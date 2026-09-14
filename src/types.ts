@@ -112,6 +112,20 @@ export interface FindTextOptions {
   readonly limit?: number | undefined;
 }
 
+export interface FindTextDetailedOptions extends FindTextOptions {
+  readonly matchesPerGroup?: number | undefined;
+}
+
+export interface FindTextResult {
+  readonly scope: "indexed-text";
+  readonly groups: FindTextGroup[];
+  readonly totalGroups: number;
+  readonly totalMatches: number;
+  readonly omittedGroups: number;
+  readonly omittedMatches: number;
+  readonly truncated: boolean;
+}
+
 export interface SkeletonEntry {
   readonly symbol: OsnovaSymbol;
   readonly signature: string;

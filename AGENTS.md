@@ -10,6 +10,9 @@ Conventions for agent sessions working in this repository.
 
 ## Invariants
 
+- Scope update (2026-09-14): finish the standalone hardening roadmap before any integration work or integration discussion. Graph viewers and graph visualization UI are entirely out of scope. The implementation plan is `/Users/fetzy/.local/share/kilo/plans/1789340040608-osnova-context-engine.md`, including its standalone expansion section.
+- Public-content boundary: keep competitor identities, repository URLs, and comparative research out of shipped docs, code comments, examples, generated output, commit messages, and PR/issue prose. Keep named competitive benchmarks and research in private local artifacts; public benchmarks describe Osnova independently. Do not copy third-party code requiring attribution that conflicts with this boundary; retain any legally required notices.
+
 - Determinism is the core correctness property: incremental updates must equal full rebuilds byte-for-byte. Sort everything (paths, symbols, edges) before serialization; never add timestamps or nondeterministic fields to the artifact. The artifact is JSON, gzip above 4 MiB.
 - The MCP tool names and argument shapes (`osnova_ask`, `osnova_find_text`, `osnova_skeleton`, `osnova_callers`, `osnova_map`) and the exported API (`buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `ask`, `findText`, `skeleton`, `callers`, `map`, `renderMapCard`, `runMcpStdio`, `cacheDir` parameter, `OSNOVA_CACHE_DIR`) are a frozen contract for a downstream consumer. Breaking them requires a coordinated major version, never a surprise.
 - Read-only contract: no writes outside the cache directory, no network, no telemetry.

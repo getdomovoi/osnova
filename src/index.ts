@@ -14,6 +14,8 @@ export type {
   FindTextGroup,
   FindTextMatch,
   FindTextOptions,
+  FindTextDetailedOptions,
+  FindTextResult,
   FreshnessReport,
   HubEntry,
   LanguageId,
@@ -35,7 +37,7 @@ export { applyChanges, freshness } from "./index/incremental.js";
 export { loadIndex } from "./api.js";
 export { serializeArtifact } from "./index/serialize.js";
 export { ask } from "./query/ask.js";
-export { findText } from "./query/findText.js";
+export { findText, findTextDetailed } from "./query/findText.js";
 export { skeleton } from "./query/skeleton.js";
 export { callers } from "./query/callers.js";
 export { map } from "./query/map.js";
