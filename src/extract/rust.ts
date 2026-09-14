@@ -28,7 +28,8 @@ export const rustAdapter: LanguageAdapter = {
         case "function_item": {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
-            out.addDef(nameNode.text, hasImplAncestor(node) ? "method" : "function", node);
+            const inTrait = node.parent?.type === "declaration_list" && node.parent?.parent?.type === "trait_item";
+            out.addDef(nameNode.text, hasImplAncestor(node) || inTrait ? "method" : "function", node);
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
