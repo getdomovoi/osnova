@@ -6,6 +6,7 @@ export default defineConfig({
       cli: "src/cli/cli.ts",
       mcp: "src/mcp/server.ts",
       diagnostics: "src/diagnostics/index.ts",
+      enrichment: "src/enrichment/index.ts",
       bin: "src/cli/bin.ts",
     },
     format: ["esm"],

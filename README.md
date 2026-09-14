@@ -147,6 +147,16 @@ The perf script enforces first-build and incremental-refresh budgets on a genera
 
 Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all eight grammars, executes build/ask/doctor/preview, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. Local linked-dependency smoke tests do not substitute for clean installation; the latest local verification also installed the tarball and registry dependencies in a fresh consumer and executed build/ask/doctor successfully. Linux/Windows clean-install execution remains a CI responsibility.
 
+### Optional LSP evidence
+
+`configureLspEnrichment`, `loadLspEnrichment`, and `refreshLspEnrichment` provide an opt-in sidecar for explicitly approved local language-server executables. Configuration/load do not launch processes; refresh requires `enabled: true`, current source hashes and zero-based UTF-16 query positions. Multiple matching servers and languages are dispatched independently, so one installed server cannot shadow another.
+
+Evidence remains separate from structural edges and is labeled `source: "lsp"`, `claim: "server-locations"`, with launch identity, source hashes, workspace fingerprint and base generation. A server location is not an Osnova semantic/type proof. Missing servers, stale offsets, unsupported methods, partial locations, request limits and cache contention remain explicit diagnostics while the structural index stays usable.
+
+Default transport limits include 2-second requests, a 30-second session/refresh deadline, 128 requests and 8 pending requests per server, 1 MiB messages, 16 MiB traffic per direction, 16 servers, 256 queries/locations per result, 4,096 source files/64 MiB source snapshots, and a 16 MiB sidecar. Callers may lower transport limits, not raise hard maxima. Supplied executables are trusted processes, not OS-sandboxed. The client supplies isolated cache/config directories, rejects server-initiated requests, and stops only children it launched.
+
+Policies and results persist separately under the workspace cache. Refresh retains still-valid complete evidence, retries failures, invalidates stale generations/source hashes and never starts a server merely because stored policy exists. No real language server is bundled, installed or auto-selected.
+
 ### Reproducible benchmarks
 
 ```sh

@@ -72,3 +72,5 @@ export { runCli } from "./cli/cli.js";
 export type { CliIo } from "./cli/cli.js";
 export { doctor, previewSetup } from "./diagnostics/index.js";
 export type { DoctorOptions, DoctorReport, DiagnosticCheck, LanguageCapability, SetupPreviewOptions, SetupFileChange, SetupPreview } from "./diagnostics/index.js";
+export { configureLspEnrichment, loadLspEnrichment, refreshLspEnrichment, lspEnrichmentLimits } from "./enrichment/index.js";
+export type { LspLaunchSpec, LspLimits, LspPolicy, LspPosition, LspRange, LspQuery, LspLocation, LspEvidence, LspQueryResult, LspDiagnostic, LspEnrichmentResult, LspCacheOptions, LspRefreshOptions } from "./enrichment/index.js";
