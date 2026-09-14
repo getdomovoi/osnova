@@ -142,6 +142,8 @@ Agent task success, tokenizer-based context counts, agent tool calls and packed-
 
 The [initial development baseline](benchmarks/results/development-baseline-2026-09-14.json) records measured workload fingerprints, quality scores, refresh samples and limitations. It preserves misses rather than presenting successful execution as successful retrieval. Evaluation cases remain separate and were not used for that baseline.
 
+The [definition-ranking candidate](benchmarks/results/definition-ranking-2026-09-14.json) records its frozen development/evaluation results and receipts. It improved retrieval on the small task sets, but preserves unresolved alias-caller misses and reports increased first-query costs. These results are not agent task-success claims.
+
 ## License
 
 Apache-2.0
