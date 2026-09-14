@@ -61,8 +61,7 @@ export const javaAdapter: LanguageAdapter = {
           return;
         }
         case "explicit_constructor_invocation": {
-          const nameNode = node.childForFieldName("name");
-          out.addEdge("calls", nameNode !== null ? nameNode.text : "this", node);
+          out.addEdge("calls", node.text.trimStart().startsWith("super") ? "super" : "this", node);
           for (const child of childrenOf(node)) visit(child);
           return;
         }
