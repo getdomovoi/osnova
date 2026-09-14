@@ -1,0 +1,84 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { buildIndex } from "../dist/index.js";
+import { applyChanges, freshness } from "../dist/index.js";
+import { serializeArtifact } from "../dist/index.js";
+
+const FILE_COUNT = 300;
+const BUDGET_BUILD_MS = 30_000;
+const BUDGET_INCREMENTAL_MS = 5_000;
+const BUDGET_HEAP_BYTES = 512 * 1024 * 1024;
+
+function generate(root) {
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  const modules = 30;
+  const filesPerModule = Math.ceil(FILE_COUNT / modules);
+  for (let m = 0; m < modules; m += 1) {
+    const dir = path.join(root, `mod${m}`);
+    fs.mkdirSync(dir, { recursive: true });
+    for (let f = 0; f < filesPerModule; f += 1) {
+      const lines = [];
+      lines.push(`export interface Shape${m}_${f} { size: number; label: string; }`);
+      lines.push(`export const LIMIT_${m}_${f} = ${m * 100 + f};`);
+      lines.push(`export class Widget${m}_${f} {`);
+      lines.push(`  private label = "w${m}_${f}";`);
+      lines.push(`  describe(): string { return \`\${this.label} \${LIMIT_${m}_${f}}\`; }`);
+      lines.push(`}`);
+      lines.push(`export function make${m}_${f}(size: number): Shape${m}_${f} {`);
+      lines.push(`  const w = new Widget${m}_${f}();`);
+      lines.push(`  return { size: size + LIMIT_${m}_${f}, label: w.describe() };`);
+      lines.push(`}`);
+      const next = f + 1 < filesPerModule ? f + 1 : 0;
+      lines.push(`export function chain${m}_${f}(v: number): number {`);
+      lines.push(`  return make${m}_${next}(v).size;`);
+      lines.push(`}`);
+      fs.writeFileSync(path.join(dir, `file${f}.ts`), `${lines.join("\n")}\n`);
+    }
+  }
+}
+
+async function main() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-perf-"));
+  const cacheDir = path.join(root, "cache");
+  const repo = path.join(root, "repo");
+  generate(repo);
+
+  const buildStart = performance.now();
+  let index = await buildIndex(repo, { cacheDir });
+  const buildMs = performance.now() - buildStart;
+  const artifactBytes = serializeArtifact(index).length;
+  const heapUsed = process.memoryUsage().heapUsed;
+
+  const changed = [];
+  for (let i = 0; i < 10; i += 1) {
+    const file = path.join(repo, `mod${i}`, "file0.ts");
+    fs.appendFileSync(file, `export function extra${i}(v: number): number { return v + ${i}; }\n`);
+    changed.push(`mod${i}/file0.ts`);
+  }
+
+  const refreshStart = performance.now();
+  const report = await freshness(index, repo);
+  index = await applyChanges(index, repo, [...report.added, ...report.changed, ...report.deleted]);
+  const incrementalMs = performance.now() - refreshStart;
+
+  console.log(`files: ${index.files.size} symbols: ${index.symbols.size} edges: ${index.edges.length}`);
+  console.log(`build: ${buildMs.toFixed(0)}ms incremental: ${incrementalMs.toFixed(0)}ms artifact: ${(artifactBytes / 1024).toFixed(0)}KiB heap: ${(heapUsed / 1024 / 1024).toFixed(0)}MiB`);
+
+  const failures = [];
+  if (buildMs > BUDGET_BUILD_MS) failures.push(`build ${buildMs.toFixed(0)}ms > ${BUDGET_BUILD_MS}ms`);
+  if (incrementalMs > BUDGET_INCREMENTAL_MS) failures.push(`incremental ${incrementalMs.toFixed(0)}ms > ${BUDGET_INCREMENTAL_MS}ms`);
+  if (heapUsed > BUDGET_HEAP_BYTES) failures.push(`heap ${(heapUsed / 1048576).toFixed(0)}MiB > ${BUDGET_HEAP_BYTES / 1048576}MiB`);
+  if (changed.length > 0 && report.changed.length < changed.length) failures.push("freshness missed edits");
+
+  fs.rmSync(root, { recursive: true, force: true });
+  if (failures.length > 0) {
+    console.error(`perf budget exceeded: ${failures.join("; ")}`);
+    process.exit(1);
+  }
+  console.log("perf budgets met");
+}
+
+await main();
