@@ -63,6 +63,14 @@ const card = await renderMapCard(index); // <= 16,384 code units
 
 Exports: `buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `indexHealth`, `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, index types, and the MCP stdio main (`runMcpStdio`).
 
+### Definition retrieval
+
+`ask` ranks individual definitions, not one first-matching line per file. Exact identifier and qualified-member matches take priority over lexical matches; separate name, signature, adjacent-documentation, path and body signals determine ordering within those tiers. Body term frequency is saturated so repeated references cannot win merely by volume. Scores are ranking values, not confidence probabilities.
+
+Camel-case, acronym and snake-case words are searchable, while exact matching preserves whole identifier boundaries, including short names. Multiple relevant definitions from one file may appear; duplicate logical symbol IDs do not. Module-level text and prose files remain searchable as fallback documents. Body text is assigned to its innermost indexed definition rather than repeated into every enclosing class.
+
+Excerpts retain exact source line numbers and may include an associated leading comment when it supplies the relevant evidence. Documentation recognition is bounded to adjacent comment-like lines and leading Python docstrings, including common multiline signatures; it is not a complete documentation parser. Query documents are cached per index instance and rebuilt for a new incremental index. `filesSearched` counts eligible indexed files, not only files with hits. API result limits must be nonnegative safe integers.
+
 ### Search completeness
 
 `findTextDetailed(index, pattern)` returns every non-overlapping, line-based match in the indexed text by default. Its result includes `groups`, `totalGroups`, `totalMatches`, `omittedGroups`, `omittedMatches`, `truncated`, and `scope: "indexed-text"`. Completeness refers to indexed text, not ignored, unreadable or otherwise unindexed workspace content, and not fresh disk state unless the caller refreshed the index.
