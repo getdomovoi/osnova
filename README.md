@@ -75,6 +75,8 @@ The existing `findText` API retains its array result, default 50-group limit, an
 
 `callersDetailed` returns `status: "ambiguous"` with candidate symbols when a bare name matches multiple definitions. Select a qualified name (`file#Class.method`) to continue. A `status: "found"` result contains the target, indexed `hits`, direction/depth, and separate `unresolved` entries carrying raw edges and traversal depth. Unresolved inbound evidence is name-based, not a confirmed caller; unresolved evidence is never traversed as a dependency.
 
+Each detailed hit includes its original `edge`, preserving the source call-site path/line separately from the callee definition location. Extracted edges record syntax provenance and their resolution basis: `import-path`, `same-file-name`, `imported-file-name`, or `unique-name`. Name resolution remains heuristic even when its status is `resolved`. Multiple candidates at the preferred tier stay `ambiguous` with candidate names instead of selecting one arbitrarily; unrelated language families are excluded. TypeScript, TSX and JavaScript share a family. Externally supplied edges without provenance are explicitly `unknown` when serialized.
+
 CLI `callers` and MCP `osnova_callers` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
 
 ### Index health
@@ -85,7 +87,7 @@ Syntax-recovered files retain their text and recovered definitions with `syntax-
 
 CLI queries emit partial-analysis warnings on stderr; MCP results include warnings in their text. Map cards keep the health indication inside their existing code-unit cap. `osnova check` exits 1 for stale, partial, or unavailable indexes, and 0 only for fresh indexes. Full builds may save partial indexes so text search and recovered definitions remain available.
 
-Artifact format 2 persists diagnostics. `loadIndex` returns `undefined` for format-1 caches, which lack health metadata; query commands rebuild them. Corrupt or unsupported newer artifacts and failed cache writes remain explicit errors. Repaired files clear their old diagnostics on incremental update.
+Artifact format 3 persists diagnostics and resolution evidence. `loadIndex` returns `undefined` for format-1 and format-2 caches, which predate current analysis guarantees; query commands rebuild them. Corrupt or unsupported newer artifacts and failed cache writes remain explicit errors. Repaired files clear their old diagnostics on incremental update.
 
 Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the platform default (macOS `~/Library/Caches/osnova/`, Linux `$XDG_CACHE_HOME/osnova/`, Windows `%LOCALAPPDATA%/osnova/cache/`). One subdirectory per workspace, LRU-evicted across workspaces.
 

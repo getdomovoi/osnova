@@ -92,10 +92,10 @@ describe("index health", () => {
     await expect(buildIndex(workspace, { cacheDir })).rejects.toThrow(/grammar-unavailable/);
   });
 
-  it("refuses to label old artifacts as health-verified", async () => {
+  it.each([1, 2])("refuses to reuse outdated analysis format %s", async (version) => {
     const index = await buildIndex(workspace, { cacheDir });
     const artifact = JSON.parse(serializeArtifact(index).toString()) as { formatVersion: number };
-    artifact.formatVersion = 1;
+    artifact.formatVersion = version;
     await fs.writeFile(path.join(workspaceDirFor(cacheDir, workspace), "index.json"), JSON.stringify(artifact));
     expect(await loadIndex(workspace, { cacheDir })).toBeUndefined();
   });

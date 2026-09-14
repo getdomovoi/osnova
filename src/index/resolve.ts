@@ -1,9 +1,13 @@
 import path from "node:path";
-import type { FileCard, OsnovaEdge, OsnovaSymbol } from "../types.js";
+import type { CardLanguage, EdgeResolution, FileCard, OsnovaEdge, OsnovaSymbol } from "../types.js";
 import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
+
+function languageFamily(language: CardLanguage | undefined): string | undefined {
+  return language === "typescript" || language === "tsx" || language === "javascript" ? "javascript" : language;
+}
 
 function resolveNodeSpecifier(
   fromFile: string,
@@ -125,27 +129,30 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const toFile = resolveImportTarget(card.language, fromFile, raw.toName, knownFiles);
         edges.push(
           toFile === undefined
-            ? { kind: "imports", fromFile, fromSymbol, toName: raw.toName, line: raw.line }
-            : { kind: "imports", fromFile, fromSymbol, toName: raw.toName, line: raw.line, toFile },
+            ? { kind: "imports", fromFile, fromSymbol, toName: raw.toName, line: raw.line,
+                evidence: { source: "syntax", resolution: { status: "unresolved", reason: "import-target-unresolved" } } }
+            : { kind: "imports", fromFile, fromSymbol, toName: raw.toName, line: raw.line, toFile,
+                evidence: { source: "syntax", resolution: { status: "resolved", method: "import-path" } } },
         );
         continue;
       }
       const lookupName = raw.toName.includes(".")
         ? (raw.toName.split(".").pop() ?? raw.toName)
         : raw.toName;
-      const candidates = symbolsByName.get(lookupName);
-      let resolved: OsnovaSymbol | undefined;
-      if (candidates !== undefined) {
-        resolved =
-          candidates.find((c) => c.file === fromFile) ??
-          candidates
-            .filter((c) => importTargets.includes(c.file))
-            .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))[0] ??
-          (candidates.length === 1 ? candidates[0] : undefined);
-      }
+      const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
+        languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language));
+      const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
+      const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
+      const preferred = sameFile.length > 0 ? sameFile : imported.length > 0 ? imported : candidates;
+      const names = [...new Set(preferred.map((symbol) => symbol.qualifiedName))].sort();
+      const resolved = names.length === 1 ? preferred[0] : undefined;
+      const resolution: EdgeResolution = names.length > 1
+        ? { status: "ambiguous", candidates: names }
+        : resolved === undefined ? { status: "unresolved", reason: "no-matching-symbol" }
+          : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : imported.length > 0 ? "imported-file-name" : "unique-name" };
       edges.push(
         resolved === undefined
-          ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line }
+          ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution } }
           : {
               kind: raw.kind,
               fromFile,
@@ -154,6 +161,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               line: raw.line,
               toSymbol: resolved.qualifiedName,
               toFile: resolved.file,
+              evidence: { source: "syntax", resolution },
             },
       );
     }

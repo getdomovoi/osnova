@@ -98,13 +98,22 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
   if (result.hits.length === 0) {
     lines.push(`${result.target.qualifiedName}: no indexed relationships found`);
   } else {
-    lines.push(formatCallers(result));
+    lines.push(`${result.target.kind} ${result.target.qualifiedName}: ${result.hits.length} indexed edges`);
+    for (const hit of result.hits) {
+      const evidence = hit.edge.evidence;
+      const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
+        ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
+      lines.push(`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`);
+    }
   }
   lines.push("This does not prove absence of callers or that deletion is safe.");
   if (result.unresolved.length > 0) {
     lines.push(`unresolved evidence (${result.unresolved.length}); not confirmed relationships`);
     for (const { edge, depth } of result.unresolved) {
       lines.push(`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`);
+      if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous") {
+        lines.push(`  ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`);
+      }
     }
   }
   return lines.join("\n");

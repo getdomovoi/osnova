@@ -3,7 +3,7 @@ import type {
   CallersOptions,
   CallersDetailedResult,
   UnresolvedCallerEdge,
-  CallerHit,
+  CallerEvidenceHit,
   EdgeDirection,
   OsnovaIndex,
   OsnovaSymbol,
@@ -34,7 +34,7 @@ export function callers(
 ): CallersResult {
   const target = resolveTargets(index, symbol)[0] as OsnovaSymbol;
   const { hits } = walkCallers(index, target, options);
-  return { target, hits };
+  return { target, hits: hits.map(({ edge: _edge, ...hit }) => hit) };
 }
 
 export function callersDetailed(
@@ -56,7 +56,8 @@ export function callersDetailed(
   const { hits, unresolved } = walkCallers(index, target, { direction, depth });
   return {
     status: "found", scope: "indexed-graph", direction, depth, target,
-    hits: hits.filter((hit) => hit.resolved), unresolved,
+    hits: hits.filter((hit) => hit.resolved).map((hit) => direction === "out"
+      ? { ...hit, line: hit.symbol?.span.startLine ?? null } : hit), unresolved,
   };
 }
 
@@ -64,11 +65,11 @@ function walkCallers(
   index: OsnovaIndex,
   target: OsnovaSymbol,
   options?: CallersOptions,
-): { hits: CallerHit[]; unresolved: UnresolvedCallerEdge[] } {
+): { hits: CallerEvidenceHit[]; unresolved: UnresolvedCallerEdge[] } {
   const direction = options?.direction ?? "in";
   const depth = Math.max(1, options?.depth ?? 1);
 
-  const hits: CallerHit[] = [];
+  const hits: CallerEvidenceHit[] = [];
   const unresolved: UnresolvedCallerEdge[] = [];
   const seenUnresolved = new Set<OsnovaEdge>();
   const unresolvedByName = new Map<string, OsnovaEdge[]>();
@@ -111,6 +112,7 @@ function walkCallers(
             kind: edge.kind,
             depth: level,
             resolved: true,
+            edge,
           });
         } else {
           hits.push({
@@ -121,6 +123,7 @@ function walkCallers(
             kind: edge.kind,
             depth: level,
             resolved: edge.toSymbol !== undefined,
+            edge,
           });
         }
         if (other.length > 0 && !visited.has(other) && index.symbols.has(other)) {

@@ -1,4 +1,4 @@
-export const indexFormatVersion = 2 as const;
+export const indexFormatVersion = 3 as const;
 
 export type LanguageId =
   | "typescript"
@@ -42,6 +42,15 @@ export interface OsnovaSymbol {
 
 export type EdgeKind = "calls" | "references" | "imports";
 
+export type EdgeResolution =
+  | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" }
+  | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" };
+
+export type EdgeEvidence =
+  | { readonly source: "syntax"; readonly resolution: EdgeResolution }
+  | { readonly source: "unknown" };
+
 export interface OsnovaEdge {
   readonly kind: EdgeKind;
   readonly fromFile: string;
@@ -50,6 +59,7 @@ export interface OsnovaEdge {
   readonly line: number;
   readonly toSymbol?: string | undefined;
   readonly toFile?: string | undefined;
+  readonly evidence?: EdgeEvidence | undefined;
 }
 
 export interface FileCard {
@@ -169,6 +179,10 @@ export interface CallersResult {
   readonly hits: readonly CallerHit[];
 }
 
+export interface CallerEvidenceHit extends CallerHit {
+  readonly edge: OsnovaEdge;
+}
+
 export interface CallersOptions {
   readonly direction?: EdgeDirection | undefined;
   readonly depth?: number | undefined;
@@ -187,7 +201,7 @@ export type CallersDetailedResult =
       readonly direction: EdgeDirection;
       readonly depth: number;
       readonly target: OsnovaSymbol;
-      readonly hits: readonly CallerHit[];
+      readonly hits: readonly CallerEvidenceHit[];
       readonly unresolved: readonly UnresolvedCallerEdge[];
     };
 

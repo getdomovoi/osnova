@@ -11,6 +11,8 @@ import type {
   SourceSpan,
   SymbolKind,
   IndexDiagnostic,
+  EdgeEvidence,
+  EdgeResolution,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
@@ -59,6 +61,7 @@ interface SerializedEdge {
   readonly l: number;
   readonly ts?: string | undefined;
   readonly tf?: string | undefined;
+  readonly e: EdgeEvidence;
 }
 
 interface SerializedArtifact {
@@ -100,6 +103,7 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
       fs: edge.fromSymbol,
       t: edge.toName,
       l: edge.line,
+      e: edge.evidence ?? { source: "unknown" as const },
     };
     if (edge.toFile !== undefined) {
       return { ...base, ts: edge.toSymbol, tf: edge.toFile };
@@ -165,14 +169,36 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
       diagnostics: file.diagnostics,
     });
   }
-  const edges: OsnovaEdge[] = artifact.edges.map((edge) =>
-    edge.tf !== undefined
-      ? { kind: edge.k, fromFile: edge.f, fromSymbol: edge.fs, toName: edge.t, line: edge.l, toSymbol: edge.ts, toFile: edge.tf }
-      : edge.ts !== undefined
-        ? { kind: edge.k, fromFile: edge.f, fromSymbol: edge.fs, toName: edge.t, line: edge.l, toSymbol: edge.ts }
-        : { kind: edge.k, fromFile: edge.f, fromSymbol: edge.fs, toName: edge.t, line: edge.l },
-  );
+  const edges: OsnovaEdge[] = artifact.edges.map((edge) => {
+    const evidence = readEvidence(edge.e);
+    return {
+      kind: edge.k, fromFile: edge.f, fromSymbol: edge.fs, toName: edge.t, line: edge.l, evidence,
+      ...(edge.ts !== undefined ? { toSymbol: edge.ts } : {}),
+      ...(edge.tf !== undefined ? { toFile: edge.tf } : {}),
+    };
+  });
   return new OsnovaIndexImpl(artifact.root, files, edges);
+}
+
+function readEvidence(value: unknown): EdgeEvidence {
+  if (typeof value === "object" && value !== null) {
+    const evidence = value as { source?: unknown; resolution?: unknown };
+    if (evidence.source === "unknown") return { source: "unknown" };
+    if (evidence.source === "syntax" && typeof evidence.resolution === "object" && evidence.resolution !== null) {
+      const resolution = evidence.resolution as Partial<EdgeResolution>;
+      if (resolution.status === "resolved" && ["import-path", "same-file-name", "imported-file-name", "unique-name"].includes(resolution.method ?? "")) {
+        return value as EdgeEvidence;
+      }
+      if (resolution.status === "ambiguous" && Array.isArray(resolution.candidates) &&
+        resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
+        return value as EdgeEvidence;
+      }
+      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved"].includes(resolution.reason ?? "")) {
+        return value as EdgeEvidence;
+      }
+    }
+  }
+  throw new Error("osnova: corrupt edge evidence metadata");
 }
 
 export async function saveArtifact(index: OsnovaIndex, cacheDir: string): Promise<string> {
@@ -207,7 +233,7 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       return deserializeArtifact(content);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      if (error instanceof ArtifactVersionError && error.version === 1) return undefined;
+      if (error instanceof ArtifactVersionError && (error.version === 1 || error.version === 2)) return undefined;
       throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
     }
   }
