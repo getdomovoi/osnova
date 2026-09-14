@@ -33,6 +33,7 @@ export function collectBindings(root: Node, python: boolean): {
   const scopes = new Map<number, Scope>();
   const exports = new Map<string, Set<string>>();
   const namespaces = new Set<string>();
+  const initializers = new Map<EdgeBinding, { end: number; scope: Scope }>();
   const writes: Array<{ scope: Scope; name: string }> = [];
   const join = (owner: string, name: string): string => owner ? `${owner}.${name}` : name;
   const bind = (scope: Scope, name: string, binding: EdgeBinding): void => {
@@ -160,8 +161,10 @@ export function collectBindings(root: Node, python: boolean): {
       const value = node.childForFieldName("value");
       const destination = node.parent?.type === "variable_declaration" ? nearestFunction(scope) : scope;
       const callable = value !== null && (functions.has(value.type) || ["class", "class_expression"].includes(value.type));
-      bindPattern(destination, target, callable && target?.type === "identifier"
-        ? { kind: "local", name: join(destination.owner, target.text) } : localValue);
+      const binding: EdgeBinding = callable && target?.type === "identifier"
+        ? { kind: "local", name: join(destination.owner, target.text) } : localValue;
+      bindPattern(destination, target, binding);
+      if (binding.kind === "local") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(destination) });
     }
     if (python && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression"].includes(node.type)) {
       bindPattern(scope, node.childForFieldName("left") ?? node.childForFieldName("name"));
@@ -196,7 +199,14 @@ export function collectBindings(root: Node, python: boolean): {
     for (let scope: Scope | null = scopes.get(site.id) ?? module; scope !== null; scope = scope.parent) {
       if (scope.names.has("*")) return { kind: "blocked", reason: "unsupported" };
       const bindings = scope.names.get(name);
-      if (bindings !== undefined) return bindings.length === 1 ? bindings[0] : { kind: "blocked", reason: "ambiguous" };
+      if (bindings !== undefined) {
+        if (bindings.length !== 1) return { kind: "blocked", reason: "ambiguous" };
+        const binding = bindings[0];
+        const initializer = binding === undefined ? undefined : initializers.get(binding);
+        if (initializer !== undefined && site.startIndex < initializer.end &&
+          nearestFunction(scopes.get(site.id) ?? module) === initializer.scope) return localValue;
+        return binding;
+      }
     }
     return undefined;
   };

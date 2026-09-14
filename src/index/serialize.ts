@@ -253,7 +253,7 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       return deserializeArtifact(content);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      if (error instanceof ArtifactVersionError && (error.version === 1 || error.version === 2 || error.version === 3)) return undefined;
+      if (error instanceof ArtifactVersionError && (error.version === 1 || error.version === 2 || error.version === 3 || error.version === 4)) return undefined;
       throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
     }
   }

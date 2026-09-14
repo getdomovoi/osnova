@@ -13,37 +13,19 @@ const FUNCTION_VALUE_NODES = new Set([
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-type ScopeKind = "module" | "class" | "function";
-
-interface ScopeFrame {
-  readonly name: string;
-  readonly kind: ScopeKind;
-}
-
 class TsExtractor {
   readonly out = new Extractor();
-  private readonly frames: ScopeFrame[] = [{ name: "", kind: "module" }];
 
-  get inFunctionScope(): boolean {
-    return this.frames.some((frame) => frame.kind === "function");
-  }
-
-  get atModuleLevel(): boolean {
-    return this.frames.length === 1;
-  }
-
-  pushFrame(name: string, kind: ScopeKind): void {
-    this.frames.push({ name, kind });
+  pushFrame(name: string): void {
     this.out.push(name);
   }
 
   popFrame(): void {
-    this.frames.pop();
     this.out.pop();
   }
 
   def(name: string, kind: Parameters<Extractor["addDef"]>[1], node: Node, sigNode?: Node): void {
-    if (this.inFunctionScope || !IDENTIFIER_RE.test(name)) return;
+    if (!IDENTIFIER_RE.test(name)) return;
     this.out.addDef(name, kind, node, sigNode);
   }
 }
@@ -96,7 +78,7 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
       ex.def(name, "class", declarator, valueNode);
       continue;
     }
-    if (isConst && ex.atModuleLevel && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+    if (isConst && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
       ex.def(name, "constant", declarator, declarator);
     }
   }
@@ -104,7 +86,7 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
 
 function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node) => void): void {
   ex.def(name, "class", node);
-  ex.pushFrame(name, "class");
+  ex.pushFrame(name);
   for (const child of childrenOf(node)) {
     if (child.type === "class_body" || child.type === "declaration_list") {
       for (const member of childrenOf(child)) {
@@ -112,7 +94,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {
             ex.out.addDef(methodName, "method", member);
-            ex.pushFrame(methodName, "function");
+            ex.pushFrame(methodName);
             for (const bodyPart of childrenOf(member)) visit(bodyPart);
             ex.popFrame();
           } else {
@@ -158,7 +140,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         case "generator_function_declaration": {
           const name = declarationName(node);
           if (name !== null) ex.def(name, "function", node);
-          ex.pushFrame(name ?? "", "function");
+          ex.pushFrame(name ?? "");
           for (const child of childrenOf(node)) visit(child);
           ex.popFrame();
           return;
@@ -205,8 +187,8 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         case "variable_declarator": {
           const value = node.childForFieldName("value");
           const name = node.childForFieldName("name");
-          if (ex.atModuleLevel && name?.type === "identifier" && value !== null && FUNCTION_VALUE_NODES.has(value.type)) {
-            ex.pushFrame(name.text, "function");
+          if (name?.type === "identifier" && value !== null && FUNCTION_VALUE_NODES.has(value.type)) {
+            ex.pushFrame(name.text);
             visit(value);
             ex.popFrame();
           } else {
