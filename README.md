@@ -156,6 +156,8 @@ The [definition-ranking candidate](benchmarks/results/definition-ranking-2026-09
 
 The [import-binding and scoped-declaration results](benchmarks/results/import-bindings-2026-09-14.json) record two separately frozen candidates, the nested-coverage regression found between them, and the corrected outcome. Exposed cases are labeled as regressions rather than reused as fresh validation.
 
+The [re-export results](benchmarks/results/reexports-2026-09-14.json) retain the frozen candidate receipt, positive and negative cases, development regressions and traversal limits. Self-host tests also verify callers through the public API barrel.
+
 ## License
 
 Apache-2.0
