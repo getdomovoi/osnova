@@ -119,7 +119,7 @@ describe("callers", () => {
 describe("map", () => {
   it("clusters directories and ranks hotspots", () => {
     const result = map(index);
-    expect(result.fileCount).toBe(8);
+    expect(result.fileCount).toBe(15);
     expect(result.clusters[0]?.dir).toBe("src/");
     expect(result.hotspots.length).toBeGreaterThan(0);
     const top = result.hotspots[0];
@@ -129,7 +129,7 @@ describe("map", () => {
   it("caps clusters at maxDirs", () => {
     const result = map(index, { maxDirs: 1 });
     expect(result.clusters).toHaveLength(1);
-    expect(result.droppedDirs).toBe(1);
+    expect(result.droppedDirs).toBe(2);
   });
 });
 

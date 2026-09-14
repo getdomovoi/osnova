@@ -44,12 +44,15 @@ function resolvePythonSpecifier(
   const parts = rest.length > 0 ? rest.split(".") : [];
   if (up >= 1) {
     for (let keep = parts.length; keep >= 0; keep -= 1) {
-      const dirParts = [...baseDir.split("/"), ...parts.slice(0, keep)];
+      const dirParts = [...baseDir.split("/").filter((p) => p.length > 0), ...parts.slice(0, keep)];
       const tail = parts.slice(keep);
       if (tail.length === 0) continue;
       const modulePath = [...dirParts, tail.join("/")].join("/");
       if (knownFiles.has(`${modulePath}.py`)) return `${modulePath}.py`;
       if (knownFiles.has(`${modulePath}/__init__.py`)) return `${modulePath}/__init__.py`;
+    }
+    if (parts.length === 0) {
+      if (knownFiles.has(`${baseDir}/__init__.py`)) return `${baseDir}/__init__.py`;
     }
     return undefined;
   }

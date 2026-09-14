@@ -82,7 +82,10 @@ export const csharpAdapter: LanguageAdapter = {
         }
         case "using_directive": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addEdge("imports", nameNode.text, node);
+          const namespaceNode = nameNode ?? childrenOf(node)[0];
+          if (namespaceNode !== null && namespaceNode !== undefined) {
+            out.addEdge("imports", namespaceNode.text, node);
+          }
           return;
         }
         default: {

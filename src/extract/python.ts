@@ -104,8 +104,7 @@ export const pythonAdapter: LanguageAdapter = {
             }
           }
           return;
-        }
-        case "import_from_statement": {
+        }        case "import_from_statement": {
           const moduleNode = node.childForFieldName("module_name");
           if (moduleNode !== null) {
             out.addEdge("imports", moduleNode.text, moduleNode);
@@ -116,8 +115,11 @@ export const pythonAdapter: LanguageAdapter = {
           }
           for (const child of childrenOf(node)) {
             if (child === moduleNode || child.type === "relative_import") continue;
+            if (child.type === "wildcard_import") continue;
             if (child.type === "dotted_name" || child.type === "aliased_import") {
-              out.addEdge("references", child.text.split(" as ")[0]?.trim() ?? child.text, child);
+              const imported = child.text.split(" as ")[0]?.trim() ?? child.text;
+              const name = imported.split(".").pop() ?? imported;
+              out.addEdge("references", name, child);
             }
           }
           return;
