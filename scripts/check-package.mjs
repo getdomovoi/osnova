@@ -19,7 +19,7 @@ export async function checkPackage(root) {
   const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.name, "@getdomovoi/osnova");
   const targets = [manifest.main, manifest.types, manifest.bin?.osnova];
-  for (const name of [".", "./cli", "./mcp"]) assert(manifest.exports[name], `Missing export ${name}`);
+  for (const name of [".", "./cli", "./mcp", "./diagnostics", "./enrichment"]) assert(manifest.exports[name], `Missing export ${name}`);
   for (const entry of Object.values(manifest.exports)) {
     assert.equal(typeof entry.import, "string");
     assert.equal(typeof entry.types, "string");

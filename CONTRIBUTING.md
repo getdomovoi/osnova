@@ -27,8 +27,8 @@ git config core.hooksPath .githooks
 
 The repo ships git hooks that block broken code from being committed or pushed:
 
-- `pre-commit`: lint and typecheck on staged changes.
-- `pre-push`: lint, typecheck, and the full test suite. This is the client-side backstop; branch protection on `main` enforces the same checks server-side.
+- `pre-commit`: lint and typecheck against an exported staged snapshot, not unrelated working-tree edits.
+- `pre-push`: lint, typecheck, build, and the full test suite against each pushed tree. The snapshot runner never installs/reconciles dependencies. This is the client-side backstop; branch protection on `main` enforces the same checks server-side.
 
 Run the full gate suite manually at any time:
 
@@ -38,6 +38,9 @@ pnpm typecheck   # tsc --noEmit
 pnpm test        # vitest
 pnpm build       # tsup, ESM + dts
 pnpm perf        # performance budgets on a generated fixture repo
+pnpm check:package # packaged target validation
+pnpm test:package  # packed consumer with existing dependencies
+pnpm test:install  # fresh registry-backed package install and consumer
 ```
 
 `pnpm perf` is required when your change touches the engine, extraction, serialization, or anything on the hot path.
@@ -52,7 +55,7 @@ pnpm perf        # performance budgets on a generated fixture repo
 ## Invariants (read before touching src/)
 
 - **Determinism**: no timestamps, random values, or host-dependent ordering in index artifacts. All paths, symbols, and edges are sorted before serialization. `localeCompare` is banned in sort paths; use code-unit comparison.
-- **Frozen contract**: the exported API (`buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `ask`, `findText`, `skeleton`, `callers`, `map`, `renderMapCard`, `runMcpStdio`), the `cacheDir` parameter, `OSNOVA_CACHE_DIR`, and the MCP tool names and argument shapes are consumed downstream. Breaking them requires a coordinated major version.
+- **Frozen contract**: existing exported APIs, the `cacheDir` parameter, `OSNOVA_CACHE_DIR`, and the five MCP tool names/argument shapes are consumed downstream. Breaking them requires a coordinated major version. Additive APIs require direct and package round-trip tests.
 - **Read-only**: no writes outside the cache directory, no network, no telemetry.
 - **web-tree-sitter is pinned exactly** (0.25.10). The prebuilt grammars in `tree-sitter-wasms@0.1.13` use the older dynamic-linking format that 0.27 cannot load. Do not bump without probing every grammar (`test/grammar.test.ts`).
 - **Edge semantics v1**: direct calls, imports, name references only. No type inference. Document precision limits in the README rather than working around them silently.

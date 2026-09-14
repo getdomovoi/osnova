@@ -1,9 +1,9 @@
 # osnova
 
-Deterministic repository context engine. Osnova maps a codebase into a symbol and edge graph using tree-sitter WASM, then serves it through a CLI and an MCP stdio server. No embeddings, no network, no telemetry.
+Deterministic repository context engine. Osnova maps a codebase into a symbol and edge graph using tree-sitter WASM, then serves it through a CLI and an MCP stdio server. The structural core uses no embeddings, network or telemetry. Optional explicitly configured language-server processes are trusted external programs and are not network-sandboxed by Osnova.
 
 - Languages v1: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Java, C#. Every other file type gets a bare file card (path, hash, no symbols).
-- Query surface: `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `indexHealth`.
+- Query surface: `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `indexHealth`, `scopedAsk`, `impact`, `taskContext`.
 - Edge semantics v1: direct calls, imports and exports, name references. No type inference and no dynamic dispatch resolution; expect per-language precision limits.
 - Determinism: incremental updates produce byte-identical artifacts to full rebuilds. All paths, symbols, and edges are sorted before serialization.
 
@@ -66,7 +66,7 @@ const hits = ask(index, "where do we validate tokens", { limit: 5 });
 const card = await renderMapCard(index); // <= 16,384 code units
 ```
 
-Exports: `buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `indexHealth`, `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, index types, and the MCP stdio main (`runMcpStdio`).
+Exports include lifecycle (`buildIndex`, `loadIndex`, `refreshWorkspace`, `indexGeneration`, `evidenceFingerprint`, `applyChanges`, `freshness`, `indexHealth`), retrieval (`ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `scopedAsk`, `impact`, `taskContext`), diagnostics/setup preview, optional LSP enrichment, index types, and the MCP stdio main (`runMcpStdio`).
 
 ### Definition retrieval
 
@@ -130,7 +130,7 @@ Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the
 
 Nested `.gitignore` and `.osnovaignore` rules are applied by directory with negation support. Runtime Osnova cache directories inside a workspace are always excluded. Cache artifacts carry envelope/content checksums and extraction-version identity; text, size, line count and source hashes are validated on load. Access metadata drives LRU eviction, with count and artifact-byte caps. Sidecars not owned by the core artifact lifecycle are preserved.
 
-Scanning currently reads root-level `.gitignore` plus an optional root-level `.osnovaignore` with the same syntax, skips dotfiles and configured output/dependency directories, and excludes files above 1 MB. Binary files get fallback cards with empty text rather than searchable contents. Nested ignore rules are not yet supported.
+Scanning applies root and nested `.gitignore` plus optional `.osnovaignore` rules with scoped negation, skips dotfiles and configured output/dependency directories, and excludes files above 1 MB. Binary or non-UTF8 files get fallback cards with source hashes and empty text rather than searchable contents.
 
 ## Development
 
@@ -139,13 +139,14 @@ pnpm install
 pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm perf
 pnpm check:package
 pnpm test:package
+pnpm test:install
 ```
 
 The perf script enforces first-build and incremental-refresh budgets on a generated fixture repo. Tests include per-language extraction goldens, an incremental-equals-full property test over randomized edit sequences, CLI round-trips, and MCP handshake plus tool round-trips over an in-memory transport.
 
 `doctor` is read-only: it checks runtime, workspace/cache access and all packaged grammar assets without scanning source or writing probes. Its capability matrix states where binding/receiver hints exist and where only name heuristics remain. `setup --preview` produces complete owned local MCP configuration content and detects conflicts; it never writes or launches commands, and no apply operation is provided. Setup previews require absolute executable and CLI paths.
 
-Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all eight grammars, executes build/ask/doctor/preview, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. Local linked-dependency smoke tests do not substitute for clean installation; the latest local verification also installed the tarball and registry dependencies in a fresh consumer and executed build/ask/doctor successfully. Linux/Windows clean-install execution remains a CI responsibility.
+Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all eight grammars, executes lifecycle/retrieval/doctor/preview APIs, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. `test:package` reuses locally installed dependency targets without downloads; `test:install` performs a fresh registry-backed dependency install with install scripts disabled, then runs the same consumer checks. Linux/Windows execution runs in CI.
 
 ### Optional LSP evidence
 

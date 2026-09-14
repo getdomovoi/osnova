@@ -22,7 +22,7 @@ it("rejects absent exported declaration and executable files", async () => {
     await mkdir(path.join(root, "dist"));
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       name: "@getdomovoi/osnova", main: entry.import, types: entry.types,
-      bin: { osnova: "./dist/bin.js" }, exports: { ".": entry, "./cli": entry, "./mcp": entry },
+      bin: { osnova: "./dist/bin.js" }, exports: { ".": entry, "./cli": entry, "./mcp": entry, "./diagnostics": entry, "./enrichment": entry },
       dependencies: { "web-tree-sitter": "0.25.10", "tree-sitter-wasms": "0.1.13" },
     }));
     await writeFile(path.join(root, "dist/index.js"), "export {};\n");

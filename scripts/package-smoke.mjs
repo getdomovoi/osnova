@@ -33,12 +33,13 @@ async function snapshot(root) {
 
 async function consumer() {
   const root = process.cwd();
+  const rootBefore = await readdir(root);
   const packageRoot = path.join(root, "node_modules/@getdomovoi/osnova");
   const manifest = await checkPackage(packageRoot);
   const packageBefore = await snapshot(packageRoot);
   assert((await realpath(packageRoot)).startsWith(await realpath(root)), "Package must be extracted, not linked to checkout");
   const api = await import("@getdomovoi/osnova");
-  for (const name of ["buildIndex", "loadIndex", "applyChanges", "freshness", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
+  for (const name of ["buildIndex", "loadIndex", "refreshWorkspace", "indexGeneration", "evidenceFingerprint", "applyChanges", "freshness", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "impact", "scopedAsk", "taskContext", "doctor", "previewSetup", "configureLspEnrichment", "loadLspEnrichment", "refreshLspEnrichment", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
   for (const entry of Object.keys(manifest.exports)) await import(entry === "." ? manifest.name : manifest.name + entry.slice(1));
   const workspace = path.join(root, "workspace");
   const cacheDir = path.join(root, "cache");
@@ -58,7 +59,7 @@ async function consumer() {
 
   const frames = await smokeStdio({ cliPath: path.join(packageRoot, manifest.bin.osnova), workspace, cacheDir, cwd: root });
   assert.deepEqual(await snapshot(packageRoot), packageBefore, "Core operations mutated installed package");
-  assert.deepEqual((await readdir(root)).sort(), ["cache", "check-package.mjs", "node_modules", "package-smoke.mjs", "workspace"], "Core operations wrote outside designated cache/workspace fixtures");
+  assert.deepEqual((await readdir(root)).sort(), [...new Set([...rootBefore, "cache", "workspace"])].sort(), "Core operations wrote outside designated cache/workspace fixtures");
   console.log(`packed consumer: exports, 8 WASM grammars, doctor, preview, build/ask, 5 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
 }
 
@@ -170,7 +171,7 @@ async function packAndTest() {
     assert(result.includes("packed consumer: exports, 8 WASM grammars"), "Consumer validation did not execute");
     console.log(result.trim());
     console.log(`artifact: ${filename}; ${entries.length} archive entries; isolated consumer outside checkout with existing dependency links; no install/download/native compilation`);
-    console.log("clean-network install: unverified (offline local dependencies reused)");
+    console.log("clean registry-backed install: run separately with scripts/clean-install-smoke.mjs");
   } finally {
     await readdir(scratch);
     await rm(scratch, { recursive: true, force: true });

@@ -65,6 +65,7 @@
     "benchmark": "tsx scripts/bench/cli.ts",
     "check:package": "node scripts/check-package.mjs",
     "test:package": "pnpm build && node scripts/package-smoke.mjs",
+    "test:install": "pnpm build && node scripts/clean-install-smoke.mjs",
     "changeset": "changeset",
     "prepublishOnly": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
