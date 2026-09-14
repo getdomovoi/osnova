@@ -133,8 +133,15 @@ async function withWriteLock<T>(root: string, options: LspCacheOptions, operatio
   try { dir = await safeDirectory(root, options); } catch { throw new Error("cache-unavailable"); }
   const lockPath = path.join(dir, "writer.lock");
   const lock = await fs.open(lockPath, "wx", 0o600).catch((error: NodeJS.ErrnoException) => { throw new Error(error.code === "EEXIST" ? "cache-busy" : "cache-unavailable"); });
-  try { return await operation(); }
-  finally { await lock.close(); await fs.unlink(lockPath); }
+  let result: T | undefined;
+  let operationError: unknown;
+  try { result = await operation(); } catch (error) { operationError = error; }
+  let cleanupError: unknown;
+  try { await lock.close(); } catch (error) { cleanupError = error; }
+  try { await fs.unlink(lockPath); } catch (error) { cleanupError ??= error; }
+  if (operationError !== undefined) throw operationError;
+  if (cleanupError !== undefined) throw new Error("cache-unavailable", { cause: cleanupError });
+  return result as T;
 }
 
 export async function configureLspEnrichment(root: string, policy: LspPolicy, options: LspCacheOptions = {}): Promise<void> {

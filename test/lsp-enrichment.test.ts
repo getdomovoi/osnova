@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +46,19 @@ describe("opt-in LSP sidecar", () => {
     const result = await refreshLspEnrichment(index, { enabled: true, queries: [{ file: card.path, sourceHash: card.hash, method: "references", position: { line: 0, character: 0 } }], cacheDir: f.cacheDir });
     expect(result.status, JSON.stringify(result.diagnostics)).toBe("complete");
     expect(result.results).toHaveLength(1);
+  });
+
+  it("removes the writer lock even when handle cleanup reports an error", async () => {
+    const f = await setup();
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
+      const handle = await open(...args);
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementationOnce(async () => { await close(); throw new Error("close failed"); });
+      return handle;
+    });
+    await expect(configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir })).rejects.toThrow(/cache-unavailable/);
+    await expect(fs.access(path.join(workspaceDirFor(f.cacheDir, f.root), "lsp", "writer.lock"))).rejects.toThrow();
   });
   it("does not mistake an unchanged binary fallback card for stale source", async () => {
     const f = await setup();
