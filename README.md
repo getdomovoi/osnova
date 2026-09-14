@@ -99,7 +99,7 @@ Static named re-export chains, JavaScript/TypeScript `export *` barrels and Pyth
 
 Export lookup is bounded to 4,096 `(module, export-name)` states and 128 forwarding hops per requested export, with per-index-resolution memoization. Links persist in `FileCard.reExports`, so changing a barrel re-resolves unchanged clients. Python relative module paths are normalized within the indexed root, and a package initializer takes precedence over a same-name module file.
 
-For TypeScript/JavaScript and Python, member calls use a syntax-backed receiver hint rather than a global method-name match. Supported evidence is an explicit class reference, a direct constructor site or local constructor assignment, lexical JavaScript `this` (including arrow capture), or an unshadowed Python method receiver. The declared class and member kind must agree; missing/inherited members, conflicting member identities, properties returning callables and unknown receivers stay unresolved. `receiver-hint` evidence records the class symbol, class/instance mode and basis, retaining export hops when the class came through a barrel.
+For TypeScript/JavaScript and Python, member calls use a syntax-backed receiver hint rather than a global method-name match. Supported evidence is an explicit class reference, a direct constructor site or local constructor assignment, lexical JavaScript `this` in indexed methods (including nested arrow capture), or an unshadowed Python method receiver. The declared class and member kind must agree; missing/inherited members, conflicting member identities, properties returning callables and unknown receivers stay unresolved. `receiver-hint` evidence records the class symbol, class/instance mode and basis, retaining export hops when the class came through a barrel.
 
 Python's bare, unshadowed `staticmethod`, `classmethod` and `property` decorators are recognized conservatively. JavaScript static/instance access is distinguished. Reassigned local instances, shadowed receiver parameters, before-initialization reads of local constructed variables and explicit local property writes block affected hints. This is not full alias, mutation, inheritance, annotation or control-flow inference: cross-object/cross-file changes, custom decorators and constructor return overrides can still change runtime behavior. Receiver hints are not runtime type proofs. Other language adapters retain their existing documented name heuristics.
 
@@ -161,6 +161,8 @@ The [definition-ranking candidate](benchmarks/results/definition-ranking-2026-09
 The [import-binding and scoped-declaration results](benchmarks/results/import-bindings-2026-09-14.json) record two separately frozen candidates, the nested-coverage regression found between them, and the corrected outcome. Exposed cases are labeled as regressions rather than reused as fresh validation.
 
 The [re-export results](benchmarks/results/reexports-2026-09-14.json) retain the frozen candidate receipt, positive and negative cases, development regressions and traversal limits. Self-host tests also verify callers through the public API barrel.
+
+The [receiver results](benchmarks/results/receivers-2026-09-14.json) retain the frozen receiver-hint evaluation, real-workload regressions and unsupported runtime behaviors. The measurements do not turn syntax-backed hints into type proofs.
 
 ## License
 
