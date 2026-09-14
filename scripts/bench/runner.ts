@@ -75,7 +75,7 @@ async function checkoutState(root: string, revision: string): Promise<void> {
   if (state.stdout.length > 0) throw new Error("checkout must be clean, including untracked files");
 }
 
-async function snapshot(manifest: BenchmarkManifest, workspace?: string): Promise<{ files: Map<string, Buffer>; excluded: string[] }> {
+export async function snapshot(manifest: BenchmarkManifest, workspace?: string): Promise<{ files: Map<string, Buffer>; excluded: string[] }> {
   if (manifest.source.kind === "inline") {
     return { files: new Map(Object.entries(manifest.source.files).map(([file, text]) => [file, Buffer.from(text)])), excluded: [] };
   }
