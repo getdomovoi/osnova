@@ -3,7 +3,7 @@
 Deterministic repository context engine. Osnova maps a codebase into a symbol and edge graph using tree-sitter WASM, then serves it through a CLI and an MCP stdio server. No embeddings, no network, no telemetry.
 
 - Languages v1: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Java, C#. Every other file type gets a bare file card (path, hash, no symbols).
-- Query surface: `ask`, `findText`, `skeleton`, `callers`, `map`, `renderMapCard`.
+- Query surface: `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `map`, `renderMapCard`.
 - Edge semantics v1: direct calls, imports and exports, name references. No type inference and no dynamic dispatch resolution; expect per-language precision limits.
 - Determinism: incremental updates produce byte-identical artifacts to full rebuilds. All paths, symbols, and edges are sorted before serialization.
 
@@ -61,7 +61,15 @@ const hits = ask(index, "where do we validate tokens", { limit: 5 });
 const card = await renderMapCard(index); // <= 16,384 code units
 ```
 
-Exports: `buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `ask`, `findText`, `skeleton`, `callers`, `map`, `renderMapCard`, index types, and the MCP stdio main (`runMcpStdio`).
+Exports: `buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `map`, `renderMapCard`, index types, and the MCP stdio main (`runMcpStdio`).
+
+### Search completeness
+
+`findTextDetailed(index, pattern)` returns every non-overlapping, line-based match in the indexed text by default. Its result includes `groups`, `totalGroups`, `totalMatches`, `omittedGroups`, `omittedMatches`, `truncated`, and `scope: "indexed-text"`. Completeness refers to indexed text, not ignored, unreadable or otherwise unindexed workspace content, and not fresh disk state unless the caller refreshed the index.
+
+Optional `limit` and `matchesPerGroup` bound the detailed result; both must be nonnegative safe integers. Counts include matches excluded by either limit. Zero limits can hide existing matches and are reported as truncation, not absence.
+
+The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_find_text` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These are count limits, not byte or token budgets.
 
 Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the platform default (macOS `~/Library/Caches/osnova/`, Linux `$XDG_CACHE_HOME/osnova/`, Windows `%LOCALAPPDATA%/osnova/cache/`). One subdirectory per workspace, LRU-evicted across workspaces.
 

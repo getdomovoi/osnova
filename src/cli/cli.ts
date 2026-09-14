@@ -5,11 +5,11 @@ import { applyChanges, freshness } from "../index/incremental.js";
 import { loadArtifact, saveArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
-import { findText } from "../query/findText.js";
+import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callers } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallers, formatFindText, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallers, formatFindTextResult, formatMap, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
 
 export interface CliIo {
@@ -151,13 +151,14 @@ export async function runCli(
       const pattern = requirePositional(parsed.positionals, "pattern", "grep");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"]);
       const limitValue = parsed.values.limit !== undefined ? Number(parsed.values.limit) : undefined;
-      const groups = findText(index, pattern, {
+      const result = findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
         in: parsed.values.in,
-        limit: limitValue !== undefined && Number.isFinite(limitValue) ? limitValue : undefined,
+        limit: limitValue ?? 50,
+        matchesPerGroup: 10,
       });
-      io.stdout(formatFindText(groups));
+      io.stdout(formatFindTextResult(result));
       return EXIT_OK;
     }
     case "skeleton": {

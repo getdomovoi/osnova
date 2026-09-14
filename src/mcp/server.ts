@@ -10,11 +10,11 @@ import { applyChanges, freshness } from "../index/incremental.js";
 import { loadArtifact, saveArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
-import { findText } from "../query/findText.js";
+import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callers } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallers, formatFindText, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallers, formatFindTextResult, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
 
 const OSNOVA_VERSION = "0.1.0";
@@ -38,7 +38,7 @@ const toolDefinitions = [
   {
     name: "osnova_find_text",
     description:
-      "Exhaustive regex or literal search over indexed files, grouped by enclosing symbol and ranked by incoming-edge count.",
+      "Regex or literal search over indexed text, grouped by enclosing symbol and ranked by incoming-edge count. Shows at most 10 matches per group and 50 groups by default, with totals and explicit omission counts.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -144,13 +144,17 @@ export function createOsnovaMcpServer(
         }
         case "osnova_find_text": {
           const pattern = requireString(args, "pattern");
-          const groups = findText(index, pattern, {
+          if (args.limit !== undefined && typeof args.limit !== "number") {
+            throw new RangeError("osnova: search limits must be nonnegative safe integers");
+          }
+          const result = findTextDetailed(index, pattern, {
             fixed: optionalBoolean(args, "fixed"),
             ignoreCase: optionalBoolean(args, "ignoreCase"),
             in: optionalString(args, "in"),
-            limit: optionalNumber(args, "limit"),
+            limit: args.limit ?? 50,
+            matchesPerGroup: 10,
           });
-          return textResult(formatFindText(groups));
+          return textResult(formatFindTextResult(result));
         }
         case "osnova_skeleton": {
           const file = requireString(args, "file");

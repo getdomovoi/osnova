@@ -2,6 +2,7 @@ import type {
   AskResult,
   CallersResult,
   FindTextGroup,
+  FindTextResult,
   MapResult,
   SkeletonResult,
 } from "../types.js";
@@ -34,6 +35,19 @@ export function formatFindText(groups: readonly FindTextGroup[]): string {
     blocks.push(`${label}\n${hits}`);
   }
   return blocks.join("\n");
+}
+
+export function formatFindTextResult(result: FindTextResult): string {
+  const shown = result.totalMatches - result.omittedMatches;
+  const summary = `indexed-text search: ${shown}/${result.totalMatches} matches, ${result.groups.length}/${result.totalGroups} groups`;
+  const lines = [summary];
+  if (result.truncated) {
+    lines.push(`truncated: ${result.omittedMatches} matches omitted; ${result.omittedGroups} groups omitted`);
+    lines.push("Use findTextDetailed without limits to retrieve all matches in indexed text.");
+  }
+  if (result.totalMatches === 0) lines.push("no matches in indexed text");
+  else if (result.groups.length > 0) lines.push(formatFindText(result.groups));
+  return lines.join("\n");
 }
 
 export function formatSkeleton(result: SkeletonResult): string {
