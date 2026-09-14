@@ -1,5 +1,6 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import type {
   CardLanguage,
@@ -163,7 +164,7 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string): Promis
   const raw = serializeArtifact(index);
   const gzipped = raw.length > GZIP_THRESHOLD_BYTES;
   const finalPath = path.join(dir, gzipped ? "index.json.gz" : "index.json");
-  const tmpPath = `${finalPath}.tmp-${process.pid}`;
+  const tmpPath = `${finalPath}.tmp-${process.pid}-${randomUUID()}`;
   const payload = gzipped ? gzipSync(raw) : raw;
   await fs.writeFile(tmpPath, payload);
   await fs.rename(tmpPath, finalPath);

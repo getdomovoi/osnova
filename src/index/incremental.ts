@@ -82,16 +82,13 @@ export async function applyChanges(
   const files = new Map(index.files);
   const rawEdges = rawEdgesFromIndex(index);
   const normalized = [...new Set([...paths].map(normalizeRelPath))].filter((p) => p.length > 0).sort();
+  if (normalized.length === 0) return index;
+
+  const scan = await scanFiles(absRoot);
+  const eligible = new Set(scan.paths);
 
   for (const relPath of normalized) {
-    const abs = path.join(absRoot, relPath);
-    let exists = true;
-    try {
-      await fs.stat(abs);
-    } catch {
-      exists = false;
-    }
-    if (!exists) {
+    if (!eligible.has(relPath)) {
       files.delete(relPath);
       rawEdges.delete(relPath);
       continue;

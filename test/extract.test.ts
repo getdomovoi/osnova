@@ -95,6 +95,7 @@ describe("extraction adapters", () => {
   it("extracts java classes and methods", () => {
     expect(symbolsOf("src/App.java")).toEqual([
       "class:src/App.java#App",
+      "constant:src/App.java#App.MAX_ITEMS",
       "method:src/App.java#App.start",
       "method:src/App.java#App.describe",
     ]);

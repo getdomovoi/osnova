@@ -44,7 +44,7 @@ describe("deterministic index", () => {
           const bv = b[i] as string | number;
           if (av !== bv) return av < bv;
         }
-        return true;
+        return false;
       };
       for (let i = 1; i < index.edges.length; i += 1) {
         const prev = key(index.edges[i - 1] as OsnovaIndex["edges"][number]);

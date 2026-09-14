@@ -76,13 +76,14 @@ export function callers(
     frontier = next;
   }
 
+  const compareStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
   hits.sort(
     (a, b) =>
       a.depth - b.depth ||
-      (a.file ?? "").localeCompare(b.file ?? "") ||
+      compareStr(a.file ?? "", b.file ?? "") ||
       (a.line ?? 0) - (b.line ?? 0) ||
-      a.kind.localeCompare(b.kind) ||
-      a.qualifiedName.localeCompare(b.qualifiedName),
+      compareStr(a.kind, b.kind) ||
+      compareStr(a.qualifiedName, b.qualifiedName),
   );
   return { target, hits };
 }

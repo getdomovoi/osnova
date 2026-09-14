@@ -57,15 +57,18 @@ export async function extractCard(
     const parser = await getParser(language);
     const tree = parser.parse(text);
     if (tree !== null) {
-      const output = adapterFor(language).extract(tree, text);
-      definitions = [...output.definitions];
-      rawEdges = output.edges.map((edge: RawEdge) => ({
-        kind: edge.kind,
-        toName: edge.toName,
-        line: edge.line,
-        enclosing: edge.enclosing,
-      }));
-      tree.delete();
+      try {
+        const output = adapterFor(language).extract(tree, text);
+        definitions = [...output.definitions];
+        rawEdges = output.edges.map((edge: RawEdge) => ({
+          kind: edge.kind,
+          toName: edge.toName,
+          line: edge.line,
+          enclosing: edge.enclosing,
+        }));
+      } finally {
+        tree.delete();
+      }
     }
   } catch {
     definitions = [];

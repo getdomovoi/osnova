@@ -82,6 +82,8 @@ describe("mcp stdio server", () => {
   }, 60_000);
 
   it("refreshes before answering when files changed on disk", async () => {
+    write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
+    write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
     const client = await connect();
     try {
       const before = await callTool(client, "osnova_skeleton", { file: "src/greet.ts" });

@@ -89,15 +89,16 @@ function fitLines(
   maxCodeUnits: number,
   onDrop: (rank: number) => void,
 ): string[] {
-  const totalUnits = (): number => lines.reduce((acc, line) => acc + line.text.length + 1, 0);
-  let remaining = [...lines];
+  const remaining = [...lines];
+  const totalUnits = (): number =>
+    remaining.reduce((acc, line) => acc + line.text.length + 1, 0);
   const dropRanks = [RANK_HOTSPOT, RANK_SECTION, RANK_HUB, RANK_CLUSTER];
   for (const rank of dropRanks) {
     while (totalUnits() > maxCodeUnits) {
       const index = findLastIndexOfRank(remaining, rank);
       if (index === -1) break;
       onDrop(rank === RANK_SECTION ? RANK_HOTSPOT : rank);
-      remaining = remaining.filter((_, i) => i !== index);
+      remaining.splice(index, 1);
     }
     if (totalUnits() <= maxCodeUnits) break;
   }

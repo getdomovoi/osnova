@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, childrenOf } from "./util.js";
+import { Extractor, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 
 export const javaAdapter: LanguageAdapter = {
@@ -40,12 +40,15 @@ export const javaAdapter: LanguageAdapter = {
           return;
         }
         case "field_declaration": {
-          const hasConst = node.text.trimStart().startsWith("final");
-          for (const declarator of childrenOf(node)) {
-            if (declarator.type !== "variable_declarator") continue;
-            const nameNode = declarator.childForFieldName("name");
-            if (nameNode !== null && hasConst && /^[A-Z][A-Z0-9_]*$/.test(nameNode.text)) {
-              out.addDef(nameNode.text, "constant", declarator);
+          const modifiers = childOfType(node, "modifiers");
+          const hasFinal = modifiers !== null && /\bfinal\b/.test(modifiers.text);
+          if (hasFinal) {
+            for (const declarator of childrenOf(node)) {
+              if (declarator.type !== "variable_declarator") continue;
+              const nameNode = declarator.childForFieldName("name");
+              if (nameNode !== null && /^[A-Z][A-Z0-9_]*$/.test(nameNode.text)) {
+                out.addDef(nameNode.text, "constant", declarator);
+              }
             }
           }
           for (const child of childrenOf(node)) visit(child);

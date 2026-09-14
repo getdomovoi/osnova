@@ -90,6 +90,9 @@ export async function getParser(language: LanguageId): Promise<Parser> {
       return parser;
     })();
     parserCache.set(language, pending);
+    pending.catch(() => {
+      parserCache.delete(language);
+    });
   }
   return pending;
 }

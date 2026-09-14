@@ -1,5 +1,5 @@
 import type { Node, Tree } from "web-tree-sitter";
-import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier, localJoin } from "./util.js";
+import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 
 const FUNCTION_VALUE_NODES = new Set([
@@ -33,7 +33,7 @@ class TsExtractor {
 
   pushFrame(name: string, kind: ScopeKind): void {
     this.frames.push({ name, kind });
-    this.out.push(localJoin(this.frames.map((frame) => frame.name).filter((n) => n.length > 0)));
+    this.out.push(name);
   }
 
   popFrame(): void {

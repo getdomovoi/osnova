@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, childrenOf } from "./util.js";
+import { Extractor, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -44,7 +44,8 @@ export const csharpAdapter: LanguageAdapter = {
           return;
         }
         case "field_declaration": {
-          const isConst = node.text.trimStart().startsWith("const");
+          const modifiers = childOfType(node, "modifiers");
+          const isConst = modifiers !== null && /\bconst\b/.test(modifiers.text);
           if (isConst) {
             for (const declarator of childrenOf(node)) {
               if (declarator.type !== "variable_declaration") continue;
