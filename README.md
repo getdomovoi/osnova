@@ -108,6 +108,24 @@ pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm perf
 
 The perf script enforces first-build and incremental-refresh budgets on a generated fixture repo. Tests include per-language extraction goldens, an incremental-equals-full property test over randomized edit sequences, CLI round-trips, and MCP handshake plus tool round-trips over an in-memory transport.
 
+### Reproducible benchmarks
+
+```sh
+pnpm benchmark --samples 5
+pnpm benchmark --split evaluation --samples 5
+pnpm benchmark --manifest /path/to/corpus.json --workspace /path/to/checkout --output /existing/directory/result.json
+```
+
+The default `benchmarks/core-v1.json` is a small authored regression corpus, not representative evidence for large repositories. It separates development cases from explicitly selected evaluation cases. Evaluation labels are public and versioned, not a sealed test set. Freeze changes before evaluating; do not tune against evaluation scores. Corpus content and labels have a stable SHA-256 fingerprint, and each run also records input-snapshot, engine and harness fingerprints.
+
+The runner launches a fresh process using `tsx` source execution, writes only into a disposable copy/cache and an explicitly requested result file, and runs no workload installation or test scripts. It never downloads a checkout. External corpus manifests require a full 40-character Git revision, a matching clean checkout with no untracked files, and source anchors independent of the extractor. Tracked files are copied independently of Osnova's scanner; symlink/submodule inputs are rejected. The supplied checkout is not edited. Output files are created exclusively, never overwritten.
+
+Reports include raw expected/actual IDs, errors, source-validation failures, per-case latency and bounded text payloads. Metrics score **structured query results**, not what an agent can reconstruct from clipped text. Retrieval uses Recall@5 and reciprocal rank at 5; duplicate hits consume ranking positions. Caller precision/recall score distinct direct-call symbols by default, excluding reference/import edges, with traversal depth available per case. Text-search IDs use `file:line:column`, with one-based lines and zero-based columns. Correct empty sets score 1; unexpected results on empty ground truth score precision 0. Query errors remain in the aggregate denominator as zero; invalid source anchors invalidate that metric aggregate instead of disappearing from it.
+
+Timing separates first build, unchanged hash refresh, and edited refresh including hash diff, incremental apply and cache write. Edit/revert setup and full-rebuild equivalence checks are outside the timed refresh samples. Percentiles use nearest rank; small sample counts provide only coarse smoke measurements. First build is process-cold for the parser, not a flushed filesystem-cache or process-startup measurement. Peak RSS includes the worker runtime and `tsx`, not just the graph. Serialized and on-disk artifact sizes are reported separately.
+
+Agent task success, tokenizer-based context counts, agent tool calls and packed-package size remain `null` until measured by their own trials. `status: completed` means measurement finished, not that retrieval was perfect; inspect the scores. Operational/query failures produce `status: failed` and command exit 2. This benchmark does not replace `pnpm perf` or the unit-test gates.
+
 ## License
 
 Apache-2.0

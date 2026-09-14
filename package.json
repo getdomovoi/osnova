@@ -54,6 +54,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "perf": "node scripts/perf.mjs",
+    "benchmark": "tsx scripts/bench/cli.ts",
     "changeset": "changeset",
     "prepublishOnly": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
