@@ -42,6 +42,7 @@ interface Distribution {
 export interface BenchmarkReport {
   schemaVersion: 1;
   corpus: string;
+  sourceRevision: string | null;
   manifestFingerprint: string;
   snapshotFingerprint: string | null;
   isolation: "in-process" | "fresh-process";
@@ -178,6 +179,7 @@ export async function runBenchmark(
   if (selected.length === 0) throw new Error("no cases in selected split");
   const report: BenchmarkReport = {
     schemaVersion: 1, corpus: manifest.id, manifestFingerprint: manifestFingerprint(manifest), snapshotFingerprint: null,
+    sourceRevision: manifest.source.kind === "checkout" ? manifest.source.revision : null,
     isolation: "in-process", scoringScope: "structured-query", status: "completed",
     index: null,
     environment: { node: process.version, platform: process.platform, arch: process.arch },

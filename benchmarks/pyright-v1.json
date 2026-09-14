@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "pyright-v1",
+  "source": { "kind": "checkout", "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1", "repository": "https://github.com/microsoft/pyright" },
+  "edit": { "file": "packages/pyright-internal/src/common/pathUtils.ts", "append": "\n// benchmark edit\n" },
+  "cases": [
+    {
+      "id": "path-root-definition", "split": "development", "kind": "ask", "question": "getRootLength pathname root",
+      "expected": ["packages/pyright-internal/src/common/pathUtils.ts#getRootLength"],
+      "anchors": [{ "file": "packages/pyright-internal/src/common/pathUtils.ts", "text": "export function getRootLength(pathString: string, sep = path.sep)" }]
+    },
+    {
+      "id": "directory-root-dependency", "split": "development", "kind": "callers", "symbol": "packages/pyright-internal/src/common/pathUtils.ts#getDirectoryPath", "direction": "out",
+      "expected": ["packages/pyright-internal/src/common/pathUtils.ts#getRootLength"],
+      "anchors": [{ "file": "packages/pyright-internal/src/common/pathUtils.ts", "text": "export function getDirectoryPath(pathString: string)" }, { "file": "packages/pyright-internal/src/common/pathUtils.ts", "text": "getRootLength(pathString)" }]
+    },
+    {
+      "id": "wildcard-definition", "split": "evaluation", "kind": "ask", "question": "getWildcardRegexPattern fileSpec",
+      "expected": ["packages/pyright-internal/src/common/pathUtils.ts#getWildcardRegexPattern"],
+      "anchors": [{ "file": "packages/pyright-internal/src/common/pathUtils.ts", "text": "export function getWildcardRegexPattern(rootPath: string, fileSpec: string)" }]
+    },
+    {
+      "id": "path-normalization-definition", "split": "evaluation", "kind": "ask", "question": "normalizePath pathString",
+      "expected": ["packages/pyright-internal/src/common/pathUtils.ts#normalizePath"],
+      "anchors": [{ "file": "packages/pyright-internal/src/common/pathUtils.ts", "text": "export function normalizePath(pathString: string)" }]
+    }
+  ]
+}

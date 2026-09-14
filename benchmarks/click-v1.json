@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "click-v1",
+  "source": { "kind": "checkout", "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1", "repository": "https://github.com/pallets/click" },
+  "edit": { "file": "src/click/utils.py", "append": "\n# benchmark edit\n" },
+  "cases": [
+    {
+      "id": "echo-definition", "split": "development", "kind": "ask", "question": "echo message newline stdout",
+      "expected": ["src/click/utils.py#echo"],
+      "anchors": [{ "file": "src/click/utils.py", "text": "def echo(" }]
+    },
+    {
+      "id": "app-directory-definition", "split": "development", "kind": "ask", "question": "get_app_dir roaming force_posix",
+      "expected": ["src/click/utils.py#get_app_dir"],
+      "anchors": [{ "file": "src/click/utils.py", "text": "def get_app_dir(app_name: str, roaming: bool = True, force_posix: bool = False)" }]
+    },
+    {
+      "id": "app-name-dependency", "split": "evaluation", "kind": "callers", "symbol": "src/click/utils.py#get_app_dir", "direction": "out",
+      "expected": ["src/click/utils.py#_posixify"],
+      "anchors": [{ "file": "src/click/utils.py", "text": "def _posixify(name: str)" }, { "file": "src/click/utils.py", "text": "_posixify(app_name)" }]
+    },
+    {
+      "id": "lazy-file-opening", "split": "evaluation", "kind": "ask", "question": "open_file lazy atomic",
+      "expected": ["src/click/utils.py#open_file"],
+      "anchors": [{ "file": "src/click/utils.py", "text": "def open_file(" }]
+    }
+  ]
+}

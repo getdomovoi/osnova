@@ -65,6 +65,7 @@ describe("offline benchmark runner", () => {
     const result = await runBenchmark(manifest, { samples: 1, split: "development" });
     expect(result.status).toBe("failed");
     expect(result.errors.join("\n")).toContain("workspace required");
+    expect(result.sourceRevision).toBe("a".repeat(40));
     expect(result.performance).toBeNull();
     expect(result.cases).toHaveLength(3);
     expect(result.cases.every((item) => item.status === "error")).toBe(true);
