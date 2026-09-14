@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { buildIndex, applyChanges, freshness, ask, callersDetailed, findTextDetailed, serializeArtifact } from "../../src/index.js";
 import { artifactPathFor, saveArtifact } from "../../src/index/serialize.js";
-import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics } from "../../src/query/format.js";
+import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexHealthSummary } from "../../src/query/format.js";
 import { boundText } from "../../src/query/budget.js";
 import type { OsnovaIndex } from "../../src/types.js";
 import { manifestFingerprint, parseManifest, pathExcluded, validateRelativePath } from "./manifest.js";
@@ -142,7 +142,7 @@ function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<
       result.set = scoreSet(result.actual, item.expected);
       text = formatFindTextResult(answer);
     }
-    const full = [formatIndexDiagnostics(index), text].filter(Boolean).join("\n");
+    const full = [formatIndexHealthSummary(index), text].filter(Boolean).join("\n");
     result.response = boundText(full);
     result.responseCodeUnits = result.response.length;
     result.responseBytes = Buffer.byteLength(result.response);

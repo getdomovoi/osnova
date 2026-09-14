@@ -12,7 +12,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexHealthSummary, formatSkeleton } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
@@ -116,7 +116,7 @@ export function createOsnovaMcpServer(
       const index = await refresh();
       const generation = `generation ${indexGeneration(index)}`;
       const respond = (text: string): ReturnType<typeof textResult> =>
-        textResult([generation, formatIndexDiagnostics(index), text].filter(Boolean).join("\n"));
+        textResult([generation, formatIndexHealthSummary(index), text].filter(Boolean).join("\n"));
       switch (name) {
         case "osnova_ask": {
           const question = requireString(args, "question");

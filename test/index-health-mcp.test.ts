@@ -47,6 +47,23 @@ it("all five tools disclose partial analysis", async () => {
   }
 });
 
+it("ordinary query tools aggregate diagnostics instead of repeating file paths", async () => {
+  for (let number = 0; number < 15; number += 1) {
+    await fs.writeFile(path.join(workspace, `broken-${number}.ts`), "export function broken( {");
+  }
+  const tools: Array<[string, Record<string, unknown>]> = [
+    ["osnova_ask", { question: "one" }], ["osnova_find_text", { pattern: "one" }],
+    ["osnova_skeleton", { file: "one.ts" }], ["osnova_callers", { symbol: "one" }],
+  ];
+  for (const [name, args] of tools) {
+    const result = await client.callTool({ name, arguments: args });
+    const text = JSON.stringify(result);
+    expect(text, name).toContain("partial analysis: 15 diagnostics (parse/syntax-errors=15)");
+    expect(text, name).toContain("details via doctor or indexHealth");
+    expect(text, name).not.toContain("broken-0.ts");
+  }
+});
+
 it("retries initialization after a grammar failure", async () => {
   vi.spyOn(loader, "getParser").mockRejectedValueOnce(new Error("unavailable"));
   const request = { name: "osnova_skeleton", arguments: { file: "one.ts" } };
