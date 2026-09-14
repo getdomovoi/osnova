@@ -1,4 +1,5 @@
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
 import { applyChanges, freshness } from "../index/incremental.js";
@@ -13,6 +14,10 @@ import { map } from "../query/map.js";
 import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
+import { scopedAsk } from "../query/scoped.js";
+import { impact } from "../query/impact.js";
+import { taskContext } from "../query/task-context.js";
+import { maximumTextResponseCodeUnits } from "../types.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -29,6 +34,9 @@ usage:
   osnova skeleton <file> [--workspace <path>] [--cache-dir <path>]
   osnova callers <symbol> [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova map [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova scoped-ask "<question>" [--in <path>] [-n <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova context "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
+  osnova impact --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova mcp --workspace <path> [--cache-dir <path>]
 
 queries refresh the index first so answers describe current disk state.`;
@@ -129,7 +137,8 @@ export async function runCli(
       ].join("\n"));
       return EXIT_STALE;
     }
-    case "ask": {
+    case "ask":
+    case "scoped-ask": {
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
@@ -145,6 +154,12 @@ export async function runCli(
       if (question.length === 0) throw new Error("osnova ask: missing <question> argument");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = parsed.values.limit !== undefined ? Number(parsed.values.limit) : undefined;
+      if (command === "scoped-ask") {
+        const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: parsed.values.full });
+        io.stdout(`generation ${result.receipt.generation}; ${result.scopes.length} scopes; ${result.omittedHits} hits omitted\n` +
+          result.hits.map((hit) => `[${hit.scope || "."}] ${hit.file}:${hit.line} ${hit.symbol?.qualifiedName ?? "<file>"}\n${hit.excerpt}`).join("\n\n"));
+        return EXIT_OK;
+      }
       const result = ask(index, question, {
         in: parsed.values.in,
         limit: limitValue !== undefined && Number.isFinite(limitValue) ? limitValue : undefined,
@@ -234,6 +249,48 @@ export async function runCli(
           }),
         ),
       );
+      return EXIT_OK;
+    }
+    case "context": {
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: {
+        task: { type: "string", default: "understand" }, symbol: { type: "string", multiple: true }, in: { type: "string" },
+        limit: { type: "string", short: "n" }, depth: { type: "string" }, "max-code-units": { type: "string" },
+        workspace: { type: "string" }, "cache-dir": { type: "string" },
+      } });
+      const task = parsed.values.task;
+      if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
+      const budget = parsed.values["max-code-units"] === undefined ? maximumTextResponseCodeUnits : Number(parsed.values["max-code-units"]);
+      if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
+      const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
+        in: parsed.values.in, limit: parsed.values.limit === undefined ? undefined : Number(parsed.values.limit),
+        maxDepth: parsed.values.depth === undefined ? undefined : Number(parsed.values.depth), maxCodeUnits: budget });
+      io.stdout(JSON.stringify(result));
+      return EXIT_OK;
+    }
+    case "impact": {
+      const parsed = parseArgs({ args: rest, options: { "base-cache": { type: "string" }, depth: { type: "string" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
+      const baseCache = parsed.values["base-cache"];
+      if (baseCache === undefined) throw new Error("osnova impact: --base-cache is required");
+      const root = path.resolve(parsed.values.workspace ?? process.cwd());
+      const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
+      const baseReal = await fs.realpath(baseCache);
+      const currentReal = await fs.realpath(cacheDir).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return path.resolve(cacheDir);
+      });
+      if (baseReal === currentReal) throw new Error("osnova impact: base and current caches must be distinct");
+      const base = await loadArtifact(root, baseCache);
+      if (base === undefined) throw new Error("osnova impact: baseline index is missing or incompatible");
+      const current = await ensureIndex(root, cacheDir, io.stderr);
+      const result = impact(base, current, { maxDepth: parsed.values.depth === undefined ? undefined : Number(parsed.values.depth) });
+      io.stdout([
+        `base ${result.base.generation}\ncurrent ${result.current.generation}`,
+        `${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
+        ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
+        ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
+        `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
+      ].join("\n"));
       return EXIT_OK;
     }
     case "mcp": {
