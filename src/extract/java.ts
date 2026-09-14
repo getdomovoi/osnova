@@ -30,7 +30,10 @@ export const javaAdapter: LanguageAdapter = {
         case "method_declaration":
         case "compact_constructor_declaration":
         case "constructor_declaration": {
-          const nameNode = node.childForFieldName("name");
+          let nameNode = node.childForFieldName("name");
+          if (nameNode === null && node.type === "compact_constructor_declaration") {
+            nameNode = childrenOf(node).find((c) => c.type === "identifier") ?? null;
+          }
           if (nameNode !== null) {
             out.addDef(nameNode.text, "method", node);
             out.push(nameNode.text);
