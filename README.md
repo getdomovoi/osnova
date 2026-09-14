@@ -91,6 +91,10 @@ Structured query APIs are not subject to this text-presentation cap. Search call
 
 Each detailed hit includes its original `edge`, preserving the source call-site path/line separately from the callee definition location. Extracted edges record syntax provenance and their resolution basis: `import-path`, `same-file-name`, `imported-file-name`, or `unique-name`. Name resolution remains heuristic even when its status is `resolved`. Multiple candidates at the preferred tier stay `ambiguous` with candidate names instead of selecting one arbitrarily; unrelated language families are excluded. TypeScript, TSX and JavaScript share a family. Externally supplied edges without provenance are explicitly `unknown` when serialized.
 
+TypeScript/JavaScript and Python direct calls additionally carry lexical `binding` hints. Named imports resolve through their source module and exported name, preserving the local call-site name. Named default exports, local export aliases, direct namespace members and known local definitions are supported, with `import-binding` or `lexical-definition` evidence. Parameter, destructuring, loop, catch and assignment bindings prevent an imported name from leaking through a shadow; Python function-local assignments apply even before their textual declaration. Missing imported targets do not fall back to unrelated global names. Module-level arrow bodies are attributed to their indexed definition.
+
+This is declaration-aware analysis, not execution or type inference. Rebinding conflicts, type-only runtime calls, Python wildcard imports, `global`/`nonlocal` and match scopes are conservative; re-export chains, anonymous defaults and dynamic receiver/value flow are not resolved by this binding pass. Ordinary member calls can still use the older documented name heuristic. Missing local definitions and blocked bindings remain explicit unresolved evidence. Exported-name and binding metadata are persisted so unchanged importers can be re-resolved after target edits.
+
 CLI `callers` and MCP `osnova_callers` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
 
 ### Index health
@@ -101,7 +105,7 @@ Syntax-recovered files retain their text and recovered definitions with `syntax-
 
 CLI queries emit partial-analysis warnings on stderr; MCP results include warnings in their text. Map cards keep the health indication inside their existing code-unit cap. `osnova check` exits 1 for stale, partial, or unavailable indexes, and 0 only for fresh indexes. Full builds may save partial indexes so text search and recovered definitions remain available.
 
-Artifact format 3 persists diagnostics and resolution evidence. `loadIndex` returns `undefined` for format-1 and format-2 caches, which predate current analysis guarantees; query commands rebuild them. Corrupt or unsupported newer artifacts and failed cache writes remain explicit errors. Repaired files clear their old diagnostics on incremental update.
+Artifact format 4 persists diagnostics, export names, lexical bindings and resolution evidence. `loadIndex` returns `undefined` for format-1 through format-3 caches, which predate current analysis guarantees; query commands rebuild them. Corrupt or unsupported newer artifacts and failed cache writes remain explicit errors. Repaired files clear their old diagnostics on incremental update.
 
 Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the platform default (macOS `~/Library/Caches/osnova/`, Linux `$XDG_CACHE_HOME/osnova/`, Windows `%LOCALAPPDATA%/osnova/cache/`). One subdirectory per workspace, LRU-evicted across workspaces.
 

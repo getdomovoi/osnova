@@ -1,4 +1,4 @@
-import type { EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { EdgeBinding, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 
 export interface RawEdgesByFile {
   readonly [file: string]: readonly RawEdgeItem[];
@@ -9,6 +9,7 @@ export interface RawEdgeItem {
   readonly toName: string;
   readonly line: number;
   readonly enclosing: string;
+  readonly binding?: EdgeBinding | undefined;
 }
 
 export function qualifiedNameOf(file: string, local: string): string {
@@ -88,7 +89,8 @@ function compareEdges(a: OsnovaEdge, b: OsnovaEdge): number {
     compareStr(a.toName, b.toName) ||
     compareStr(a.toSymbol ?? "", b.toSymbol ?? "") ||
     compareStr(a.toFile ?? "", b.toFile ?? "") ||
-    compareStr(a.fromSymbol, b.fromSymbol)
+    compareStr(a.fromSymbol, b.fromSymbol) ||
+    compareStr(JSON.stringify(a.binding ?? null), JSON.stringify(b.binding ?? null))
   );
 }
 
@@ -104,7 +106,8 @@ function dedupeEdges(sorted: OsnovaEdge[]): OsnovaEdge[] {
       prev.toName === edge.toName &&
       prev.line === edge.line &&
       prev.toSymbol === edge.toSymbol &&
-      prev.toFile === edge.toFile
+      prev.toFile === edge.toFile &&
+      JSON.stringify(prev.binding ?? null) === JSON.stringify(edge.binding ?? null)
     ) {
       continue;
     }

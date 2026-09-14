@@ -75,6 +75,7 @@ export async function extractCard(
           toName: edge.toName,
           line: edge.line,
           enclosing: edge.enclosing,
+          ...(edge.binding === undefined ? {} : { binding: edge.binding }),
         }));
       } finally {
         tree.delete();
@@ -99,6 +100,7 @@ export async function extractCard(
       span: def.span,
       signature: def.signature,
       lineCount: Math.max(1, def.span.endLine - def.span.startLine + 1),
+      ...(def.exportedNames === undefined ? {} : { exportedNames: def.exportedNames }),
     };
   });
 

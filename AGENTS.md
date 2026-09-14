@@ -24,6 +24,7 @@ Conventions for agent sessions working in this repository.
 - Extraction adapters stay small and golden-tested in `test/extract.test.ts`. One adapter per language under `src/extract/`; the TS adapter is shared by typescript, tsx, and javascript.
 - web-tree-sitter is pinned exactly (0.25.10) because the prebuilt grammars in `tree-sitter-wasms@0.1.13` use the older dynamic-linking format; 0.27 fails with a `getDylinkMetadata` error. Do not bump without probing every grammar first (`test/grammar.test.ts` does this).
 - Edge semantics v1: direct calls, imports, name references only. No type inference. Resolution preference: same file, then files reached by the file's resolved imports, then unique name within the language family. Ambiguous candidates at the preferred tier remain unresolved; persist the resolution basis and never label a name heuristic as type-proven evidence.
+- TypeScript/JavaScript and Python binding hints take precedence over name heuristics. Blocked bindings and missing bound targets must not fall through to global matches. Preserve binding metadata when rebuilding raw edges, and include it in same-line edge identity so incremental updates retain distinct scope states.
 - Tree output strings from `renderMapCard` default to a 16,384-code-unit cap with elastic drop order: hotspot lines first, then hub lines, then cluster lines. Preserve the header where the requested budget permits; zero returns an empty card. CLI/MCP text payloads have a separate 16,384-code-unit presentation cap with explicit clipping notices.
 
 ## Test layout

@@ -136,6 +136,35 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         );
         continue;
       }
+      if (raw.binding !== undefined) {
+        const binding = raw.binding;
+        let candidates: readonly OsnovaSymbol[] = [];
+        let resolution: EdgeResolution = { status: "unresolved", reason: "binding-blocked" };
+        if (binding.kind === "import") {
+          const target = resolveImportTarget(card.language, fromFile, binding.source, knownFiles);
+          if (target === undefined) resolution = { status: "unresolved", reason: "import-target-unresolved" };
+          else {
+            candidates = (files.get(target)?.symbols ?? []).filter((symbol) =>
+              languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
+              symbol.exportedNames?.includes(binding.importedName) &&
+              (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
+            resolution = { status: "resolved", method: "import-binding" };
+          }
+        } else if (binding.kind === "local") {
+          candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, binding.name));
+          resolution = { status: "resolved", method: "lexical-definition" };
+        }
+        const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
+        const resolved = names.length === 1 ? candidates[0] : undefined;
+        if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
+        else if (resolved === undefined && resolution.status === "resolved") resolution = { status: "unresolved", reason: "bound-symbol-missing" };
+        edges.push({
+          kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
+          evidence: { source: "syntax", resolution },
+          ...(resolved === undefined ? {} : { toSymbol: resolved.qualifiedName, toFile: resolved.file }),
+        });
+        continue;
+      }
       const lookupName = raw.toName.includes(".")
         ? (raw.toName.split(".").pop() ?? raw.toName)
         : raw.toName;

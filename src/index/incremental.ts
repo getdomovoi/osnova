@@ -54,6 +54,7 @@ function rawEdgesFromIndex(index: OsnovaIndex): Map<string, RawEdgeItem[]> {
       toName: edge.toName,
       line: edge.line,
       enclosing: localOfQualifiedName(edge.fromSymbol),
+      ...(edge.binding === undefined ? {} : { binding: edge.binding }),
     };
     const list = out.get(edge.fromFile);
     if (list === undefined) out.set(edge.fromFile, [raw]);

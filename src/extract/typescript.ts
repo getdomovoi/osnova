@@ -1,6 +1,7 @@
 import type { Node, Tree } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectBindings } from "./bindings.js";
 
 const FUNCTION_VALUE_NODES = new Set([
   "function_expression",
@@ -131,6 +132,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
 export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript"): LanguageAdapter {
   const extract = (tree: Tree): AdapterOutput => {
     const ex = new TsExtractor();
+    const bindings = collectBindings(tree.rootNode, false);
     const visit = (node: Node): void => {
       switch (node.type) {
         case "import_statement": {
@@ -200,6 +202,18 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
           }
           return;
         }
+        case "variable_declarator": {
+          const value = node.childForFieldName("value");
+          const name = node.childForFieldName("name");
+          if (ex.atModuleLevel && name?.type === "identifier" && value !== null && FUNCTION_VALUE_NODES.has(value.type)) {
+            ex.pushFrame(name.text, "function");
+            visit(value);
+            ex.popFrame();
+          } else {
+            for (const child of childrenOf(node)) visit(child);
+          }
+          return;
+        }
         case "call_expression": {
           const fn = node.childForFieldName("function");
           if (
@@ -221,13 +235,13 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
             return;
           }
           const target = callTarget(node);
-          if (target !== null) ex.out.addEdge("calls", target, node);
+          if (target !== null) ex.out.addEdge("calls", target, node, bindings.at(fn, node));
           for (const child of childrenOf(node)) visit(child);
           return;
         }
         case "new_expression": {
           const target = newTarget(node);
-          if (target !== null) ex.out.addEdge("calls", target, node);
+          if (target !== null) ex.out.addEdge("calls", target, node, bindings.at(node.childForFieldName("constructor"), node));
           for (const child of childrenOf(node)) visit(child);
           return;
         }
@@ -237,7 +251,9 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
       }
     };
     for (const child of childrenOf(tree.rootNode)) visit(child);
-    return { definitions: ex.out.definitions, edges: ex.out.edges };
+    return { definitions: ex.out.definitions.map((definition) => ({
+      ...definition, exportedNames: bindings.exportedNames(definition.name, definition.parent),
+    })), edges: ex.out.edges };
   };
   return { language, extract };
 }

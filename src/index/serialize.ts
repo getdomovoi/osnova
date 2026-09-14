@@ -13,6 +13,7 @@ import type {
   IndexDiagnostic,
   EdgeEvidence,
   EdgeResolution,
+  EdgeBinding,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
@@ -40,6 +41,7 @@ interface SerializedSymbol {
   readonly kind: SymbolKind;
   readonly span: SerializedSpan;
   readonly signature: string;
+  readonly exportedNames: readonly string[];
 }
 
 interface SerializedFile {
@@ -62,6 +64,7 @@ interface SerializedEdge {
   readonly ts?: string | undefined;
   readonly tf?: string | undefined;
   readonly e: EdgeEvidence;
+  readonly b?: EdgeBinding | undefined;
 }
 
 interface SerializedArtifact {
@@ -92,6 +95,7 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
           ec: symbol.span.endCol,
         },
         signature: symbol.signature,
+        exportedNames: symbol.exportedNames ?? [],
       })),
       diagnostics: card.diagnostics ?? [],
     });
@@ -104,6 +108,7 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
       t: edge.toName,
       l: edge.line,
       e: edge.evidence ?? { source: "unknown" as const },
+      ...(edge.binding === undefined ? {} : { b: edge.binding }),
     };
     if (edge.toFile !== undefined) {
       return { ...base, ts: edge.toSymbol, tf: edge.toFile };
@@ -142,6 +147,9 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
       throw new Error("osnova: corrupt index diagnostic metadata");
     }
     const symbols = file.symbols.map((symbol) => {
+      if (!Array.isArray(symbol.exportedNames) || !symbol.exportedNames.every((name: unknown) => typeof name === "string")) {
+        throw new Error("osnova: corrupt exported-name metadata");
+      }
       const span: SourceSpan = {
         startLine: symbol.span.s,
         endLine: symbol.span.e,
@@ -156,6 +164,7 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
         span,
         signature: symbol.signature,
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
+        exportedNames: symbol.exportedNames,
       };
     });
     files.set(file.path, {
@@ -175,6 +184,7 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
       kind: edge.k, fromFile: edge.f, fromSymbol: edge.fs, toName: edge.t, line: edge.l, evidence,
       ...(edge.ts !== undefined ? { toSymbol: edge.ts } : {}),
       ...(edge.tf !== undefined ? { toFile: edge.tf } : {}),
+      ...(edge.b === undefined ? {} : { binding: readBinding(edge.b) }),
     };
   });
   return new OsnovaIndexImpl(artifact.root, files, edges);
@@ -186,19 +196,29 @@ function readEvidence(value: unknown): EdgeEvidence {
     if (evidence.source === "unknown") return { source: "unknown" };
     if (evidence.source === "syntax" && typeof evidence.resolution === "object" && evidence.resolution !== null) {
       const resolution = evidence.resolution as Partial<EdgeResolution>;
-      if (resolution.status === "resolved" && ["import-path", "same-file-name", "imported-file-name", "unique-name"].includes(resolution.method ?? "")) {
+      if (resolution.status === "resolved" && ["import-path", "same-file-name", "imported-file-name", "unique-name", "import-binding", "lexical-definition"].includes(resolution.method ?? "")) {
         return value as EdgeEvidence;
       }
       if (resolution.status === "ambiguous" && Array.isArray(resolution.candidates) &&
         resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
         return value as EdgeEvidence;
       }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved"].includes(resolution.reason ?? "")) {
+      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing"].includes(resolution.reason ?? "")) {
         return value as EdgeEvidence;
       }
     }
   }
   throw new Error("osnova: corrupt edge evidence metadata");
+}
+
+function readBinding(value: unknown): EdgeBinding {
+  if (typeof value === "object" && value !== null) {
+    const binding = value as Partial<EdgeBinding>;
+    if (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string") return value as EdgeBinding;
+    if (binding.kind === "local" && typeof binding.name === "string") return value as EdgeBinding;
+    if (binding.kind === "blocked" && ["local-value", "unsupported", "ambiguous"].includes(binding.reason ?? "")) return value as EdgeBinding;
+  }
+  throw new Error("osnova: corrupt binding metadata");
 }
 
 export async function saveArtifact(index: OsnovaIndex, cacheDir: string): Promise<string> {
@@ -233,7 +253,7 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       return deserializeArtifact(content);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      if (error instanceof ArtifactVersionError && (error.version === 1 || error.version === 2)) return undefined;
+      if (error instanceof ArtifactVersionError && (error.version === 1 || error.version === 2 || error.version === 3)) return undefined;
       throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
     }
   }

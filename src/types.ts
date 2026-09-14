@@ -1,4 +1,4 @@
-export const indexFormatVersion = 3 as const;
+export const indexFormatVersion = 4 as const;
 
 export type LanguageId =
   | "typescript"
@@ -38,14 +38,20 @@ export interface OsnovaSymbol {
   readonly span: SourceSpan;
   readonly signature: string;
   readonly lineCount: number;
+  readonly exportedNames?: readonly string[] | undefined;
 }
 
 export type EdgeKind = "calls" | "references" | "imports";
 
 export type EdgeResolution =
-  | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" }
+  | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition" }
   | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
-  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" };
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" };
+
+export type EdgeBinding =
+  | { readonly kind: "import"; readonly source: string; readonly importedName: string }
+  | { readonly kind: "local"; readonly name: string }
+  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" };
 
 export type EdgeEvidence =
   | { readonly source: "syntax"; readonly resolution: EdgeResolution }
@@ -60,6 +66,7 @@ export interface OsnovaEdge {
   readonly toSymbol?: string | undefined;
   readonly toFile?: string | undefined;
   readonly evidence?: EdgeEvidence | undefined;
+  readonly binding?: EdgeBinding | undefined;
 }
 
 export interface FileCard {

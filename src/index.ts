@@ -14,6 +14,7 @@ export type {
   EdgeDirection,
   EdgeKind,
   EdgeEvidence,
+  EdgeBinding,
   EdgeResolution,
   CallerEvidenceHit,
   FileCard,

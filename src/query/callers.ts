@@ -76,7 +76,9 @@ function walkCallers(
   if (direction === "in") {
     for (const edge of index.edges) {
       if (edge.toSymbol !== undefined || edge.kind === "imports") continue;
-      const name = edge.toName.split(".").pop() ?? edge.toName;
+      const targetName = edge.binding?.kind === "import" ? edge.binding.importedName
+        : edge.binding?.kind === "local" ? edge.binding.name : edge.toName;
+      const name = targetName.split(".").pop() ?? targetName;
       const list = unresolvedByName.get(name) ?? [];
       list.push(edge);
       unresolvedByName.set(name, list);
