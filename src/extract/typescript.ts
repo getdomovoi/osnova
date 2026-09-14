@@ -1,7 +1,7 @@
 import type { Node, Tree } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
-import { collectBindings } from "./bindings.js";
+import { collectBindings, memberKindOf } from "./bindings.js";
 
 const FUNCTION_VALUE_NODES = new Set([
   "function_expression",
@@ -93,7 +93,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
         if (member.type === "method_definition") {
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {
-            ex.out.addDef(methodName, "method", member);
+            ex.out.addDef(methodName, "method", member, undefined, memberKindOf(member, false));
             ex.pushFrame(methodName);
             for (const bodyPart of childrenOf(member)) visit(bodyPart);
             ex.popFrame();

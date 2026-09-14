@@ -92,7 +92,7 @@ describe("index health", () => {
     await expect(buildIndex(workspace, { cacheDir })).rejects.toThrow(/grammar-unavailable/);
   });
 
-  it.each([1, 2, 3, 4, 5])("refuses to reuse outdated analysis format %s", async (version) => {
+  it.each([1, 2, 3, 4, 5, 6])("refuses to reuse outdated analysis format %s", async (version) => {
     const index = await buildIndex(workspace, { cacheDir });
     const artifact = JSON.parse(serializeArtifact(index).toString()) as { formatVersion: number };
     artifact.formatVersion = version;

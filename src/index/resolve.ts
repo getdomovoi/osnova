@@ -182,14 +182,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       }
       if (raw.binding !== undefined) {
         const binding = raw.binding;
+        const reference = binding.kind === "member" ? binding.owner : binding;
         let candidates: readonly OsnovaSymbol[] = [];
-        let resolution: EdgeResolution = { status: "unresolved", reason: "binding-blocked" };
+        let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved" : "binding-blocked" };
         let exportResult: ExportResult | undefined;
-        if (binding.kind === "import") {
-          const target = resolveImportTarget(card.language, fromFile, binding.source, knownFiles);
+        if (reference.kind === "import") {
+          const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles);
           if (target === undefined) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           else {
-            exportResult = exported(target, binding.importedName);
+            exportResult = exported(target, reference.importedName);
             if (exportResult.incomplete) resolution = { status: "unresolved", reason: "re-export-incomplete" };
             else {
               candidates = [...exportResult.symbols.values()].filter((symbol) =>
@@ -200,16 +201,36 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
                 : { status: "resolved", method: "import-binding" };
             }
           }
-        } else if (binding.kind === "local") {
-          candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, binding.name));
+        } else if (reference.kind === "local") {
+          candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, reference.name));
           resolution = { status: "resolved", method: "lexical-definition" };
+        }
+        let owner: OsnovaSymbol | undefined;
+        if (binding.kind === "member") {
+          const owners = candidates.filter((symbol) => symbol.kind === "class");
+          owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
+          const ownerName = owner?.qualifiedName;
+          const members = owner === undefined ? [] : (files.get(owner.file)?.symbols ?? []).filter((symbol) =>
+            symbol.kind === "method" && symbol.qualifiedName === `${ownerName}.${binding.member}`);
+          const kinds = new Set(members.map((symbol) => symbol.memberKind));
+          candidates = kinds.size > 1 ? [] : members.filter((symbol) => {
+            if (symbol.memberKind === undefined || symbol.memberKind === "unknown" || symbol.memberKind === "property") return false;
+            if (card.language === "python") return true;
+            return binding.mode === "class" ? symbol.memberKind === "static" : symbol.memberKind === "instance";
+          });
+          if (owner !== undefined && candidates.length > 0) {
+            resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis: binding.basis } };
+          } else if (resolution.status === "resolved" || reference.kind === "local") {
+            resolution = { status: "unresolved", reason: "receiver-unresolved" };
+          }
         }
         const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
         const resolved = names.length === 1 ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
         else if (resolved === undefined && resolution.status === "resolved") resolution = { status: "unresolved", reason: "bound-symbol-missing" };
-        const via = resolved === undefined ? undefined : exportResult?.routes.get(resolved.qualifiedName);
-        if (via !== undefined && via.length > 0) resolution = { status: "resolved", method: "re-export-binding", via };
+        const via = resolved === undefined ? undefined : exportResult?.routes.get(owner?.qualifiedName ?? resolved.qualifiedName);
+        if (via !== undefined && via.length > 0) resolution = resolution.status === "resolved" && resolution.method === "receiver-hint"
+          ? { ...resolution, via } : { status: "resolved", method: "re-export-binding", via };
         edges.push({
           kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
           evidence: { source: "syntax", resolution },

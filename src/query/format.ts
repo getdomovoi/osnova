@@ -108,8 +108,12 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
       const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
         ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
       lines.push(`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`);
-      if (evidence?.source === "syntax" && evidence.resolution.status === "resolved" && evidence.resolution.method === "re-export-binding") {
-        for (const hop of evidence.resolution.via) lines.push(`  via ${hop.file}:${hop.line} ${hop.exportedName} -> ${hop.targetFile} (export ${hop.importedName})`);
+      if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
+        if (evidence.resolution.method === "receiver-hint") {
+          const receiver = evidence.resolution.receiver;
+          lines.push(`  receiver hint: ${receiver.classSymbol} (${receiver.mode}, ${receiver.basis}); not runtime type proof`);
+        }
+        for (const hop of evidence.resolution.via ?? []) lines.push(`  via ${hop.file}:${hop.line} ${hop.exportedName} -> ${hop.targetFile} (export ${hop.importedName})`);
       }
     }
   }

@@ -1,4 +1,4 @@
-export const indexFormatVersion = 6 as const;
+export const indexFormatVersion = 7 as const;
 
 export type LanguageId =
   | "typescript"
@@ -39,15 +39,21 @@ export interface OsnovaSymbol {
   readonly signature: string;
   readonly lineCount: number;
   readonly exportedNames?: readonly string[] | undefined;
+  readonly memberKind?: MemberKind | undefined;
 }
+
+export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
+export type ReceiverMode = "instance" | "class";
+export type ReceiverBasis = "constructor" | "lexical" | "class-reference";
 
 export type EdgeKind = "calls" | "references" | "imports";
 
 export type EdgeResolution =
   | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition"; readonly via?: undefined }
   | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
+  | { readonly status: "resolved"; readonly method: "receiver-hint"; readonly receiver: { readonly classSymbol: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }; readonly via?: readonly ExportHop[] | undefined }
   | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
-  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" };
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" };
 
 export type ReExport =
   | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }
@@ -64,10 +70,14 @@ export interface ExportHop {
   readonly targetFile: string;
 }
 
-export type EdgeBinding =
+export type SymbolBinding =
   | { readonly kind: "import"; readonly source: string; readonly importedName: string }
-  | { readonly kind: "local"; readonly name: string }
-  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" };
+  | { readonly kind: "local"; readonly name: string };
+
+export type EdgeBinding = SymbolBinding
+  | { readonly kind: "instance"; readonly owner: SymbolBinding; readonly basis: "constructor" | "lexical" }
+  | { readonly kind: "member"; readonly owner: SymbolBinding; readonly member: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }
+  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" };
 
 export type EdgeEvidence =
   | { readonly source: "syntax"; readonly resolution: EdgeResolution }

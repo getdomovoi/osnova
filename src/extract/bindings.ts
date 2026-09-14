@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import type { EdgeBinding, ReExport } from "../types.js";
+import type { EdgeBinding, MemberKind, ReExport, ReceiverMode, SymbolBinding } from "../types.js";
 import { childrenOf, childOfType } from "./util.js";
 
 interface Scope {
@@ -7,12 +7,32 @@ interface Scope {
   owner: string;
   parent: Scope | null;
   names: Map<string, EdgeBinding[]>;
+  thisBinding?: { owner: SymbolBinding; mode: ReceiverMode } | null | undefined;
 }
 
 const functions = new Set(["function_declaration", "generator_function_declaration", "function_expression", "function", "generator_function", "arrow_function", "method_definition", "function_definition", "lambda"]);
 const classes = new Set(["class_declaration", "abstract_class_declaration", "class_definition"]);
 const containers = new Set(["formal_parameters", "parameters", "array_pattern", "object_pattern", "tuple_pattern", "list_pattern", "pattern_list", "rest_pattern", "list_splat_pattern", "dictionary_splat_pattern", "as_pattern_target", "expression_list"]);
 const localValue: EdgeBinding = { kind: "blocked", reason: "local-value" };
+
+export function memberKindOf(node: Node, python: boolean): MemberKind {
+  if (!python) {
+    if (node.children.some((child) => child?.type === "get" || child?.type === "set") || node.childForFieldName("name")?.text === "constructor") return "property";
+    return node.children.some((child) => child?.type === "static") ? "static" : "instance";
+  }
+  const decorators = node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : [];
+  if (decorators.length === 0) return "instance";
+  if (decorators.length !== 1) return "unknown";
+  if (decorators[0] === "@staticmethod") return "static";
+  if (decorators[0] === "@classmethod") return "class";
+  if (decorators[0] === "@property" || /\.(setter|getter|deleter)$/.test(decorators[0] ?? "")) return "property";
+  return "unknown";
+}
+
+function unwrap(node: Node | null): Node | null {
+  while (node !== null && ["parenthesized_expression", "non_null_expression"].includes(node.type)) node = childrenOf(node)[0] ?? null;
+  return node;
+}
 
 function patternNames(node: Node | null): string[] {
   if (node === null) return [];
@@ -29,13 +49,17 @@ export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
   exportedNames: (name: string, parent: string) => readonly string[];
   reExports: readonly ReExport[];
+  memberKind: (node: Node) => MemberKind;
 } {
-  const module: Scope = { kind: "module", owner: "", parent: null, names: new Map() };
+  const module: Scope = { kind: "module", owner: "", parent: null, names: new Map(), thisBinding: null };
   const scopes = new Map<number, Scope>();
   const exports = new Map<string, Map<string, number>>();
   const reExports: ReExport[] = [];
   const importLines = new Map<EdgeBinding, number>();
-  const namespaces = new Set<string>();
+  const constructions = new Map<EdgeBinding, { expression: Node; site: Node }>();
+  const implicitReceivers: Array<{ node: Node; scope: Scope; parameter: string }> = [];
+  const memberWrites: Array<{ object: Node; member: string; scope: Scope }> = [];
+  const mutations = new Map<object, Set<string>>();
   const initializers = new Map<EdgeBinding, { end: number; scope: Scope }>();
   const writes: Array<{ scope: Scope; name: string }> = [];
   const join = (owner: string, name: string): string => owner ? `${owner}.${name}` : name;
@@ -57,6 +81,22 @@ export function collectBindings(root: Node, python: boolean): {
     while (scope.kind === "block" && scope.parent !== null) scope = scope.parent;
     return scope;
   };
+  const construction = (value: Node | null, site: Node): EdgeBinding | undefined => {
+    value = unwrap(value);
+    if (value?.type !== (python ? "call" : "new_expression")) return undefined;
+    const expression = value.childForFieldName(python ? "function" : "constructor");
+    if (expression === null) return undefined;
+    const binding: EdgeBinding = { kind: "instance", owner: { kind: "local", name: expression.text }, basis: "constructor" };
+    constructions.set(binding, { expression, site });
+    return binding;
+  };
+  const recordMemberWrite = (target: Node | null, scope: Scope): void => {
+    target = unwrap(target);
+    if (target === null || !["member_expression", "attribute", "subscript_expression", "subscript"].includes(target.type)) return;
+    const object = unwrap(target.childForFieldName("object") ?? target.childForFieldName("value"));
+    const member = target.childForFieldName(python ? "attribute" : "property")?.text ?? "*";
+    if (object !== null) memberWrites.push({ object, member, scope });
+  };
 
   function visit(node: Node, outer: Scope): void {
     let scope = outer;
@@ -72,6 +112,20 @@ export function collectBindings(root: Node, python: boolean): {
       while (python && parent.kind === "class") parent = parent.parent ?? module;
       const inner: Scope = { kind: "function", owner, parent, names: new Map() };
       bindPattern(inner, node.childForFieldName("parameters") ?? node.childForFieldName("parameter"));
+      if (!python && node.type !== "arrow_function") {
+        inner.thisBinding = node.type === "method_definition" && outer.kind === "class"
+          ? { owner: { kind: "local", name: outer.owner }, mode: node.children.some((child) => child?.type === "static") ? "class" : "instance" }
+          : null;
+      }
+      if (python && outer.kind === "class" && node.type === "function_definition") {
+        const kind = memberKindOf(node, true);
+        const first = patternNames(node.childForFieldName("parameters"))[0];
+        if (first !== undefined && (kind === "instance" || kind === "class" || kind === "property")) {
+          inner.names.set(first, [kind === "class" ? { kind: "local", name: outer.owner }
+            : { kind: "instance", owner: { kind: "local", name: outer.owner }, basis: "lexical" }]);
+          implicitReceivers.push({ node, scope: inner, parameter: first });
+        }
+      }
       if (!python && nameNode !== null && !["method_definition", "function_declaration", "generator_function_declaration"].includes(node.type)) {
         bind(inner, nameNode.text, { kind: "local", name: owner });
       }
@@ -85,7 +139,7 @@ export function collectBindings(root: Node, python: boolean): {
       if (name) bind(outer, name, { kind: "local", name: join(outer.owner, name) });
       let parent = outer;
       while (python && parent.kind === "class") parent = parent.parent ?? module;
-      scope = { kind: "class", owner: join(outer.owner, name), parent, names: new Map() };
+      scope = { kind: "class", owner: join(outer.owner, name), parent, names: new Map(), thisBinding: null };
     } else if ((!python && ["statement_block", "for_statement", "for_in_statement", "catch_clause"].includes(node.type)) ||
       (python && ["list_comprehension", "set_comprehension", "dictionary_comprehension", "generator_expression"].includes(node.type))) {
       scope = { kind: "block", owner: outer.owner, parent: outer, names: new Map() };
@@ -113,7 +167,6 @@ export function collectBindings(root: Node, python: boolean): {
           } else if (child.type === "namespace_import") {
             const local = childrenOf(child).find((part) => part.type === "identifier");
             if (local !== undefined) {
-              namespaces.add(local.text);
               bind(scope, local.text, typeOnly ? { kind: "blocked", reason: "unsupported" } : { kind: "import", source: moduleName, importedName: "*" });
             }
           }
@@ -136,7 +189,6 @@ export function collectBindings(root: Node, python: boolean): {
         const alias = item.childForFieldName("alias")?.text;
         const local = alias ?? source?.split(".")[0];
         if (local !== undefined && source !== undefined) {
-          namespaces.add(local);
           bind(scope, local, { kind: "import", source: alias === undefined ? local : source, importedName: "*" }, item.startPosition.row + 1);
         }
       }
@@ -183,15 +235,20 @@ export function collectBindings(root: Node, python: boolean): {
       const destination = node.parent?.type === "variable_declaration" ? nearestFunction(scope) : scope;
       const callable = value !== null && (functions.has(value.type) || ["class", "class_expression"].includes(value.type));
       const binding: EdgeBinding = callable && target?.type === "identifier"
-        ? { kind: "local", name: join(destination.owner, target.text) } : localValue;
+        ? { kind: "local", name: join(destination.owner, target.text) }
+        : target?.type === "identifier" ? construction(value, node) ?? localValue : localValue;
       bindPattern(destination, target, binding);
-      if (binding.kind === "local") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(destination) });
+      if (binding.kind === "local" || binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(destination) });
     }
     if (python && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression"].includes(node.type)) {
-      bindPattern(scope, node.childForFieldName("left") ?? node.childForFieldName("name"));
+      const target = node.childForFieldName("left") ?? node.childForFieldName("name");
+      recordMemberWrite(target, scope);
+      const binding = node.type === "assignment" && target?.type === "identifier" ? construction(node.childForFieldName("right"), node) ?? localValue : localValue;
+      bindPattern(scope, target, binding);
+      if (binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(scope) });
     }
     if (python && node.type === "as_pattern") bindPattern(scope, node.childForFieldName("alias"));
-    if (python && node.type === "delete_statement") for (const child of childrenOf(node)) bindPattern(scope, child);
+    if (python && node.type === "delete_statement") for (const child of childrenOf(node)) { bindPattern(scope, child); recordMemberWrite(child, scope); }
     if (python && node.type === "match_statement") bind(scope, "*", { kind: "blocked", reason: "unsupported" });
     if (!python && node.type === "for_in_statement") {
       const kind = node.childForFieldName("kind");
@@ -206,8 +263,10 @@ export function collectBindings(root: Node, python: boolean): {
     }
     if (!python && ["assignment_expression", "augmented_assignment_expression", "update_expression"].includes(node.type)) {
       const left = node.childForFieldName("left") ?? node.childForFieldName("argument");
+      recordMemberWrite(left, scope);
       for (const name of patternNames(left)) writes.push({ scope, name });
     }
+    if (!python && node.type === "unary_expression" && node.children.some((child) => child?.type === "delete")) recordMemberWrite(node.childForFieldName("argument"), scope);
     for (const child of childrenOf(node)) visit(child, scope);
   }
   visit(root, module);
@@ -249,23 +308,81 @@ export function collectBindings(root: Node, python: boolean): {
     }
     return undefined;
   };
+  const memberKind = (node: Node): MemberKind => {
+    const kind = memberKindOf(node, python);
+    if (!python || node.parent?.type !== "decorated_definition") return kind;
+    for (const decorator of childrenOf(node.parent).filter((child) => child.type === "decorator")) {
+      const name = decorator.text.trim().slice(1);
+      if (["staticmethod", "classmethod", "property"].includes(name) && lookup(name, decorator) !== undefined) return "unknown";
+    }
+    return kind;
+  };
+  for (const receiver of implicitReceivers) {
+    if (memberKind(receiver.node) === "unknown") receiver.scope.names.set(receiver.parameter, [{ kind: "blocked", reason: "unknown-receiver" }]);
+  }
+  const thisFor = (scope: Scope): Scope["thisBinding"] => {
+    for (let current: Scope | null = scope; current !== null; current = current.parent) {
+      if (current.thisBinding !== undefined) return current.thisBinding;
+    }
+    return null;
+  };
+  for (const write of memberWrites) {
+    const key = write.object.type === "this" ? thisFor(write.scope)
+      : write.object.type === "identifier" ? lookup(write.object.text, write.object) : undefined;
+    if (key === undefined || key === null) continue;
+    const names = mutations.get(key) ?? new Set<string>();
+    names.add(write.member);
+    mutations.set(key, names);
+  }
+  const mutated = (key: object | undefined | null, member: string): boolean =>
+    key !== undefined && key !== null && (mutations.get(key)?.has(member) === true || mutations.get(key)?.has("*") === true);
+  const symbolBinding = (expression: Node | null, site: Node): SymbolBinding | undefined => {
+    expression = unwrap(expression);
+    if (expression?.type === "identifier") {
+      const binding = lookup(expression.text, site);
+      return binding?.kind === "local" || binding?.kind === "import" ? binding : undefined;
+    }
+    if (expression !== null && ["member_expression", "attribute"].includes(expression.type)) {
+      const object = expression.childForFieldName("object");
+      const property = expression.childForFieldName(python ? "attribute" : "property");
+      const binding = object?.type === "identifier" ? lookup(object.text, site) : undefined;
+      if (binding?.kind === "import" && binding.importedName === "*" && property !== null) return { ...binding, importedName: property.text };
+    }
+    return undefined;
+  };
+  const normalize = (binding: EdgeBinding | undefined): EdgeBinding | undefined => {
+    const created = binding === undefined ? undefined : constructions.get(binding);
+    if (created === undefined) return binding;
+    const owner = symbolBinding(created.expression, created.site);
+    return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "instance", owner, basis: "constructor" };
+  };
   return {
     at(expression, site) {
-      while (expression !== null && ["parenthesized_expression", "non_null_expression"].includes(expression.type)) expression = childrenOf(expression)[0] ?? null;
-      if (expression?.type === "identifier") return lookup(expression.text, site) ?? { kind: "blocked", reason: "unsupported" };
+      expression = unwrap(expression);
+      if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: "unsupported" };
       if (expression !== null && ["member_expression", "attribute"].includes(expression.type)) {
-        const object = expression.childForFieldName("object");
+        const object = unwrap(expression.childForFieldName("object"));
         const property = expression.childForFieldName(python ? "attribute" : "property");
-        if (object?.type === "identifier" && property !== null) {
-          const binding = lookup(object.text, site);
-          if (binding?.kind === "import" && binding.importedName === "*") return { ...binding, importedName: property.text };
-          if (namespaces.has(object.text) && binding?.kind === "blocked") return binding;
+        if (property === null) return { kind: "blocked", reason: "unknown-receiver" };
+        if (object?.type === "this") {
+          const receiver = thisFor(scopes.get(site.id) ?? module);
+          return receiver === null || receiver === undefined || mutated(receiver, property.text) ? { kind: "blocked", reason: "unknown-receiver" }
+            : { kind: "member", owner: receiver.owner, member: property.text, mode: receiver.mode, basis: "lexical" };
         }
-        return undefined;
+        const rawBinding = object?.type === "identifier" ? lookup(object.text, site) : construction(object, site);
+        if (mutated(rawBinding, property.text)) return { kind: "blocked", reason: "unknown-receiver" };
+        const binding = normalize(rawBinding);
+        if (binding !== undefined) {
+          if (binding?.kind === "import" && binding.importedName === "*") return { ...binding, importedName: property.text };
+          if (binding.kind === "instance") return { kind: "member", owner: binding.owner, member: property.text, mode: "instance", basis: binding.basis };
+          if (binding.kind === "local" || binding.kind === "import") return { kind: "member", owner: binding, member: property.text, mode: "class", basis: "class-reference" };
+        }
+        return { kind: "blocked", reason: "unknown-receiver" };
       }
       return { kind: "blocked", reason: "unsupported" };
     },
     exportedNames: (name, parent) => parent !== "" || module.names.has("*") ? [] : python ? [name] : [...(exports.get(name)?.keys() ?? [])].sort(),
     reExports,
+    memberKind,
   };
 }
