@@ -32,9 +32,11 @@ export async function renderMapCard(
 
   const lines: CardLine[] = [];
   const staleText =
-    staleCount === 0 ? "fresh" : staleCount === undefined || staleCount < 0 ? "stale: unknown" : `stale: ${staleCount} file${staleCount === 1 ? "" : "s"}`;
+    staleCount === 0 ? "fresh" : staleCount === undefined || staleCount < 0 ? "unavailable" : `stale: ${staleCount} file${staleCount === 1 ? "" : "s"}`;
+  const analysisText = index.diagnostics === undefined ? " | analysis health unverified"
+    : index.diagnostics.length > 0 ? ` | partial analysis: ${index.diagnostics.length} diagnostics` : "";
   lines.push({
-    text: `osnova ${basename(index.root)} | files ${mapResult.fileCount} | symbols ${mapResult.symbolCount} | edges ${mapResult.edgeCount} | ${staleText}`,
+    text: `osnova ${basename(index.root)} | files ${mapResult.fileCount} | symbols ${mapResult.symbolCount} | edges ${mapResult.edgeCount} | ${staleText}${analysisText}`,
     rank: RANK_HEADER,
   });
 

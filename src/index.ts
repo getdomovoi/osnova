@@ -28,6 +28,8 @@ export type {
   MapResult,
   OsnovaEdge,
   OsnovaIndex,
+  IndexDiagnostic,
+  IndexHealthReport,
   OsnovaSymbol,
   ProgressEvent,
   SkeletonEntry,
@@ -37,6 +39,8 @@ export type {
 } from "./types.js";
 export { buildIndex } from "./index/build.js";
 export { applyChanges, freshness } from "./index/incremental.js";
+export { indexHealth } from "./index/health.js";
+export { IndexingError } from "./index/diagnostics.js";
 export { loadIndex } from "./api.js";
 export { serializeArtifact } from "./index/serialize.js";
 export { ask } from "./query/ask.js";

@@ -3,7 +3,7 @@
 Deterministic repository context engine. Osnova maps a codebase into a symbol and edge graph using tree-sitter WASM, then serves it through a CLI and an MCP stdio server. No embeddings, no network, no telemetry.
 
 - Languages v1: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Java, C#. Every other file type gets a bare file card (path, hash, no symbols).
-- Query surface: `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `map`, `renderMapCard`.
+- Query surface: `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `indexHealth`.
 - Edge semantics v1: direct calls, imports and exports, name references. No type inference and no dynamic dispatch resolution; expect per-language precision limits.
 - Determinism: incremental updates produce byte-identical artifacts to full rebuilds. All paths, symbols, and edges are sorted before serialization.
 
@@ -28,7 +28,7 @@ osnova check <root>            # staleness gate for CI (exit 1 when stale)
 osnova mcp --workspace <path>  # MCP stdio server
 ```
 
-Query commands refresh the index first (hash diff plus incremental apply), so answers always describe current disk state, including uncommitted edits.
+Query commands refresh the index first (hash diff plus incremental apply), including uncommitted edits. Unavailable workspace data aborts the query; recovered syntax errors and extraction failures produce explicit partial-analysis warnings. This is not an atomic snapshot of a workspace being edited concurrently.
 
 ## MCP server
 
@@ -61,7 +61,7 @@ const hits = ask(index, "where do we validate tokens", { limit: 5 });
 const card = await renderMapCard(index); // <= 16,384 code units
 ```
 
-Exports: `buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `map`, `renderMapCard`, index types, and the MCP stdio main (`runMcpStdio`).
+Exports: `buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `indexHealth`, `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, index types, and the MCP stdio main (`runMcpStdio`).
 
 ### Search completeness
 
@@ -77,9 +77,19 @@ The existing `findText` API retains its array result, default 50-group limit, an
 
 CLI `callers` and MCP `osnova_callers` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
 
+### Index health
+
+`await indexHealth(index)` returns a state, all diagnostics, and a freshness report (or `null` when freshness cannot be checked). States are `fresh`, `stale`, `partial`, and `unavailable`. Disk changes take precedence over partial analysis in the state; diagnostics remain present in either case. Fresh means unchanged indexed inputs and no recorded extraction failures, not complete semantic understanding of every language or file.
+
+Syntax-recovered files retain their text and recovered definitions with `syntax-errors` diagnostics. Extractor failures retain text with `extraction-failed` diagnostics. Missing grammars, unreadable ignore files, directories, file stats or file contents stop indexing/refresh rather than silently removing data. Operational failures use `IndexingError` with a structured `diagnostic` and the underlying error as `cause`.
+
+CLI queries emit partial-analysis warnings on stderr; MCP results include warnings in their text. Map cards keep the health indication inside their existing code-unit cap. `osnova check` exits 1 for stale, partial, or unavailable indexes, and 0 only for fresh indexes. Full builds may save partial indexes so text search and recovered definitions remain available.
+
+Artifact format 2 persists diagnostics. `loadIndex` returns `undefined` for format-1 caches, which lack health metadata; query commands rebuild them. Corrupt or unsupported newer artifacts and failed cache writes remain explicit errors. Repaired files clear their old diagnostics on incremental update.
+
 Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the platform default (macOS `~/Library/Caches/osnova/`, Linux `$XDG_CACHE_HOME/osnova/`, Windows `%LOCALAPPDATA%/osnova/cache/`). One subdirectory per workspace, LRU-evicted across workspaces.
 
-Scanning respects `.gitignore` plus an optional `.osnovaignore` file with the same syntax, skips dotfiles, binaries, and files above 1 MB.
+Scanning currently reads root-level `.gitignore` plus an optional root-level `.osnovaignore` with the same syntax, skips dotfiles and configured output/dependency directories, and excludes files above 1 MB. Binary files get fallback cards with empty text rather than searchable contents. Nested ignore rules are not yet supported.
 
 ## Development
 

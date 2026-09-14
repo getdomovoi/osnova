@@ -1,4 +1,4 @@
-export const indexFormatVersion = 1 as const;
+export const indexFormatVersion = 2 as const;
 
 export type LanguageId =
   | "typescript"
@@ -60,6 +60,7 @@ export interface FileCard {
   readonly lineCount: number;
   readonly text: string;
   readonly symbols: readonly OsnovaSymbol[];
+  readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
 }
 
 export interface OsnovaIndex {
@@ -67,9 +68,22 @@ export interface OsnovaIndex {
   readonly files: ReadonlyMap<string, FileCard>;
   readonly symbols: ReadonlyMap<string, OsnovaSymbol>;
   readonly edges: readonly OsnovaEdge[];
+  readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
   incoming(qualifiedName: string): readonly OsnovaEdge[];
   outgoing(qualifiedName: string): readonly OsnovaEdge[];
   edgesForFile(path: string): readonly OsnovaEdge[];
+}
+
+export interface IndexDiagnostic {
+  readonly phase: "scan" | "read" | "parse" | "cache";
+  readonly path: string;
+  readonly code: string;
+}
+
+export interface IndexHealthReport {
+  readonly state: "fresh" | "stale" | "partial" | "unavailable";
+  readonly diagnostics: readonly IndexDiagnostic[];
+  readonly freshness: FreshnessReport | null;
 }
 
 export interface AskHit {

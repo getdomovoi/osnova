@@ -1,4 +1,4 @@
-import type { EdgeKind, FileCard, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 
 export interface RawEdgesByFile {
   readonly [file: string]: readonly RawEdgeItem[];
@@ -35,6 +35,7 @@ export class OsnovaIndexImpl implements OsnovaIndex {
   readonly files: Map<string, FileCard>;
   readonly symbols: Map<string, OsnovaSymbol>;
   readonly edges: OsnovaEdge[];
+  readonly diagnostics: readonly IndexDiagnostic[];
   private readonly incomingBySymbol: Map<string, OsnovaEdge[]>;
   private readonly outgoingBySymbol: Map<string, OsnovaEdge[]>;
   private readonly edgesByFile: Map<string, OsnovaEdge[]>;
@@ -43,6 +44,8 @@ export class OsnovaIndexImpl implements OsnovaIndex {
     this.root = root;
     this.files = files;
     this.symbols = buildSymbolTable(files);
+    this.diagnostics = [...files.values()].flatMap((file) => file.diagnostics ?? []).sort((a, b) =>
+      compareStr(a.path, b.path) || compareStr(a.phase, b.phase) || compareStr(a.code, b.code));
     const sorted = [...edges].sort(compareEdges);
     this.edges = dedupeEdges(sorted);
     this.incomingBySymbol = new Map();

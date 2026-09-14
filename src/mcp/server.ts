@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallersDetailed, formatFindTextResult, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
 
 const OSNOVA_VERSION = "0.1.0";
@@ -106,7 +106,12 @@ export function createOsnovaMcpServer(
       const loaded = await loadArtifact(absRoot, cacheDir);
       return loaded ?? (await buildIndex(absRoot, { cacheDir }));
     })();
-    return indexPromise;
+    try {
+      return await indexPromise;
+    } catch (error) {
+      indexPromise = undefined;
+      throw error;
+    }
   }
 
   async function refresh(): Promise<OsnovaIndex> {
@@ -115,7 +120,7 @@ export function createOsnovaMcpServer(
     const stale = [...report.added, ...report.changed, ...report.deleted];
     if (stale.length === 0) return index;
     const updated = await applyChanges(index, absRoot, stale);
-    await saveArtifact(updated, cacheDir).catch(() => {});
+    await saveArtifact(updated, cacheDir);
     indexPromise = Promise.resolve(updated);
     return updated;
   }
@@ -132,6 +137,8 @@ export function createOsnovaMcpServer(
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
       const index = await refresh();
+      const respond = (text: string): ReturnType<typeof textResult> =>
+        textResult([formatIndexDiagnostics(index), text].filter(Boolean).join("\n"));
       switch (name) {
         case "osnova_ask": {
           const question = requireString(args, "question");
@@ -140,7 +147,7 @@ export function createOsnovaMcpServer(
             limit: optionalNumber(args, "limit"),
             full: optionalBoolean(args, "full"),
           });
-          return textResult(formatAsk(result));
+          return respond(formatAsk(result));
         }
         case "osnova_find_text": {
           const pattern = requireString(args, "pattern");
@@ -154,11 +161,11 @@ export function createOsnovaMcpServer(
             limit: args.limit ?? 50,
             matchesPerGroup: 10,
           });
-          return textResult(formatFindTextResult(result));
+          return respond(formatFindTextResult(result));
         }
         case "osnova_skeleton": {
           const file = requireString(args, "file");
-          return textResult(formatSkeleton(skeleton(index, file)));
+          return respond(formatSkeleton(skeleton(index, file)));
         }
         case "osnova_callers": {
           const symbol = requireString(args, "symbol");
@@ -174,7 +181,7 @@ export function createOsnovaMcpServer(
             ...(direction !== undefined ? { direction } : {}),
             ...(depthValue !== undefined ? { depth: depthValue } : {}),
           });
-          return textResult(formatCallersDetailed(result));
+          return respond(formatCallersDetailed(result));
         }
         case "osnova_map": {
           const card = await renderMapCard(index, {

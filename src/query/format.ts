@@ -6,7 +6,19 @@ import type {
   FindTextResult,
   MapResult,
   SkeletonResult,
+  OsnovaIndex,
 } from "../types.js";
+
+export function formatIndexDiagnostics(index: OsnovaIndex): string {
+  if (index.diagnostics === undefined) return "partial analysis: index health is unverified";
+  if (index.diagnostics.length === 0) return "";
+  const lines = [`partial analysis: ${index.diagnostics.length} diagnostics; results may be incomplete`];
+  for (const diagnostic of index.diagnostics.slice(0, 10)) {
+    lines.push(`${diagnostic.phase} ${diagnostic.path}: ${diagnostic.code}`);
+  }
+  if (index.diagnostics.length > 10) lines.push(`${index.diagnostics.length - 10} diagnostics omitted; inspect indexHealth for all diagnostics`);
+  return lines.join("\n");
+}
 
 export function formatAsk(result: AskResult): string {
   if (result.hits.length === 0) return "no matches";

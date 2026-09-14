@@ -2,6 +2,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
 import { applyChanges, freshness } from "../index/incremental.js";
+import { indexHealth } from "../index/health.js";
 import { loadArtifact, saveArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -9,7 +10,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatFindTextResult, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
 
 export interface CliIo {
@@ -38,19 +39,24 @@ const EXIT_ERROR = 2;
 async function ensureIndex(
   workspace: string,
   cacheDir?: string,
+  warn?: (text: string) => void,
 ): Promise<OsnovaIndex> {
   const resolvedCache = resolveCacheDir(cacheDir);
   const absRoot = path.resolve(workspace);
-  const loaded = await loadArtifact(absRoot, resolvedCache);
-  if (loaded === undefined) {
-    return buildIndex(absRoot, { cacheDir: resolvedCache });
+  let index: OsnovaIndex | undefined = await loadArtifact(absRoot, resolvedCache);
+  if (index === undefined) {
+    index = await buildIndex(absRoot, { cacheDir: resolvedCache });
+  } else {
+    const report = await freshness(index, absRoot);
+    const stale = [...report.added, ...report.changed, ...report.deleted];
+    if (stale.length > 0) {
+      index = await applyChanges(index, absRoot, stale);
+      await saveArtifact(index, resolvedCache);
+    }
   }
-  const report = await freshness(loaded, absRoot);
-  const stale = [...report.added, ...report.changed, ...report.deleted];
-  if (stale.length === 0) return loaded;
-  const updated = await applyChanges(loaded, absRoot, stale);
-  await saveArtifact(updated, resolvedCache);
-  return updated;
+  const diagnostics = formatIndexDiagnostics(index);
+  if (diagnostics.length > 0) warn?.(diagnostics);
+  return index;
 }
 
 function requirePositional(values: readonly string[], name: string, command: string): string {
@@ -82,6 +88,8 @@ export async function runCli(
       const cacheDir = parsed.values["cache-dir"];
       const started = Date.now();
       const index = await buildIndex(root, { cacheDir });
+      const diagnostics = formatIndexDiagnostics(index);
+      if (diagnostics.length > 0) io.stderr(diagnostics);
       const ms = Date.now() - started;
       io.stdout(
         `built index for ${index.root}: ${index.files.size} files, ${index.symbols.size} symbols, ${index.edges.length} edges in ${ms}ms`,
@@ -102,13 +110,17 @@ export async function runCli(
         io.stderr(`osnova check: no index artifact for ${absRoot}; run \`osnova build ${root}\` first`);
         return EXIT_STALE;
       }
-      const report = await freshness(loaded, absRoot);
-      const stale = [...report.added, ...report.changed, ...report.deleted];
-      if (stale.length === 0) {
+      const health = await indexHealth(loaded);
+      if (health.state === "fresh") {
         io.stdout("fresh");
         return EXIT_OK;
       }
-      io.stderr(`stale: ${stale.length} file(s): ${stale.join(", ")}`);
+      const report = health.freshness;
+      const stale = report === null ? [] : [...report.added, ...report.changed, ...report.deleted];
+      io.stderr(`${health.state}: ${stale.length} changed file(s): ${stale.join(", ")}`);
+      for (const diagnostic of health.diagnostics) {
+        io.stderr(`${diagnostic.phase} ${diagnostic.path}: ${diagnostic.code}`);
+      }
       return EXIT_STALE;
     }
     case "ask": {
@@ -125,7 +137,7 @@ export async function runCli(
       });
       const question = parsed.positionals.join(" ").trim();
       if (question.length === 0) throw new Error("osnova ask: missing <question> argument");
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"]);
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = parsed.values.limit !== undefined ? Number(parsed.values.limit) : undefined;
       const result = ask(index, question, {
         in: parsed.values.in,
@@ -149,7 +161,7 @@ export async function runCli(
         },
       });
       const pattern = requirePositional(parsed.positionals, "pattern", "grep");
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"]);
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = parsed.values.limit !== undefined ? Number(parsed.values.limit) : undefined;
       const result = findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
@@ -168,7 +180,7 @@ export async function runCli(
         options: { workspace: { type: "string" }, "cache-dir": { type: "string" } },
       });
       const file = requirePositional(parsed.positionals, "file", "skeleton");
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"]);
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(formatSkeleton(skeleton(index, file)));
       return EXIT_OK;
     }
@@ -184,7 +196,7 @@ export async function runCli(
         },
       });
       const symbol = requirePositional(parsed.positionals, "symbol", "callers");
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"]);
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const depthValue = parsed.values.depth !== undefined ? Number(parsed.values.depth) : undefined;
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") {
@@ -207,7 +219,7 @@ export async function runCli(
           "cache-dir": { type: "string" },
         },
       });
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"]);
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const maxDirsValue = parsed.values["max-dirs"] !== undefined ? Number(parsed.values["max-dirs"]) : undefined;
       io.stdout(
         formatMap(

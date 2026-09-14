@@ -5,6 +5,7 @@ import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
 import { scanFiles, sha256Hex } from "./scan.js";
+import { IndexingError } from "./diagnostics.js";
 
 export async function freshness(index: OsnovaIndex, root: string): Promise<FreshnessReport> {
   const absRoot = path.resolve(root);
@@ -28,8 +29,8 @@ export async function freshness(index: OsnovaIndex, root: string): Promise<Fresh
     try {
       const buffer = await fs.readFile(path.join(absRoot, relPath));
       if (sha256Hex(buffer) !== card.hash) changed.push(relPath);
-    } catch {
-      deleted.push(relPath);
+    } catch (error) {
+      throw new IndexingError({ phase: "read", path: relPath, code: "file-unreadable" }, error);
     }
   }
   for (const existing of index.files.keys()) {

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import ignore from "ignore";
 import { maximumIndexedFileSizeBytes } from "../types.js";
+import { IndexingError } from "./diagnostics.js";
 
 const DEFAULT_SKIP_DIRS = new Set([
   ".git",
@@ -36,8 +37,9 @@ async function loadIgnoreFile(absPath: string): Promise<string[]> {
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.length > 0 && !line.startsWith("#"));
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new IndexingError({ phase: "scan", path: path.basename(absPath), code: "ignore-unreadable" }, error);
   }
 }
 
@@ -60,8 +62,8 @@ export async function scanFiles(absRoot: string): Promise<ScanResult> {
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (error) {
+      throw new IndexingError({ phase: "scan", path: relDir || ".", code: "directory-unreadable" }, error);
     }
     for (const entry of entries) {
       const rel = relDir.length > 0 ? `${relDir}/${entry.name}` : entry.name;
@@ -78,8 +80,8 @@ export async function scanFiles(absRoot: string): Promise<ScanResult> {
       let stat;
       try {
         stat = await fs.stat(path.join(dir, entry.name));
-      } catch {
-        continue;
+      } catch (error) {
+        throw new IndexingError({ phase: "scan", path: rel, code: "stat-failed" }, error);
       }
       if (stat.size > maximumIndexedFileSizeBytes) {
         truncated += 1;

@@ -1,0 +1,82 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createOsnovaMcpServer } from "../src/mcp/server.js";
+import * as loader from "../src/grammar/loader.js";
+import { workspaceDirFor } from "../src/cache/cache.js";
+
+let temporary: string;
+let workspace: string;
+let cacheDir: string;
+let client: Client;
+let closeServer: () => Promise<void>;
+
+beforeEach(async () => {
+  temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-health-mcp-"));
+  workspace = path.join(temporary, "workspace");
+  cacheDir = path.join(temporary, "cache");
+  await fs.mkdir(workspace);
+  await fs.writeFile(path.join(workspace, "one.ts"), "export function one() { return 1; }\n");
+  const { server } = createOsnovaMcpServer(workspace, { cacheDir });
+  closeServer = () => server.close();
+  client = new Client({ name: "health-test", version: "0.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await client.close();
+  await closeServer();
+  await fs.rm(temporary, { recursive: true, force: true });
+});
+
+it("all five tools disclose partial analysis", async () => {
+  await fs.writeFile(path.join(workspace, "broken.ts"), "export function broken( {");
+  const tools: Array<[string, Record<string, unknown>]> = [
+    ["osnova_ask", { question: "one" }], ["osnova_find_text", { pattern: "one" }],
+    ["osnova_skeleton", { file: "one.ts" }], ["osnova_callers", { symbol: "one" }], ["osnova_map", {}],
+  ];
+  for (const [name, args] of tools) {
+    const result = await client.callTool({ name, arguments: args });
+    expect(result.isError, name).toBeFalsy();
+    expect(JSON.stringify(result), name).toContain("partial analysis");
+  }
+});
+
+it("retries initialization after a grammar failure", async () => {
+  vi.spyOn(loader, "getParser").mockRejectedValueOnce(new Error("unavailable"));
+  const request = { name: "osnova_skeleton", arguments: { file: "one.ts" } };
+  const first = await client.callTool(request);
+  expect(first.isError).toBe(true);
+  expect(JSON.stringify(first)).toContain("grammar-unavailable");
+  const retry = await client.callTool(request);
+  expect(retry.isError).toBeFalsy();
+  expect(JSON.stringify(retry)).toContain("function one");
+});
+
+it("does not conceal a failed refresh write and can retry safely", async () => {
+  const request = { name: "osnova_skeleton", arguments: { file: "one.ts" } };
+  await client.callTool(request);
+  await fs.appendFile(path.join(workspace, "one.ts"), "export function added() {}\n");
+  vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("denied"));
+  const failed = await client.callTool(request);
+  expect(failed.isError).toBe(true);
+  expect(JSON.stringify(failed)).toContain("cache-write-failed");
+  const cached = await fs.readdir(workspaceDirFor(cacheDir, workspace));
+  expect(cached.some((name) => name.includes(".tmp-"))).toBe(false);
+  const retry = await client.callTool(request);
+  expect(retry.isError).toBeFalsy();
+  expect(JSON.stringify(retry)).toContain("function added");
+});
+
+it("returns a tool error rather than an empty map after a workspace disappears", async () => {
+  await client.callTool({ name: "osnova_map", arguments: {} });
+  await fs.rename(workspace, path.join(temporary, "moved"));
+  const result = await client.callTool({ name: "osnova_map", arguments: {} });
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result)).toContain("directory-unreadable");
+});

@@ -10,12 +10,20 @@ import type {
   OsnovaIndex,
   SourceSpan,
   SymbolKind,
+  IndexDiagnostic,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
 import { workspaceDirFor, evictLru } from "../cache/cache.js";
+import { IndexingError } from "./diagnostics.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
+
+class ArtifactVersionError extends Error {
+  constructor(readonly version: unknown) {
+    super(`osnova: index artifact format version ${String(version)} != ${indexFormatVersion}; rebuild the index`);
+  }
+}
 
 interface SerializedSpan {
   readonly s: number;
@@ -40,6 +48,7 @@ interface SerializedFile {
   readonly lineCount: number;
   readonly text: string;
   readonly symbols: readonly SerializedSymbol[];
+  readonly diagnostics: readonly IndexDiagnostic[];
 }
 
 interface SerializedEdge {
@@ -81,6 +90,7 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
         },
         signature: symbol.signature,
       })),
+      diagnostics: card.diagnostics ?? [],
     });
   }
   const edges: SerializedEdge[] = index.edges.map((edge) => {
@@ -115,12 +125,18 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
   }
   const artifact = parsed as SerializedArtifact;
   if (artifact.formatVersion !== indexFormatVersion) {
-    throw new Error(
-      `osnova: index artifact format version ${artifact.formatVersion} != ${indexFormatVersion}; rebuild the index`,
-    );
+    throw new ArtifactVersionError(artifact.formatVersion);
   }
   const files = new Map<string, FileCard>();
   for (const file of artifact.files) {
+    if (!Array.isArray(file.diagnostics) || file.diagnostics.some((diagnostic: unknown) => {
+      if (typeof diagnostic !== "object" || diagnostic === null) return true;
+      const value = diagnostic as Partial<IndexDiagnostic>;
+      return typeof value.path !== "string" || typeof value.code !== "string" ||
+        !["scan", "read", "parse", "cache"].includes(value.phase ?? "");
+    })) {
+      throw new Error("osnova: corrupt index diagnostic metadata");
+    }
     const symbols = file.symbols.map((symbol) => {
       const span: SourceSpan = {
         startLine: symbol.span.s,
@@ -146,6 +162,7 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
       lineCount: file.lineCount,
       text: file.text,
       symbols,
+      diagnostics: file.diagnostics,
     });
   }
   const edges: OsnovaEdge[] = artifact.edges.map((edge) =>
@@ -160,18 +177,25 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
 
 export async function saveArtifact(index: OsnovaIndex, cacheDir: string): Promise<string> {
   const dir = workspaceDirFor(cacheDir, index.root);
-  await fs.mkdir(dir, { recursive: true });
-  const raw = serializeArtifact(index);
-  const gzipped = raw.length > GZIP_THRESHOLD_BYTES;
-  const finalPath = path.join(dir, gzipped ? "index.json.gz" : "index.json");
-  const tmpPath = `${finalPath}.tmp-${process.pid}-${randomUUID()}`;
-  const payload = gzipped ? gzipSync(raw) : raw;
-  await fs.writeFile(tmpPath, payload);
-  await fs.rename(tmpPath, finalPath);
-  const other = path.join(dir, gzipped ? "index.json" : "index.json.gz");
-  await fs.rm(other, { force: true }).catch(() => {});
-  await evictLru(cacheDir).catch(() => {});
-  return finalPath;
+  let tmpPath: string | undefined;
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const raw = serializeArtifact(index);
+    const gzipped = raw.length > GZIP_THRESHOLD_BYTES;
+    const finalPath = path.join(dir, gzipped ? "index.json.gz" : "index.json");
+    tmpPath = `${finalPath}.tmp-${process.pid}-${randomUUID()}`;
+    const payload = gzipped ? gzipSync(raw) : raw;
+    await fs.writeFile(tmpPath, payload);
+    await fs.rename(tmpPath, finalPath);
+    const other = path.join(dir, gzipped ? "index.json" : "index.json.gz");
+    await fs.rm(other, { force: true }).catch(() => {});
+    await evictLru(cacheDir).catch(() => {});
+    return finalPath;
+  } catch (error) {
+    throw new IndexingError({ phase: "cache", path: dir, code: "cache-write-failed" }, error);
+  } finally {
+    if (tmpPath !== undefined) await fs.rm(tmpPath, { force: true }).catch(() => {});
+  }
 }
 
 export async function loadArtifact(root: string, cacheDir: string): Promise<OsnovaIndexImpl | undefined> {
@@ -183,7 +207,8 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       return deserializeArtifact(content);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
+      if (error instanceof ArtifactVersionError && error.version === 1) return undefined;
+      throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
     }
   }
   return undefined;

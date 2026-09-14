@@ -12,6 +12,7 @@ import type {
   OsnovaIndex,
   OsnovaSymbol,
   ProgressEvent,
+  IndexDiagnostic,
 } from "../types.js";
 import { OsnovaIndexImpl, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
@@ -19,6 +20,7 @@ import { resolveCacheDir } from "../cache/cache.js";
 import { saveArtifact } from "./serialize.js";
 import { resolveEdges } from "./resolve.js";
 import { scanFiles, sha256Hex } from "./scan.js";
+import { IndexingError } from "./diagnostics.js";
 
 const BINARY_SNIFF_BYTES = 8192;
 
@@ -31,7 +33,9 @@ export async function extractCard(
   relPath: string,
 ): Promise<{ card: FileCard; rawEdges: RawEdgeItem[] }> {
   const abs = path.join(absRoot, relPath);
-  const buffer = await fs.readFile(abs);
+  const buffer = await fs.readFile(abs).catch((error: unknown) => {
+    throw new IndexingError({ phase: "read", path: relPath, code: "file-unreadable" }, error);
+  });
   const hash = sha256Hex(buffer);
   const language = languageOf(relPath);
   const binary = buffer.subarray(0, Math.min(buffer.length, BINARY_SNIFF_BYTES)).includes(0);
@@ -53,11 +57,17 @@ export async function extractCard(
 
   let definitions: RawDefinition[] = [];
   let rawEdges: RawEdgeItem[] = [];
+  const diagnostics: IndexDiagnostic[] = [];
+  const parser = await getParser(language).catch((error: unknown) => {
+    throw new IndexingError({ phase: "parse", path: relPath, code: "grammar-unavailable" }, error);
+  });
   try {
-    const parser = await getParser(language);
     const tree = parser.parse(text);
     if (tree !== null) {
       try {
+        if (tree.rootNode.hasError) {
+          diagnostics.push({ phase: "parse", path: relPath, code: "syntax-errors" });
+        }
         const output = adapterFor(language).extract(tree, text);
         definitions = [...output.definitions];
         rawEdges = output.edges.map((edge: RawEdge) => ({
@@ -69,10 +79,13 @@ export async function extractCard(
       } finally {
         tree.delete();
       }
+    } else {
+      diagnostics.push({ phase: "parse", path: relPath, code: "empty-parse" });
     }
   } catch {
     definitions = [];
     rawEdges = [];
+    diagnostics.push({ phase: "parse", path: relPath, code: "extraction-failed" });
   }
 
   definitions.sort((a, b) => a.span.startLine - b.span.startLine || a.span.endLine - b.span.endLine || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -97,6 +110,7 @@ export async function extractCard(
     lineCount,
     text,
     symbols,
+    diagnostics,
   };
   return { card, rawEdges };
 }
