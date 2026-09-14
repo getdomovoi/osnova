@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { CardLanguage, EdgeResolution, FileCard, OsnovaEdge, OsnovaSymbol } from "../types.js";
+import type { CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol } from "../types.js";
 import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 
@@ -43,26 +43,15 @@ function resolvePythonSpecifier(
   const fromDir = path.posix.dirname(fromFile);
   let baseDir = fromDir;
   for (let i = 1; i < up; i += 1) {
+    if (baseDir === ".") return undefined;
     baseDir = path.posix.dirname(baseDir);
   }
   const parts = rest.length > 0 ? rest.split(".") : [];
-  if (up >= 1) {
-    for (let keep = parts.length; keep >= 0; keep -= 1) {
-      const dirParts = [...baseDir.split("/").filter((p) => p.length > 0), ...parts.slice(0, keep)];
-      const tail = parts.slice(keep);
-      if (tail.length === 0) continue;
-      const modulePath = [...dirParts, tail.join("/")].join("/");
-      if (knownFiles.has(`${modulePath}.py`)) return `${modulePath}.py`;
-      if (knownFiles.has(`${modulePath}/__init__.py`)) return `${modulePath}/__init__.py`;
-    }
-    if (parts.length === 0) {
-      if (knownFiles.has(`${baseDir}/__init__.py`)) return `${baseDir}/__init__.py`;
-    }
-    return undefined;
-  }
-  const modulePath = parts.join("/");
+  if (up === 0 && parts.length === 0) return undefined;
+  const modulePath = up > 0 ? path.posix.join(baseDir, ...parts) : parts.join("/");
+  const init = path.posix.join(modulePath, "__init__.py");
+  if (knownFiles.has(init)) return init;
   if (knownFiles.has(`${modulePath}.py`)) return `${modulePath}.py`;
-  if (knownFiles.has(`${modulePath}/__init__.py`)) return `${modulePath}/__init__.py`;
   return undefined;
 }
 
@@ -103,6 +92,61 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   }
 
   const knownFiles = new Set(files.keys());
+  interface ExportResult {
+    symbols: Map<string, OsnovaSymbol>;
+    routes: Map<string, readonly ExportHop[]>;
+    incomplete: boolean;
+    cycle: boolean;
+  }
+  const exportCache = new Map<string, ExportResult>();
+  const exported = (file: string, name: string): ExportResult => {
+    const key = JSON.stringify([file, name]);
+    const cached = exportCache.get(key);
+    if (cached !== undefined) return cached;
+    const result: ExportResult = { symbols: new Map(), routes: new Map(), incomplete: false, cycle: false };
+    const visited = new Set<string>();
+    const active = new Set<string>();
+    const family = languageFamily(files.get(file)?.language);
+    const walk = (currentFile: string, currentName: string, via: readonly ExportHop[]): void => {
+      const state = JSON.stringify([currentFile, currentName]);
+      if (active.has(state)) { result.cycle = true; return; }
+      if (visited.has(state)) return;
+      if (visited.size >= 4096 || via.length > 128) { result.incomplete = true; return; }
+      visited.add(state);
+      const card = files.get(currentFile);
+      if (card === undefined || languageFamily(card.language) !== family) { result.incomplete = true; return; }
+      const links = card.reExports ?? [];
+      if (links.some((link) => link.kind === "blocked" && (link.exportedName === currentName || link.exportedName === "*"))) {
+        result.incomplete = true;
+        return;
+      }
+      const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName));
+      const named = links.filter((link) => link.kind === "named" && link.exportedName === currentName);
+      const next = direct.length > 0 || named.length > 0 ? named
+        : currentName === "default" ? [] : links.filter((link) => link.kind === "star");
+      for (const symbol of direct) {
+        if (!result.symbols.has(symbol.qualifiedName)) {
+          result.symbols.set(symbol.qualifiedName, symbol);
+          result.routes.set(symbol.qualifiedName, via);
+        }
+      }
+      active.add(state);
+      for (const link of next) {
+        if (link.kind === "blocked") continue;
+        const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles);
+        if (target === undefined) { result.incomplete = true; continue; }
+        const importedName = link.kind === "named" ? link.importedName : currentName;
+        walk(target, importedName, [...via, {
+          file: currentFile, line: link.line, kind: link.kind, exportedName: currentName,
+          importedName, source: link.source, targetFile: target,
+        }]);
+      }
+      active.delete(state);
+    };
+    walk(file, name, []);
+    exportCache.set(key, result);
+    return result;
+  };
   const importTargetsByFile = new Map<string, string[]>();
   for (const fromFile of [...rawEdges.keys()].sort()) {
     const raws = rawEdges.get(fromFile);
@@ -140,15 +184,21 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const binding = raw.binding;
         let candidates: readonly OsnovaSymbol[] = [];
         let resolution: EdgeResolution = { status: "unresolved", reason: "binding-blocked" };
+        let exportResult: ExportResult | undefined;
         if (binding.kind === "import") {
           const target = resolveImportTarget(card.language, fromFile, binding.source, knownFiles);
           if (target === undefined) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           else {
-            candidates = (files.get(target)?.symbols ?? []).filter((symbol) =>
-              languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-              symbol.exportedNames?.includes(binding.importedName) &&
-              (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
-            resolution = { status: "resolved", method: "import-binding" };
+            exportResult = exported(target, binding.importedName);
+            if (exportResult.incomplete) resolution = { status: "unresolved", reason: "re-export-incomplete" };
+            else {
+              candidates = [...exportResult.symbols.values()].filter((symbol) =>
+                languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
+                (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
+              resolution = candidates.length === 0 && exportResult.cycle
+                ? { status: "unresolved", reason: "re-export-cycle" }
+                : { status: "resolved", method: "import-binding" };
+            }
           }
         } else if (binding.kind === "local") {
           candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, binding.name));
@@ -158,6 +208,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const resolved = names.length === 1 ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
         else if (resolved === undefined && resolution.status === "resolved") resolution = { status: "unresolved", reason: "bound-symbol-missing" };
+        const via = resolved === undefined ? undefined : exportResult?.routes.get(resolved.qualifiedName);
+        if (via !== undefined && via.length > 0) resolution = { status: "resolved", method: "re-export-binding", via };
         edges.push({
           kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
           evidence: { source: "syntax", resolution },

@@ -108,6 +108,9 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
       const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
         ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
       lines.push(`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`);
+      if (evidence?.source === "syntax" && evidence.resolution.status === "resolved" && evidence.resolution.method === "re-export-binding") {
+        for (const hop of evidence.resolution.via) lines.push(`  via ${hop.file}:${hop.line} ${hop.exportedName} -> ${hop.targetFile} (export ${hop.importedName})`);
+      }
     }
   }
   lines.push("This does not prove absence of callers or that deletion is safe.");
@@ -115,6 +118,9 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
     lines.push(`unresolved evidence (${result.unresolved.length}); not confirmed relationships`);
     for (const { edge, depth } of result.unresolved) {
       lines.push(`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`);
+      if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "unresolved") {
+        lines.push(`  reason: ${edge.evidence.resolution.reason}`);
+      }
       if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous") {
         lines.push(`  ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`);
       }

@@ -14,6 +14,7 @@ import type {
   EdgeEvidence,
   EdgeResolution,
   EdgeBinding,
+  ReExport,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
@@ -53,6 +54,7 @@ interface SerializedFile {
   readonly text: string;
   readonly symbols: readonly SerializedSymbol[];
   readonly diagnostics: readonly IndexDiagnostic[];
+  readonly reExports: readonly ReExport[];
 }
 
 interface SerializedEdge {
@@ -98,6 +100,7 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
         exportedNames: symbol.exportedNames ?? [],
       })),
       diagnostics: card.diagnostics ?? [],
+      reExports: card.reExports ?? [],
     });
   }
   const edges: SerializedEdge[] = index.edges.map((edge) => {
@@ -138,6 +141,8 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
   }
   const files = new Map<string, FileCard>();
   for (const file of artifact.files) {
+    if (!Array.isArray(file.reExports)) throw new Error("osnova: corrupt re-export metadata");
+    const reExports = file.reExports.map(readReExport);
     if (!Array.isArray(file.diagnostics) || file.diagnostics.some((diagnostic: unknown) => {
       if (typeof diagnostic !== "object" || diagnostic === null) return true;
       const value = diagnostic as Partial<IndexDiagnostic>;
@@ -176,6 +181,7 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
       text: file.text,
       symbols,
       diagnostics: file.diagnostics,
+      reExports,
     });
   }
   const edges: OsnovaEdge[] = artifact.edges.map((edge) => {
@@ -199,16 +205,36 @@ function readEvidence(value: unknown): EdgeEvidence {
       if (resolution.status === "resolved" && ["import-path", "same-file-name", "imported-file-name", "unique-name", "import-binding", "lexical-definition"].includes(resolution.method ?? "")) {
         return value as EdgeEvidence;
       }
+      if (resolution.status === "resolved" && resolution.method === "re-export-binding" &&
+        Array.isArray(resolution.via) && resolution.via.length > 0 && resolution.via.length <= 128 &&
+        resolution.via.every((hop: unknown) => {
+          if (typeof hop !== "object" || hop === null) return false;
+          const item = hop as Record<string, unknown>;
+          return ["file", "source", "exportedName", "importedName", "targetFile"].every((key) => typeof item[key] === "string") &&
+            (item.kind === "named" || item.kind === "star") && Number.isSafeInteger(item.line) && (item.line as number) > 0;
+        })) return value as EdgeEvidence;
       if (resolution.status === "ambiguous" && Array.isArray(resolution.candidates) &&
         resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
         return value as EdgeEvidence;
       }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing"].includes(resolution.reason ?? "")) {
+      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle"].includes(resolution.reason ?? "")) {
         return value as EdgeEvidence;
       }
     }
   }
   throw new Error("osnova: corrupt edge evidence metadata");
+}
+
+function readReExport(value: unknown): ReExport {
+  if (typeof value === "object" && value !== null) {
+    const link = value as Partial<ReExport>;
+    if (Number.isSafeInteger(link.line) && (link.line ?? 0) > 0) {
+      if (link.kind === "star" && typeof link.source === "string") return value as ReExport;
+      if (link.kind === "blocked" && typeof link.exportedName === "string") return value as ReExport;
+      if (link.kind === "named" && typeof link.exportedName === "string" && typeof link.source === "string" && typeof link.importedName === "string") return value as ReExport;
+    }
+  }
+  throw new Error("osnova: corrupt re-export metadata");
 }
 
 function readBinding(value: unknown): EdgeBinding {
@@ -253,7 +279,7 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       return deserializeArtifact(content);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      if (error instanceof ArtifactVersionError && (error.version === 1 || error.version === 2 || error.version === 3 || error.version === 4)) return undefined;
+      if (error instanceof ArtifactVersionError && (error.version === 1 || error.version === 2 || error.version === 3 || error.version === 4 || error.version === 5)) return undefined;
       throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
     }
   }

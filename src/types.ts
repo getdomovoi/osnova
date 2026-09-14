@@ -1,4 +1,4 @@
-export const indexFormatVersion = 5 as const;
+export const indexFormatVersion = 6 as const;
 
 export type LanguageId =
   | "typescript"
@@ -44,9 +44,25 @@ export interface OsnovaSymbol {
 export type EdgeKind = "calls" | "references" | "imports";
 
 export type EdgeResolution =
-  | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition" }
+  | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition"; readonly via?: undefined }
+  | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
   | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
-  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" };
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" };
+
+export type ReExport =
+  | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }
+  | { readonly kind: "star"; readonly source: string; readonly line: number }
+  | { readonly kind: "blocked"; readonly exportedName: string; readonly line: number };
+
+export interface ExportHop {
+  readonly file: string;
+  readonly line: number;
+  readonly kind: "named" | "star";
+  readonly exportedName: string;
+  readonly importedName: string;
+  readonly source: string;
+  readonly targetFile: string;
+}
 
 export type EdgeBinding =
   | { readonly kind: "import"; readonly source: string; readonly importedName: string }
@@ -78,6 +94,7 @@ export interface FileCard {
   readonly text: string;
   readonly symbols: readonly OsnovaSymbol[];
   readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
+  readonly reExports?: readonly ReExport[] | undefined;
 }
 
 export interface OsnovaIndex {

@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import type { EdgeBinding } from "../types.js";
+import type { EdgeBinding, ReExport } from "../types.js";
 import { childrenOf, childOfType } from "./util.js";
 
 interface Scope {
@@ -28,15 +28,19 @@ function patternNames(node: Node | null): string[] {
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
   exportedNames: (name: string, parent: string) => readonly string[];
+  reExports: readonly ReExport[];
 } {
   const module: Scope = { kind: "module", owner: "", parent: null, names: new Map() };
   const scopes = new Map<number, Scope>();
-  const exports = new Map<string, Set<string>>();
+  const exports = new Map<string, Map<string, number>>();
+  const reExports: ReExport[] = [];
+  const importLines = new Map<EdgeBinding, number>();
   const namespaces = new Set<string>();
   const initializers = new Map<EdgeBinding, { end: number; scope: Scope }>();
   const writes: Array<{ scope: Scope; name: string }> = [];
   const join = (owner: string, name: string): string => owner ? `${owner}.${name}` : name;
-  const bind = (scope: Scope, name: string, binding: EdgeBinding): void => {
+  const bind = (scope: Scope, name: string, binding: EdgeBinding, line?: number): void => {
+    if (line !== undefined) importLines.set(binding, line);
     const values = scope.names.get(name) ?? [];
     if (!values.some((value) => JSON.stringify(value) === JSON.stringify(binding))) values.push(binding);
     scope.names.set(name, values);
@@ -44,9 +48,9 @@ export function collectBindings(root: Node, python: boolean): {
   const bindPattern = (scope: Scope, node: Node | null, binding: EdgeBinding = localValue): void => {
     for (const name of patternNames(node)) bind(scope, name, binding);
   };
-  const exportName = (local: string, exported: string): void => {
-    const names = exports.get(local) ?? new Set<string>();
-    names.add(exported);
+  const exportName = (local: string, exported: string, line: number): void => {
+    const names = exports.get(local) ?? new Map<string, number>();
+    names.set(exported, line);
     exports.set(local, names);
   };
   const nearestFunction = (scope: Scope): Scope => {
@@ -123,7 +127,7 @@ export function collectBindings(root: Node, python: boolean): {
         if (item.id === source?.id || item.type === "relative_import" || item.type === "wildcard_import") continue;
         const imported = item.type === "aliased_import" ? item.childForFieldName("name")?.text : item.text;
         const local = item.type === "aliased_import" ? item.childForFieldName("alias")?.text : imported;
-        if (local !== undefined && imported !== undefined) bind(scope, local, { kind: "import", source: source?.text ?? "", importedName: imported });
+        if (local !== undefined && imported !== undefined) bind(scope, local, { kind: "import", source: source?.text ?? "", importedName: imported }, item.startPosition.row + 1);
       }
     }
     if (python && node.type === "import_statement") {
@@ -133,28 +137,45 @@ export function collectBindings(root: Node, python: boolean): {
         const local = alias ?? source?.split(".")[0];
         if (local !== undefined && source !== undefined) {
           namespaces.add(local);
-          bind(scope, local, { kind: "import", source: alias === undefined ? local : source, importedName: "*" });
+          bind(scope, local, { kind: "import", source: alias === undefined ? local : source, importedName: "*" }, item.startPosition.row + 1);
         }
       }
     }
-    if (!python && node.type === "export_statement" && outer === module && node.childForFieldName("source") === null &&
+    if (!python && node.type === "export_statement" && outer === module &&
       !node.children.some((child) => child?.type === "type")) {
+      const sourceNode = node.childForFieldName("source");
+      const source = sourceNode === null ? null : childOfType(sourceNode, "string_fragment")?.text ?? "";
+      const line = node.startPosition.row + 1;
       const clause = childOfType(node, "export_clause");
       if (clause !== null) {
         for (const specifier of childrenOf(clause)) {
           if (specifier.children.some((child) => child?.type === "type")) continue;
           const local = specifier.childForFieldName("name")?.text;
-          if (local !== undefined) exportName(local, specifier.childForFieldName("alias")?.text ?? local);
+          if (local !== undefined) {
+            const exported = specifier.childForFieldName("alias")?.text ?? local;
+            const exportLine = specifier.startPosition.row + 1;
+            if (source === null) exportName(local, exported, exportLine);
+            else reExports.push({ kind: "named", exportedName: exported, source, importedName: local, line: exportLine });
+          }
+        }
+      } else if (source !== null) {
+        const namespace = childOfType(node, "namespace_export");
+        if (namespace === null) reExports.push({ kind: "star", source, line });
+        else {
+          const name = childrenOf(namespace).find((child) => child.type === "identifier")?.text;
+          if (name !== undefined) reExports.push({ kind: "blocked", exportedName: name, line });
         }
       }
       const declaration = node.childForFieldName("declaration");
       if (declaration !== null) {
         const names = declaration.childForFieldName("name")?.text;
-        if (names !== undefined) exportName(names, node.children.some((child) => child?.type === "default") ? "default" : names);
+        if (names !== undefined) exportName(names, node.children.some((child) => child?.type === "default") ? "default" : names, line);
         for (const item of childrenOf(declaration)) {
-          if (item.type === "variable_declarator") for (const name of patternNames(item.childForFieldName("name"))) exportName(name, name);
+          if (item.type === "variable_declarator") for (const name of patternNames(item.childForFieldName("name"))) exportName(name, name, line);
         }
       }
+      const value = node.childForFieldName("value");
+      if (source === null && value?.type === "identifier" && node.children.some((child) => child?.type === "default")) exportName(value.text, "default", line);
     }
     if (!python && node.type === "variable_declarator") {
       const target = node.childForFieldName("name");
@@ -195,6 +216,24 @@ export function collectBindings(root: Node, python: boolean): {
     while (!scope.names.has(write.name) && scope.parent !== null) scope = scope.parent;
     bind(scope, write.name, localValue);
   }
+  const forward = (exportedName: string, bindings: readonly EdgeBinding[] | undefined, line: number): void => {
+    const binding = bindings?.length === 1 ? bindings[0] : undefined;
+    if (binding?.kind === "import" && binding.importedName !== "*") {
+      reExports.push({ kind: "named", exportedName, source: binding.source, importedName: binding.importedName, line });
+    } else if (binding === undefined || (binding.kind === "blocked" && binding.reason !== "local-value") || binding.kind === "import") {
+      reExports.push({ kind: "blocked", exportedName, line });
+    }
+  };
+  if (python) {
+    if (module.names.has("*")) reExports.push({ kind: "blocked", exportedName: "*", line: 1 });
+    for (const [name, bindings] of module.names) {
+      if (name === "*") continue;
+      forward(name, bindings, importLines.get(bindings[0] as EdgeBinding) ?? 1);
+    }
+  } else {
+    for (const [local, names] of exports) for (const [name, line] of names) forward(name, module.names.get(local), line);
+  }
+  reExports.sort((a, b) => a.line - b.line || (JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0));
   const lookup = (name: string, site: Node): EdgeBinding | undefined => {
     for (let scope: Scope | null = scopes.get(site.id) ?? module; scope !== null; scope = scope.parent) {
       if (scope.names.has("*")) return { kind: "blocked", reason: "unsupported" };
@@ -226,6 +265,7 @@ export function collectBindings(root: Node, python: boolean): {
       }
       return { kind: "blocked", reason: "unsupported" };
     },
-    exportedNames: (name, parent) => parent !== "" || module.names.has("*") ? [] : python ? [name] : [...(exports.get(name) ?? [])].sort(),
+    exportedNames: (name, parent) => parent !== "" || module.names.has("*") ? [] : python ? [name] : [...(exports.get(name)?.keys() ?? [])].sort(),
+    reExports,
   };
 }

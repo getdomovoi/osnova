@@ -235,7 +235,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
     for (const child of childrenOf(tree.rootNode)) visit(child);
     return { definitions: ex.out.definitions.map((definition) => ({
       ...definition, exportedNames: bindings.exportedNames(definition.name, definition.parent),
-    })), edges: ex.out.edges };
+    })), edges: ex.out.edges, reExports: bindings.reExports };
   };
   return { language, extract };
 }

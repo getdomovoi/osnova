@@ -138,6 +138,6 @@ export const pythonAdapter: LanguageAdapter = {
     for (const child of childrenOf(tree.rootNode)) visit(child);
     return { definitions: out.definitions.map((definition) => ({
       ...definition, exportedNames: bindings.exportedNames(definition.name, definition.parent),
-    })), edges: out.edges };
+    })), edges: out.edges, reExports: bindings.reExports };
   },
 };

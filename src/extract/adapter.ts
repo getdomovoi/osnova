@@ -1,5 +1,5 @@
 import type { Tree } from "web-tree-sitter";
-import type { EdgeBinding, EdgeKind, SourceSpan, SymbolKind } from "../types.js";
+import type { EdgeBinding, EdgeKind, ReExport, SourceSpan, SymbolKind } from "../types.js";
 
 export interface RawDefinition {
   readonly name: string;
@@ -21,6 +21,7 @@ export interface RawEdge {
 export interface AdapterOutput {
   readonly definitions: readonly RawDefinition[];
   readonly edges: readonly RawEdge[];
+  readonly reExports?: readonly ReExport[] | undefined;
 }
 
 export interface LanguageAdapter {

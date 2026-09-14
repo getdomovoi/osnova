@@ -13,6 +13,7 @@ import type {
   OsnovaSymbol,
   ProgressEvent,
   IndexDiagnostic,
+  ReExport,
 } from "../types.js";
 import { OsnovaIndexImpl, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
@@ -57,6 +58,7 @@ export async function extractCard(
 
   let definitions: RawDefinition[] = [];
   let rawEdges: RawEdgeItem[] = [];
+  let reExports: readonly ReExport[] = [];
   const diagnostics: IndexDiagnostic[] = [];
   const parser = await getParser(language).catch((error: unknown) => {
     throw new IndexingError({ phase: "parse", path: relPath, code: "grammar-unavailable" }, error);
@@ -70,6 +72,7 @@ export async function extractCard(
         }
         const output = adapterFor(language).extract(tree, text);
         definitions = [...output.definitions];
+        reExports = output.reExports ?? [];
         rawEdges = output.edges.map((edge: RawEdge) => ({
           kind: edge.kind,
           toName: edge.toName,
@@ -86,6 +89,7 @@ export async function extractCard(
   } catch {
     definitions = [];
     rawEdges = [];
+    reExports = [];
     diagnostics.push({ phase: "parse", path: relPath, code: "extraction-failed" });
   }
 
@@ -113,6 +117,7 @@ export async function extractCard(
     text,
     symbols,
     diagnostics,
+    reExports,
   };
   return { card, rawEdges };
 }
