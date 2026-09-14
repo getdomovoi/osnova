@@ -55,4 +55,27 @@ describe("benchmark manifest", () => {
     first.anchors = [];
     expect(() => parseManifest(input)).toThrow(/anchors/);
   });
+
+  it("does not allow exclusions to hide the edit or ground-truth sources", () => {
+    const input = manifest();
+    input.source = { kind: "checkout", revision: "a".repeat(40), exclude: ["src"] };
+    expect(() => parseManifest(input)).toThrow(/exclusion/);
+    input.edit = { file: "other.ts", append: "\n// edit" };
+    expect(() => parseManifest(input)).toThrow(/exclusion/);
+    input.source = { kind: "checkout", revision: "a".repeat(40), exclude: ["hidden.ts"] };
+    const first = (input.cases as Array<Record<string, unknown>>)[0];
+    if (first === undefined) throw new Error("missing fixture");
+    first.expected = ["hidden.ts#answer"];
+    expect(() => parseManifest(input)).toThrow(/exclusion/);
+  });
+
+  it("validates exclusion paths and includes them in the manifest fingerprint", () => {
+    const input = manifest();
+    input.source = { kind: "checkout", revision: "a".repeat(40), exclude: ["../outside"] };
+    expect(() => parseManifest(input)).toThrow(/path/);
+    input.source = { kind: "checkout", revision: "a".repeat(40), exclude: [".config"] };
+    const excluded = manifestFingerprint(parseManifest(input));
+    input.source = { kind: "checkout", revision: "a".repeat(40) };
+    expect(manifestFingerprint(parseManifest(input))).not.toBe(excluded);
+  });
 });

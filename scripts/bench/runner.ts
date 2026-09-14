@@ -9,7 +9,7 @@ import { artifactPathFor, saveArtifact } from "../../src/index/serialize.js";
 import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics } from "../../src/query/format.js";
 import { boundText } from "../../src/query/budget.js";
 import type { OsnovaIndex } from "../../src/types.js";
-import { manifestFingerprint, parseManifest, validateRelativePath } from "./manifest.js";
+import { manifestFingerprint, parseManifest, pathExcluded, validateRelativePath } from "./manifest.js";
 import type { BenchmarkCase, BenchmarkManifest } from "./manifest.js";
 import { percentile, scoreRanking, scoreSet } from "./metrics.js";
 
@@ -45,6 +45,7 @@ export interface BenchmarkReport {
   sourceRevision: string | null;
   manifestFingerprint: string;
   snapshotFingerprint: string | null;
+  snapshotExclusions: { declared: readonly string[]; files: readonly string[] };
   isolation: "in-process" | "fresh-process";
   scoringScope: "structured-query";
   status: "completed" | "failed";
@@ -74,9 +75,9 @@ async function checkoutState(root: string, revision: string): Promise<void> {
   if (state.stdout.length > 0) throw new Error("checkout must be clean, including untracked files");
 }
 
-async function snapshot(manifest: BenchmarkManifest, workspace?: string): Promise<Map<string, Buffer>> {
+async function snapshot(manifest: BenchmarkManifest, workspace?: string): Promise<{ files: Map<string, Buffer>; excluded: string[] }> {
   if (manifest.source.kind === "inline") {
-    return new Map(Object.entries(manifest.source.files).map(([file, text]) => [file, Buffer.from(text)]));
+    return { files: new Map(Object.entries(manifest.source.files).map(([file, text]) => [file, Buffer.from(text)])), excluded: [] };
   }
   if (workspace === undefined) throw new Error("workspace required for a checkout corpus");
   await checkoutState(workspace, manifest.source.revision);
@@ -84,16 +85,22 @@ async function snapshot(manifest: BenchmarkManifest, workspace?: string): Promis
     timeout: 30_000, maxBuffer: 10 * 1024 * 1024,
   });
   const paths = stdout.split("\0").filter(Boolean);
+  const exclusions = manifest.source.exclude ?? [];
+  for (const prefix of exclusions) {
+    if (!paths.some((file) => pathExcluded(file, [prefix]))) throw new Error(`exclusion matches no tracked path: ${prefix}`);
+  }
+  const excluded = paths.filter((file) => pathExcluded(file, exclusions)).sort();
   const files = new Map<string, Buffer>();
   for (const relative of paths) {
     validateRelativePath(relative);
+    if (pathExcluded(relative, exclusions)) continue;
     const absolute = path.join(workspace, relative);
     const stat = await fs.lstat(absolute);
     if (!stat.isFile()) throw new Error(`snapshot requires regular files: ${relative}`);
     files.set(relative, await fs.readFile(absolute));
   }
   await checkoutState(workspace, manifest.source.revision);
-  return files;
+  return { files, excluded };
 }
 
 function emptyMeasurement(item: BenchmarkCase): CaseMeasurement {
@@ -180,6 +187,7 @@ export async function runBenchmark(
   const report: BenchmarkReport = {
     schemaVersion: 1, corpus: manifest.id, manifestFingerprint: manifestFingerprint(manifest), snapshotFingerprint: null,
     sourceRevision: manifest.source.kind === "checkout" ? manifest.source.revision : null,
+    snapshotExclusions: { declared: manifest.source.kind === "checkout" ? manifest.source.exclude ?? [] : [], files: [] },
     isolation: "in-process", scoringScope: "structured-query", status: "completed",
     index: null,
     environment: { node: process.version, platform: process.platform, arch: process.arch },
@@ -189,7 +197,8 @@ export async function runBenchmark(
   };
   const temporary = await fs.mkdtemp(path.join(options.temporaryRoot ?? os.tmpdir(), "osnova-benchmark-"));
   try {
-    const sources = await snapshot(manifest, options.workspace);
+    const { files: sources, excluded } = await snapshot(manifest, options.workspace);
+    report.snapshotExclusions.files = excluded;
     const hash = createHash("sha256");
     const workspace = path.join(temporary, "workspace");
     const cacheDir = path.join(temporary, "cache");

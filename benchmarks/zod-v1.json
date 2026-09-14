@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "zod-v1",
-  "source": { "kind": "checkout", "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21", "repository": "https://github.com/colinhacks/zod" },
+  "source": { "kind": "checkout", "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21", "repository": "https://github.com/colinhacks/zod", "exclude": [".codex/skills"] },
   "edit": { "file": "packages/zod/src/v4/core/util.ts", "append": "\n// benchmark edit\n" },
   "cases": [
     {

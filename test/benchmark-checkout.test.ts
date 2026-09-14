@@ -62,3 +62,24 @@ it("rejects untracked source instead of letting it contaminate a pinned workload
   expect(report.errors.join("\n")).toContain("checkout must be clean");
   expect(await fs.readFile(path.join(root, "untracked.ts"), "utf8")).toContain("beta");
 });
+
+it("reports exact declared exclusions without changing the checkout", async () => {
+  await fs.mkdir(path.join(root, ".config"));
+  await fs.writeFile(path.join(root, ".config", "instructions.txt"), "metadata only\n");
+  await git(["add", ".config/instructions.txt"]);
+  await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-qm", "metadata fixture"]);
+  revision = (await git(["rev-parse", "HEAD"])).trim();
+  const input = parseManifest({ ...manifest(), source: { kind: "checkout", revision, exclude: [".config"] } });
+  const report = await runBenchmark(input, { samples: 1, split: "development", workspace: root });
+  expect(report.status).toBe("completed");
+  expect(report.snapshotExclusions).toEqual({ declared: [".config"], files: [".config/instructions.txt"] });
+  expect(await git(["status", "--porcelain"])).toBe("");
+  expect(await fs.readFile(path.join(root, ".config", "instructions.txt"), "utf8")).toBe("metadata only\n");
+});
+
+it("rejects exclusions that match no tracked input", async () => {
+  const input = parseManifest({ ...manifest(), source: { kind: "checkout", revision, exclude: [".missing"] } });
+  const report = await runBenchmark(input, { samples: 1, split: "development", workspace: root });
+  expect(report.status).toBe("failed");
+  expect(report.errors.join("\n")).toContain("exclusion matches no tracked path");
+});

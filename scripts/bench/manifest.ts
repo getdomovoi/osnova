@@ -18,7 +18,7 @@ export interface BenchmarkManifest {
   readonly id: string;
   readonly source:
     | { readonly kind: "inline"; readonly files: Readonly<Record<string, string>> }
-    | { readonly kind: "checkout"; readonly revision: string };
+    | { readonly kind: "checkout"; readonly revision: string; readonly exclude?: readonly string[] };
   readonly edit: { readonly file: string; readonly append: string };
   readonly cases: readonly BenchmarkCase[];
 }
@@ -39,11 +39,24 @@ export function validateRelativePath(value: unknown): asserts value is string {
   "expected a safe relative path");
 }
 
+export function pathExcluded(file: string, exclusions: readonly string[]): boolean {
+  return exclusions.some((prefix) => file === prefix || file.startsWith(`${prefix}/`));
+}
+
 export function parseManifest(value: unknown): BenchmarkManifest {
   const manifest = object(value);
   ensure(manifest.schemaVersion === 1, "unsupported schemaVersion");
   ensure(typeof manifest.id === "string" && /^[a-z0-9-]+$/.test(manifest.id), "invalid corpus id");
   const source = object(manifest.source);
+  const exclusions: string[] = [];
+  if (source.exclude !== undefined) {
+    ensure(source.kind === "checkout" && Array.isArray(source.exclude), "exclusions require a checkout source");
+    for (const file of source.exclude) {
+      validateRelativePath(file);
+      ensure(!exclusions.includes(file), "duplicate exclusion");
+      exclusions.push(file);
+    }
+  }
   if (source.kind === "inline") {
     const files = object(source.files);
     ensure(Object.keys(files).length > 0, "source files must not be empty");
@@ -57,6 +70,7 @@ export function parseManifest(value: unknown): BenchmarkManifest {
   }
   const edit = object(manifest.edit);
   validateRelativePath(edit.file);
+  ensure(!pathExcluded(edit.file, exclusions), "exclusion hides the edit file");
   ensure(typeof edit.append === "string" && edit.append.length > 0, "edit append must not be empty");
   ensure(Array.isArray(manifest.cases) && manifest.cases.length > 0, "cases must not be empty");
   const ids = new Set<string>();
@@ -68,18 +82,27 @@ export function parseManifest(value: unknown): BenchmarkManifest {
     ensure(item.split === "development" || item.split === "evaluation", "invalid case split");
     ensure(Array.isArray(item.expected) && item.expected.every((id: unknown) => typeof id === "string" && id.length > 0), "invalid expected IDs");
     ensure(new Set(item.expected).size === item.expected.length, "duplicate expected IDs");
+    for (const expected of item.expected as string[]) {
+      const file = expected.split(item.kind === "findText" ? ":" : "#")[0] ?? expected;
+      ensure(!pathExcluded(file, exclusions), "exclusion hides an expected source");
+    }
     ensure(Array.isArray(item.anchors) && item.anchors.length > 0, "source anchors required");
     for (const value of item.anchors) {
       const anchor = object(value);
       validateRelativePath(anchor.file);
+      ensure(!pathExcluded(anchor.file, exclusions), "exclusion hides a source anchor");
       ensure(typeof anchor.text === "string" && anchor.text.length > 0, "anchor text required");
     }
-    if (item.in !== undefined) validateRelativePath(item.in);
+    if (item.in !== undefined) {
+      validateRelativePath(item.in);
+      ensure(!pathExcluded(item.in, exclusions), "exclusion hides the query scope");
+    }
     if (item.kind === "ask") {
       ensure(typeof item.question === "string" && item.question.length > 0, "question required");
       ensure(item.expected.length > 0, "nonempty relevance labels required");
     } else if (item.kind === "callers") {
       ensure(typeof item.symbol === "string" && item.symbol.length > 0, "symbol required");
+      if (item.symbol.includes("#")) ensure(!pathExcluded(item.symbol.split("#")[0] ?? "", exclusions), "exclusion hides the query target");
       ensure(item.direction === undefined || item.direction === "in" || item.direction === "out", "invalid direction");
       ensure(item.depth === undefined || (typeof item.depth === "number" && Number.isSafeInteger(item.depth) && item.depth > 0), "invalid depth");
     } else {
