@@ -37,8 +37,11 @@ async function main(): Promise<void> {
     samples: { type: "string", default: "5" }, output: { type: "string" }, worker: { type: "boolean" },
     "temporary-root": { type: "string" },
     "candidate-report": { type: "string" },
+    "graph-rank": { type: "string", default: "off" },
   } });
   const manifestPath = path.resolve(values.manifest ?? path.join(repository, "benchmarks/core-v1.json"));
+  if (values["graph-rank"] !== "on" && values["graph-rank"] !== "off") throw new Error("graph-rank must be on or off");
+  const graphRank = values["graph-rank"] === "on";
   if (values.split !== "development" && values.split !== "evaluation") throw new Error("split must be development or evaluation");
   if (values.split === "evaluation" && values["candidate-report"] === undefined) {
     throw new Error("evaluation requires --candidate-report from the matching development run");
@@ -53,12 +56,14 @@ async function main(): Promise<void> {
         engineFingerprint: identity.engineFingerprint, harnessFingerprint: identity.harnessFingerprint,
         developmentCaseIds: manifest.cases.filter((item) => item.split === "development").map((item) => item.id),
         environment: { node: process.version, platform: process.platform, arch: process.arch },
+        queryOptions: { graphRank },
       },
     );
     const { runBenchmark } = await import("./runner.js");
     const result = await runBenchmark(manifest, {
       samples: Number(values.samples), split: values.split, workspace: values.workspace, temporaryRoot: values["temporary-root"],
       expectedSnapshotFingerprint: receipt?.snapshotFingerprint,
+      graphRank,
     });
     const after = await implementationIdentity();
     if (identity.engineFingerprint !== after.engineFingerprint || identity.harnessFingerprint !== after.harnessFingerprint) {
@@ -69,7 +74,7 @@ async function main(): Promise<void> {
     return;
   }
   const args = ["--import", "tsx", fileURLToPath(import.meta.url), "--worker", "--manifest", manifestPath,
-    "--split", values.split, "--samples", values.samples];
+    "--split", values.split, "--samples", values.samples, "--graph-rank", values["graph-rank"]];
   if (values.workspace !== undefined) args.push("--workspace", path.resolve(values.workspace));
   if (values["candidate-report"] !== undefined) args.push("--candidate-report", path.resolve(values["candidate-report"]));
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-bench-worker-"));

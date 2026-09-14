@@ -50,4 +50,10 @@ describe("evaluation receipts", () => {
     expect(() => validateCandidate(null, context)).toThrow(/candidate/);
     expect(() => validateCandidate({ ...candidate(), snapshotFingerprint: "" }, context)).toThrow(/snapshot/);
   });
+
+  it("does not compare different ranking variants under the same receipt", () => {
+    const report = { ...candidate(), queryOptions: { graphRank: false } };
+    expect(() => validateCandidate(report, { ...context, queryOptions: { graphRank: true } })).toThrow(/configuration mismatch/);
+    expect(validateCandidate(report, { ...context, queryOptions: { graphRank: false } }).snapshotFingerprint).toBe("d".repeat(64));
+  });
 });

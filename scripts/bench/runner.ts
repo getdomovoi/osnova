@@ -12,6 +12,7 @@ import type { OsnovaIndex } from "../../src/types.js";
 import { manifestFingerprint, parseManifest, pathExcluded, validateRelativePath } from "./manifest.js";
 import type { BenchmarkCase, BenchmarkManifest } from "./manifest.js";
 import { percentile, scoreRanking, scoreSet } from "./metrics.js";
+import { responseTokens } from "./tokenizer.js";
 
 const execute = promisify(execFile);
 
@@ -27,6 +28,7 @@ export interface CaseMeasurement {
   elapsedMs: number | null;
   responseCodeUnits: number | null;
   responseBytes: number | null;
+  responseTokens: ReturnType<typeof responseTokens> | null;
   responseClipped: boolean | null;
   response: string | null;
   unresolvedEdges: number | null;
@@ -48,6 +50,7 @@ export interface BenchmarkReport {
   snapshotExclusions: { declared: readonly string[]; files: readonly string[] };
   isolation: "in-process" | "fresh-process";
   scoringScope: "structured-query";
+  queryOptions: { graphRank: boolean };
   status: "completed" | "failed";
   index: { files: number; symbols: number; edges: number } | null;
   environment: { node: string; platform: string; arch: string };
@@ -106,12 +109,12 @@ export async function snapshot(manifest: BenchmarkManifest, workspace?: string):
 function emptyMeasurement(item: BenchmarkCase): CaseMeasurement {
   return {
     id: item.id, kind: item.kind, split: item.split, status: "measured", expected: item.expected, actual: [],
-    ranking: null, set: null, elapsedMs: null, responseCodeUnits: null, responseBytes: null,
+    ranking: null, set: null, elapsedMs: null, responseCodeUnits: null, responseBytes: null, responseTokens: null,
     responseClipped: null, response: null, unresolvedEdges: null, error: null,
   };
 }
 
-function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<string, Buffer>): CaseMeasurement {
+function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<string, Buffer>, graphRank: boolean): CaseMeasurement {
   const result = emptyMeasurement(item);
   for (const anchor of item.anchors) {
     if (!sources.get(anchor.file)?.toString("utf8").includes(anchor.text)) {
@@ -122,7 +125,7 @@ function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<
   try {
     let text: string;
     if (item.kind === "ask") {
-      const answer = ask(index, item.question, { in: item.in, limit: 5 });
+      const answer = ask(index, item.question, { in: item.in, limit: 5, graphRank });
       result.actual = answer.hits.map((hit) => hit.symbol?.qualifiedName ?? `@${hit.file}:${hit.line}`);
       result.ranking = scoreRanking(result.actual, item.expected, 5);
       text = formatAsk(answer);
@@ -150,6 +153,7 @@ function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<
     result.error = error instanceof Error ? error.message : String(error);
   }
   result.elapsedMs = performance.now() - start;
+  if (result.response !== null) result.responseTokens = responseTokens(result.response);
   return result;
 }
 
@@ -175,7 +179,7 @@ function distribution(samples: number[]): Distribution {
 
 export async function runBenchmark(
   input: BenchmarkManifest,
-  options: { samples: number; split: "development" | "evaluation"; workspace?: string | undefined; temporaryRoot?: string | undefined; expectedSnapshotFingerprint?: string | undefined },
+  options: { samples: number; split: "development" | "evaluation"; workspace?: string | undefined; temporaryRoot?: string | undefined; expectedSnapshotFingerprint?: string | undefined; graphRank?: boolean | undefined },
 ): Promise<BenchmarkReport> {
   if (!Number.isSafeInteger(options.samples) || options.samples < 1 || options.samples > 100) {
     throw new RangeError("benchmark samples must be an integer from 1 to 100");
@@ -189,6 +193,7 @@ export async function runBenchmark(
     sourceRevision: manifest.source.kind === "checkout" ? manifest.source.revision : null,
     snapshotExclusions: { declared: manifest.source.kind === "checkout" ? manifest.source.exclude ?? [] : [], files: [] },
     isolation: "in-process", scoringScope: "structured-query", status: "completed",
+    queryOptions: { graphRank: options.graphRank ?? false },
     index: null,
     environment: { node: process.version, platform: process.platform, arch: process.arch },
     cases: selected.map((item) => ({ ...emptyMeasurement(item), status: "error", error: "not run: benchmark setup or indexing failed" })),
@@ -220,7 +225,7 @@ export async function runBenchmark(
     const firstBuildMs = performance.now() - start;
     report.index = { files: index.files.size, symbols: index.symbols.size, edges: index.edges.length };
     report.analysisDiagnostics = index.diagnostics ?? [];
-    report.cases = selected.map((item) => evaluate(index, item, sources));
+    report.cases = selected.map((item) => evaluate(index, item, sources, options.graphRank ?? false));
     const serializedArtifactBytes = serializeArtifact(index).length;
     const artifactPath = await artifactPathFor(workspace, cacheDir);
     if (artifactPath === undefined) throw new Error("artifact was not saved");
