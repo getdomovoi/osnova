@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "graph-ranking-v1",
+  "source": {
+    "kind": "inline",
+    "files": {
+      "a-unused.ts": "export function dispatch() { return 1; }\n",
+      "z-central.ts": "export function dispatch() { return 1; }\n",
+      "entry.ts": "import { dispatch } from './z-central.js';\nexport function start() { return dispatch(); }\nexport function retry() { return dispatch(); }\n",
+      "a-second.ts": "export function assemble() { return 2; }\n",
+      "z-used.ts": "export function assemble() { return 2; }\n",
+      "service.ts": "import { assemble } from './z-used.js';\nexport function build() { return assemble(); }\nexport function refresh() { return assemble(); }\n"
+    }
+  },
+  "edit": { "file": "entry.ts", "append": "\n// measured edit\n" },
+  "cases": [
+    {
+      "id": "central-definition", "split": "development", "kind": "ask", "question": "dispatch",
+      "expected": ["z-central.ts#dispatch"],
+      "anchors": [{ "file": "entry.ts", "text": "return dispatch()" }]
+    },
+    {
+      "id": "used-definition", "split": "evaluation", "kind": "ask", "question": "assemble",
+      "expected": ["z-used.ts#assemble"],
+      "anchors": [{ "file": "service.ts", "text": "return assemble()" }]
+    }
+  ]
+}
