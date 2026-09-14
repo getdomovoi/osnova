@@ -130,6 +130,8 @@ Timing separates first build, unchanged hash refresh, and edited refresh includi
 
 Agent task success, tokenizer-based context counts, agent tool calls and packed-package size remain `null` until measured by their own trials. `status: completed` means measurement finished, not that retrieval was perfect; inspect the scores. Operational/query failures produce `status: failed` and command exit 2. This benchmark does not replace `pnpm perf` or the unit-test gates.
 
+The [initial development baseline](benchmarks/results/development-baseline-2026-09-14.json) records measured workload fingerprints, quality scores, refresh samples and limitations. It preserves misses rather than presenting successful execution as successful retrieval. Evaluation cases remain separate and were not used for that baseline.
+
 ## License
 
 Apache-2.0
