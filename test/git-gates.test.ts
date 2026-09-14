@@ -53,3 +53,17 @@ it("treats a deletion as no code snapshot to validate", () => {
   const result = spawnSync(process.execPath, [gate, "push"], { cwd: root, encoding: "utf8", input: `(delete) ${"0".repeat(40)} refs/heads/test ${"a".repeat(40)}\n` });
   expect(result.status, result.stderr).toBe(0);
 });
+
+it("never auto-installs or reconciles the checkout's linked dependencies", async () => {
+  await fs.mkdir(path.join(root, "dependency"));
+  await fs.writeFile(path.join(root, "dependency", "package.json"), JSON.stringify({ name: "gate-local-dependency", version: "1.0.0" }));
+  const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as Record<string, unknown>;
+  manifest.dependencies = { "gate-local-dependency": "file:./dependency" };
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify(manifest));
+  git(["add", "package.json", "dependency"]);
+  await fs.mkdir(path.join(root, "node_modules"));
+  await fs.writeFile(path.join(root, "node_modules", "sentinel"), "unchanged");
+  const result = spawnSync(process.execPath, [gate, "commit"], { cwd: root, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  expect(await fs.readdir(path.join(root, "node_modules"))).toEqual(["sentinel"]);
+});

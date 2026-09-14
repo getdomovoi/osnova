@@ -32,7 +32,7 @@ for (const tree of trees) {
     }
     for (const gate of mode === "commit" ? ["lint", "typecheck"] : ["lint", "typecheck", "build", "test"]) {
       process.stdout.write(`osnova: ${gate} on ${mode === "commit" ? "staged snapshot" : "pushed snapshot"} ${tree.slice(0, 8)}\n`);
-      const result = spawnSync(process.platform === "win32" ? "pnpm.cmd" : "pnpm", ["run", gate], { cwd: temporary, stdio: "inherit", shell: process.platform === "win32" });
+      const result = spawnSync(process.platform === "win32" ? "pnpm.cmd" : "pnpm", ["--config.verifyDepsBeforeRun=false", "run", gate], { cwd: temporary, stdio: "inherit", shell: process.platform === "win32" });
       if (result.error || result.status !== 0) throw new Error(`${gate} failed; ${mode} blocked${result.error ? `: ${result.error.message}` : ""}`);
     }
   } finally {
