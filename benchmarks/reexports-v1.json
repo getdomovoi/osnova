@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "id": "reexports-v1",
+  "source": {
+    "kind": "inline",
+    "files": {
+      "engine.ts": "export function run() { return 1; }\n",
+      "middle.ts": "export { run as execute } from './engine.js';\n",
+      "front.ts": "export { execute as submit } from './middle.js';\n",
+      "client.ts": "import { submit } from './front.js';\nexport function start() { return submit(); }\n",
+      "pkg/engine.py": "def create():\n    return 1\n",
+      "pkg/__init__.py": "from .engine import create as make\n",
+      "python_client.py": "from pkg import make\n\ndef invoke():\n    return make()\n",
+      "left.ts": "export function task() { return 1; }\n",
+      "right.ts": "export function task() { return 2; }\n",
+      "mixed.ts": "export * from './left.js';\nexport * from './right.js';\n",
+      "ambiguous.ts": "import { task } from './mixed.js';\nexport function ambiguous() { return task(); }\n",
+      "cycle/a.ts": "export * from './b.js';\n",
+      "cycle/b.ts": "export * from './a.js';\nexport { launch as dispatch } from './engine.js';\n",
+      "cycle/engine.ts": "export function launch() { return 3; }\n",
+      "cycle/client.ts": "import { dispatch } from './a.js';\nexport function cyclic() { return dispatch(); }\n"
+    }
+  },
+  "edit": { "file": "engine.ts", "append": "\n// measured edit\n" },
+  "cases": [
+    {
+      "id": "renamed-barrel-chain", "kind": "callers", "split": "development", "symbol": "engine.ts#run",
+      "expected": ["client.ts#start"],
+      "anchors": [{ "file": "front.ts", "text": "execute as submit" }, { "file": "client.ts", "text": "return submit()" }]
+    },
+    {
+      "id": "python-package-export", "kind": "callers", "split": "development", "symbol": "pkg/engine.py#create",
+      "expected": ["python_client.py#invoke"],
+      "anchors": [{ "file": "pkg/__init__.py", "text": "create as make" }, { "file": "python_client.py", "text": "return make()" }]
+    },
+    {
+      "id": "ambiguous-star-is-not-a-caller", "kind": "callers", "split": "evaluation", "symbol": "left.ts#task",
+      "expected": [],
+      "anchors": [{ "file": "mixed.ts", "text": "export * from './left.js'" }, { "file": "mixed.ts", "text": "export * from './right.js'" }]
+    },
+    {
+      "id": "cycle-with-valid-exit", "kind": "callers", "split": "evaluation", "symbol": "cycle/client.ts#cyclic", "direction": "out",
+      "expected": ["cycle/engine.ts#launch"],
+      "anchors": [{ "file": "cycle/b.ts", "text": "launch as dispatch" }, { "file": "cycle/client.ts", "text": "return dispatch()" }]
+    }
+  ]
+}
