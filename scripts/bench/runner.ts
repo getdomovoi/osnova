@@ -175,7 +175,7 @@ function distribution(samples: number[]): Distribution {
 
 export async function runBenchmark(
   input: BenchmarkManifest,
-  options: { samples: number; split: "development" | "evaluation"; workspace?: string | undefined; temporaryRoot?: string | undefined },
+  options: { samples: number; split: "development" | "evaluation"; workspace?: string | undefined; temporaryRoot?: string | undefined; expectedSnapshotFingerprint?: string | undefined },
 ): Promise<BenchmarkReport> {
   if (!Number.isSafeInteger(options.samples) || options.samples < 1 || options.samples > 100) {
     throw new RangeError("benchmark samples must be an integer from 1 to 100");
@@ -210,6 +210,9 @@ export async function runBenchmark(
       await fs.writeFile(path.join(workspace, relative), content);
     }
     report.snapshotFingerprint = hash.digest("hex");
+    if (options.expectedSnapshotFingerprint !== undefined && report.snapshotFingerprint !== options.expectedSnapshotFingerprint) {
+      throw new Error("candidate snapshot mismatch");
+    }
     const original = sources.get(manifest.edit.file);
     if (original === undefined) throw new Error("edit file missing from snapshot");
     const start = performance.now();

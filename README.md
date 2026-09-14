@@ -111,12 +111,14 @@ The perf script enforces first-build and incremental-refresh budgets on a genera
 ### Reproducible benchmarks
 
 ```sh
-pnpm benchmark --samples 5
-pnpm benchmark --split evaluation --samples 5
+pnpm benchmark --samples 5 --output /existing/directory/candidate.json
+pnpm benchmark --split evaluation --samples 5 --candidate-report /existing/directory/candidate.json
 pnpm benchmark --manifest /path/to/corpus.json --workspace /path/to/checkout --output /existing/directory/result.json
 ```
 
 The default `benchmarks/core-v1.json` is a small authored regression corpus, not representative evidence for large repositories. It separates development cases from explicitly selected evaluation cases. Evaluation labels are public and versioned, not a sealed test set. Freeze changes before evaluating; do not tune against evaluation scores. Corpus content and labels have a stable SHA-256 fingerprint, and each run also records input-snapshot, engine and harness fingerprints.
+
+Evaluation commands require `--candidate-report` from a completed development run over the same corpus. Engine, harness, manifest, runtime environment and complete development case set must match; the input snapshot is checked before indexing or executing evaluation queries. The evaluation result carries a receipt identifying that candidate. Code, harness, labels or runtime changes require another development run. This is a local reproducibility guard, not a cryptographic signature, proof of task success, or a way to make public labels secret.
 
 Additional source-pinned workloads are `benchmarks/zod-v1.json` (TypeScript), `benchmarks/click-v1.json` (Python), and `benchmarks/pyright-v1.json` (a TypeScript monorepo with Python test inputs). Their source repository and immutable revision are recorded in each manifest. They are small task sets over full checkouts, not comprehensive language coverage. Supply a clean checkout at that revision with `--workspace`; merely validating a manifest is not a measured benchmark result.
 

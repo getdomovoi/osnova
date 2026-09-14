@@ -45,3 +45,24 @@ it("writes raw JSON reports but refuses to overwrite an existing result", async 
   await expect(execute(process.execPath, args, { cwd: root, timeout: 30_000 })).rejects.toThrow();
   expect(await fs.readFile(output)).toEqual(saved);
 });
+
+it("requires an explicit development receipt before evaluation", async () => {
+  await expect(execute(process.execPath, ["--import", "tsx", command, "--split", "evaluation", "--samples", "1"],
+    { cwd: root, timeout: 30_000 })).rejects.toThrow(/candidate-report/);
+});
+
+it("evaluates a frozen candidate and rejects a changed implementation receipt", async () => {
+  const candidate = path.join(temporary, "candidate.json");
+  await execute(process.execPath, ["--import", "tsx", command, "--samples", "1", "--output", candidate], { cwd: root, timeout: 30_000 });
+  const args = ["--import", "tsx", command, "--split", "evaluation", "--samples", "1", "--candidate-report", candidate];
+  const { stdout } = await execute(process.execPath, args, { cwd: root, timeout: 30_000 });
+  const evaluated = JSON.parse(stdout) as BenchmarkReport & { evaluationReceipt: { candidateReportFingerprint: string } };
+  expect(evaluated.status).toBe("completed");
+  expect(evaluated.cases).toHaveLength(3);
+  expect(evaluated.cases.every((item) => item.split === "evaluation")).toBe(true);
+  expect(evaluated.evaluationReceipt.candidateReportFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  const stale = JSON.parse(await fs.readFile(candidate, "utf8")) as { implementation: { engineFingerprint: string } };
+  stale.implementation.engineFingerprint = "0".repeat(64);
+  await fs.writeFile(candidate, JSON.stringify(stale));
+  await expect(execute(process.execPath, args, { cwd: root, timeout: 30_000 })).rejects.toThrow(/engineFingerprint mismatch/);
+});

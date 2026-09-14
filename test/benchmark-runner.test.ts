@@ -74,4 +74,14 @@ describe("offline benchmark runner", () => {
   it.each([0, -1, 1.5, 101, NaN, Infinity])("rejects invalid repeat counts: %s", async (samples) => {
     await expect(runBenchmark(corpus(), { samples, split: "development" })).rejects.toThrow(RangeError);
   });
+
+  it("does not execute queries if the evaluation source snapshot changed", async () => {
+    const result = await runBenchmark(corpus(), {
+      samples: 1, split: "evaluation", expectedSnapshotFingerprint: "0".repeat(64),
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errors.join("\n")).toContain("candidate snapshot mismatch");
+    expect(result.performance).toBeNull();
+    expect(result.cases.every((item) => item.status === "error" && item.elapsedMs === null)).toBe(true);
+  });
 });
