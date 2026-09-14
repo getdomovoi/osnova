@@ -12,6 +12,7 @@ import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
 import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
+import { boundText } from "../query/budget.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -71,6 +72,11 @@ export async function runCli(
   argv: readonly string[],
   io: CliIo = { stdout: (t) => process.stdout.write(t + "\n"), stderr: (t) => process.stderr.write(t + "\n") },
 ): Promise<number> {
+  const rawIo = io;
+  io = {
+    stdout: (text) => rawIo.stdout(boundText(text)),
+    stderr: (text) => rawIo.stderr(boundText(text)),
+  };
   const [command = "", ...rest] = argv;
   if (command.length === 0 || command === "--help" || command === "-h" || command === "help") {
     io.stdout(USAGE);
@@ -117,10 +123,10 @@ export async function runCli(
       }
       const report = health.freshness;
       const stale = report === null ? [] : [...report.added, ...report.changed, ...report.deleted];
-      io.stderr(`${health.state}: ${stale.length} changed file(s): ${stale.join(", ")}`);
-      for (const diagnostic of health.diagnostics) {
-        io.stderr(`${diagnostic.phase} ${diagnostic.path}: ${diagnostic.code}`);
-      }
+      io.stderr([
+        `${health.state}: ${stale.length} changed file(s): ${stale.join(", ")}`,
+        ...health.diagnostics.map((diagnostic) => `${diagnostic.phase} ${diagnostic.path}: ${diagnostic.code}`),
+      ].join("\n"));
       return EXIT_STALE;
     }
     case "ask": {

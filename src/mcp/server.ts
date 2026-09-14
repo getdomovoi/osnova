@@ -16,6 +16,7 @@ import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
+import { boundText } from "../query/budget.js";
 
 const OSNOVA_VERSION = "0.1.0";
 
@@ -201,14 +202,14 @@ export function createOsnovaMcpServer(
 }
 
 function textResult(text: string): { content: Array<{ type: "text"; text: string }> } {
-  return { content: [{ type: "text", text }] };
+  return { content: [{ type: "text", text: boundText(text) }] };
 }
 
 function errorResult(message: string): {
   content: Array<{ type: "text"; text: string }>;
   isError: true;
 } {
-  return { content: [{ type: "text", text: `osnova error: ${message}` }], isError: true };
+  return { ...textResult(`osnova error: ${message}`), isError: true };
 }
 
 function requireString(args: Record<string, unknown>, key: string): string {

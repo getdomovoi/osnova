@@ -1,4 +1,4 @@
-export { indexFormatVersion, maximumOsnovaMapCardCodeUnits, maximumIndexedFileSizeBytes } from "./types.js";
+export { indexFormatVersion, maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, maximumIndexedFileSizeBytes } from "./types.js";
 export type {
   AskHit,
   AskOptions,

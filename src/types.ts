@@ -264,5 +264,6 @@ export interface LoadIndexOptions {
 }
 
 export const maximumOsnovaMapCardCodeUnits = 16_384 as const;
+export const maximumTextResponseCodeUnits = 16_384 as const;
 
 export const maximumIndexedFileSizeBytes = 1_000_000 as const;

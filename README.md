@@ -69,7 +69,13 @@ Exports: `buildIndex`, `loadIndex`, `applyChanges`, `freshness`, `indexHealth`, 
 
 Optional `limit` and `matchesPerGroup` bound the detailed result; both must be nonnegative safe integers. Counts include matches excluded by either limit. Zero limits can hide existing matches and are reported as truncation, not absence.
 
-The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_find_text` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These are count limits, not byte or token budgets.
+The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_find_text` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These count limits are separate from the presentation budget below.
+
+### Presentation budget
+
+CLI output messages and MCP text payloads are capped at 16,384 UTF-16 code units (`maximumTextResponseCodeUnits`), excluding transport framing and the CLI's terminating newline. Diagnostics and errors use the same cap. Larger payloads include an explicit output-clipping notice with the omitted code-unit count; any query counts above that notice describe the structured selection before presentation clipping. Clipping never splits a surrogate pair. These are code-unit limits, not token estimates or limits on computation/memory use.
+
+Structured query APIs are not subject to this text-presentation cap. Search callers needing every indexed occurrence should use `findTextDetailed` without limits. Ask output identifies excerpt ranges when a definition is not fully displayed, including its existing 400-line full-span limit. Map cards retain their elastic detail dropping and configurable nonnegative code-unit cap; zero returns an empty card.
 
 ### Caller evidence
 

@@ -19,6 +19,10 @@ export async function renderMapCard(
   options?: MapCardOptions,
 ): Promise<string> {
   const maxCodeUnits = options?.maxCodeUnits ?? maximumOsnovaMapCardCodeUnits;
+  if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 0) {
+    throw new RangeError("osnova: map-card budget must be a nonnegative safe integer");
+  }
+  if (maxCodeUnits === 0) return "";
   let staleCount = options?.staleCount;
   if (staleCount === undefined) {
     try {

@@ -29,7 +29,11 @@ export function formatAsk(result: AskResult): string {
       .split("\n")
       .map((line, i) => `L${hit.excerptStartLine + i}: ${line}`)
       .join("\n");
-    blocks.push(`${header}\n${numbered}`);
+    const endLine = hit.excerptStartLine + hit.excerpt.split("\n").length - 1;
+    const excerptNotice = hit.symbol !== null &&
+      (hit.excerptStartLine > hit.symbol.span.startLine || endLine < hit.symbol.span.endLine)
+      ? `\nexcerpt: lines ${hit.excerptStartLine}-${endLine} of definition lines ${hit.symbol.span.startLine}-${hit.symbol.span.endLine}` : "";
+    blocks.push(`${header}${excerptNotice}\n${numbered}`);
   }
   return blocks.join("\n\n");
 }
