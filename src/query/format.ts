@@ -1,6 +1,7 @@
 import type {
   AskResult,
   CallersResult,
+  CallersDetailedResult,
   FindTextGroup,
   FindTextResult,
   MapResult,
@@ -72,6 +73,29 @@ export function formatCallers(result: CallersResult): string {
     return `d${hit.depth} ${hit.kind} ${label}${where}`;
   });
   return [`${target}: ${result.hits.length} edges`, ...lines].join("\n");
+}
+
+export function formatCallersDetailed(result: CallersDetailedResult): string {
+  if (result.status === "ambiguous") {
+    return [
+      "ambiguous symbol: use a qualified name to select a target",
+      ...result.candidates.map((symbol) => `${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}`),
+    ].join("\n");
+  }
+  const lines = ["indexed-graph results; relationships use heuristic resolution, not type inference"];
+  if (result.hits.length === 0) {
+    lines.push(`${result.target.qualifiedName}: no indexed relationships found`);
+  } else {
+    lines.push(formatCallers(result));
+  }
+  lines.push("This does not prove absence of callers or that deletion is safe.");
+  if (result.unresolved.length > 0) {
+    lines.push(`unresolved evidence (${result.unresolved.length}); not confirmed relationships`);
+    for (const { edge, depth } of result.unresolved) {
+      lines.push(`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function formatMap(result: MapResult): string {

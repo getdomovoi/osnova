@@ -12,9 +12,9 @@ import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
-import { callers } from "../query/callers.js";
+import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallers, formatFindTextResult, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatFindTextResult, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
 
 const OSNOVA_VERSION = "0.1.0";
@@ -65,7 +65,7 @@ const toolDefinitions = [
   {
     name: "osnova_callers",
     description:
-      "Direct or transitive callers/callees of a symbol from precomputed call, import, and reference edges (direction=in default).",
+      "Direct or transitive indexed callers/callees (direction=in default). Lists candidates for ambiguous names and unresolved evidence separately. Relationships use heuristic resolution; absence does not prove deletion is safe.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -166,12 +166,15 @@ export function createOsnovaMcpServer(
           if (direction !== undefined && direction !== "in" && direction !== "out") {
             throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
           }
-          const depthValue = optionalNumber(args, "depth");
-          const result = callers(index, symbol, {
+          if (args.depth !== undefined && typeof args.depth !== "number") {
+            throw new RangeError("osnova: caller depth must be a positive safe integer");
+          }
+          const depthValue = args.depth;
+          const result = callersDetailed(index, symbol, {
             ...(direction !== undefined ? { direction } : {}),
             ...(depthValue !== undefined ? { depth: depthValue } : {}),
           });
-          return textResult(formatCallers(result));
+          return textResult(formatCallersDetailed(result));
         }
         case "osnova_map": {
           const card = await renderMapCard(index, {

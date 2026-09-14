@@ -6,6 +6,9 @@ export type {
   BuildOptions,
   CallerHit,
   CallersResult,
+  CallersOptions,
+  CallersDetailedResult,
+  UnresolvedCallerEdge,
   CardLanguage,
   DirCluster,
   EdgeDirection,
@@ -39,7 +42,7 @@ export { serializeArtifact } from "./index/serialize.js";
 export { ask } from "./query/ask.js";
 export { findText, findTextDetailed } from "./query/findText.js";
 export { skeleton } from "./query/skeleton.js";
-export { callers } from "./query/callers.js";
+export { callers, callersDetailed } from "./query/callers.js";
 export { map } from "./query/map.js";
 export { renderMapCard } from "./query/mapCard.js";
 export { createOsnovaMcpServer, runMcpStdio } from "./mcp/server.js";

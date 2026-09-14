@@ -7,9 +7,9 @@ import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
-import { callers } from "../query/callers.js";
+import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallers, formatFindTextResult, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatFindTextResult, formatMap, formatSkeleton } from "../query/format.js";
 import type { OsnovaIndex } from "../types.js";
 
 export interface CliIo {
@@ -190,11 +190,11 @@ export async function runCli(
       if (direction !== undefined && direction !== "in" && direction !== "out") {
         throw new Error(`osnova callers: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
       }
-      const result = callers(index, symbol, {
+      const result = callersDetailed(index, symbol, {
         ...(direction !== undefined ? { direction } : {}),
-        ...(depthValue !== undefined && Number.isFinite(depthValue) ? { depth: depthValue } : {}),
+        ...(depthValue !== undefined ? { depth: depthValue } : {}),
       });
-      io.stdout(formatCallers(result));
+      io.stdout(formatCallersDetailed(result));
       return EXIT_OK;
     }
     case "map": {

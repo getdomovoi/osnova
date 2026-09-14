@@ -155,6 +155,28 @@ export interface CallersResult {
   readonly hits: readonly CallerHit[];
 }
 
+export interface CallersOptions {
+  readonly direction?: EdgeDirection | undefined;
+  readonly depth?: number | undefined;
+}
+
+export interface UnresolvedCallerEdge {
+  readonly edge: OsnovaEdge;
+  readonly depth: number;
+}
+
+export type CallersDetailedResult =
+  | { readonly status: "ambiguous"; readonly candidates: readonly OsnovaSymbol[] }
+  | {
+      readonly status: "found";
+      readonly scope: "indexed-graph";
+      readonly direction: EdgeDirection;
+      readonly depth: number;
+      readonly target: OsnovaSymbol;
+      readonly hits: readonly CallerHit[];
+      readonly unresolved: readonly UnresolvedCallerEdge[];
+    };
+
 export interface DirCluster {
   readonly dir: string;
   readonly fileCount: number;

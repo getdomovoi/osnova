@@ -71,6 +71,12 @@ Optional `limit` and `matchesPerGroup` bound the detailed result; both must be n
 
 The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_find_text` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These are count limits, not byte or token budgets.
 
+### Caller evidence
+
+`callersDetailed` returns `status: "ambiguous"` with candidate symbols when a bare name matches multiple definitions. Select a qualified name (`file#Class.method`) to continue. A `status: "found"` result contains the target, indexed `hits`, direction/depth, and separate `unresolved` entries carrying raw edges and traversal depth. Unresolved inbound evidence is name-based, not a confirmed caller; unresolved evidence is never traversed as a dependency.
+
+CLI `callers` and MCP `osnova_callers` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
+
 Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the platform default (macOS `~/Library/Caches/osnova/`, Linux `$XDG_CACHE_HOME/osnova/`, Windows `%LOCALAPPDATA%/osnova/cache/`). One subdirectory per workspace, LRU-evicted across workspaces.
 
 Scanning respects `.gitignore` plus an optional `.osnovaignore` file with the same syntax, skips dotfiles, binaries, and files above 1 MB.

@@ -1,14 +1,18 @@
 import type {
   CallersResult,
+  CallersOptions,
+  CallersDetailedResult,
+  UnresolvedCallerEdge,
   CallerHit,
   EdgeDirection,
   OsnovaIndex,
   OsnovaSymbol,
+  OsnovaEdge,
 } from "../types.js";
 
-function resolveTarget(index: OsnovaIndex, symbol: string): OsnovaSymbol {
+function resolveTargets(index: OsnovaIndex, symbol: string): OsnovaSymbol[] {
   const exact = index.symbols.get(symbol);
-  if (exact !== undefined) return exact;
+  if (exact !== undefined) return [exact];
   const candidates = [...index.symbols.values()].filter((s) => s.name === symbol);
   if (candidates.length === 0) {
     throw new Error(
@@ -20,7 +24,7 @@ function resolveTarget(index: OsnovaIndex, symbol: string): OsnovaSymbol {
     if (diff !== 0) return diff;
     return a.qualifiedName < b.qualifiedName ? -1 : 1;
   });
-  return candidates[0] as OsnovaSymbol;
+  return candidates;
 }
 
 export function callers(
@@ -28,11 +32,55 @@ export function callers(
   symbol: string,
   options?: { direction?: EdgeDirection; depth?: number },
 ): CallersResult {
-  const target = resolveTarget(index, symbol);
+  const target = resolveTargets(index, symbol)[0] as OsnovaSymbol;
+  const { hits } = walkCallers(index, target, options);
+  return { target, hits };
+}
+
+export function callersDetailed(
+  index: OsnovaIndex,
+  symbol: string,
+  options?: CallersOptions,
+): CallersDetailedResult {
+  const depth = options?.depth ?? 1;
+  const direction = options?.direction ?? "in";
+  if (!Number.isSafeInteger(depth) || depth < 1) {
+    throw new RangeError("osnova: caller depth must be a positive safe integer");
+  }
+  if (direction !== "in" && direction !== "out") {
+    throw new RangeError("osnova: caller direction must be in or out");
+  }
+  const candidates = resolveTargets(index, symbol);
+  if (candidates.length > 1) return { status: "ambiguous", candidates };
+  const target = candidates[0] as OsnovaSymbol;
+  const { hits, unresolved } = walkCallers(index, target, { direction, depth });
+  return {
+    status: "found", scope: "indexed-graph", direction, depth, target,
+    hits: hits.filter((hit) => hit.resolved), unresolved,
+  };
+}
+
+function walkCallers(
+  index: OsnovaIndex,
+  target: OsnovaSymbol,
+  options?: CallersOptions,
+): { hits: CallerHit[]; unresolved: UnresolvedCallerEdge[] } {
   const direction = options?.direction ?? "in";
   const depth = Math.max(1, options?.depth ?? 1);
 
   const hits: CallerHit[] = [];
+  const unresolved: UnresolvedCallerEdge[] = [];
+  const seenUnresolved = new Set<OsnovaEdge>();
+  const unresolvedByName = new Map<string, OsnovaEdge[]>();
+  if (direction === "in") {
+    for (const edge of index.edges) {
+      if (edge.toSymbol !== undefined || edge.kind === "imports") continue;
+      const name = edge.toName.split(".").pop() ?? edge.toName;
+      const list = unresolvedByName.get(name) ?? [];
+      list.push(edge);
+      unresolvedByName.set(name, list);
+    }
+  }
   const visited = new Set<string>([target.qualifiedName]);
   let frontier: string[] = [target.qualifiedName];
 
@@ -40,6 +88,14 @@ export function callers(
     const next: string[] = [];
     for (const node of frontier) {
       const edges = direction === "in" ? index.incoming(node) : index.outgoing(node);
+      const candidates = direction === "in"
+        ? unresolvedByName.get(index.symbols.get(node)?.name ?? "") ?? []
+        : edges.filter((edge) => edge.toSymbol === undefined);
+      for (const edge of candidates) {
+        if (seenUnresolved.has(edge)) continue;
+        seenUnresolved.add(edge);
+        unresolved.push({ edge, depth: level });
+      }
       for (const edge of edges) {
         const other =
           direction === "in"
@@ -85,5 +141,9 @@ export function callers(
       compareStr(a.kind, b.kind) ||
       compareStr(a.qualifiedName, b.qualifiedName),
   );
-  return { target, hits };
+  unresolved.sort((a, b) =>
+    a.depth - b.depth || compareStr(a.edge.fromFile, b.edge.fromFile) ||
+    a.edge.line - b.edge.line || compareStr(a.edge.kind, b.edge.kind) ||
+    compareStr(a.edge.toName, b.edge.toName) || compareStr(a.edge.fromSymbol, b.edge.fromSymbol));
+  return { hits, unresolved };
 }
