@@ -61,3 +61,25 @@ it("keeps doctor and setup previews read-only", async () => {
   expect(await fs.readdir(workspace)).toEqual(before);
   await expect(runCli(["setup", "--workspace", workspace])).rejects.toThrow(/preview/);
 });
+
+it.each([
+  ["ask", ["work", "--limit", "NaN"]],
+  ["scoped-ask", ["work", "--limit", "1.5"]],
+  ["grep", ["work", "--limit", "Infinity"]],
+  ["callers", ["api.ts#work", "--depth", "0"]],
+  ["map", ["--max-dirs", "oops"]],
+  ["context", ["work", "--depth", "NaN"]],
+  ["context", ["work", "--limit=-1"]],
+  ["context", ["work", "--max-code-units", "1.5"]],
+] as const)("rejects invalid numeric options for %s", async (name, args) => {
+  await expect(command([name, ...args])).rejects.toThrow(/safe integer/);
+});
+
+it("rejects invalid impact depth", async () => {
+  await runCli(["build", workspace, "--cache-dir", baseline], { stdout: () => {}, stderr: () => {} });
+  await expect(command(["impact", "--base-cache", baseline, "--depth", "0"])).rejects.toThrow(/safe integer/);
+});
+
+it("reports a missing impact baseline as a usage error", async () => {
+  await expect(command(["impact", "--base-cache", path.join(temporary, "missing")])).rejects.toThrow(/does not exist/);
+});

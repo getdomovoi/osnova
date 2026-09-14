@@ -35,9 +35,9 @@ describe("python adapter extended paths", () => {
 
   it("records decorator references on decorated defs", () => {
     const deco = index.edges.find(
-      (e) => e.fromFile === "src/server.py" && e.kind === "references",
+      (e) => e.fromFile === "src/server.py" && e.kind === "references" && e.toName === "registered",
     );
-    expect(deco === undefined || typeof deco.toName === "string").toBe(true);
+    expect(deco).toBeDefined();
   });
 });
 

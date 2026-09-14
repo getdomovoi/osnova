@@ -17,7 +17,7 @@ async function implementationIdentity(): Promise<{ revision: string | null; engi
   const harness = createHash("sha256");
   const { paths } = await scanFiles(repository);
   for (const relative of paths) {
-    const hash = relative.startsWith("src/") || relative === "package.json" || relative === "pnpm-lock.yaml" ? engine
+    const hash = relative.startsWith("src/") || ["package.json", "pnpm-lock.yaml", "tsconfig.json"].includes(relative) ? engine
       : relative.startsWith("scripts/bench/") ? harness : null;
     if (hash === null) continue;
     hash.update(JSON.stringify([relative, createHash("sha256").update(await fs.readFile(path.join(repository, relative))).digest("hex")]));
@@ -39,6 +39,8 @@ async function main(): Promise<void> {
     "candidate-report": { type: "string" },
   } });
   const manifestPath = path.resolve(values.manifest ?? path.join(repository, "benchmarks/core-v1.json"));
+  const samples = Number(values.samples);
+  if (!Number.isSafeInteger(samples) || samples < 1 || samples > 100) throw new RangeError("samples must be an integer from 1 to 100");
   if (values.split !== "development" && values.split !== "evaluation") throw new Error("split must be development or evaluation");
   if (values.split === "evaluation" && values["candidate-report"] === undefined) {
     throw new Error("evaluation requires --candidate-report from the matching development run");
@@ -57,7 +59,7 @@ async function main(): Promise<void> {
     );
     const { runBenchmark } = await import("./runner.js");
     const result = await runBenchmark(manifest, {
-      samples: Number(values.samples), split: values.split, workspace: values.workspace, temporaryRoot: values["temporary-root"],
+      samples, split: values.split, workspace: values.workspace, temporaryRoot: values["temporary-root"],
       expectedSnapshotFingerprint: receipt?.snapshotFingerprint,
     });
     const after = await implementationIdentity();

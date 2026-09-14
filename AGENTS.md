@@ -10,7 +10,7 @@ Conventions for agent sessions working in this repository.
 
 ## Invariants
 
-- Scope update (2026-09-14): finish the standalone hardening roadmap before any integration work or integration discussion. Graph viewers and graph visualization UI are entirely out of scope. The implementation plan is `/Users/fetzy/.local/share/kilo/plans/1789340040608-osnova-context-engine.md`, including its standalone expansion section.
+- Scope update (2026-09-14): finish the standalone hardening roadmap before any integration work or integration discussion. Graph viewers and graph visualization UI are entirely out of scope. The implementation plan is private local planning state, not a public repository dependency.
 - Public-content boundary: keep competitor identities, repository URLs, and comparative research out of shipped docs, code comments, examples, generated output, commit messages, and PR/issue prose. Keep named competitive benchmarks and research in private local artifacts; public benchmarks describe Osnova independently. Do not copy third-party code requiring attribution that conflicts with this boundary; retain any legally required notices.
 
 - Determinism is the core correctness property: incremental updates must equal full rebuilds byte-for-byte. Sort everything (paths, symbols, edges) before serialization; never add timestamps or nondeterministic fields to the structural artifact. Runtime lock/access metadata are cache sidecars, not artifact content.

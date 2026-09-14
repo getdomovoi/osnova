@@ -70,7 +70,7 @@ describe("CLI search completeness", () => {
   });
 
   it.each(["-1", "1.5", "NaN", "Infinity", "oops"])("rejects invalid limit %s", async (limit) => {
-    await expect(grep("needle", [`--limit=${limit}`])).rejects.toThrow(/search limits/);
+    await expect(grep("needle", [`--limit=${limit}`])).rejects.toThrow(/safe integer/);
   });
 });
 

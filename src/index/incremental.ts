@@ -30,6 +30,10 @@ export async function freshness(index: OsnovaIndex, root: string): Promise<Fresh
       const buffer = await fs.readFile(await workspaceFilePath(absRoot, relPath));
       if (sha256Hex(buffer) !== card.hash || card.size !== buffer.length || card.text !== (sourceText(buffer) ?? "")) changed.push(relPath);
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        deleted.push(relPath);
+        continue;
+      }
       throw new IndexingError({ phase: "read", path: relPath, code: "file-unreadable" }, error);
     }
   }

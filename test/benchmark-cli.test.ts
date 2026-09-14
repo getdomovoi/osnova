@@ -51,6 +51,11 @@ it("requires an explicit development receipt before evaluation", async () => {
     { cwd: root, timeout: 30_000 })).rejects.toThrow(/candidate-report/);
 });
 
+it.each(["NaN", "0", "-1", "1.5", "101"])("rejects invalid sample count before spawning work: %s", async (samples) => {
+  await expect(execute(process.execPath, ["--import", "tsx", command, "--samples", samples],
+    { cwd: root, timeout: 30_000 })).rejects.toThrow(/samples/);
+});
+
 it("evaluates a frozen candidate and rejects a changed implementation receipt", async () => {
   const candidate = path.join(temporary, "candidate.json");
   await execute(process.execPath, ["--import", "tsx", command, "--samples", "1", "--output", candidate], { cwd: root, timeout: 30_000 });

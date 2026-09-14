@@ -14,6 +14,7 @@ class Server:
         return f"listening on {port}"
 
 
+@registered
 def helper(value):
     return value * MAX_CONNECTIONS
 

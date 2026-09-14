@@ -54,6 +54,12 @@ describe("index health", () => {
     expect(index.symbols.has("one.ts#one")).toBe(true);
   });
 
+  it("treats a file disappearing after scan as workspace drift", async () => {
+    const index = await buildIndex(workspace, { cacheDir });
+    vi.spyOn(fs, "readFile").mockRejectedValueOnce(Object.assign(new Error("gone"), { code: "ENOENT" }));
+    expect((await freshness(index, workspace)).deleted).toEqual(["one.ts"]);
+  });
+
   it("retains text from syntax-recovered files with persistent partial diagnostics", async () => {
     await fs.writeFile(path.join(workspace, "broken.ts"), "export function broken( {");
     const index = await buildIndex(workspace, { cacheDir });

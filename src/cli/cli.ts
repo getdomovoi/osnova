@@ -67,6 +67,23 @@ function requirePositional(values: readonly string[], name: string, command: str
   return value;
 }
 
+function numericOption(value: string | undefined, name: string, minimum = 0): number | undefined {
+  if (value === undefined) return undefined;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < minimum) {
+    throw new RangeError(`osnova: --${name} must be a safe integer >= ${minimum}`);
+  }
+  return number;
+}
+
+function jsonOutput(value: unknown, label: string): string {
+  const text = JSON.stringify(value);
+  if (text.length > maximumTextResponseCodeUnits) {
+    throw new RangeError(`osnova: ${label} JSON exceeds ${maximumTextResponseCodeUnits} code units; use the API for complete structured output`);
+  }
+  return text;
+}
+
 export async function runCli(
   argv: readonly string[],
   io: CliIo = { stdout: (t) => process.stdout.write(t + "\n"), stderr: (t) => process.stderr.write(t + "\n") },
@@ -144,7 +161,7 @@ export async function runCli(
       const question = parsed.positionals.join(" ").trim();
       if (question.length === 0) throw new Error("osnova ask: missing <question> argument");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = parsed.values.limit !== undefined ? Number(parsed.values.limit) : undefined;
+      const limitValue = numericOption(parsed.values.limit, "limit");
       if (command === "scoped-ask") {
         const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: parsed.values.full });
         io.stdout(`generation ${result.receipt.generation}; ${result.scopes.length} scopes; ${result.omittedHits} hits omitted\n` +
@@ -153,7 +170,7 @@ export async function runCli(
       }
       const result = ask(index, question, {
         in: parsed.values.in,
-        limit: limitValue !== undefined && Number.isFinite(limitValue) ? limitValue : undefined,
+        limit: limitValue,
         full: parsed.values.full,
       });
       io.stdout(formatAsk(result));
@@ -174,7 +191,7 @@ export async function runCli(
       });
       const pattern = requirePositional(parsed.positionals, "pattern", "grep");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = parsed.values.limit !== undefined ? Number(parsed.values.limit) : undefined;
+      const limitValue = numericOption(parsed.values.limit, "limit");
       const result = findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
@@ -209,7 +226,7 @@ export async function runCli(
       });
       const symbol = requirePositional(parsed.positionals, "symbol", "callers");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const depthValue = parsed.values.depth !== undefined ? Number(parsed.values.depth) : undefined;
+      const depthValue = numericOption(parsed.values.depth, "depth", 1);
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") {
         throw new Error(`osnova callers: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
@@ -232,11 +249,11 @@ export async function runCli(
         },
       });
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const maxDirsValue = parsed.values["max-dirs"] !== undefined ? Number(parsed.values["max-dirs"]) : undefined;
+      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", 1);
       io.stdout(
         formatMap(
           map(index, {
-            maxDirs: maxDirsValue !== undefined && Number.isFinite(maxDirsValue) ? maxDirsValue : undefined,
+            maxDirs: maxDirsValue,
           }),
         ),
       );
@@ -250,13 +267,13 @@ export async function runCli(
       } });
       const task = parsed.values.task;
       if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
-      const budget = parsed.values["max-code-units"] === undefined ? maximumTextResponseCodeUnits : Number(parsed.values["max-code-units"]);
+      const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
-        in: parsed.values.in, limit: parsed.values.limit === undefined ? undefined : Number(parsed.values.limit),
-        maxDepth: parsed.values.depth === undefined ? undefined : Number(parsed.values.depth), maxCodeUnits: budget });
-      io.stdout(JSON.stringify(result));
+        in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit"),
+        maxDepth: numericOption(parsed.values.depth, "depth", 1), maxCodeUnits: budget });
+      io.stdout(jsonOutput(result, "context"));
       return EXIT_OK;
     }
     case "impact": {
@@ -265,7 +282,10 @@ export async function runCli(
       if (baseCache === undefined) throw new Error("osnova impact: --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const baseReal = await fs.realpath(baseCache);
+      const baseReal = await fs.realpath(baseCache).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") throw new Error(`osnova impact: baseline cache does not exist: ${baseCache}`);
+        throw error;
+      });
       const currentReal = await fs.realpath(cacheDir).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
         return path.resolve(cacheDir);
@@ -274,7 +294,7 @@ export async function runCli(
       const base = await loadArtifact(root, baseCache);
       if (base === undefined) throw new Error("osnova impact: baseline index is missing or incompatible");
       const current = await ensureIndex(root, cacheDir, io.stderr);
-      const result = impact(base, current, { maxDepth: parsed.values.depth === undefined ? undefined : Number(parsed.values.depth) });
+      const result = impact(base, current, { maxDepth: numericOption(parsed.values.depth, "depth", 1) });
       io.stdout([
         `base ${result.base.generation}\ncurrent ${result.current.generation}`,
         `${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
@@ -287,7 +307,7 @@ export async function runCli(
     case "doctor": {
       const parsed = parseArgs({ args: rest, options: { workspace: { type: "string" }, "cache-dir": { type: "string" } } });
       const report = await doctor(parsed.values.workspace ?? process.cwd(), { cacheDir: parsed.values["cache-dir"] });
-      io.stdout(JSON.stringify(report));
+      io.stdout(jsonOutput(report, "doctor"));
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {
