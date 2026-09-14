@@ -1,7 +1,6 @@
 import type { AskHit, AskOptions, AskResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { idf, matchInPath, queryContext, tokenize } from "./context.js";
 import type { QueryContext, SearchDocument } from "./context.js";
-import { graphAdjustedScore, graphWeights } from "./graph-rank.js";
 
 const DEFAULT_LIMIT = 8;
 const EXCERPT_LINES = 8;
@@ -50,7 +49,6 @@ export function ask(index: OsnovaIndex, question: string, options?: AskOptions):
     return { hits: [], filesSearched: 0 };
   }
   const ctx = queryContext(index);
-  const weights = options?.graphRank === true ? graphWeights(index) : undefined;
   const full = options?.full ?? false;
   const filter = options?.in ?? "";
   const filesSearched = [...ctx.lines.keys()].filter((path) => matchInPath([path], filter)).length;
@@ -73,9 +71,7 @@ export function ask(index: OsnovaIndex, question: string, options?: AskOptions):
       );
     }
     if (priority > 0 || lexical > 0) {
-      const lexicalScore = priority + lexical / (1 + lexical);
-      const score = weights === undefined ? lexicalScore : graphAdjustedScore(lexicalScore, symbol === null ? 0 : weights.get(symbol.qualifiedName) ?? 0);
-      scored.push({ document, score, exact: priority > 0 });
+      scored.push({ document, score: priority + lexical / (1 + lexical), exact: priority > 0 });
     }
   }
   const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "decision": "rejected",
+  "reason": "The adjustment improved two authored exact-name ties but reduced a pinned real-repository development MRR@5 from 0.75 to 0.50.",
+  "implementation": {
+    "revision": "437ddce77e9ca63efc41c15fc31cdb881b108b5e",
+    "engineFingerprint": "5f0cd07033ec050343627670b87e1121a3db1573ac82a22e61df5abc883bb8d1",
+    "harnessFingerprint": "c688cc05f1b3af627081665661d223ca9114fbced16ec2bd3739bc9e916dce09"
+  },
+  "authoredTieCases": {
+    "development": { "offMrrAt5": 0.5, "onMrrAt5": 1, "offResponseTokens": 140, "onResponseTokens": 140 },
+    "evaluation": { "offMrrAt5": 0.5, "onMrrAt5": 1, "offResponseTokens": 140, "onResponseTokens": 140 }
+  },
+  "developmentRegressionsWithGraphRankOn": [
+    { "corpus": "core-v1", "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 },
+    { "corpus": "zod-v1", "meanRecallAt5": 1, "meanReciprocalRankAt5": 0.5, "previousLexicalMrrAt5": 0.75 },
+    { "corpus": "click-v1", "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 },
+    { "corpus": "pyright-v1", "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 }
+  ],
+  "guardrails": [
+    "Only distinct resolved call relationships with lexical/import/re-export binding evidence were counted; name-only, receiver-hint, self and unknown edges were excluded.",
+    "The adjustment remained within lexical identifier tiers and never introduced graph-only candidates.",
+    "Response token counts use cl100k_base and measure emitted text, not total agent context or provider usage.",
+    "The workloads are small public case sets, not general task-success evidence."
+  ],
+  "unmeasured": { "taskSuccess": null, "agentToolCalls": null, "providerUsage": null }
+}

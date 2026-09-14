@@ -50,7 +50,6 @@ export interface BenchmarkReport {
   snapshotExclusions: { declared: readonly string[]; files: readonly string[] };
   isolation: "in-process" | "fresh-process";
   scoringScope: "structured-query";
-  queryOptions: { graphRank: boolean };
   status: "completed" | "failed";
   index: { files: number; symbols: number; edges: number } | null;
   environment: { node: string; platform: string; arch: string };
@@ -114,7 +113,7 @@ function emptyMeasurement(item: BenchmarkCase): CaseMeasurement {
   };
 }
 
-function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<string, Buffer>, graphRank: boolean): CaseMeasurement {
+function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<string, Buffer>): CaseMeasurement {
   const result = emptyMeasurement(item);
   for (const anchor of item.anchors) {
     if (!sources.get(anchor.file)?.toString("utf8").includes(anchor.text)) {
@@ -125,7 +124,7 @@ function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<
   try {
     let text: string;
     if (item.kind === "ask") {
-      const answer = ask(index, item.question, { in: item.in, limit: 5, graphRank });
+      const answer = ask(index, item.question, { in: item.in, limit: 5 });
       result.actual = answer.hits.map((hit) => hit.symbol?.qualifiedName ?? `@${hit.file}:${hit.line}`);
       result.ranking = scoreRanking(result.actual, item.expected, 5);
       text = formatAsk(answer);
@@ -179,7 +178,7 @@ function distribution(samples: number[]): Distribution {
 
 export async function runBenchmark(
   input: BenchmarkManifest,
-  options: { samples: number; split: "development" | "evaluation"; workspace?: string | undefined; temporaryRoot?: string | undefined; expectedSnapshotFingerprint?: string | undefined; graphRank?: boolean | undefined },
+  options: { samples: number; split: "development" | "evaluation"; workspace?: string | undefined; temporaryRoot?: string | undefined; expectedSnapshotFingerprint?: string | undefined },
 ): Promise<BenchmarkReport> {
   if (!Number.isSafeInteger(options.samples) || options.samples < 1 || options.samples > 100) {
     throw new RangeError("benchmark samples must be an integer from 1 to 100");
@@ -193,7 +192,6 @@ export async function runBenchmark(
     sourceRevision: manifest.source.kind === "checkout" ? manifest.source.revision : null,
     snapshotExclusions: { declared: manifest.source.kind === "checkout" ? manifest.source.exclude ?? [] : [], files: [] },
     isolation: "in-process", scoringScope: "structured-query", status: "completed",
-    queryOptions: { graphRank: options.graphRank ?? false },
     index: null,
     environment: { node: process.version, platform: process.platform, arch: process.arch },
     cases: selected.map((item) => ({ ...emptyMeasurement(item), status: "error", error: "not run: benchmark setup or indexing failed" })),
@@ -225,7 +223,7 @@ export async function runBenchmark(
     const firstBuildMs = performance.now() - start;
     report.index = { files: index.files.size, symbols: index.symbols.size, edges: index.edges.length };
     report.analysisDiagnostics = index.diagnostics ?? [];
-    report.cases = selected.map((item) => evaluate(index, item, sources, options.graphRank ?? false));
+    report.cases = selected.map((item) => evaluate(index, item, sources));
     const serializedArtifactBytes = serializeArtifact(index).length;
     const artifactPath = await artifactPathFor(workspace, cacheDir);
     if (artifactPath === undefined) throw new Error("artifact was not saved");

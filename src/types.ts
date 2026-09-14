@@ -143,7 +143,6 @@ export interface AskOptions {
   readonly in?: string | undefined;
   readonly limit?: number | undefined;
   readonly full?: boolean | undefined;
-  readonly graphRank?: boolean | undefined;
 }
 
 export interface AskResult {

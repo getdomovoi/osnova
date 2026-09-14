@@ -99,7 +99,7 @@ export function scopedAsk(index: OsnovaIndex, question: string, options: AskOpti
   const queues = selected.map((scope) => {
     const paths = partitions.get(scope.path)!;
     filesSearched += paths.size;
-    const result = ask(isolatedIndex(index, paths), question, { limit: Number.MAX_SAFE_INTEGER, full: options.full, graphRank: options.graphRank });
+    const result = ask(isolatedIndex(index, paths), question, { limit: Number.MAX_SAFE_INTEGER, full: options.full });
     return result.hits.map((hit) => ({ ...hit, scope: scope.path, receipt: sourceReceipt(index, hit.file, receipt) }));
   });
   const hits: ScopedAskHit[] = [];

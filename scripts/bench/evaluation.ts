@@ -7,7 +7,6 @@ export interface EvaluationContext {
   harnessFingerprint: string;
   developmentCaseIds: readonly string[];
   environment: { node: string; platform: string; arch: string };
-  queryOptions?: { graphRank: boolean } | undefined;
 }
 
 export interface EvaluationReceipt {
@@ -37,10 +36,6 @@ export function validateCandidate(value: unknown, context: EvaluationContext): E
     ensure(implementation[field] === context[field], `${field} mismatch`);
   }
   const environment = object(report.environment);
-  if (context.queryOptions !== undefined) {
-    const queryOptions = object(report.queryOptions);
-    ensure(queryOptions.graphRank === context.queryOptions.graphRank, "query configuration mismatch");
-  }
   for (const field of ["node", "platform", "arch"] as const) ensure(environment[field] === context.environment[field], "environment mismatch");
   ensure(Array.isArray(report.cases) && report.cases.length > 0, "development cases required");
   const ids = report.cases.map((entry: unknown) => {

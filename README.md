@@ -76,7 +76,7 @@ Camel-case, acronym and snake-case words are searchable, while exact matching pr
 
 Excerpts retain exact source line numbers and may include an associated leading comment when it supplies the relevant evidence. Documentation recognition is bounded to adjacent comment-like lines and leading Python docstrings, including common multiline signatures; it is not a complete documentation parser. Query documents are cached per index instance and rebuilt for a new incremental index. `filesSearched` counts eligible indexed files, not only files with hits. API result limits must be nonnegative safe integers.
 
-`ask(index, question, { graphRank: true })` enables an optional bounded graph adjustment within lexical match tiers. It counts distinct indexed callers with declaration/import/re-export binding evidence, excluding self loops, name-only guesses, receiver hints and unknown provenance. It never introduces nonmatching graph neighbors or moves a weaker identifier tier above an exact match. Default remains lexical ranking pending broader outcome evidence. Benchmark it with `--graph-rank on` or `off`; evaluation receipts require the same variant.
+An experimental graph adjustment was measured and rejected after improving authored tie cases but reducing a pinned real-repository development ranking score. `ask` remains fielded lexical definition retrieval. The [experiment record](benchmarks/results/graph-ranking-experiment-2026-09-14.json) preserves the positive and negative evidence; no graph-ranking option is shipped.
 
 ### Search completeness
 
