@@ -92,6 +92,11 @@ describe("mcp stdio server", () => {
       write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function farewell(): string { return shout("bye"); }\n');
 
       const after = await callTool(client, "osnova_skeleton", { file: "src/greet.ts" });
+      const beforeGeneration = before.match(/generation ([a-f0-9]{64})/)?.[1];
+      const afterGeneration = after.match(/generation ([a-f0-9]{64})/)?.[1];
+      expect(beforeGeneration).toBeDefined();
+      expect(afterGeneration).toBeDefined();
+      expect(afterGeneration).not.toBe(beforeGeneration);
       expect(after).toContain("farewell");
       expect(after).not.toContain("function greet");
     } finally {

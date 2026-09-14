@@ -62,7 +62,15 @@ it("does not conceal a failed refresh write and can retry safely", async () => {
   const request = { name: "osnova_skeleton", arguments: { file: "one.ts" } };
   await client.callTool(request);
   await fs.appendFile(path.join(workspace, "one.ts"), "export function added() {}\n");
-  vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("denied"));
+  const rename = fs.rename.bind(fs);
+  let rejected = false;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (!rejected && path.basename(String(to)) === "index.json") {
+      rejected = true;
+      throw new Error("denied");
+    }
+    return rename(from, to);
+  });
   const failed = await client.callTool(request);
   expect(failed.isError).toBe(true);
   expect(JSON.stringify(failed)).toContain("cache-write-failed");

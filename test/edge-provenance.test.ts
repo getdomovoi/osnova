@@ -6,10 +6,12 @@ import { deserializeArtifact, serializeArtifact } from "../src/index/serialize.j
 import { callers, callersDetailed } from "../src/query/callers.js";
 import { formatCallersDetailed } from "../src/query/format.js";
 import type { CardLanguage, FileCard } from "../src/types.js";
+import { createHash } from "node:crypto";
 
 function card(file: string, names: string[], language: CardLanguage = "typescript"): FileCard {
+  const text = Array(20).fill("x").join("\n");
   return {
-    path: file, language, hash: "fixture", size: 0, lineCount: 20, text: "", symbols: names.map((name) => ({
+    path: file, language, hash: createHash("sha256").update(text).digest("hex"), size: Buffer.byteLength(text), lineCount: 20, text, symbols: names.map((name) => ({
       name: name.split(".").pop() ?? name, qualifiedName: `${file}#${name}`, file, kind: "function",
       signature: `function ${name}()`, lineCount: 1,
       span: { startLine: 10, endLine: 10, startCol: 0, endCol: 1 },

@@ -2,9 +2,9 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
-import { applyChanges, freshness } from "../index/incremental.js";
+import { refreshWorkspace } from "../api.js";
 import { indexHealth } from "../index/health.js";
-import { loadArtifact, saveArtifact } from "../index/serialize.js";
+import { loadArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
@@ -50,19 +50,7 @@ async function ensureIndex(
   cacheDir?: string,
   warn?: (text: string) => void,
 ): Promise<OsnovaIndex> {
-  const resolvedCache = resolveCacheDir(cacheDir);
-  const absRoot = path.resolve(workspace);
-  let index: OsnovaIndex | undefined = await loadArtifact(absRoot, resolvedCache);
-  if (index === undefined) {
-    index = await buildIndex(absRoot, { cacheDir: resolvedCache });
-  } else {
-    const report = await freshness(index, absRoot);
-    const stale = [...report.added, ...report.changed, ...report.deleted];
-    if (stale.length > 0) {
-      index = await applyChanges(index, absRoot, stale);
-      await saveArtifact(index, resolvedCache);
-    }
-  }
+  const index = await refreshWorkspace(workspace, { cacheDir });
   const diagnostics = formatIndexDiagnostics(index);
   if (diagnostics.length > 0) warn?.(diagnostics);
   return index;

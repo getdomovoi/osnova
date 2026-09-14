@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ignore from "ignore";
+import type { Ignore } from "ignore";
 import { maximumIndexedFileSizeBytes } from "../types.js";
 import { IndexingError } from "./diagnostics.js";
+import { canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
 
 const DEFAULT_SKIP_DIRS = new Set([
   ".git",
@@ -30,13 +33,14 @@ export function sha256Hex(data: Buffer | string): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
+export function sourceText(buffer: Buffer): string | null {
+  return buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0) || !isUtf8(buffer) ? null : buffer.toString("utf8");
+}
+
 async function loadIgnoreFile(absPath: string): Promise<string[]> {
   try {
-    const content = await fs.readFile(absPath, "utf8");
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("#"));
+    if ((await fs.lstat(absPath)).isSymbolicLink()) throw new Error("ignore file must not be a symlink");
+    return (await fs.readFile(absPath, "utf8")).split("\n");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw new IndexingError({ phase: "scan", path: path.basename(absPath), code: "ignore-unreadable" }, error);
@@ -48,17 +52,26 @@ export interface ScanResult {
   readonly truncated: number;
 }
 
-export async function scanFiles(absRoot: string): Promise<ScanResult> {
-  const ig = ignore();
-  const gitignoreLines = await loadIgnoreFile(path.join(absRoot, ".gitignore"));
-  const osnovaIgnoreLines = await loadIgnoreFile(path.join(absRoot, ".osnovaignore"));
-  ig.add(gitignoreLines);
-  ig.add(osnovaIgnoreLines);
+export async function scanFiles(absRoot: string, cacheDir?: string): Promise<ScanResult> {
+  absRoot = await canonicalWorkspaceRoot(absRoot);
 
   const paths: string[] = [];
   let truncated = 0;
 
-  const walk = async (dir: string, relDir: string): Promise<void> => {
+  const walk = async (dir: string, relDir: string, inherited: readonly { base: string; rules: Ignore }[]): Promise<void> => {
+    if (relDir !== "") dir = await workspaceFilePath(absRoot, relDir);
+    const rules = ignore().add(await loadIgnoreFile(path.join(dir, ".gitignore")))
+      .add(await loadIgnoreFile(path.join(dir, ".osnovaignore")));
+    const layers = [...inherited, { base: relDir === "" ? "" : `${relDir}/`, rules }];
+    const ignored = (relative: string): boolean => {
+      let excluded = false;
+      for (const layer of layers) {
+        const result = layer.rules.test(relative.slice(layer.base.length));
+        if (result.ignored) excluded = true;
+        else if (result.unignored) excluded = false;
+      }
+      return excluded;
+    };
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
@@ -68,15 +81,16 @@ export async function scanFiles(absRoot: string): Promise<ScanResult> {
     for (const entry of entries) {
       const rel = relDir.length > 0 ? `${relDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
+        if (path.join(dir, entry.name) === cacheDir || (dir === cacheDir && /^[0-9a-f]{16}(?:\.lock(?:\.abandoned-[0-9a-f-]+)?)?$/.test(entry.name))) continue;
         if (DEFAULT_SKIP_DIRS.has(entry.name)) continue;
         if (entry.name.startsWith(".") && entry.name !== ".") continue;
-        if (ig.ignores(`${rel}/`)) continue;
-        await walk(path.join(dir, entry.name), rel);
+        if (ignored(`${rel}/`)) continue;
+        await walk(path.join(dir, entry.name), rel, layers);
         continue;
       }
       if (!entry.isFile()) continue;
       if (entry.name.startsWith(".")) continue;
-      if (ig.ignores(rel)) continue;
+      if (ignored(rel)) continue;
       let stat;
       try {
         stat = await fs.stat(path.join(dir, entry.name));
@@ -91,7 +105,7 @@ export async function scanFiles(absRoot: string): Promise<ScanResult> {
     }
   };
 
-  await walk(absRoot, "");
+  await walk(absRoot, "", []);
   paths.sort();
   return { paths, truncated };
 }

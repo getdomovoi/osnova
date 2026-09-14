@@ -5,9 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { buildIndex } from "../index/build.js";
-import { applyChanges, freshness } from "../index/incremental.js";
-import { loadArtifact, saveArtifact } from "../index/serialize.js";
+import { refreshWorkspace, indexGeneration } from "../api.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
@@ -15,7 +13,7 @@ import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatSkeleton } from "../query/format.js";
-import type { OsnovaIndex } from "../types.js";
+import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
 const OSNOVA_VERSION = "0.1.0";
@@ -100,30 +98,8 @@ export function createOsnovaMcpServer(
 ): { server: Server; refresh: () => Promise<OsnovaIndex> } {
   const cacheDir = resolveCacheDir(options?.cacheDir);
   const absRoot = path.resolve(workspace);
-  let indexPromise: Promise<OsnovaIndex> | undefined;
-
-  async function getIndex(): Promise<OsnovaIndex> {
-    indexPromise ??= (async () => {
-      const loaded = await loadArtifact(absRoot, cacheDir);
-      return loaded ?? (await buildIndex(absRoot, { cacheDir }));
-    })();
-    try {
-      return await indexPromise;
-    } catch (error) {
-      indexPromise = undefined;
-      throw error;
-    }
-  }
-
   async function refresh(): Promise<OsnovaIndex> {
-    const index = await getIndex();
-    const report = await freshness(index, absRoot);
-    const stale = [...report.added, ...report.changed, ...report.deleted];
-    if (stale.length === 0) return index;
-    const updated = await applyChanges(index, absRoot, stale);
-    await saveArtifact(updated, cacheDir);
-    indexPromise = Promise.resolve(updated);
-    return updated;
+    return refreshWorkspace(absRoot, { cacheDir });
   }
 
   const server = new Server(
@@ -138,8 +114,9 @@ export function createOsnovaMcpServer(
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
       const index = await refresh();
+      const generation = `generation ${indexGeneration(index)}`;
       const respond = (text: string): ReturnType<typeof textResult> =>
-        textResult([formatIndexDiagnostics(index), text].filter(Boolean).join("\n"));
+        textResult([generation, formatIndexDiagnostics(index), text].filter(Boolean).join("\n"));
       switch (name) {
         case "osnova_ask": {
           const question = requireString(args, "question");
@@ -187,8 +164,10 @@ export function createOsnovaMcpServer(
         case "osnova_map": {
           const card = await renderMapCard(index, {
             maxDirs: optionalNumber(args, "maxDirs"),
+            staleCount: 0,
+            maxCodeUnits: maximumOsnovaMapCardCodeUnits - generation.length - 1,
           });
-          return textResult(card);
+          return textResult(`${generation}\n${card}`);
         }
         default:
           return errorResult(`unknown tool ${JSON.stringify(name)}`);

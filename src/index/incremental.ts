@@ -1,20 +1,20 @@
-import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { FreshnessReport, OsnovaIndex } from "../types.js";
 import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
-import { scanFiles, sha256Hex } from "./scan.js";
+import { scanFiles, sha256Hex, sourceText } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
+import { bindIndexCache, canonicalWorkspaceRoot, indexCacheDirectory, workspaceFilePath, workspaceRelativePath } from "./workspace.js";
 
 export async function freshness(index: OsnovaIndex, root: string): Promise<FreshnessReport> {
-  const absRoot = path.resolve(root);
+  const absRoot = await canonicalWorkspaceRoot(root);
   if (index.root !== absRoot) {
     throw new Error(
       `osnova: index belongs to ${index.root}, not ${absRoot}; rebuild with buildIndex(${JSON.stringify(absRoot)})`,
     );
   }
-  const scan = await scanFiles(absRoot);
+  const scan = await scanFiles(absRoot, indexCacheDirectory(index));
   const current = new Set(scan.paths);
   const added: string[] = [];
   const changed: string[] = [];
@@ -27,8 +27,8 @@ export async function freshness(index: OsnovaIndex, root: string): Promise<Fresh
       continue;
     }
     try {
-      const buffer = await fs.readFile(path.join(absRoot, relPath));
-      if (sha256Hex(buffer) !== card.hash) changed.push(relPath);
+      const buffer = await fs.readFile(await workspaceFilePath(absRoot, relPath));
+      if (sha256Hex(buffer) !== card.hash || card.size !== buffer.length || card.text !== (sourceText(buffer) ?? "")) changed.push(relPath);
     } catch (error) {
       throw new IndexingError({ phase: "read", path: relPath, code: "file-unreadable" }, error);
     }
@@ -63,19 +63,12 @@ function rawEdgesFromIndex(index: OsnovaIndex): Map<string, RawEdgeItem[]> {
   return out;
 }
 
-function normalizeRelPath(nativePath: string): string {
-  const posix = nativePath.split(path.sep).join("/");
-  const normalized = path.posix.normalize(posix);
-  if (normalized.startsWith("..") || path.posix.isAbsolute(normalized)) return "";
-  return normalized;
-}
-
 export async function applyChanges(
   index: OsnovaIndex,
   root: string,
   paths: Iterable<string>,
 ): Promise<OsnovaIndex> {
-  const absRoot = path.resolve(root);
+  const absRoot = await canonicalWorkspaceRoot(root);
   if (index.root !== absRoot) {
     throw new Error(
       `osnova: index belongs to ${index.root}, not ${absRoot}; rebuild with buildIndex(${JSON.stringify(absRoot)})`,
@@ -83,23 +76,32 @@ export async function applyChanges(
   }
   const files = new Map(index.files);
   const rawEdges = rawEdgesFromIndex(index);
-  const normalized = [...new Set([...paths].map(normalizeRelPath))].filter((p) => p.length > 0).sort();
+  const requested = [...paths].map((file) => workspaceRelativePath(absRoot, root, file));
+  for (const file of requested) {
+    if (file === ".") continue;
+    try {
+      await workspaceFilePath(absRoot, file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  const report = await freshness(index, absRoot);
+  const normalized = [...new Set([...requested, ...report.added, ...report.changed, ...report.deleted])].sort();
   if (normalized.length === 0) return index;
-
-  const scan = await scanFiles(absRoot);
-  const eligible = new Set(scan.paths);
+  const deleted = new Set(report.deleted);
 
   for (const relPath of normalized) {
-    if (!eligible.has(relPath)) {
+    if (deleted.has(relPath)) {
       files.delete(relPath);
       rawEdges.delete(relPath);
       continue;
     }
+    if (!report.added.includes(relPath) && !report.changed.includes(relPath)) continue;
     const { card, rawEdges: fileEdges } = await extractCard(absRoot, relPath);
     files.set(relPath, card);
     if (fileEdges.length > 0) rawEdges.set(relPath, fileEdges);
     else rawEdges.delete(relPath);
   }
 
-  return finalizeIndex(absRoot, files, rawEdges);
+  return bindIndexCache(finalizeIndex(absRoot, files, rawEdges), indexCacheDirectory(index));
 }
