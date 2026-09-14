@@ -70,3 +70,5 @@ export { createOsnovaMcpServer, runMcpStdio } from "./mcp/server.js";
 export type { OsnovaMcpOptions } from "./mcp/server.js";
 export { runCli } from "./cli/cli.js";
 export type { CliIo } from "./cli/cli.js";
+export { doctor, previewSetup } from "./diagnostics/index.js";
+export type { DoctorOptions, DoctorReport, DiagnosticCheck, LanguageCapability, SetupPreviewOptions, SetupFileChange, SetupPreview } from "./diagnostics/index.js";

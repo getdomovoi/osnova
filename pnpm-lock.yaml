@@ -166,9 +166,6 @@ importers:
 
   .:
     dependencies:
-      '@eslint/js':
-        specifier: ^9.39.5
-        version: 9.39.5
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.30.0(supports-color@7.2.0)(zod@4.6.4)
@@ -185,6 +182,9 @@ importers:
       '@changesets/cli':
         specifier: ^2.29.0
         version: 2.31.1(@types/node@24.13.4)
+      '@eslint/js':
+        specifier: ^9.39.5
+        version: 9.39.5
       '@types/emscripten':
         specifier: ^1.41.6
         version: 1.41.6

@@ -46,3 +46,18 @@ it("compares preserved baseline evidence without overwriting its cache", async (
   expect(result.text).toContain("entry.ts#start");
   await expect(command(["impact", "--base-cache", cache])).rejects.toThrow(/distinct/);
 });
+
+it("keeps doctor and setup previews read-only", async () => {
+  const before = await fs.readdir(workspace);
+  const checked = await command(["doctor"]);
+  expect(checked.code).toBe(0);
+  expect((JSON.parse(checked.text) as { readOnly: boolean }).readOnly).toBe(true);
+  const output: string[] = [];
+  const code = await runCli(["setup", "--preview", "--cli-path", path.join(temporary, "bin.js"), "--workspace", workspace], {
+    stdout: (text) => output.push(text), stderr: (text) => output.push(text),
+  });
+  expect(code).toBe(0);
+  expect((JSON.parse(output.join("\n")) as { mode: string }).mode).toBe("preview");
+  expect(await fs.readdir(workspace)).toEqual(before);
+  await expect(runCli(["setup", "--workspace", workspace])).rejects.toThrow(/preview/);
+});

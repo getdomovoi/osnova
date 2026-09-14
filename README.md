@@ -25,6 +25,11 @@ osnova skeleton <file>         # every definition's signature and span
 osnova callers <symbol>        # direct or transitive callers/callees
 osnova map                     # directory clusters, hubs, hotspots
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
+osnova scoped-ask "<question>" # balanced package-scoped retrieval
+osnova context "<question>"    # bounded understand/change/review evidence
+osnova impact --base-cache ... # compare preserved base/current indexes
+osnova doctor                  # read-only runtime/assets checks
+osnova setup --preview ...     # inspect setup changes; never applies
 osnova mcp --workspace <path>  # MCP stdio server
 ```
 
@@ -121,6 +126,10 @@ Artifact format 7 persists diagnostics, export names, re-export links, lexical/r
 
 Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the platform default (macOS `~/Library/Caches/osnova/`, Linux `$XDG_CACHE_HOME/osnova/`, Windows `%LOCALAPPDATA%/osnova/cache/`). One subdirectory per workspace, LRU-evicted across workspaces.
 
+`refreshWorkspace` coordinates refreshes per canonical workspace/cache identity in-process and across processes. It publishes one coherent artifact generation, verifies source stability before returning, and exposes `indexGeneration` plus `evidenceFingerprint` for source-hash receipts. Defaults: 8 workspace artifacts, 256 MiB artifact budget, 10-second lock wait and 25 ms polling. Owners are checked for verified local process exit; malformed, foreign-host or otherwise unverified locks fail closed rather than being stolen. This is bounded source verification, not an atomic filesystem snapshot.
+
+Nested `.gitignore` and `.osnovaignore` rules are applied by directory with negation support. Runtime Osnova cache directories inside a workspace are always excluded. Cache artifacts carry envelope/content checksums and extraction-version identity; text, size, line count and source hashes are validated on load. Access metadata drives LRU eviction, with count and artifact-byte caps. Sidecars not owned by the core artifact lifecycle are preserved.
+
 Scanning currently reads root-level `.gitignore` plus an optional root-level `.osnovaignore` with the same syntax, skips dotfiles and configured output/dependency directories, and excludes files above 1 MB. Binary files get fallback cards with empty text rather than searchable contents. Nested ignore rules are not yet supported.
 
 ## Development
@@ -128,9 +137,15 @@ Scanning currently reads root-level `.gitignore` plus an optional root-level `.o
 ```sh
 pnpm install
 pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm perf
+pnpm check:package
+pnpm test:package
 ```
 
 The perf script enforces first-build and incremental-refresh budgets on a generated fixture repo. Tests include per-language extraction goldens, an incremental-equals-full property test over randomized edit sequences, CLI round-trips, and MCP handshake plus tool round-trips over an in-memory transport.
+
+`doctor` is read-only: it checks runtime, workspace/cache access and all packaged grammar assets without scanning source or writing probes. Its capability matrix states where binding/receiver hints exist and where only name heuristics remain. `setup --preview` produces complete owned local MCP configuration content and detects conflicts; it never writes or launches commands, and no apply operation is provided. Setup previews require absolute executable and CLI paths.
+
+Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all eight grammars, executes build/ask/doctor/preview, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. Local linked-dependency smoke tests do not substitute for clean installation; the latest local verification also installed the tarball and registry dependencies in a fresh consumer and executed build/ask/doctor successfully. Linux/Windows clean-install execution remains a CI responsibility.
 
 ### Reproducible benchmarks
 
