@@ -7,6 +7,7 @@ import { workspaceDirFor } from "../src/cache/cache.js";
 import { inspectFreshness } from "../src/index/incremental.js";
 import { loadVerification } from "../src/index/verification.js";
 import { knownIndexGeneration } from "../src/index/generation.js";
+import { sha256Hex } from "../src/index/scan.js";
 
 let temporary: string;
 let workspace: string;
@@ -71,9 +72,15 @@ it("invalidates in-memory data when another process could have published the art
 
 it("does not hide externally corrupted or deleted artifacts behind memory", async () => {
   const first = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
-  const artifact = path.join(workspaceDirFor(cacheDir, first.root), "index.json");
+  const dir = workspaceDirFor(cacheDir, first.root);
+  const artifact = path.join(dir, "index.json");
   await fs.writeFile(artifact, "corrupt");
-  await expect(refreshWorkspace(workspace, { cacheDir, reuseMemory: true })).rejects.toThrow(/cache-read-failed/);
+  const rebuiltAfterCorruption = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  expect(rebuiltAfterCorruption).not.toBe(first);
+  expect(indexGeneration(rebuiltAfterCorruption)).toBe(indexGeneration(first));
+  const raw = await fs.readFile(artifact);
+  const sha = (await fs.readFile(path.join(dir, "index.sha"), "utf8")).trim();
+  expect(sha).toBe(sha256Hex(raw));
   await fs.rm(artifact);
   const rebuilt = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
   expect(indexGeneration(rebuilt)).toBe(indexGeneration(first));

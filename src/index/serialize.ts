@@ -397,7 +397,7 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       });
       const sha = shaText.trim();
       if (!/^[a-f0-9]{64}$/.test(sha)) throw new SectionError("osnova: cache core checksum corrupt");
-      if (sha256Hex(raw) !== sha) throw new Error("osnova: cache core checksum mismatch");
+      if (sha256Hex(raw) !== sha) throw new SectionError("osnova: cache core checksum mismatch");
       const content = raw.toString("utf8");
       const parsed: unknown = JSON.parse(content);
       const parsedVersion = (parsed as { formatVersion?: unknown }).formatVersion;

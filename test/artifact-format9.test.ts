@@ -75,6 +75,11 @@ describe("format 9", () => {
       expect(indexGeneration(refreshed)).toBe(indexGeneration(index));
       expect((await fs.readFile(file)).equals(original)).toBe(true);
     }
+    const shaFile = path.join(ws, "index.sha");
+    await fs.writeFile(shaFile, `${"0".repeat(64)}\n`);
+    await expect(loadIndex(FIXTURE, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
+    const refreshedAfterMismatch = await refreshWorkspace(FIXTURE, { cacheDir });
+    expect(indexGeneration(refreshedAfterMismatch)).toBe(indexGeneration(index));
   });
 
   it("returns undefined for a format 8 core", async () => {
