@@ -19,6 +19,7 @@ import { boundText } from "../query/budget.js";
 const OSNOVA_VERSION = "0.1.0";
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
+const maximumMcpMapCodeUnits = 2_048;
 
 const toolDefinitions = [
   {
@@ -80,7 +81,7 @@ const toolDefinitions = [
   {
     name: "osnova_map",
     description:
-      "Compact deterministic map of the workspace: directory clusters with per-directory hubs, global hotspots, and staleness. Hard-capped at 16384 code units.",
+      "Compact deterministic workspace map. MCP defaults to eight directory clusters and 2048 code units with explicit dropped-detail counts; the map API supports larger structured results.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -168,9 +169,9 @@ export function createOsnovaMcpServer(
         }
         case "osnova_map": {
           const card = await renderMapCard(index, {
-            maxDirs: optionalNumber(args, "maxDirs"),
+            maxDirs: optionalNumber(args, "maxDirs") ?? 8,
             staleCount: 0,
-            maxCodeUnits: maximumOsnovaMapCardCodeUnits - generation.length - 1,
+            maxCodeUnits: Math.min(maximumOsnovaMapCardCodeUnits, maximumMcpMapCodeUnits) - generation.length - 1,
           });
           return textResult(`${generation}\n${card}`);
         }

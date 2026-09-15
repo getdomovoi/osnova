@@ -224,7 +224,7 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
 
 export function formatMap(result: MapResult): string {
   const lines: string[] = [
-    `files ${result.fileCount} | symbols ${result.symbolCount} | edges ${result.edgeCount}${result.droppedDirs > 0 ? ` | dropped ${result.droppedDirs} dirs` : ""}`,
+    `files ${result.fileCount} | symbols ${result.symbolCount} | edges ${result.edgeCount}${result.droppedDirs > 0 ? ` | dropped ${result.droppedDirs} dirs` : ""}${result.droppedHotspots > 0 ? ` | dropped ${result.droppedHotspots} hotspots` : ""}`,
   ];
   for (const cluster of result.clusters) {
     lines.push(
@@ -233,6 +233,7 @@ export function formatMap(result: MapResult): string {
     for (const hub of cluster.hubs) {
       lines.push(`  hub ${hub.qualifiedName} (in ${hub.inEdges}, out ${hub.outEdges}) ${hub.file}:${hub.line}`);
     }
+    if (cluster.droppedHubs > 0) lines.push(`  omitted ${cluster.droppedHubs} hubs`);
   }
   if (result.hotspots.length > 0) {
     lines.push("hotspots:");

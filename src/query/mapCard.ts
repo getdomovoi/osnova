@@ -68,47 +68,34 @@ export async function renderMapCard(
   }
 
   const dropped: Partial<Record<number, number>> = {};
-  const fitted = fitLines(lines, maxCodeUnits, (rank) => {
-    dropped[rank] = (dropped[rank] ?? 0) + 1;
-  });
-
-  const droppedClusters = mapResult.droppedDirs + (dropped[RANK_CLUSTER] ?? 0);
-  const droppedHubs = dropped[RANK_HUB] ?? 0;
-  const droppedHotspots = dropped[RANK_HOTSPOT] ?? 0;
-  if (droppedClusters > 0 || droppedHubs > 0 || droppedHotspots > 0) {
+  const remaining = [...lines];
+  const footer = (): string | null => {
+    const droppedClusters = mapResult.droppedDirs + (dropped[RANK_CLUSTER] ?? 0);
+    const droppedHubs = mapResult.clusters.reduce((count, cluster) => count + cluster.droppedHubs, 0) + (dropped[RANK_HUB] ?? 0);
+    const droppedHotspots = mapResult.droppedHotspots + (dropped[RANK_HOTSPOT] ?? 0);
+    if (droppedClusters === 0 && droppedHubs === 0 && droppedHotspots === 0) return null;
     const parts: string[] = [];
     if (droppedClusters > 0) parts.push(`${droppedClusters} cluster lines`);
     if (droppedHubs > 0) parts.push(`${droppedHubs} hub lines`);
     if (droppedHotspots > 0) parts.push(`${droppedHotspots} hotspot lines`);
-    fitted.push(`dropped: ${parts.join(", ")}`);
+    return `dropped: ${parts.join(", ")}`;
+  };
+  const render = (): string => [...remaining.map((line) => line.text), footer()].filter((line): line is string => line !== null).join("\n");
+  for (const rank of [RANK_HOTSPOT, RANK_SECTION, RANK_HUB, RANK_CLUSTER]) {
+    while (render().length > maxCodeUnits) {
+      const index = findLastIndexOfRank(remaining, rank);
+      if (index === -1) break;
+      const countedRank = rank === RANK_SECTION ? RANK_HOTSPOT : rank;
+      dropped[countedRank] = (dropped[countedRank] ?? 0) + 1;
+      remaining.splice(index, 1);
+    }
+    if (render().length <= maxCodeUnits) break;
   }
-
-  let card = fitted.join("\n");
+  let card = render();
   if (card.length > maxCodeUnits) {
     card = card.slice(0, Math.max(0, maxCodeUnits - 1)) + "…";
   }
   return card;
-}
-
-function fitLines(
-  lines: readonly CardLine[],
-  maxCodeUnits: number,
-  onDrop: (rank: number) => void,
-): string[] {
-  const remaining = [...lines];
-  const totalUnits = (): number =>
-    remaining.reduce((acc, line) => acc + line.text.length + 1, 0);
-  const dropRanks = [RANK_HOTSPOT, RANK_SECTION, RANK_HUB, RANK_CLUSTER];
-  for (const rank of dropRanks) {
-    while (totalUnits() > maxCodeUnits) {
-      const index = findLastIndexOfRank(remaining, rank);
-      if (index === -1) break;
-      onDrop(rank === RANK_SECTION ? RANK_HOTSPOT : rank);
-      remaining.splice(index, 1);
-    }
-    if (totalUnits() <= maxCodeUnits) break;
-  }
-  return remaining.map((line) => line.text);
 }
 
 function findLastIndexOfRank(lines: readonly CardLine[], rank: number): number {

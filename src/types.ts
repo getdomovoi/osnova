@@ -246,6 +246,7 @@ export interface DirCluster {
   readonly internalEdges: number;
   readonly externalEdges: number;
   readonly hubs: readonly HubEntry[];
+  readonly droppedHubs: number;
 }
 
 export interface HubEntry {
@@ -268,6 +269,7 @@ export interface MapResult {
   readonly clusters: readonly DirCluster[];
   readonly hotspots: readonly HubEntry[];
   readonly droppedDirs: number;
+  readonly droppedHotspots: number;
 }
 
 export interface MapCardOptions {

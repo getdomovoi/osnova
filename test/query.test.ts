@@ -122,6 +122,7 @@ describe("map", () => {
     expect(result.fileCount).toBe(15);
     expect(result.clusters[0]?.dir).toBe("src/");
     expect(result.hotspots.length).toBeGreaterThan(0);
+    expect(result.droppedHotspots).toBeGreaterThanOrEqual(0);
     const top = result.hotspots[0];
     expect(top !== undefined && top.inEdges + top.outEdges > 0).toBe(true);
   });
@@ -148,6 +149,7 @@ describe("renderMapCard", () => {
     const card = await renderMapCard(index, { staleCount: 0, maxCodeUnits: 400 });
     expect(card.length).toBeLessThanOrEqual(400);
     expect(card).toContain("osnova sample-repo");
+    expect(card).toContain("dropped:");
   });
 
   it("reports staleness from disk when not overridden", async () => {

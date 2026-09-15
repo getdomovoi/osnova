@@ -148,4 +148,16 @@ describe("mcp stdio server", () => {
       await client.close();
     }
   }, 60_000);
+
+  it("bounds map output while preserving dropped-detail counts", async () => {
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_map", {});
+      expect(text.length).toBeLessThanOrEqual(2_048);
+      expect(text).toContain("dropped:");
+      expect(text).not.toContain("[output truncated:");
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
 });
