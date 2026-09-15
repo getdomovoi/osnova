@@ -29,6 +29,17 @@
     "noChangeP95Percent": 51.90,
     "editedP95Percent": 61.65
   },
+  "longLivedMcp": {
+    "revision": "50be8c7",
+    "reuseMemory": true,
+    "firstRefreshMs": 731.3828750000002,
+    "subsequentNoChangeMs": [328.4340000000002, 294.9913750000005, 273.73041600000033, 272.1764579999999, 274.4518339999995, 289.564625, 274.34420899999986],
+    "subsequentMedianMs": 274.4518339999995,
+    "subsequentP95Ms": 328.4340000000002,
+    "medianImprovementFromBaselinePercent": 80.17,
+    "invalidatesOnExternalArtifactIdentityChange": true,
+    "publicDefault": false
+  },
   "stageProfileMedianMs": {
     "artifactLoad": 356.03170800000044,
     "scanAndMetadata": 270.8125830000008,
