@@ -67,7 +67,7 @@ function documentationRange(lines: readonly string[], symbol: OsnovaSymbol, lang
 interface FileDocuments {
   readonly documents: readonly SearchDocument[];
   readonly lines: readonly string[];
-  readonly terms: ReadonlySet<string>;
+  readonly documentTerms: readonly ReadonlySet<string>[];
   readonly length: number;
 }
 
@@ -111,13 +111,13 @@ function buildFileDocuments(file: string, card: FileCard): FileDocuments {
     for (const token of tokens) owner.body.set(token, (owner.body.get(token) ?? 0) + 1);
   }
   const documents = [module, ...definitions];
-  const terms = new Set<string>();
+  const documentTerms: Set<string>[] = [];
   let length = 0;
   for (const document of documents) {
     length += document.length;
-    for (const t of [...document.name, ...document.signature, ...document.documentation, ...document.path, ...document.body.keys()]) terms.add(t);
+    documentTerms.push(new Set([...document.name, ...document.signature, ...document.documentation, ...document.path, ...document.body.keys()]));
   }
-  return { documents, lines, terms, length };
+  return { documents, lines, documentTerms, length };
 }
 
 export function queryContext(index: OsnovaIndex): QueryContext {
@@ -139,7 +139,9 @@ export function queryContext(index: OsnovaIndex): QueryContext {
     documents.push(...entry.documents);
     fileLines.set(file, entry.lines);
     totalLength += entry.length;
-    for (const term of entry.terms) df.set(term, (df.get(term) ?? 0) + 1);
+    for (const terms of entry.documentTerms) {
+      for (const term of terms) df.set(term, (df.get(term) ?? 0) + 1);
+    }
   }
   for (const key of fileCache.keys()) {
     if (!live.has(key) && fileCache.size > live.size * 2) fileCache.delete(key);
