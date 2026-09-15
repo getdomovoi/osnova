@@ -55,6 +55,7 @@ export { IndexingError } from "./index/diagnostics.js";
 export { loadIndex, refreshWorkspace, indexGeneration, evidenceFingerprint } from "./api.js";
 export type { WorkspaceOptions, CachePolicy, LockOptions, EvidenceFingerprint } from "./api.js";
 export { serializeArtifact } from "./index/serialize.js";
+export { serializeText } from "./index/textStore.js";
 export { ask, askDetailed } from "./query/ask.js";
 export { findText, findTextDetailed } from "./query/findText.js";
 export { skeleton } from "./query/skeleton.js";

@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor } from "./index/serialize.js";
+import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor, artifactTextPathFor, isTextSidecarInconsistency } from "./index/serialize.js";
 import { resolveCacheDir, workspaceLockPath, workspaceKey, cacheLimits, evictLru } from "./cache/cache.js";
 import type { LoadIndexOptions, OsnovaIndex } from "./types.js";
 import { canonicalWorkspaceRoot, workspaceIdentity, validRelativePath } from "./index/workspace.js";
@@ -40,9 +40,14 @@ const loadedIndexes = new Map<string, { index: OsnovaIndex; artifact: string }>(
 
 async function artifactSignature(root: string, cacheDir: string): Promise<string | undefined> {
   const artifact = await artifactPathFor(root, cacheDir);
-  if (artifact === undefined) return undefined;
-  const stat = await fs.stat(artifact, { bigint: true });
-  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  const text = await artifactTextPathFor(root, cacheDir);
+  if (artifact === undefined || text === undefined) return undefined;
+  const parts: string[] = [];
+  for (const file of [artifact, text]) {
+    const stat = await fs.stat(file, { bigint: true });
+    parts.push([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":"));
+  }
+  return parts.join("|");
 }
 
 function rememberLoaded(key: string, index: OsnovaIndex, artifact: string | undefined, limit: number): void {
@@ -69,8 +74,17 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
   const task = withCacheLock(workspaceLockPath(canonicalCache, canonicalRoot), async () => {
     const published = await artifactSignature(canonicalRoot, canonicalCache);
     const cached = loadedIndexes.get(indexKey);
-    let index: OsnovaIndex | undefined = options.reuseMemory === true && cached !== undefined && cached.artifact === published
-      ? cached.index : await loadArtifact(canonicalRoot, canonicalCache);
+    let index: OsnovaIndex | undefined;
+    if (options.reuseMemory === true && cached !== undefined && cached.artifact === published) {
+      index = cached.index;
+    } else {
+      try {
+        index = await loadArtifact(canonicalRoot, canonicalCache);
+      } catch (error) {
+        if (!isTextSidecarInconsistency(error)) throw error;
+        index = undefined;
+      }
+    }
     let dirty = index === undefined;
     let verified = index === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, indexGeneration(index)))?.files;
     for (let attempt = 0; attempt < 3; attempt += 1) {

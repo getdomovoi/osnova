@@ -5,6 +5,7 @@ import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { applyChanges, freshness } from "../src/index/incremental.js";
 import { serializeArtifact } from "../src/index/serialize.js";
+import { serializeText } from "../src/index/textStore.js";
 import type { OsnovaIndex } from "../src/types.js";
 
 function copyFixture(): string {
@@ -94,6 +95,9 @@ describe("incremental equals full", () => {
         const incremental = serializeArtifact(index);
         const full = serializeArtifact(await buildIndex(dir));
         expect(incremental.equals(full), `step ${step} op ${op}`).toBe(true);
+        const incrementalText = serializeText(index).bytes;
+        const fullText = serializeText(await buildIndex(dir)).bytes;
+        expect(incrementalText.equals(fullText)).toBe(true);
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

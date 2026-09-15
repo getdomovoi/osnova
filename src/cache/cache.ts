@@ -93,7 +93,7 @@ export async function evictLru(cacheDir: string, policy: number | CachePolicy = 
         const artifacts = await fs.readdir(dir);
         let bytes = 0;
         let access = 0;
-        for (const name of artifacts.filter((name) => name === "index.json" || name === "index.json.gz")) {
+        for (const name of artifacts.filter((name) => name === "index.json" || name === "index.json.gz" || name === "text.bin")) {
           const stat = await fs.lstat(path.join(dir, name));
           if (!stat.isFile()) throw new Error("osnova: cache artifact is not a regular file");
           bytes += stat.size;
@@ -121,7 +121,7 @@ export async function evictLru(cacheDir: string, policy: number | CachePolicy = 
       try {
         await withCacheLock(`${victim.dir}.lock`, async () => {
           const names = await fs.readdir(victim.dir);
-          const owned = names.filter((name) => ["index.json", "index.json.gz", "access", "verification.json"].includes(name));
+          const owned = names.filter((name) => ["index.json", "index.json.gz", "text.bin", "access", "verification.json"].includes(name));
           const access = Number(await fs.readFile(path.join(victim.dir, "access"), "utf8").catch((error: unknown) => {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") return "0";
             throw error;

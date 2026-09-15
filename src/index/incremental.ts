@@ -3,7 +3,7 @@ import type { FreshnessReport, OsnovaIndex } from "../types.js";
 import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
-import { scanFiles, sameFileMetadata, sha256Hex, sourceText } from "./scan.js";
+import { scanFiles, sameFileMetadata, sha256Hex } from "./scan.js";
 import type { FileMetadata } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, indexCacheDirectory, workspaceFilePath, workspaceRelativePath } from "./workspace.js";
@@ -46,7 +46,7 @@ export async function inspectFreshness(
     try {
       hashedFiles += 1;
       const buffer = await fs.readFile(await workspaceFilePath(absRoot, relPath));
-      if (sha256Hex(buffer) !== card.hash || card.size !== buffer.length || card.text !== (sourceText(buffer) ?? "")) changed.push(relPath);
+      if (sha256Hex(buffer) !== card.hash || card.size !== buffer.length) changed.push(relPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         deleted.push(relPath);
