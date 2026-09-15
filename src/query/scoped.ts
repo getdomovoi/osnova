@@ -1,8 +1,6 @@
 import { OsnovaIndexImpl } from "../index/indexImpl.js";
 import type { AskHit, AskOptions, OsnovaIndex } from "../types.js";
 import { askDetailed } from "./ask.js";
-import { queryContext, tokenize } from "./context.js";
-import type { SearchDocument } from "./context.js";
 import { compareText, indexReceipt, sourceReceipt } from "./impact.js";
 import type { IndexReceipt, SourceReceipt } from "./impact.js";
 
@@ -149,31 +147,6 @@ export function detectScopes(index: OsnovaIndex): PackageScope[] {
   return [...scopes.values()].sort((a, b) => compareText(a.path, b.path));
 }
 
-function documentKey(file: string, qualifiedName: string | undefined): string {
-  return qualifiedName === undefined ? `file:${file}` : `symbol:${qualifiedName}`;
-}
-
-function documentCovers(document: SearchDocument, term: string): boolean {
-  return document.name.has(term) || document.signature.has(term) || document.documentation.has(term) ||
-    document.path.has(term) || document.body.has(term);
-}
-
-function comparableScore(
-  hit: ScopedAskHit,
-  documents: ReadonlyMap<string, SearchDocument>,
-  queryTokens: readonly string[],
-  identifiers: ReadonlySet<string>,
-  qualified: ReadonlySet<string>,
-): number {
-  const symbol = hit.symbol;
-  const localName = symbol?.qualifiedName.split("#").slice(1).join("#").toLowerCase() ?? "";
-  const priority = symbol !== null && localName.includes(".") && qualified.has(localName) ? 2
-    : symbol !== null && identifiers.has(symbol.name.toLowerCase()) ? 1 : 0;
-  const document = documents.get(documentKey(hit.file, symbol?.qualifiedName));
-  const coversQuery = document === undefined || queryTokens.every((term) => documentCovers(document, term));
-  return coversQuery ? hit.score - priority : 0;
-}
-
 export function isolatedIndex(index: OsnovaIndex, paths: ReadonlySet<string>): OsnovaIndex {
   const files = new Map([...index.files].filter(([path]) => paths.has(path)));
   const edges = index.edges.filter((edge) => {
@@ -215,40 +188,21 @@ export function scopedAsk(index: OsnovaIndex, question: string, options: AskOpti
     for (const file of paths) ownerOf.set(file, scope.path);
   }
   const detailed = askDetailed(index, question, { limit: Number.MAX_SAFE_INTEGER, full: options.full });
-  const ctx = queryContext(index);
-  const documents = new Map<string, SearchDocument>(
-    ctx.documents.map((document) => [documentKey(document.file, document.symbol?.qualifiedName), document]),
-  );
-  const queryTokens = [...new Set(tokenize(question))];
-  const identifiers = new Set((question.match(/[$A-Za-z_][$\w]*/g) ?? []).map((name) => name.toLowerCase()));
-  const qualified = new Set((question.match(/[$A-Za-z_][$\w]*(?:\.[$A-Za-z_][$\w]*)+/g) ?? []).map((name) => name.toLowerCase()));
-  const grouped = new Map<string, Array<{ hit: ScopedAskHit; order: number; comparable: number }>>(
-    selected.map((scope) => [scope.path, []]),
-  );
-  let order = 0;
+  const grouped = new Map<string, ScopedAskHit[]>(selected.map((scope) => [scope.path, []]));
   for (const hit of detailed.hits) {
     const scopePath = ownerOf.get(hit.file);
     if (scopePath === undefined) continue;
-    const scopedHit: ScopedAskHit = { ...hit, scope: scopePath, receipt: sourceReceipt(index, hit.file, receipt) };
-    const comparable = comparableScore(scopedHit, documents, queryTokens, identifiers, qualified);
-    grouped.get(scopePath)!.push({ hit: scopedHit, order, comparable });
-    order += 1;
+    grouped.get(scopePath)!.push({ ...hit, scope: scopePath, receipt: sourceReceipt(index, hit.file, receipt) });
   }
-  const perScope = selected.map((scope) => ({ scope, entries: grouped.get(scope.path)! }));
-  const best = perScope.reduce((max, { entries }) => entries.length > 0
-    ? Math.max(max, ...entries.map((entry) => entry.comparable)) : max, 0);
-  const threshold = 0.25 * best;
-  const topComparable = (entries: readonly { comparable: number }[]): number =>
-    entries.reduce((max, entry) => Math.max(max, entry.comparable), 0);
-  const participating = perScope.filter(({ entries }) => entries.length > 0 && topComparable(entries) >= threshold);
-  const alsoMatched = perScope
-    .filter(({ entries }) => entries.length > 0 && topComparable(entries) < threshold)
-    .map(({ scope }) => scope)
-    .sort((a, b) => compareText(a.path, b.path));
-  const flattened = participating.flatMap(({ entries }) => entries);
-  flattened.sort((a, b) => b.hit.score - a.hit.score || compareText(a.hit.scope, b.hit.scope) || a.order - b.order);
-  const total = flattened.length;
-  const hits = flattened.slice(0, limit).map((entry) => entry.hit);
-  return { hits, filesSearched, scopes: selected, receipt, omittedHits: total - hits.length, alsoMatched,
-    limitations: ["indexed-manifest-boundaries-only", "repository-wide-idf", "scope-participation-threshold-0.25", "indexed-content-not-disk-freshness"] };
+  const queues = selected.map((scope) => grouped.get(scope.path)!);
+  const hits: ScopedAskHit[] = [];
+  const total = queues.reduce((sum, queue) => sum + queue.length, 0);
+  for (let round = 0; hits.length < Math.min(limit, total); round++) {
+    for (const queue of queues) {
+      const hit = queue[round];
+      if (hit !== undefined && hits.length < limit) hits.push(hit);
+    }
+  }
+  return { hits, filesSearched, scopes: selected, receipt, omittedHits: total - hits.length, alsoMatched: [],
+    limitations: ["indexed-manifest-boundaries-only", "repository-wide-idf", "scope-round-robin-path-order", "indexed-content-not-disk-freshness"] };
 }

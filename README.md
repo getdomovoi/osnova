@@ -25,7 +25,7 @@ osnova skeleton <file>         # every definition's signature and span
 osnova callers <symbol>        # direct or transitive callers/callees
 osnova map                     # directory clusters, hubs, hotspots
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
-osnova scoped-ask "<question>" # ranked package-scoped retrieval
+osnova scoped-ask "<question>" # balanced package-scoped retrieval
 osnova context "<question>"    # bounded understand/change/review evidence
 osnova impact --base-cache ... # compare preserved base/current indexes
 osnova doctor                  # read-only runtime/assets checks
@@ -80,7 +80,7 @@ Excerpts retain exact source line numbers and may include an associated leading 
 
 An experimental graph adjustment was measured and rejected after improving authored tie cases but reducing a pinned real-repository development ranking score. `ask` remains fielded lexical definition retrieval. The [experiment record](benchmarks/results/graph-ranking-experiment-2026-09-14.json) preserves the positive and negative evidence; no graph-ranking option is shipped.
 
-`scopedAsk` detects package scopes from indexed manifests (`package.json`, `Cargo.toml`, `pyproject.toml`/`setup.cfg`/`setup.py`, `go.mod`, `pom.xml`, `*.csproj`) and from root `package.json` `workspaces` globs and root `pnpm-workspace.yaml` `packages:` entries, expanding `dir/*` and exact `dir/name` forms against directories that contain at least one indexed file. Every scope is scored once against the same repository-wide IDF as `ask`, so scores are comparable across scopes rather than computed per scope: a scope participates in the merged, score-ordered `hits` when its strongest comparable match reaches at least 25% of the strongest comparable match seen anywhere in the query. Scopes that matched but fell under that threshold are reported separately as `alsoMatched` instead of being interleaved or dropped silently. Package boundaries remain indexed-manifest and workspace-glob boundaries, not verified ownership.
+`scopedAsk` detects package scopes from indexed manifests (`package.json`, `Cargo.toml`, `pyproject.toml`/`setup.cfg`/`setup.py`, `go.mod`, `pom.xml`, `*.csproj`) and from root `package.json` `workspaces` globs and root `pnpm-workspace.yaml` `packages:` entries, expanding `dir/*` and exact `dir/name` forms against directories that contain at least one indexed file. Every scope is scored once against the same repository-wide IDF as `ask`. Scopes are merged round-robin in path order, taking one hit from each scope with remaining candidates per round until the limit is reached. `alsoMatched` is reserved for a future ranked merge and is currently always empty. Package boundaries remain indexed-manifest and workspace-glob boundaries, not verified ownership.
 
 ### Search completeness
 

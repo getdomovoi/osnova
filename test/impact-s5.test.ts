@@ -151,7 +151,7 @@ describe("package scopes", () => {
     card("packages/ab/package.json", [], '{"name":"large"}'), ...Array.from({ length: 12 }, (_, i) => card(`packages/ab/${i}.ts`, ["work"])),
     card("rust/Cargo.toml", [], '[package]\nname = "worker"'), card("py/pyproject.toml", [], '[project]\nname = "python-worker"')];
 
-  it("detects indexed manifests and balances package rounds", () => {
+  it("detects indexed manifests and spreads hits across scopes", () => {
     const repo = index(files);
     expect(detectScopes(repo).map((scope) => scope.path)).toEqual(["", "packages/a", "packages/ab", "py", "rust"]);
     const result = scopedAsk(repo, "work", { limit: 2 });

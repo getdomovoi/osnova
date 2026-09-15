@@ -26,13 +26,12 @@ describe("scope ranking", () => {
     expect(scopes).toEqual(["", "packages/core", "packages/docs", "packages/ui"]);
   });
 
-  it("merges by comparable score and reports weak scopes as alsoMatched", async () => {
+  it("merges hits round-robin by scope path order", async () => {
     const index = await buildIndex(await monorepo());
     const result = scopedAsk(index, "retry timer", { limit: 4 });
-    expect(result.hits[0]?.scope).toBe("packages/core");
-    expect(result.hits.map((h) => h.scope)).not.toContain("packages/ui");
-    expect(result.alsoMatched?.map((s) => s.path) ?? []).toContain("packages/docs");
-    expect(result.limitations).toContain("scope-participation-threshold-0.25");
-    expect(result.limitations).not.toContain("scope-round-robin-path-order");
+    expect(result.hits.map((h) => h.scope)).toEqual(["packages/core", "packages/docs", "packages/core"]);
+    expect(result.alsoMatched).toEqual([]);
+    expect(result.limitations).toContain("scope-round-robin-path-order");
+    expect(result.limitations).not.toContain("scope-participation-threshold-0.25");
   });
 });
