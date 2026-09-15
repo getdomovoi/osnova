@@ -210,6 +210,7 @@ describe("extraction adapters", () => {
       "module:src/breadth/greeter.ex#Greeter",
       "function:src/breadth/greeter.ex#Greeter.greet",
       "function:src/breadth/greeter.ex#Greeter.greet_safe",
+      "function:src/breadth/greeter.ex#Greeter.run",
       "function:src/breadth/greeter.ex#Greeter.format",
     ]);
     const greetCalls = index.outgoing("src/breadth/greeter.ex#Greeter.greet");
@@ -218,11 +219,15 @@ describe("extraction adapters", () => {
     const greetSafeCalls = index.outgoing("src/breadth/greeter.ex#Greeter.greet_safe");
     expect(greetSafeCalls).toHaveLength(1);
     expect(greetSafeCalls[0]?.toName).toBe("format");
+    const runCalls = index.outgoing("src/breadth/greeter.ex#Greeter.run");
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0]?.toName).toBe("greet");
     const allCalls = index.edges.filter((e) => e.fromFile === "src/breadth/greeter.ex" && e.kind === "calls");
     expect(allCalls.map((e) => e.toName)).not.toContain("def");
     expect(allCalls.map((e) => e.toName)).not.toContain("defp");
     expect(allCalls.map((e) => e.toName)).not.toContain("defmodule");
     expect(allCalls.map((e) => e.toName)).not.toContain("is_binary");
+    expect(allCalls.map((e) => e.toName)).not.toContain("run");
     expect(allCalls.some((e) => e.toSymbol !== undefined && e.toSymbol === e.fromSymbol)).toBe(false);
   });
 
