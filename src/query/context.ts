@@ -1,4 +1,4 @@
-import type { CardLanguage, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { CardLanguage, FileCard, OsnovaIndex, OsnovaSymbol } from "../types.js";
 
 const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "of", "in", "to", "for", "and", "or", "how",
@@ -64,7 +64,61 @@ function documentationRange(lines: readonly string[], symbol: OsnovaSymbol, lang
   return end >= start ? { start, end } : null;
 }
 
+interface FileDocuments {
+  readonly documents: readonly SearchDocument[];
+  readonly lines: readonly string[];
+  readonly terms: ReadonlySet<string>;
+  readonly length: number;
+}
+
+const fileCache = new Map<string, FileDocuments>();
 const contextCache = new WeakMap<OsnovaIndex, QueryContext>();
+
+const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}`;
+
+function buildFileDocuments(file: string, card: FileCard): FileDocuments {
+  const lines = card.text.length > 0 ? card.text.split("\n") : [];
+  const pathTokens = new Set(tokenize(file));
+  const create = (symbol: OsnovaSymbol | null): SearchDocument => {
+    const docRange = symbol === null ? null : documentationRange(lines, symbol, card.language);
+    return {
+      file, symbol, path: pathTokens,
+      name: new Set(tokenize(symbol?.qualifiedName.split("#").slice(1).join("#") ?? "")),
+      signature: new Set(tokenize(symbol?.signature ?? "")),
+      documentation: new Set(tokenize(docRange === null ? "" : lines.slice(docRange.start - 1, docRange.end).join("\n"))),
+      documentationRange: docRange, ranges: [], body: new Map(), length: 0,
+    };
+  };
+  const module = create(null);
+  const definitions = [...card.symbols].sort((a, b) => a.span.startLine - b.span.startLine ||
+    a.span.startCol - b.span.startCol || b.span.endLine - a.span.endLine || b.span.endCol - a.span.endCol).map(create);
+  let active: SearchDocument[] = [];
+  let cursor = 0;
+  for (let line = 1; line <= lines.length; line += 1) {
+    while (cursor < definitions.length) {
+      const doc = definitions[cursor];
+      if (doc?.symbol === undefined || doc.symbol === null || doc.symbol.span.startLine > line) break;
+      active.push(doc);
+      cursor += 1;
+    }
+    active = active.filter((doc) => (doc.symbol?.span.endLine ?? 0) >= line);
+    const owner = active[active.length - 1] ?? module;
+    const last = owner.ranges[owner.ranges.length - 1];
+    if (last?.end === line - 1) last.end = line;
+    else owner.ranges.push({ start: line, end: line });
+    const tokens = tokenize(lines[line - 1] ?? "");
+    owner.length += tokens.length;
+    for (const token of tokens) owner.body.set(token, (owner.body.get(token) ?? 0) + 1);
+  }
+  const documents = [module, ...definitions];
+  const terms = new Set<string>();
+  let length = 0;
+  for (const document of documents) {
+    length += document.length;
+    for (const t of [...document.name, ...document.signature, ...document.documentation, ...document.path, ...document.body.keys()]) terms.add(t);
+  }
+  return { documents, lines, terms, length };
+}
 
 export function queryContext(index: OsnovaIndex): QueryContext {
   const cached = contextCache.get(index);
@@ -73,51 +127,31 @@ export function queryContext(index: OsnovaIndex): QueryContext {
   const fileLines = new Map<string, readonly string[]>();
   const df = new Map<string, number>();
   let totalLength = 0;
+  const live = new Set<string>();
   for (const [file, card] of index.files) {
-    const lines = card.text.length > 0 ? card.text.split("\n") : [];
-    fileLines.set(file, lines);
-    const pathTokens = new Set(tokenize(file));
-    const create = (symbol: OsnovaSymbol | null): SearchDocument => {
-      const docRange = symbol === null ? null : documentationRange(lines, symbol, card.language);
-      return {
-        file, symbol, path: pathTokens,
-        name: new Set(tokenize(symbol?.qualifiedName.split("#").slice(1).join("#") ?? "")),
-        signature: new Set(tokenize(symbol?.signature ?? "")),
-        documentation: new Set(tokenize(docRange === null ? "" : lines.slice(docRange.start - 1, docRange.end).join("\n"))),
-        documentationRange: docRange, ranges: [], body: new Map(), length: 0,
-      };
-    };
-    const module = create(null);
-    const definitions = [...card.symbols].sort((a, b) => a.span.startLine - b.span.startLine ||
-      a.span.startCol - b.span.startCol || b.span.endLine - a.span.endLine || b.span.endCol - a.span.endCol).map(create);
-    let active: SearchDocument[] = [];
-    let cursor = 0;
-    for (let line = 1; line <= lines.length; line += 1) {
-      while (cursor < definitions.length) {
-        const doc = definitions[cursor];
-        if (doc?.symbol === undefined || doc.symbol === null || doc.symbol.span.startLine > line) break;
-        active.push(doc);
-        cursor += 1;
-      }
-      active = active.filter((doc) => (doc.symbol?.span.endLine ?? 0) >= line);
-      const owner = active[active.length - 1] ?? module;
-      const last = owner.ranges[owner.ranges.length - 1];
-      if (last?.end === line - 1) last.end = line;
-      else owner.ranges.push({ start: line, end: line });
-      const tokens = tokenize(lines[line - 1] ?? "");
-      owner.length += tokens.length;
-      for (const token of tokens) owner.body.set(token, (owner.body.get(token) ?? 0) + 1);
+    const key = cacheKey(card);
+    live.add(key);
+    let entry = fileCache.get(key);
+    if (entry === undefined) {
+      entry = buildFileDocuments(file, card);
+      fileCache.set(key, entry);
     }
-    for (const document of [module, ...definitions]) {
-      documents.push(document);
-      totalLength += document.length;
-      const terms = new Set([...document.name, ...document.signature, ...document.documentation, ...document.path, ...document.body.keys()]);
-      for (const term of terms) df.set(term, (df.get(term) ?? 0) + 1);
-    }
+    documents.push(...entry.documents);
+    fileLines.set(file, entry.lines);
+    totalLength += entry.length;
+    for (const term of entry.terms) df.set(term, (df.get(term) ?? 0) + 1);
+  }
+  for (const key of fileCache.keys()) {
+    if (!live.has(key) && fileCache.size > live.size * 2) fileCache.delete(key);
   }
   const ctx: QueryContext = { documents, lines: fileLines, df, averageLength: Math.max(1, totalLength / Math.max(1, documents.length)) };
   contextCache.set(index, ctx);
   return ctx;
+}
+
+export function fileDocumentsCached(index: OsnovaIndex, file: string): boolean {
+  const card = index.files.get(file);
+  return card !== undefined && fileCache.has(cacheKey(card));
 }
 
 export function idf(ctx: QueryContext, term: string): number {

@@ -1,6 +1,6 @@
 import { OsnovaIndexImpl } from "../index/indexImpl.js";
 import type { AskHit, AskOptions, OsnovaIndex } from "../types.js";
-import { ask } from "./ask.js";
+import { askDetailed } from "./ask.js";
 import { compareText, indexReceipt, sourceReceipt } from "./impact.js";
 import type { IndexReceipt, SourceReceipt } from "./impact.js";
 
@@ -96,12 +96,20 @@ export function scopedAsk(index: OsnovaIndex, question: string, options: AskOpti
   }
   const selected = scopes.filter((scope) => partitions.has(scope.path));
   let filesSearched = 0;
-  const queues = selected.map((scope) => {
+  const ownerOf = new Map<string, string>();
+  for (const scope of selected) {
     const paths = partitions.get(scope.path)!;
     filesSearched += paths.size;
-    const result = ask(isolatedIndex(index, paths), question, { limit: Number.MAX_SAFE_INTEGER, full: options.full });
-    return result.hits.map((hit) => ({ ...hit, scope: scope.path, receipt: sourceReceipt(index, hit.file, receipt) }));
-  });
+    for (const file of paths) ownerOf.set(file, scope.path);
+  }
+  const detailed = askDetailed(index, question, { limit: Number.MAX_SAFE_INTEGER, full: options.full });
+  const grouped = new Map<string, ScopedAskHit[]>(selected.map((scope) => [scope.path, []]));
+  for (const hit of detailed.hits) {
+    const scopePath = ownerOf.get(hit.file);
+    if (scopePath === undefined) continue;
+    grouped.get(scopePath)!.push({ ...hit, scope: scopePath, receipt: sourceReceipt(index, hit.file, receipt) });
+  }
+  const queues = selected.map((scope) => grouped.get(scope.path)!);
   const hits: ScopedAskHit[] = [];
   const total = queues.reduce((sum, queue) => sum + queue.length, 0);
   for (let round = 0; hits.length < Math.min(limit, total); round++) {
@@ -111,5 +119,5 @@ export function scopedAsk(index: OsnovaIndex, question: string, options: AskOpti
     }
   }
   return { hits, filesSearched, scopes: selected, receipt, omittedHits: total - hits.length,
-    limitations: ["indexed-manifest-boundaries-only", "package-scores-are-local", "scope-round-robin-path-order", "indexed-content-not-disk-freshness"] };
+    limitations: ["indexed-manifest-boundaries-only", "repository-wide-idf", "scope-round-robin-path-order", "indexed-content-not-disk-freshness"] };
 }
