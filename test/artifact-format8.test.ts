@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -121,6 +121,25 @@ describe("format 8 publication", () => {
     expect(loaded).toBeDefined();
     expect(indexGeneration(loaded!)).toBe(indexGeneration(index));
     expect(loaded!.files.get("src/util.ts")!.text).toBe(index.files.get("src/util.ts")!.text);
+  });
+
+  it("parses the core artifact JSON exactly once per loadIndex", async () => {
+    const dir = await scratch();
+    const cacheDir = path.join(dir, "cache");
+    await buildIndex(FIXTURE, { cacheDir });
+    const originalParse = JSON.parse;
+    let coreParses = 0;
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+      if (typeof text === "string" && text.includes('"formatVersion"')) coreParses += 1;
+      return originalParse(text, reviver);
+    });
+    try {
+      const loaded = await loadIndex(FIXTURE, { cacheDir });
+      expect(loaded).toBeDefined();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(coreParses).toBe(1);
   });
 
   it("treats a missing or mismatched text.bin as a corrupt cache", async () => {

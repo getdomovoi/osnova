@@ -164,7 +164,10 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
 }
 
 export function deserializeArtifact(data: string, textPath: string | undefined, textBytes?: Buffer): OsnovaIndexImpl {
-  const parsed: unknown = JSON.parse(data);
+  return deserializeParsedArtifact(JSON.parse(data), data, textPath, textBytes);
+}
+
+function deserializeParsedArtifact(parsed: unknown, data: string, textPath: string | undefined, textBytes?: Buffer): OsnovaIndexImpl {
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error("osnova: corrupt index artifact");
   }
@@ -268,9 +271,13 @@ export function deserializeArtifact(data: string, textPath: string | undefined, 
 }
 
 export function serializedTextIdentity(data: string): { hash: string; bytes: number } {
-  const parsed = JSON.parse(data) as Partial<SerializedArtifact>;
-  if (typeof parsed.textHash !== "string" || !nonnegativeInteger(parsed.textBytes)) throw new Error("osnova: corrupt text identity");
-  return { hash: parsed.textHash, bytes: parsed.textBytes };
+  return textIdentityFromParsed(JSON.parse(data));
+}
+
+function textIdentityFromParsed(parsed: unknown): { hash: string; bytes: number } {
+  const value = parsed as Partial<SerializedArtifact>;
+  if (typeof value.textHash !== "string" || !nonnegativeInteger(value.textBytes)) throw new Error("osnova: corrupt text identity");
+  return { hash: value.textHash, bytes: value.textBytes };
 }
 
 function nonnegativeInteger(value: unknown): value is number {
@@ -399,16 +406,17 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
         const data = await fs.readFile(artifactPath);
         const content = data[0] === 0x1f && data[1] === 0x8b
           ? gunzipSync(data, { maxOutputLength: MAX_ARTIFACT_BYTES }).toString("utf8") : data.toString("utf8");
-        const parsedVersion = (JSON.parse(content) as { formatVersion?: unknown }).formatVersion;
+        const parsed: unknown = JSON.parse(content);
+        const parsedVersion = (parsed as { formatVersion?: unknown }).formatVersion;
         if (parsedVersion !== indexFormatVersion) throw new ArtifactVersionError(parsedVersion);
-        const identity = serializedTextIdentity(content);
+        const identity = textIdentityFromParsed(parsed);
         const textPath = path.join(dir, "text.bin");
         const textStat = await fs.lstat(textPath).catch((error: unknown) => {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new TextSidecarError("osnova: cache text sidecar missing");
           throw error;
         });
         if (!textStat.isFile() || textStat.size !== identity.bytes) throw new TextSidecarError("osnova: cache text sidecar mismatch");
-        const index = deserializeArtifact(content, textPath);
+        const index = deserializeParsedArtifact(parsed, content, textPath);
         if (index.root !== root) throw new Error("osnova: cache artifact belongs to a different workspace");
         if (identity.bytes <= 4 * 1024 * 1024 && sha256Hex(await fs.readFile(textPath)) !== identity.hash) throw new TextSidecarError("osnova: cache text sidecar mismatch");
         await touchWorkspace(dir).catch((error: unknown) => {
