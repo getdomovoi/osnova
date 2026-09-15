@@ -77,7 +77,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
     let active = 0;
     const queue: Array<() => void> = [];
     return async <T>(job: () => Promise<T>): Promise<T> => {
-      if (active >= limit) await new Promise<void>((resolve) => queue.push(resolve));
+      while (active >= limit) await new Promise<void>((resolve) => queue.push(resolve));
       active += 1;
       try { return await job(); } finally { active -= 1; queue.shift()?.(); }
     };

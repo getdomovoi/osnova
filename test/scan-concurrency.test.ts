@@ -95,6 +95,33 @@ describe("scan", () => {
     expect(max).toBeLessThanOrEqual(8);
   });
 
+  it("keeps the file-stat gate at or under its limit even under wake races", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-scan-file-gate-"));
+    dirs.push(root);
+    const dir = path.join(root, "many");
+    await fs.mkdir(dir, { recursive: true });
+    for (let f = 0; f < 500; f += 1) await fs.writeFile(path.join(dir, `f${f}.ts`), `export const v${f} = ${f};\n`);
+    const originalStat = fs.stat.bind(fs);
+    let active = 0;
+    let max = 0;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+      active += 1;
+      max = Math.max(max, active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, Math.random() * 2));
+        return await originalStat(...args);
+      } finally {
+        active -= 1;
+      }
+    });
+    try {
+      await scanFiles(root);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(max).toBeLessThanOrEqual(64);
+  });
+
   it("surfaces a permission failure resolving a symlink target as stat-failed", async () => {
     if (process.platform === "win32" || process.getuid?.() === 0) return;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-scan-symstat-"));
