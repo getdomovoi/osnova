@@ -39,6 +39,19 @@ describe("scan", () => {
     await expect(scanFiles(root)).rejects.toMatchObject({ diagnostic: { code: "ignore-unreadable" } });
   });
 
+  it("reports the lexically smaller relative path when two ignore files fail", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-scan-ignore-tie-"));
+    dirs.push(root);
+    await fs.mkdir(path.join(root, "dirA"), { recursive: true });
+    await fs.mkdir(path.join(root, "dirB"), { recursive: true });
+    await fs.writeFile(path.join(root, "real-ignore"), "");
+    await fs.symlink(path.join(root, "real-ignore"), path.join(root, "dirA", ".gitignore"));
+    await fs.symlink(path.join(root, "real-ignore"), path.join(root, "dirB", ".gitignore"));
+    for (let i = 0; i < 5; i += 1) {
+      await expect(scanFiles(root)).rejects.toMatchObject({ diagnostic: { code: "ignore-unreadable", path: "dirA/.gitignore" } });
+    }
+  });
+
   it("names the same unreadable path on every run", async () => {
     if (process.platform === "win32" || process.getuid?.() === 0) return;
     const root = await repo();

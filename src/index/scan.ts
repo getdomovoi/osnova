@@ -37,13 +37,13 @@ export function sourceText(buffer: Buffer): string | null {
   return buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0) || !isUtf8(buffer) ? null : buffer.toString("utf8");
 }
 
-async function loadIgnoreFile(absPath: string): Promise<string[]> {
+async function loadIgnoreFile(absPath: string, relDir: string, name: string): Promise<string[]> {
   try {
     if ((await fs.lstat(absPath)).isSymbolicLink()) throw new Error("ignore file must not be a symlink");
     return (await fs.readFile(absPath, "utf8")).split("\n");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw new IndexingError({ phase: "scan", path: path.basename(absPath), code: "ignore-unreadable" }, error);
+    throw new IndexingError({ phase: "scan", path: relDir ? `${relDir}/${name}` : name, code: "ignore-unreadable" }, error);
   }
 }
 
@@ -97,7 +97,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
         const dirEntries = await fs.readdir(dir, { withFileTypes: true });
         const names = new Set(dirEntries.map((entry) => entry.name));
         for (const name of [".gitignore", ".osnovaignore"]) {
-          if (names.has(name)) rules.add(await loadIgnoreFile(path.join(dir, name)));
+          if (names.has(name)) rules.add(await loadIgnoreFile(path.join(dir, name), relDir, name));
         }
         return dirEntries;
       });
