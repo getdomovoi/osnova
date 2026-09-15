@@ -14,12 +14,14 @@ try {
   await mkdir(consumer);
   const environment = { ...process.env, HOME: home, USERPROFILE: home, npm_config_update_notifier: "false",
     npm_config_userconfig: path.join(home, ".npmrc"), npm_config_globalconfig: path.join(home, "global-npmrc") };
-  const packed = execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", scratch], {
+  const windows = process.platform === "win32";
+  const npm = (args, options) => execFileSync(windows ? "npm.cmd" : "npm", windows ? args.map((arg) => `"${arg}"`) : args, { ...options, shell: windows });
+  const packed = npm(["pack", "--ignore-scripts", "--json", "--pack-destination", scratch], {
     cwd: checkout, encoding: "utf8", timeout: 60_000, env: environment,
   });
   const [{ filename }] = JSON.parse(packed);
   await writeFile(path.join(consumer, "package.json"), '{"name":"osnova-clean-consumer","private":true,"type":"module"}\n');
-  execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["install", path.join(scratch, filename), "--ignore-scripts", "--no-audit", "--no-fund", "--cache", path.join(scratch, "npm-cache")], {
+  npm(["install", path.join(scratch, filename), "--ignore-scripts", "--no-audit", "--no-fund", "--cache", path.join(scratch, "npm-cache")], {
     cwd: consumer, encoding: "utf8", timeout: 180_000, env: environment,
   });
   await cp(path.join(checkout, "scripts/package-smoke.mjs"), path.join(consumer, "package-smoke.mjs"));
