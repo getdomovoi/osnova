@@ -98,7 +98,10 @@ export function formatSkeletonBounded(index: OsnovaIndex, result: SkeletonResult
   }
   const complete = formatSkeleton(result);
   if (complete.length <= maxCodeUnits) return complete;
-  const header = `${result.file} (${result.language}, ${result.lineCount} lines, ${result.entries.length} symbols)`;
+  const metadata = ` (${result.language}, ${result.lineCount} lines, ${result.entries.length} symbols)`;
+  const emptyFooter = `omitted: ${result.entries.length} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
+  const availablePath = Math.max(8, maxCodeUnits - metadata.length - emptyFooter.length - 2);
+  const header = `${compactField(result.file, availablePath)}${metadata}`;
   const line = (entry: SkeletonResult["entries"][number]): string =>
     `${entry.symbol.kind} ${entry.symbol.name} (L${entry.symbol.span.startLine}-L${entry.symbol.span.endLine}): ${entry.signature}`;
   const ranked = [...result.entries].sort((a, b) => {
@@ -119,6 +122,14 @@ export function formatSkeletonBounded(index: OsnovaIndex, result: SkeletonResult
     a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1));
   const omitted = result.entries.length - selected.length;
   return [header, ...selected.map(line), `omitted: ${omitted} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`].join("\n");
+}
+
+function compactField(value: string, maxCodeUnits: number): string {
+  if (value.length <= maxCodeUnits) return value;
+  if (maxCodeUnits <= 1) return "…".slice(0, maxCodeUnits);
+  const left = Math.ceil((maxCodeUnits - 1) / 2);
+  const right = Math.floor((maxCodeUnits - 1) / 2);
+  return `${value.slice(0, left)}…${right === 0 ? "" : value.slice(-right)}`;
 }
 
 export function formatCallers(result: CallersResult): string {
@@ -208,7 +219,6 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
   }
   const base = [
     "indexed-graph results; relationships use heuristic resolution, not type inference",
-    `${result.target.kind} ${result.target.qualifiedName}: ${result.hits.length} indexed edges`,
     "This does not prove absence of callers or that deletion is safe.",
   ];
   const hitBlocks = result.hits.map(callerHitLines);
@@ -216,10 +226,23 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
   const selectedHits: string[][] = [];
   const selectedUnresolved: string[][] = [];
   const footer = (): string => `omitted: ${hitBlocks.length - selectedHits.length} of ${hitBlocks.length} confirmed relationships; ${unresolvedBlocks.length - selectedUnresolved.length} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
-  const fits = (block: string[]): boolean => [...base, ...selectedHits.flat(), ...selectedUnresolved.flat(), ...block, footer()].join("\n").length <= maxCodeUnits;
-  for (const block of hitBlocks) if (fits(block)) selectedHits.push(block);
-  for (const block of unresolvedBlocks) if (fits(block)) selectedUnresolved.push(block);
-  return [...base, ...selectedHits.flat(), ...selectedUnresolved.flat(), footer()].join("\n");
+  const targetSuffix = `: ${result.hits.length} indexed edges`;
+  const fixedUnits = [...base, footer()].join("\n").length + targetSuffix.length + 2;
+  const target = `${result.target.kind} ${compactField(result.target.qualifiedName, Math.max(1, maxCodeUnits - fixedUnits - result.target.kind.length - 1))}${targetSuffix}`;
+  const fixed = [base[0] ?? "", target, base[1] ?? ""];
+  const unresolvedHeader = `unresolved evidence (${result.unresolved.length}); not confirmed relationships`;
+  const fits = (block: string[], unresolved: boolean): boolean => [
+    ...fixed, ...selectedHits.flat(),
+    ...(selectedUnresolved.length > 0 || unresolved ? [unresolvedHeader] : []),
+    ...selectedUnresolved.flat(), ...block, footer(),
+  ].join("\n").length <= maxCodeUnits;
+  for (const block of hitBlocks) if (fits(block, false)) selectedHits.push(block);
+  for (const block of unresolvedBlocks) if (fits(block, true)) selectedUnresolved.push(block);
+  return [
+    ...fixed, ...selectedHits.flat(),
+    ...(selectedUnresolved.length > 0 ? [unresolvedHeader, ...selectedUnresolved.flat()] : []),
+    footer(),
+  ].join("\n");
 }
 
 export function formatMap(result: MapResult): string {

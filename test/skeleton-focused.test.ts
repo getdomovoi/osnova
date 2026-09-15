@@ -36,3 +36,11 @@ it("preserves the complete source-order view when it fits", () => {
 it.each([0, 255, 1.5, NaN, Infinity])("rejects invalid skeleton budgets: %s", (budget) => {
   expect(() => formatSkeletonBounded(index, skeleton(index, "large.ts"), budget)).toThrow(RangeError);
 });
+
+it("compacts hostile file paths without clipping omission metadata", () => {
+  const result = skeleton(index, "large.ts");
+  const text = formatSkeletonBounded(index, { ...result, file: "nested/" + "x".repeat(2_000) + "/large.ts" }, 256);
+  expect(text.length).toBeLessThanOrEqual(256);
+  expect(text).toContain("omitted: 150 of 150 signatures");
+  expect(text).toContain("Use skeleton API");
+});

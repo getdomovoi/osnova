@@ -50,3 +50,16 @@ it("matches the complete formatter when the result fits", () => {
 it.each([0, 511, 1.5, NaN, Infinity])("rejects invalid caller budgets: %s", (budget) => {
   expect(() => formatCallersDetailedBounded(result, budget)).toThrow(RangeError);
 });
+
+it("labels selected unresolved blocks before their evidence lines", () => {
+  const unresolvedOnly: CallersDetailedResult = { ...result, hits: [], unresolved: unresolved.slice(0, 2) };
+  const text = formatCallersDetailedBounded(unresolvedOnly, 2_048);
+  expect(text.indexOf("unresolved evidence (2)")).toBeLessThan(text.indexOf("unknown0"));
+});
+
+it("compacts hostile target names while preserving exact omissions", () => {
+  const hostile: CallersDetailedResult = { ...result, target: { ...target, qualifiedName: "x".repeat(5_000) } };
+  const text = formatCallersDetailedBounded(hostile, 512);
+  expect(text.length).toBeLessThanOrEqual(512);
+  expect(text).toContain("omitted: 100 of 100 confirmed relationships; 100 of 100 unresolved evidence items");
+});
