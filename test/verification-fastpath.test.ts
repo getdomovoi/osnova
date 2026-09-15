@@ -69,6 +69,14 @@ it("falls back to hashing when the sidecar is corrupt or from another generation
   await refreshWorkspace(workspace, { cacheDir });
 });
 
+it.each(["null", "[]", "1", "\"text\""])("ignores valid JSON with an invalid sidecar shape: %s", async (content) => {
+  const built = await buildIndex(workspace, { cacheDir });
+  const verification = path.join(workspaceDirFor(cacheDir, built.root), "verification.json");
+  await fs.writeFile(verification, content);
+  expect(await loadVerification(cacheDir, built.root, indexGeneration(built))).toBeUndefined();
+  expect((await inspectFreshness(built, workspace)).hashedFiles).toBe(20);
+});
+
 it("hashes metadata changes but does not change generation for a touch", async () => {
   const built = await buildIndex(workspace, { cacheDir });
   const file = path.join(workspace, "file-0.ts");

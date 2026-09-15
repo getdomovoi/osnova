@@ -25,7 +25,9 @@ function validMetadata(value: unknown): value is FileMetadata {
 export async function loadVerification(cacheDir: string, root: string, generation: string): Promise<VerificationState | undefined> {
   const file = path.join(workspaceDirFor(cacheDir, root), "verification.json");
   try {
-    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>;
+    const value: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const parsed = value as Record<string, unknown>;
     const payload = { version: parsed.version, generation: parsed.generation, files: parsed.files };
     if (parsed.version !== verificationVersion || parsed.generation !== generation || parsed.checksum !== checksum(payload) ||
       typeof parsed.files !== "object" || parsed.files === null || Array.isArray(parsed.files)) return undefined;
