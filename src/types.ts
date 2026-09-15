@@ -1,4 +1,4 @@
-export const indexFormatVersion = 7 as const;
+export const indexFormatVersion = 8 as const;
 
 export type LanguageId =
   | "typescript"
