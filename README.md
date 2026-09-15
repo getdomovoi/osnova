@@ -136,6 +136,8 @@ Nested `.gitignore` and `.osnovaignore` rules are applied by directory with nega
 
 Successful full verification writes a generation-bound metadata sidecar with file size, nanosecond mtime/ctime, inode and device. Subsequent workspace refreshes can skip content reads when every field and the artifact generation still match; any path/metadata change hashes affected files, while missing/corrupt/mismatched sidecars fall back to full hashing. Public `freshness()` always hashes content. Structural generation IDs are cached from exact serialized bytes.
 
+Large cache artifacts use deterministic level-1 gzip to favor edited-refresh latency over maximum compression. On the pinned 61 MB logical artifact used for profiling, level 1 compressed in 153 ms versus 497 ms at the previous default level, while increasing stored size from 6.7 MB to 8.7 MB. Cache byte limits continue to apply to the stored payload.
+
 Scanning applies root and nested `.gitignore` plus optional `.osnovaignore` rules with scoped negation, skips dotfiles and configured output/dependency directories, and excludes files above 1 MB. Binary or non-UTF8 files get fallback cards with source hashes and empty text rather than searchable contents.
 
 ## Development

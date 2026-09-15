@@ -333,7 +333,7 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
       const gzipped = raw.length > GZIP_THRESHOLD_BYTES;
       const finalPath = path.join(dir, "index.json");
       tmpPath = `${finalPath}.tmp-${process.pid}-${randomUUID()}`;
-      const payload = gzipped ? gzipSync(raw) : raw;
+      const payload = gzipped ? gzipSync(raw, { level: 1 }) : raw;
       const limits = cacheLimits(policy);
       if (payload.length > limits.maxBytes || limits.maxWorkspaces === 0 || raw.length > MAX_ARTIFACT_BYTES) {
         throw new Error("osnova: artifact exceeds configured cache limits");

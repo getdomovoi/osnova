@@ -134,6 +134,7 @@ it("publishes compressed and plain generations through one atomic artifact path"
   const target = path.join(workspaceDirFor(cacheDir, root), "index.json");
   const compressed = await fs.readFile(target);
   expect([...compressed.subarray(0, 2)]).toEqual([0x1f, 0x8b]);
+  expect(compressed[8]).toBe(4);
   expect(serializeArtifact((await loadArtifact(root, cacheDir))!).toString()).toBe(serializeArtifact(large).toString());
   for (let i = 0; i < 6; i += 1) await fs.unlink(path.join(root, `${i}.txt`));
   const small = await refreshWorkspace(root, { cacheDir });
