@@ -1,4 +1,4 @@
-import type { Language, Node, Query, Tree } from "web-tree-sitter";
+import type { Node, Query, Tree } from "web-tree-sitter";
 import type { LanguageId, SymbolKind } from "../types.js";
 import { makeSignature, makeSpan } from "./adapter.js";
 import type { AdapterOutput, LanguageAdapter, RawDefinition, RawEdge } from "./adapter.js";
@@ -117,8 +117,4 @@ export function makeGenericAdapter(
       return { definitions, edges };
     },
   };
-}
-
-export function compileWith(language: Language): (source: string) => Query {
-  return (source) => language.query(source);
 }

@@ -119,7 +119,7 @@ describe("callers", () => {
 describe("map", () => {
   it("clusters directories and ranks hotspots", () => {
     const result = map(index);
-    expect(result.fileCount).toBe(16);
+    expect(result.fileCount).toBe(27);
     expect(result.clusters[0]?.dir).toBe("src/");
     expect(result.hotspots.length).toBeGreaterThan(0);
     expect(result.droppedHotspots).toBeGreaterThanOrEqual(0);

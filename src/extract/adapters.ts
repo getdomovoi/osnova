@@ -23,10 +23,19 @@ const adapters: Partial<Record<LanguageId, LanguageAdapter>> = {
   c_sharp: csharpAdapter,
 };
 
+const genericIgnoreCallNames: Partial<Record<LanguageId, ReadonlySet<string>>> = {
+  elixir: new Set(["def", "defp", "defmodule", "defmacro", "import", "alias", "require", "use"]),
+};
+
 for (const language of genericLanguages) {
   const query = queryFor(language);
   if (query === undefined) continue;
-  adapters[language] = makeGenericAdapter(language, query, (source) => loadedLanguage(language).query(source));
+  adapters[language] = makeGenericAdapter(
+    language,
+    query,
+    (source) => loadedLanguage(language).query(source),
+    genericIgnoreCallNames[language] ?? new Set(),
+  );
 }
 
 export function adapterFor(language: LanguageId): LanguageAdapter {

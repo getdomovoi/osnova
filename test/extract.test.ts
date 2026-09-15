@@ -126,6 +126,123 @@ describe("extraction adapters", () => {
     expect(calls.find((e) => e.toName === "printf")?.evidence).toMatchObject({ source: "syntax", resolution: { status: "unresolved" } });
   });
 
+  it("extracts cpp definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/shape.cpp")).toEqual([
+      "module:src/breadth/shape.cpp#geo",
+      "class:src/breadth/shape.cpp#geo.Shape",
+      "method:src/breadth/shape.cpp#geo.Shape.area",
+      "function:src/breadth/shape.cpp#describe",
+    ]);
+    expect(index.outgoing("src/breadth/shape.cpp#describe").map((e) => e.toName)).toContain("area");
+  });
+
+  it("extracts ruby definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.rb")).toEqual([
+      "module:src/breadth/greeter.rb#Greeting",
+      "class:src/breadth/greeter.rb#Greeting.Greeter",
+      "method:src/breadth/greeter.rb#Greeting.Greeter.greet",
+      "method:src/breadth/greeter.rb#Greeting.Greeter.format_name",
+      "function:src/breadth/greeter.rb#run",
+    ]);
+    expect(index.outgoing("src/breadth/greeter.rb#Greeting.Greeter.greet").map((e) => e.toName)).toContain("format_name");
+  });
+
+  it("extracts php definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.php")).toEqual([
+      "module:src/breadth/greeter.php#App",
+      "class:src/breadth/greeter.php#Greeter",
+      "method:src/breadth/greeter.php#Greeter.greet",
+      "method:src/breadth/greeter.php#Greeter.format",
+      "function:src/breadth/greeter.php#run",
+    ]);
+    expect(index.outgoing("src/breadth/greeter.php#Greeter.greet").map((e) => e.toName)).toContain("format");
+  });
+
+  it("extracts kotlin definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/Greeter.kt")).toEqual([
+      "class:src/breadth/Greeter.kt#Greeter",
+      "method:src/breadth/Greeter.kt#Greeter.greet",
+      "method:src/breadth/Greeter.kt#Greeter.format",
+      "function:src/breadth/Greeter.kt#run",
+    ]);
+    expect(index.outgoing("src/breadth/Greeter.kt#Greeter.greet").map((e) => e.toName)).toContain("format");
+  });
+
+  it("extracts swift definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/Greeter.swift")).toEqual([
+      "struct:src/breadth/Greeter.swift#Point",
+      "class:src/breadth/Greeter.swift#Greeter",
+      "method:src/breadth/Greeter.swift#Greeter.greet",
+      "method:src/breadth/Greeter.swift#Greeter.format",
+      "function:src/breadth/Greeter.swift#run",
+    ]);
+    expect(index.outgoing("src/breadth/Greeter.swift#Greeter.greet").map((e) => e.toName)).toContain("format");
+  });
+
+  it("extracts scala definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/Greeter.scala")).toEqual([
+      "class:src/breadth/Greeter.scala#Runner",
+      "method:src/breadth/Greeter.scala#Runner.run",
+      "class:src/breadth/Greeter.scala#Greeter",
+      "method:src/breadth/Greeter.scala#Greeter.greet",
+      "method:src/breadth/Greeter.scala#Greeter.format",
+      "trait:src/breadth/Greeter.scala#Named",
+      "method:src/breadth/Greeter.scala#Named.name",
+    ]);
+    expect(index.outgoing("src/breadth/Greeter.scala#Greeter.greet").map((e) => e.toName)).toContain("format");
+  });
+
+  it("extracts dart definitions through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.dart")).toEqual([
+      "class:src/breadth/greeter.dart#Greeter",
+      "method:src/breadth/greeter.dart#Greeter.greet",
+      "method:src/breadth/greeter.dart#Greeter.format",
+      "function:src/breadth/greeter.dart#run",
+    ]);
+  });
+
+  it("extracts elixir definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.ex")).toEqual([
+      "module:src/breadth/greeter.ex#Greeter",
+      "function:src/breadth/greeter.ex#Greeter.greet",
+      "function:src/breadth/greeter.ex#Greeter.format",
+    ]);
+    const greetCalls = index.outgoing("src/breadth/greeter.ex#Greeter.greet").map((e) => e.toName);
+    expect(greetCalls).toContain("format");
+    const allCalls = index.edges.filter((e) => e.fromFile === "src/breadth/greeter.ex" && e.kind === "calls");
+    expect(allCalls.map((e) => e.toName)).not.toContain("def");
+    expect(allCalls.map((e) => e.toName)).not.toContain("defp");
+    expect(allCalls.map((e) => e.toName)).not.toContain("defmodule");
+  });
+
+  it("extracts ocaml definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.ml")).toEqual([
+      "module:src/breadth/greeter.ml#Greeter",
+      "function:src/breadth/greeter.ml#Greeter.format",
+      "function:src/breadth/greeter.ml#Greeter.greet",
+      "function:src/breadth/greeter.ml#run",
+    ]);
+    expect(index.outgoing("src/breadth/greeter.ml#Greeter.greet").map((e) => e.toName)).toContain("format");
+  });
+
+  it("extracts zig definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.zig")).toEqual([
+      "struct:src/breadth/greeter.zig#Greeter",
+      "method:src/breadth/greeter.zig#Greeter.greet",
+      "method:src/breadth/greeter.zig#Greeter.format",
+      "function:src/breadth/greeter.zig#run",
+    ]);
+    expect(index.outgoing("src/breadth/greeter.zig#Greeter.greet").map((e) => e.toName)).toContain("format");
+  });
+
+  it("extracts bash definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.sh")).toEqual([
+      "function:src/breadth/greeter.sh#greet",
+      "function:src/breadth/greeter.sh#format",
+    ]);
+    expect(index.outgoing("src/breadth/greeter.sh#greet").map((e) => e.toName)).toContain("format");
+  });
+
   it("gives unindexed files a bare fallback card", () => {
     const card = index.files.get("docs/notes.txt");
     expect(card).toBeDefined();
