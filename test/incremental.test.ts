@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { applyChanges, freshness } from "../src/index/incremental.js";
-import { serializeArtifact, serializeSections } from "../src/index/serialize.js";
+import { saveArtifact, serializeArtifact, serializeSections } from "../src/index/serialize.js";
 import { serializeText } from "../src/index/textStore.js";
 import type { OsnovaIndex } from "../src/types.js";
 
@@ -61,6 +61,8 @@ describe("deterministic index", () => {
 describe("incremental equals full", () => {
   it("randomized edit sequences converge to identical artifacts", async () => {
     const dir = copyFixture();
+    const incrementalCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-determinism-inc-"));
+    const freshCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-determinism-fresh-"));
     try {
       let seed = 0x5eed1234;
       const rand = (n: number): number => {
@@ -101,9 +103,22 @@ describe("incremental equals full", () => {
         const incrementalEdges = serializeSections(index).edges.bytes;
         const fullEdges = serializeSections(await buildIndex(dir)).edges.bytes;
         expect(incrementalEdges.equals(fullEdges)).toBe(true);
+
+        const publishedIncrementalPath = await saveArtifact(index, incrementalCacheDir);
+        const publishedFreshPath = await saveArtifact(await buildIndex(dir), freshCacheDir);
+        const publishedIncrementalDir = path.dirname(publishedIncrementalPath);
+        const publishedFreshDir = path.dirname(publishedFreshPath);
+        const publishedIncrementalText = fs.readFileSync(path.join(publishedIncrementalDir, "text.bin"));
+        const publishedFreshText = fs.readFileSync(path.join(publishedFreshDir, "text.bin"));
+        expect(publishedIncrementalText.equals(publishedFreshText), `step ${step} published text`).toBe(true);
+        const publishedIncrementalEdges = fs.readFileSync(path.join(publishedIncrementalDir, "edges.json"));
+        const publishedFreshEdges = fs.readFileSync(path.join(publishedFreshDir, "edges.json"));
+        expect(publishedIncrementalEdges.equals(publishedFreshEdges), `step ${step} published edges`).toBe(true);
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(incrementalCacheDir, { recursive: true, force: true });
+      fs.rmSync(freshCacheDir, { recursive: true, force: true });
     }
   });
 

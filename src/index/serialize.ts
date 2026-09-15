@@ -25,8 +25,8 @@ import { IndexingError } from "./diagnostics.js";
 import { rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
-import { lazyTextCard, serializeText } from "./textStore.js";
-import type { TextLayout } from "./textStore.js";
+import { lazyTextCard, previousTextFrom, rebindPublishedText, serializeText } from "./textStore.js";
+import type { PreviousText, TextLayout } from "./textStore.js";
 import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
@@ -43,8 +43,6 @@ class ArtifactVersionError extends Error {
     super(`osnova: index artifact format version ${String(version)} != ${indexFormatVersion}; rebuild the index`);
   }
 }
-
-type PreviousText = never;
 
 interface SerializedSpan {
   readonly s: number;
@@ -97,7 +95,6 @@ export function serializeSections(
   index: OsnovaIndex,
   previousText?: PreviousText | undefined,
 ): { core: Buffer; edges: EdgeLayout; text: TextLayout; paths: string[] } {
-  void previousText;
   const paths = [...index.files.keys()].sort(compareStr);
   const nameSet = new Set<string>();
   for (const card of index.files.values()) {
@@ -105,7 +102,7 @@ export function serializeSections(
   }
   const names = [...nameSet].sort(compareStr);
   const nameIndex = new Map(names.map((n, i) => [n, i]));
-  const text = serializeText(index);
+  const text = serializeText(index, previousText);
   const edges = serializeEdges(index.edges, paths);
   const files: SerializedFile[] = paths.map((p, i) => {
     const card = index.files.get(p)!;
@@ -331,9 +328,13 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
     try {
       await fs.mkdir(dir, { recursive: true });
       if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error("cache workspace must not be a symlink");
-      const { core: raw, edges, text: layout } = serializeSections(index);
-      rememberIndexGeneration(index, raw);
       const textFinal = path.join(dir, "text.bin");
+      const previous = previousTextFrom(index);
+      const { core: raw, edges, text: layout } = serializeSections(
+        index,
+        previous !== undefined && previous.path === textFinal ? previous : undefined,
+      );
+      rememberIndexGeneration(index, raw);
       textTmp = `${textFinal}.tmp-${process.pid}-${randomUUID()}`;
       const edgesFinal = path.join(dir, "edges.json");
       edgesTmp = `${edgesFinal}.tmp-${process.pid}-${randomUUID()}`;
@@ -354,6 +355,7 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
       await fs.writeFile(textTmp, layout.bytes, { flag: "wx" });
       await fs.rename(textTmp, textFinal);
       textTmp = undefined;
+      rebindPublishedText(index, textFinal, layout.offsets);
       await fs.writeFile(edgesTmp, edgesPayload, { flag: "wx" });
       await fs.rename(edgesTmp, edgesFinal);
       edgesTmp = undefined;
