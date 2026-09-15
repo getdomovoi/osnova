@@ -12,12 +12,13 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
+import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
 const OSNOVA_VERSION = "0.1.0";
 const maximumMcpSkeletonCodeUnits = 4_096;
+const maximumMcpCallersCodeUnits = 2_048;
 
 const toolDefinitions = [
   {
@@ -65,7 +66,7 @@ const toolDefinitions = [
   {
     name: "osnova_callers",
     description:
-      "Direct or transitive indexed callers/callees (direction=in default). Lists candidates for ambiguous names and unresolved evidence separately. Relationships use heuristic resolution; absence does not prove deletion is safe.",
+      "Direct or transitive indexed callers/callees (direction=in default). MCP output prioritizes confirmed evidence under 2048 code units with exact omission counts; callersDetailed returns the complete structured result. Absence does not prove deletion is safe.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -162,7 +163,8 @@ export function createOsnovaMcpServer(
             ...(direction !== undefined ? { direction } : {}),
             ...(depthValue !== undefined ? { depth: depthValue } : {}),
           });
-          return respond(formatCallersDetailed(result));
+          const available = maximumMcpCallersCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}`);
         }
         case "osnova_map": {
           const card = await renderMapCard(index, {

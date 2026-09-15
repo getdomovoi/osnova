@@ -7,6 +7,8 @@ import type {
   MapResult,
   SkeletonResult,
   OsnovaIndex,
+  CallerEvidenceHit,
+  OsnovaEdge,
 } from "../types.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
@@ -148,33 +150,76 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
   } else {
     lines.push(`${result.target.kind} ${result.target.qualifiedName}: ${result.hits.length} indexed edges`);
     for (const hit of result.hits) {
-      const evidence = hit.edge.evidence;
-      const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
-        ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
-      lines.push(`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`);
-      if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
-        if (evidence.resolution.method === "receiver-hint") {
-          const receiver = evidence.resolution.receiver;
-          lines.push(`  receiver hint: ${receiver.classSymbol} (${receiver.mode}, ${receiver.basis}); not runtime type proof`);
-        }
-        for (const hop of evidence.resolution.via ?? []) lines.push(`  via ${hop.file}:${hop.line} ${hop.exportedName} -> ${hop.targetFile} (export ${hop.importedName})`);
-      }
+      lines.push(...callerHitLines(hit));
     }
   }
   lines.push("This does not prove absence of callers or that deletion is safe.");
   if (result.unresolved.length > 0) {
     lines.push(`unresolved evidence (${result.unresolved.length}); not confirmed relationships`);
     for (const { edge, depth } of result.unresolved) {
-      lines.push(`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`);
-      if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "unresolved") {
-        lines.push(`  reason: ${edge.evidence.resolution.reason}`);
-      }
-      if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous") {
-        lines.push(`  ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`);
-      }
+      lines.push(...unresolvedCallerLines(edge, depth));
     }
   }
   return lines.join("\n");
+}
+
+function callerHitLines(hit: CallerEvidenceHit): string[] {
+  const evidence = hit.edge.evidence;
+  const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
+    ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
+  const lines = [`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`];
+  if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
+    if (evidence.resolution.method === "receiver-hint") {
+      const receiver = evidence.resolution.receiver;
+      lines.push(`  receiver hint: ${receiver.classSymbol} (${receiver.mode}, ${receiver.basis}); not runtime type proof`);
+    }
+    for (const hop of evidence.resolution.via ?? []) lines.push(`  via ${hop.file}:${hop.line} ${hop.exportedName} -> ${hop.targetFile} (export ${hop.importedName})`);
+  }
+  return lines;
+}
+
+function unresolvedCallerLines(edge: OsnovaEdge, depth: number): string[] {
+  const lines = [`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`];
+  if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "unresolved") {
+    lines.push(`  reason: ${edge.evidence.resolution.reason}`);
+  }
+  if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous") {
+    lines.push(`  ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`);
+  }
+  return lines;
+}
+
+export function formatCallersDetailedBounded(result: CallersDetailedResult, maxCodeUnits: number): string {
+  if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 512) {
+    throw new RangeError("osnova: caller budget must be a safe integer of at least 512 code units");
+  }
+  const complete = formatCallersDetailed(result);
+  if (complete.length <= maxCodeUnits) return complete;
+  if (result.status === "ambiguous") {
+    const header = "ambiguous symbol: use a qualified name to select a target";
+    const selected: string[] = [];
+    for (const symbol of result.candidates) {
+      const line = `${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}`;
+      const omitted = result.candidates.length - selected.length - 1;
+      const footer = `omitted: ${omitted} of ${result.candidates.length} ambiguous candidates. Use callersDetailed API for the complete candidate list.`;
+      if ([header, ...selected, line, footer].join("\n").length <= maxCodeUnits) selected.push(line);
+    }
+    return [header, ...selected, `omitted: ${result.candidates.length - selected.length} of ${result.candidates.length} ambiguous candidates. Use callersDetailed API for the complete candidate list.`].join("\n");
+  }
+  const base = [
+    "indexed-graph results; relationships use heuristic resolution, not type inference",
+    `${result.target.kind} ${result.target.qualifiedName}: ${result.hits.length} indexed edges`,
+    "This does not prove absence of callers or that deletion is safe.",
+  ];
+  const hitBlocks = result.hits.map(callerHitLines);
+  const unresolvedBlocks = result.unresolved.map(({ edge, depth }) => unresolvedCallerLines(edge, depth));
+  const selectedHits: string[][] = [];
+  const selectedUnresolved: string[][] = [];
+  const footer = (): string => `omitted: ${hitBlocks.length - selectedHits.length} of ${hitBlocks.length} confirmed relationships; ${unresolvedBlocks.length - selectedUnresolved.length} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
+  const fits = (block: string[]): boolean => [...base, ...selectedHits.flat(), ...selectedUnresolved.flat(), ...block, footer()].join("\n").length <= maxCodeUnits;
+  for (const block of hitBlocks) if (fits(block)) selectedHits.push(block);
+  for (const block of unresolvedBlocks) if (fits(block)) selectedUnresolved.push(block);
+  return [...base, ...selectedHits.flat(), ...selectedUnresolved.flat(), footer()].join("\n");
 }
 
 export function formatMap(result: MapResult): string {

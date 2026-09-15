@@ -131,4 +131,21 @@ describe("mcp stdio server", () => {
       await client.close();
     }
   }, 60_000);
+
+  it("bounds large caller responses with relationship omission counts", async () => {
+    write("src/caller-target.ts", "export function callerTarget(): number { return 1; }\n");
+    for (let index = 0; index < 100; index += 1) {
+      write(`src/caller-${index}.ts`, `import { callerTarget } from "./caller-target.js";\nexport function caller${index}(): number { return callerTarget(); }\n`);
+    }
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_callers", { symbol: "src/caller-target.ts#callerTarget" });
+      expect(text.length).toBeLessThanOrEqual(2_048);
+      expect(text).toMatch(/omitted: \d+ of 100 confirmed relationships/);
+      expect(text).toContain("Use callersDetailed API for complete structured results");
+      expect(text).not.toContain("[output truncated:");
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
 });
