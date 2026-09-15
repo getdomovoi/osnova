@@ -63,6 +63,14 @@ describe("diff impact evidence", () => {
     expect(result.changes[0]?.uncertainty).toContain("symbol-identity-inferred");
   });
 
+  it("accepts blank context lines whose leading space was stripped", () => {
+    const base = index([card("a.ts", ["old", "stable"])]);
+    const current = index([card("a.ts", ["newName", "stable"])]);
+    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,3 @@\n-function old() { return 1; }\n+function newName() { return 1; }\n\n function stable() { return 1; }\n";
+    const result = impact(base, current, { diff });
+    expect(result.changes.map((change) => change.kind)).toEqual(["renamed"]);
+  });
+
   it("compares spans without marking unchanged siblings", () => {
     const base = index([card("a.ts", ["work", "stable"])]);
     const current = index([card("a.ts", ["work", "stable"], "function work() { return 2; }\nfunction stable() { return 1; }")]);

@@ -144,12 +144,14 @@ function parseDiff(diff: string): DiffFile[] {
   const finish = (): void => {
     if (oldLeft !== 0 || newLeft !== 0) throw new Error("osnova: incomplete unified diff hunk");
   };
-  for (const line of diff.split(/\r?\n/)) {
+  const lines = diff.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  for (const line of lines) {
     if (oldLeft > 0 || newLeft > 0) {
       if (line.startsWith("\\ No newline")) continue;
       if (line.startsWith("-")) { file?.oldLines.add(oldLine++); oldLeft--; }
       else if (line.startsWith("+")) { file?.newLines.add(newLine++); newLeft--; }
-      else if (line.startsWith(" ")) { oldLine++; newLine++; oldLeft--; newLeft--; }
+      else if (line.startsWith(" ") || line === "") { oldLine++; newLine++; oldLeft--; newLeft--; }
       else throw new Error("osnova: invalid unified diff hunk line");
       if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts");
       continue;
