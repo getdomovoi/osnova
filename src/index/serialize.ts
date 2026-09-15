@@ -27,6 +27,7 @@ import { rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
 import { lazyTextCard, serializeText } from "./textStore.js";
+import type { TextLayout } from "./textStore.js";
 import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
@@ -97,7 +98,7 @@ interface SerializedArtifact {
   readonly edges: readonly SerializedEdge[];
 }
 
-export function serializeArtifact(index: OsnovaIndex): Buffer {
+function serializeArtifactWithText(index: OsnovaIndex): { core: Buffer; text: TextLayout } {
   const layout = serializeText(index);
   const files: SerializedFile[] = [];
   for (const card of [...index.files.values()].sort((a, b) => (a.path < b.path ? -1 : 1))) {
@@ -155,7 +156,11 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
     files,
     edges,
   };
-  return Buffer.from(JSON.stringify(artifact), "utf8");
+  return { core: Buffer.from(JSON.stringify(artifact), "utf8"), text: layout };
+}
+
+export function serializeArtifact(index: OsnovaIndex): Buffer {
+  return serializeArtifactWithText(index).core;
 }
 
 export function deserializeArtifact(data: string, textPath: string | undefined, textBytes?: Buffer): OsnovaIndexImpl {
@@ -352,9 +357,8 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
     try {
       await fs.mkdir(dir, { recursive: true });
       if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error("cache workspace must not be a symlink");
-    const raw = serializeArtifact(index);
-    rememberIndexGeneration(index, raw);
-      const layout = serializeText(index);
+      const { core: raw, text: layout } = serializeArtifactWithText(index);
+      rememberIndexGeneration(index, raw);
       const textFinal = path.join(dir, "text.bin");
       textTmp = `${textFinal}.tmp-${process.pid}-${randomUUID()}`;
       const gzipped = raw.length > GZIP_THRESHOLD_BYTES;
