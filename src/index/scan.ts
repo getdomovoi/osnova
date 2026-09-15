@@ -91,20 +91,20 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
 
   const walk = async (dir: string, relDir: string, inherited: readonly { base: string; rules: Ignore }[]): Promise<void> => {
     let entries;
+    const rules = ignore();
     try {
-      entries = await dirGate(() => fs.readdir(dir, { withFileTypes: true }));
+      entries = await dirGate(async () => {
+        const dirEntries = await fs.readdir(dir, { withFileTypes: true });
+        const names = new Set(dirEntries.map((entry) => entry.name));
+        for (const name of [".gitignore", ".osnovaignore"]) {
+          if (names.has(name)) rules.add(await loadIgnoreFile(path.join(dir, name)));
+        }
+        return dirEntries;
+      });
     } catch (error) {
+      if (error instanceof IndexingError) { fail(error.diagnostic, error.cause); return; }
       fail({ phase: "scan", path: relDir || ".", code: "directory-unreadable" }, error);
       return;
-    }
-    const names = new Set(entries.map((entry) => entry.name));
-    const rules = ignore();
-    for (const name of [".gitignore", ".osnovaignore"]) {
-      if (!names.has(name)) continue;
-      try { rules.add(await loadIgnoreFile(path.join(dir, name))); } catch (error) {
-        if (error instanceof IndexingError) { fail(error.diagnostic, error.cause); return; }
-        throw error;
-      }
     }
     const layers = [...inherited, { base: relDir === "" ? "" : `${relDir}/`, rules }];
     const ignored = (relative: string): boolean => {
@@ -135,7 +135,14 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
         if (entry.name.startsWith(".")) continue;
         pending.push(dirGate(async () => {
           let stat;
-          try { stat = await fs.stat(abs); } catch { return; }
+          try {
+            stat = await fs.stat(abs);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === "ENOENT" || code === "ENOTDIR") return;
+            fail({ phase: "scan", path: rel, code: "stat-failed" }, error);
+            return;
+          }
           if (!stat.isDirectory()) return;
           if (ignored(`${rel}/`)) return;
           fail({ phase: "read", path: rel, code: "symlink-not-indexed" }, undefined);

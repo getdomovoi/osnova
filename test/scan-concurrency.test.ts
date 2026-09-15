@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,48 @@ describe("scan", () => {
     } finally {
       await fs.chmod(path.join(root, "pkg5", "src"), 0o755);
       await fs.chmod(path.join(root, "pkg3", "src"), 0o755);
+    }
+  });
+
+  it("bounds concurrent ignore-file reads to the directory gate", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-scan-ignore-"));
+    dirs.push(root);
+    for (let d = 0; d < 40; d += 1) {
+      const dir = path.join(root, `dir${d}`);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, ".gitignore"), "*.log\n");
+    }
+    const originalReadFile = fs.readFile.bind(fs);
+    let active = 0;
+    let max = 0;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+      active += 1;
+      max = Math.max(max, active);
+      try {
+        return await originalReadFile(...args);
+      } finally {
+        active -= 1;
+      }
+    });
+    try {
+      await scanFiles(root);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(max).toBeLessThanOrEqual(8);
+  });
+
+  it("surfaces a permission failure resolving a symlink target as stat-failed", async () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-scan-symstat-"));
+    dirs.push(root);
+    await fs.mkdir(path.join(root, ".blocked", "inner"), { recursive: true });
+    await fs.symlink(path.join(root, ".blocked", "inner"), path.join(root, "link"));
+    await fs.chmod(path.join(root, ".blocked"), 0o000);
+    try {
+      await expect(scanFiles(root)).rejects.toMatchObject({ diagnostic: { code: "stat-failed", path: "link" } });
+    } finally {
+      await fs.chmod(path.join(root, ".blocked"), 0o755);
     }
   });
 });
