@@ -6,12 +6,14 @@ import { buildIndex } from "../dist/index.js";
 import { applyChanges, freshness } from "../dist/index.js";
 import { serializeArtifact } from "../dist/index.js";
 import { loadIndex } from "../dist/index.js";
+import { scanFiles } from "../dist/index.js";
 
 const FILE_COUNT = 300;
 const BUDGET_BUILD_MS = 30_000;
 const BUDGET_INCREMENTAL_MS = 5_000;
 const BUDGET_HEAP_BYTES = 512 * 1024 * 1024;
 const BUDGET_CORE_LOAD_MS = 1_000;
+const BUDGET_SCAN_MS = 500;
 
 function generate(root) {
   fs.rmSync(root, { recursive: true, force: true });
@@ -66,7 +68,13 @@ async function main() {
   index = await applyChanges(index, repo, [...report.added, ...report.changed, ...report.deleted]);
   const incrementalMs = performance.now() - refreshStart;
 
+  const scanStart = performance.now();
+  const scan = await scanFiles(repo);
+  const scanMs = performance.now() - scanStart;
+
   const failures = [];
+  if (scan.paths.length !== FILE_COUNT) failures.push(`scan found ${scan.paths.length} files, expected ${FILE_COUNT}`);
+  if (scanMs > BUDGET_SCAN_MS) failures.push(`scan ${scanMs.toFixed(0)}ms > ${BUDGET_SCAN_MS}ms`);
 
   const loadStart = performance.now();
   const reloaded = await loadIndex(repo, { cacheDir });
@@ -74,7 +82,7 @@ async function main() {
   if (reloaded === undefined) failures.push("core load returned undefined");
 
   console.log(`files: ${index.files.size} symbols: ${index.symbols.size} edges: ${index.edges.length}`);
-  console.log(`build: ${buildMs.toFixed(0)}ms incremental: ${incrementalMs.toFixed(0)}ms coreLoad: ${coreLoadMs.toFixed(0)}ms artifact: ${(artifactBytes / 1024).toFixed(0)}KiB heap: ${(heapUsed / 1024 / 1024).toFixed(0)}MiB`);
+  console.log(`build: ${buildMs.toFixed(0)}ms incremental: ${incrementalMs.toFixed(0)}ms coreLoad: ${coreLoadMs.toFixed(0)}ms scan: ${scanMs.toFixed(0)}ms artifact: ${(artifactBytes / 1024).toFixed(0)}KiB heap: ${(heapUsed / 1024 / 1024).toFixed(0)}MiB`);
 
   if (buildMs > BUDGET_BUILD_MS) failures.push(`build ${buildMs.toFixed(0)}ms > ${BUDGET_BUILD_MS}ms`);
   if (incrementalMs > BUDGET_INCREMENTAL_MS) failures.push(`incremental ${incrementalMs.toFixed(0)}ms > ${BUDGET_INCREMENTAL_MS}ms`);

@@ -60,8 +60,9 @@ it("never follows nested source or ignore symlinks outside the workspace", async
   await fs.writeFile(path.join(outside, "secret.ts"), "export const secret = 1;\n");
   const initial = await buildIndex(root, { cacheDir });
   await fs.symlink(outside, path.join(root, "linked"), "dir");
-  expect((await scanFiles(root)).paths).toEqual([]);
+  await expect(scanFiles(root)).rejects.toThrow(/symlink/);
   await expect(applyChanges(initial, root, ["linked/secret.ts"])).rejects.toThrow(/symlink/);
+  await fs.rm(path.join(root, "linked"));
   await fs.symlink(path.join(outside, "secret.ts"), path.join(root, "nested/.gitignore"));
   await expect(scanFiles(root)).rejects.toThrow(/ignore-unreadable/);
 });

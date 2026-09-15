@@ -6,7 +6,7 @@ import ignore from "ignore";
 import type { Ignore } from "ignore";
 import { maximumIndexedFileSizeBytes } from "../types.js";
 import { IndexingError } from "./diagnostics.js";
-import { canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
+import { canonicalWorkspaceRoot } from "./workspace.js";
 
 const DEFAULT_SKIP_DIRS = new Set([
   ".git",
@@ -69,14 +69,43 @@ export function sameFileMetadata(a: FileMetadata | undefined, b: FileMetadata | 
 export async function scanFiles(absRoot: string, cacheDir?: string): Promise<ScanResult> {
   absRoot = await canonicalWorkspaceRoot(absRoot);
 
-  const paths: string[] = [];
-  const metadata = new Map<string, FileMetadata>();
+  const errors: IndexingError[] = [];
+  const results: Array<{ rel: string; metadata: FileMetadata }> = [];
   let truncated = 0;
 
+  const limited = (limit: number) => {
+    let active = 0;
+    const queue: Array<() => void> = [];
+    return async <T>(job: () => Promise<T>): Promise<T> => {
+      if (active >= limit) await new Promise<void>((resolve) => queue.push(resolve));
+      active += 1;
+      try { return await job(); } finally { active -= 1; queue.shift()?.(); }
+    };
+  };
+  const dirGate = limited(8);
+  const fileGate = limited(64);
+
+  const fail = (diagnostic: IndexingError["diagnostic"], cause: unknown): void => {
+    errors.push(new IndexingError(diagnostic, cause));
+  };
+
   const walk = async (dir: string, relDir: string, inherited: readonly { base: string; rules: Ignore }[]): Promise<void> => {
-    if (relDir !== "") dir = await workspaceFilePath(absRoot, relDir);
-    const rules = ignore().add(await loadIgnoreFile(path.join(dir, ".gitignore")))
-      .add(await loadIgnoreFile(path.join(dir, ".osnovaignore")));
+    let entries;
+    try {
+      entries = await dirGate(() => fs.readdir(dir, { withFileTypes: true }));
+    } catch (error) {
+      fail({ phase: "scan", path: relDir || ".", code: "directory-unreadable" }, error);
+      return;
+    }
+    const names = new Set(entries.map((entry) => entry.name));
+    const rules = ignore();
+    for (const name of [".gitignore", ".osnovaignore"]) {
+      if (!names.has(name)) continue;
+      try { rules.add(await loadIgnoreFile(path.join(dir, name))); } catch (error) {
+        if (error instanceof IndexingError) { fail(error.diagnostic, error.cause); return; }
+        throw error;
+      }
+    }
     const layers = [...inherited, { base: relDir === "" ? "" : `${relDir}/`, rules }];
     const ignored = (relative: string): boolean => {
       let excluded = false;
@@ -87,44 +116,52 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
       }
       return excluded;
     };
-    let entries;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      throw new IndexingError({ phase: "scan", path: relDir || ".", code: "directory-unreadable" }, error);
-    }
+    const pending: Promise<void>[] = [];
     for (const entry of entries) {
       const rel = relDir.length > 0 ? `${relDir}/${entry.name}` : entry.name;
+      const abs = path.join(dir, entry.name);
+      const isCacheEntry = abs === cacheDir || (dir === cacheDir && /^[0-9a-f]{16}(?:\.lock(?:\.abandoned-[0-9a-f-]+)?)?$/.test(entry.name));
       if (entry.isDirectory()) {
-        if (path.join(dir, entry.name) === cacheDir || (dir === cacheDir && /^[0-9a-f]{16}(?:\.lock(?:\.abandoned-[0-9a-f-]+)?)?$/.test(entry.name))) continue;
+        if (isCacheEntry) continue;
         if (DEFAULT_SKIP_DIRS.has(entry.name)) continue;
-        if (entry.name.startsWith(".") && entry.name !== ".") continue;
+        if (entry.name.startsWith(".")) continue;
         if (ignored(`${rel}/`)) continue;
-        await walk(path.join(dir, entry.name), rel, layers);
+        pending.push(walk(abs, rel, layers));
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        if (isCacheEntry) continue;
+        if (DEFAULT_SKIP_DIRS.has(entry.name)) continue;
+        if (entry.name.startsWith(".")) continue;
+        pending.push(dirGate(async () => {
+          let stat;
+          try { stat = await fs.stat(abs); } catch { return; }
+          if (!stat.isDirectory()) return;
+          if (ignored(`${rel}/`)) return;
+          fail({ phase: "read", path: rel, code: "symlink-not-indexed" }, undefined);
+        }));
         continue;
       }
       if (!entry.isFile()) continue;
       if (entry.name.startsWith(".")) continue;
       if (ignored(rel)) continue;
-      let stat;
-      try {
-        stat = await fs.stat(path.join(dir, entry.name), { bigint: true });
-      } catch (error) {
-        throw new IndexingError({ phase: "scan", path: rel, code: "stat-failed" }, error);
-      }
-      if (stat.size > BigInt(maximumIndexedFileSizeBytes)) {
-        truncated += 1;
-        continue;
-      }
-      paths.push(rel);
-      metadata.set(rel, {
-        size: Number(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs),
-        ino: String(stat.ino), dev: String(stat.dev),
-      });
+      pending.push(fileGate(async () => {
+        let stat;
+        try { stat = await fs.stat(abs, { bigint: true }); } catch (error) { fail({ phase: "scan", path: rel, code: "stat-failed" }, error); return; }
+        if (stat.size > BigInt(maximumIndexedFileSizeBytes)) { truncated += 1; return; }
+        results.push({ rel, metadata: { size: Number(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs), ino: String(stat.ino), dev: String(stat.dev) } });
+      }));
     }
+    await Promise.all(pending);
   };
 
   await walk(absRoot, "", []);
-  paths.sort();
+  if (errors.length > 0) {
+    errors.sort((a, b) => (a.diagnostic.path < b.diagnostic.path ? -1 : a.diagnostic.path > b.diagnostic.path ? 1 : 0));
+    throw errors[0];
+  }
+  results.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  const paths = results.map((item) => item.rel);
+  const metadata = new Map(results.map((item) => [item.rel, item.metadata]));
   return { paths, truncated, metadata };
 }
