@@ -5,11 +5,13 @@ import path from "node:path";
 import { buildIndex } from "../dist/index.js";
 import { applyChanges, freshness } from "../dist/index.js";
 import { serializeArtifact } from "../dist/index.js";
+import { loadIndex } from "../dist/index.js";
 
 const FILE_COUNT = 300;
 const BUDGET_BUILD_MS = 30_000;
 const BUDGET_INCREMENTAL_MS = 5_000;
 const BUDGET_HEAP_BYTES = 512 * 1024 * 1024;
+const BUDGET_CORE_LOAD_MS = 1_000;
 
 function generate(root) {
   fs.rmSync(root, { recursive: true, force: true });
@@ -64,12 +66,19 @@ async function main() {
   index = await applyChanges(index, repo, [...report.added, ...report.changed, ...report.deleted]);
   const incrementalMs = performance.now() - refreshStart;
 
-  console.log(`files: ${index.files.size} symbols: ${index.symbols.size} edges: ${index.edges.length}`);
-  console.log(`build: ${buildMs.toFixed(0)}ms incremental: ${incrementalMs.toFixed(0)}ms artifact: ${(artifactBytes / 1024).toFixed(0)}KiB heap: ${(heapUsed / 1024 / 1024).toFixed(0)}MiB`);
-
   const failures = [];
+
+  const loadStart = performance.now();
+  const reloaded = await loadIndex(repo, { cacheDir });
+  const coreLoadMs = performance.now() - loadStart;
+  if (reloaded === undefined) failures.push("core load returned undefined");
+
+  console.log(`files: ${index.files.size} symbols: ${index.symbols.size} edges: ${index.edges.length}`);
+  console.log(`build: ${buildMs.toFixed(0)}ms incremental: ${incrementalMs.toFixed(0)}ms coreLoad: ${coreLoadMs.toFixed(0)}ms artifact: ${(artifactBytes / 1024).toFixed(0)}KiB heap: ${(heapUsed / 1024 / 1024).toFixed(0)}MiB`);
+
   if (buildMs > BUDGET_BUILD_MS) failures.push(`build ${buildMs.toFixed(0)}ms > ${BUDGET_BUILD_MS}ms`);
   if (incrementalMs > BUDGET_INCREMENTAL_MS) failures.push(`incremental ${incrementalMs.toFixed(0)}ms > ${BUDGET_INCREMENTAL_MS}ms`);
+  if (coreLoadMs > BUDGET_CORE_LOAD_MS) failures.push(`coreLoad ${coreLoadMs.toFixed(0)}ms > ${BUDGET_CORE_LOAD_MS}ms`);
   if (heapUsed > BUDGET_HEAP_BYTES) failures.push(`heap ${(heapUsed / 1048576).toFixed(0)}MiB > ${BUDGET_HEAP_BYTES / 1048576}MiB`);
   if (changed.length > 0 && report.changed.length < changed.length) failures.push("freshness missed edits");
 

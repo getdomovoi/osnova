@@ -55,7 +55,7 @@ interface SerializedSymbol {
   readonly kind: SymbolKind;
   readonly span: SerializedSpan;
   readonly signature: string;
-  readonly exportedNames: readonly string[];
+  readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
 }
 
@@ -118,7 +118,7 @@ export function serializeArtifact(index: OsnovaIndex): Buffer {
           ec: symbol.span.endCol,
         },
         signature: symbol.signature,
-        exportedNames: symbol.exportedNames ?? [],
+        ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
       })),
       diagnostics: card.diagnostics ?? [],
@@ -205,7 +205,7 @@ export function deserializeArtifact(data: string, textPath: string | undefined, 
         !positiveInteger(symbol.span.e) || symbol.span.e < symbol.span.s || symbol.span.e > file.lineCount ||
         !nonnegativeInteger(symbol.span.sc) || !nonnegativeInteger(symbol.span.ec) ||
         (symbol.span.s === symbol.span.e && symbol.span.ec < symbol.span.sc)) throw new Error("osnova: corrupt symbol metadata");
-      if (!Array.isArray(symbol.exportedNames) || !symbol.exportedNames.every((name: unknown) => typeof name === "string")) {
+      if (symbol.exportedNames !== undefined && (!Array.isArray(symbol.exportedNames) || !symbol.exportedNames.every((name: unknown) => typeof name === "string"))) {
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.memberKind !== undefined && !["instance", "static", "class", "property", "unknown"].includes(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
@@ -223,7 +223,7 @@ export function deserializeArtifact(data: string, textPath: string | undefined, 
         span,
         signature: symbol.signature,
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
-        exportedNames: symbol.exportedNames,
+        ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
       };
     });
