@@ -143,6 +143,8 @@ describe("extraction adapters", () => {
       "method:src/breadth/greeter.rb#Greeting.Greeter.greet",
       "method:src/breadth/greeter.rb#Greeting.Greeter.format_name",
       "function:src/breadth/greeter.rb#run",
+      "module:src/breadth/greeter.rb#Util",
+      "method:src/breadth/greeter.rb#Util.helper",
     ]);
     expect(index.outgoing("src/breadth/greeter.rb#Greeting.Greeter.greet").map((e) => e.toName)).toContain("format_name");
   });
@@ -205,15 +207,20 @@ describe("extraction adapters", () => {
     expect(symbolsOf("src/breadth/greeter.ex")).toEqual([
       "module:src/breadth/greeter.ex#Greeter",
       "function:src/breadth/greeter.ex#Greeter.greet",
+      "function:src/breadth/greeter.ex#Greeter.greet_safe",
       "function:src/breadth/greeter.ex#Greeter.format",
     ]);
     const greetCalls = index.outgoing("src/breadth/greeter.ex#Greeter.greet");
     expect(greetCalls).toHaveLength(1);
     expect(greetCalls[0]?.toName).toBe("format");
+    const greetSafeCalls = index.outgoing("src/breadth/greeter.ex#Greeter.greet_safe");
+    expect(greetSafeCalls).toHaveLength(1);
+    expect(greetSafeCalls[0]?.toName).toBe("format");
     const allCalls = index.edges.filter((e) => e.fromFile === "src/breadth/greeter.ex" && e.kind === "calls");
     expect(allCalls.map((e) => e.toName)).not.toContain("def");
     expect(allCalls.map((e) => e.toName)).not.toContain("defp");
     expect(allCalls.map((e) => e.toName)).not.toContain("defmodule");
+    expect(allCalls.map((e) => e.toName)).not.toContain("is_binary");
     expect(allCalls.some((e) => e.toSymbol !== undefined && e.toSymbol === e.fromSymbol)).toBe(false);
   });
 

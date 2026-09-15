@@ -11,3 +11,9 @@ end
 def run
   Greeting::Greeter.new.greet("x")
 end
+
+module Util
+  def helper(x)
+    x
+  end
+end

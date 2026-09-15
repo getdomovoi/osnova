@@ -25,7 +25,10 @@ const adapters: Partial<Record<LanguageId, LanguageAdapter>> = {
 };
 
 const genericIgnoreCallNames: Partial<Record<LanguageId, ReadonlySet<string>>> = {
-  elixir: new Set(["def", "defp", "defmodule", "defmacro", "import", "alias", "require", "use"]),
+  elixir: new Set([
+    "def", "defp", "defmodule", "defmacro", "import", "alias", "require", "use",
+    "defstruct", "defmacrop", "defguard", "defimpl", "defprotocol", "do",
+  ]),
 };
 
 for (const language of genericLanguages) {
