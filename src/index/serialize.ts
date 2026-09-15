@@ -12,13 +12,13 @@ import type {
   SymbolKind,
   IndexDiagnostic,
   EdgeEvidence,
-  EdgeResolution,
   EdgeBinding,
   ReExport,
   MemberKind,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
+import { validateEvidence, validateBinding } from "./edgeStore.js";
 import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits } from "../cache/cache.js";
 import type { CachePolicy } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
@@ -289,46 +289,7 @@ function positiveInteger(value: unknown): value is number {
 }
 
 function readEvidence(value: unknown): EdgeEvidence {
-  if (typeof value === "object" && value !== null) {
-    const evidence = value as { source?: unknown; resolution?: unknown };
-    if (evidence.source === "unknown") return { source: "unknown" };
-    if (evidence.source === "syntax" && typeof evidence.resolution === "object" && evidence.resolution !== null) {
-      const resolution = evidence.resolution as Partial<EdgeResolution>;
-      if (resolution.status === "resolved" && ["import-path", "same-file-name", "imported-file-name", "unique-name", "import-binding", "lexical-definition"].includes(resolution.method ?? "")) {
-        return value as EdgeEvidence;
-      }
-      if (resolution.status === "resolved" && resolution.method === "re-export-binding" && validHops(resolution.via)) return value as EdgeEvidence;
-      if (resolution.status === "resolved" && resolution.method === "receiver-hint" &&
-        typeof resolution.receiver === "object" && resolution.receiver !== null &&
-        typeof resolution.receiver.classSymbol === "string" && ["class", "instance"].includes(resolution.receiver.mode) &&
-        ["constructor", "lexical", "class-reference"].includes(resolution.receiver.basis) &&
-        (resolution.via === undefined || validHops(resolution.via))) return value as EdgeEvidence;
-      if (resolution.status === "ambiguous" && Array.isArray(resolution.candidates) &&
-        resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
-        return value as EdgeEvidence;
-      }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved"].includes(resolution.reason ?? "")) {
-        return value as EdgeEvidence;
-      }
-    }
-  }
-  throw new Error("osnova: corrupt edge evidence metadata");
-}
-
-function validHops(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0 && value.length <= 128 && value.every((hop: unknown) => {
-    if (typeof hop !== "object" || hop === null) return false;
-    const item = hop as Record<string, unknown>;
-    return ["file", "source", "exportedName", "importedName", "targetFile"].every((key) => typeof item[key] === "string") &&
-      (item.kind === "named" || item.kind === "star") && Number.isSafeInteger(item.line) && (item.line as number) > 0;
-  });
-}
-
-function validSymbolBinding(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const binding = value as Record<string, unknown>;
-  return (binding.kind === "local" && typeof binding.name === "string") ||
-    (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string");
+  return validateEvidence(value);
 }
 
 function readReExport(value: unknown): ReExport {
@@ -344,16 +305,7 @@ function readReExport(value: unknown): ReExport {
 }
 
 function readBinding(value: unknown): EdgeBinding {
-  if (typeof value === "object" && value !== null) {
-    const binding = value as Partial<EdgeBinding>;
-    if (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string") return value as EdgeBinding;
-    if (binding.kind === "local" && typeof binding.name === "string") return value as EdgeBinding;
-    if (binding.kind === "blocked" && ["local-value", "unsupported", "ambiguous", "unknown-receiver"].includes(binding.reason ?? "")) return value as EdgeBinding;
-    if (binding.kind === "instance" && validSymbolBinding(binding.owner) && ["constructor", "lexical"].includes(binding.basis ?? "")) return value as EdgeBinding;
-    if (binding.kind === "member" && validSymbolBinding(binding.owner) && typeof binding.member === "string" &&
-      ["instance", "class"].includes(binding.mode ?? "") && ["constructor", "lexical", "class-reference"].includes(binding.basis ?? "")) return value as EdgeBinding;
-  }
-  throw new Error("osnova: corrupt binding metadata");
+  return validateBinding(value);
 }
 
 export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy: CachePolicy = {}): Promise<string> {
