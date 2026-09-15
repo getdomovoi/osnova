@@ -6,7 +6,7 @@ import { buildIndex } from "../src/index/build.js";
 import { serializeText, lazyTextCard, readTextSlice } from "../src/index/textStore.js";
 import { sha256Hex } from "../src/index/scan.js";
 import { serializeArtifact, deserializeArtifact, serializedTextIdentity } from "../src/index/serialize.js";
-import { loadIndex } from "../src/api.js";
+import { loadIndex, refreshWorkspace } from "../src/api.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
 import { indexGeneration } from "../src/api.js";
 
@@ -143,5 +143,34 @@ describe("format 8 publication", () => {
     core.formatVersion = 7;
     await fs.writeFile(corePath, JSON.stringify(core));
     await expect(loadIndex(FIXTURE, { cacheDir })).resolves.toBeUndefined();
+  });
+});
+
+describe("format 8 self-heal", () => {
+  it("lets refreshWorkspace rebuild past a mismatched or missing text.bin that loadIndex still rejects", async () => {
+    const dir = await scratch();
+    const cacheDir = path.join(dir, "cache");
+    const index = await buildIndex(FIXTURE, { cacheDir });
+    const workspace = workspaceDirFor(cacheDir, index.root);
+    const textPath = path.join(workspace, "text.bin");
+    const corePath = path.join(workspace, "index.json");
+
+    await fs.appendFile(textPath, "x");
+    await expect(loadIndex(FIXTURE, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
+    const refreshedAfterMismatch = await refreshWorkspace(FIXTURE, { cacheDir });
+    const loadedAfterMismatch = await loadIndex(FIXTURE, { cacheDir });
+    expect(loadedAfterMismatch).toBeDefined();
+    expect(indexGeneration(loadedAfterMismatch!)).toBe(indexGeneration(refreshedAfterMismatch));
+    const identityAfterMismatch = serializedTextIdentity((await fs.readFile(corePath)).toString("utf8"));
+    expect((await fs.stat(textPath)).size).toBe(identityAfterMismatch.bytes);
+
+    await fs.rm(textPath);
+    await expect(loadIndex(FIXTURE, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
+    const refreshedAfterDeletion = await refreshWorkspace(FIXTURE, { cacheDir });
+    const loadedAfterDeletion = await loadIndex(FIXTURE, { cacheDir });
+    expect(loadedAfterDeletion).toBeDefined();
+    expect(indexGeneration(loadedAfterDeletion!)).toBe(indexGeneration(refreshedAfterDeletion));
+    const identityAfterDeletion = serializedTextIdentity((await fs.readFile(corePath)).toString("utf8"));
+    expect((await fs.stat(textPath)).size).toBe(identityAfterDeletion.bytes);
   });
 });

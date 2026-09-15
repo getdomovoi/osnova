@@ -43,11 +43,15 @@ it("does not retain reentrant ownership in an escaped async callback", async () 
 it("rejects cache artifacts from a different workspace", async () => {
   const { root, cacheDir } = await fixture();
   const index = await buildIndex(root, { cacheDir });
-  const data = JSON.parse(serializeArtifact(index).toString()) as Record<string, unknown>;
+  const data = JSON.parse(serializeArtifact(index).toString()) as {
+    root: string; textHash: string; textBytes: number; files: unknown; edges: unknown; checksum: string;
+  };
   data.root = path.dirname(index.root);
-  data.checksum = sha256Hex(JSON.stringify({ root: data.root, files: data.files, edges: data.edges }));
+  data.checksum = sha256Hex(JSON.stringify({ root: data.root, textHash: data.textHash, textBytes: data.textBytes, files: data.files, edges: data.edges }));
   await fs.writeFile(path.join(workspaceDirFor(cacheDir, root), "index.json"), JSON.stringify(data));
-  await expect(loadArtifact(root, cacheDir)).rejects.toThrow(/cache-read-failed/);
+  const error: unknown = await loadArtifact(root, cacheDir).catch((caught: unknown) => caught);
+  expect(error).toMatchObject({ diagnostic: { code: "cache-read-failed" } });
+  expect((error as { cause?: Error }).cause?.message).toMatch(/different workspace/);
 });
 
 it("rejects altered cached source even when the envelope checksum was recomputed", async () => {
