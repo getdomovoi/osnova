@@ -78,6 +78,6 @@
     "The benchmark is one repository and one machine with warm filesystem caches, not a universal latency claim.",
     "The harness's non-worker CLI wrapper enforces a 60-second child-process timeout (scripts/bench/cli.ts); the baseline tree's full seven-sample run exceeds that wall time, so both runs were invoked via the harness's own documented --worker mode directly (same arguments the wrapper would pass) rather than through the timed wrapper. No harness file was modified.",
     "The pinned checkout referenced in the task brief no longer exists on this machine; a fresh disposable clone at the manifest revision was used instead and is not retained as an approved long-lived fixture.",
-    "workerPeakRssBytes and firstBuildMs are reported by the harness but not part of this record's required fields; see the task report for those values if needed."
+    "workerPeakRssBytes and firstBuildMs are reported by the harness but not part of this record's required fields; baseline (9e39e0c) firstBuildMs 4543.265167 and workerPeakRssBytes 1311342592, optimized (257c400) firstBuildMs 4167.870459 and workerPeakRssBytes 1355546624."
   ]
 }
