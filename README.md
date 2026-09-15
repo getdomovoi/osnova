@@ -92,6 +92,10 @@ CLI output messages and MCP text payloads are capped at 16,384 UTF-16 code units
 
 Structured query APIs are not subject to this text-presentation cap. Search callers needing every indexed occurrence should use `findTextDetailed` without limits. Ask output identifies excerpt ranges when a definition is not fully displayed, including its existing 400-line full-span limit. Map cards retain their elastic detail dropping and configurable nonnegative code-unit cap; zero returns an empty card.
 
+MCP applies smaller task-focused budgets to broad structural views: skeleton is 4,096 code units, callers is 2,048, and map is 2,048 including the generation/health prefix. Skeleton selects signatures by indexed incoming/outgoing degree and then presents them in source order; it reports exactly how many signatures were omitted. Callers prioritizes confirmed relationships, retains safety/uncertainty language, and separately counts omitted confirmed and unresolved evidence. Map defaults to eight directories and reports omitted directories, per-directory hubs and global hotspots.
+
+These limits affect MCP presentation only. `skeleton`, `callersDetailed` and `map` return structured results; `MapResult.droppedHotspots` and each `DirCluster.droppedHubs` disclose intrinsic top-list selection. Increase/narrow queries through APIs rather than treating a compact MCP view as complete.
+
 ### Caller evidence
 
 `callersDetailed` returns `status: "ambiguous"` with candidate symbols when a bare name matches multiple definitions. Select a qualified name (`file#Class.method`) to continue. A `status: "found"` result contains the target, indexed `hits`, direction/depth, and separate `unresolved` entries carrying raw edges and traversal depth. Unresolved inbound evidence is name-based, not a confirmed caller; unresolved evidence is never traversed as a dependency.
