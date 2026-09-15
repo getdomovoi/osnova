@@ -25,3 +25,9 @@ it("distinguishes query-limit omissions in structured results", () => {
   const detailed = askDetailed(index, "shared target", { limit: 8 });
   expect(detailed).toMatchObject({ totalCandidates: 100, omittedHits: 92, truncated: true });
 });
+
+it("reports eligible files for empty queries without inventing candidates", () => {
+  expect(askDetailed(index, "", { in: "source-0.ts" })).toMatchObject({
+    hits: [], filesSearched: 1, totalCandidates: 0, omittedHits: 0, truncated: false,
+  });
+});

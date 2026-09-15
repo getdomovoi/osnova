@@ -50,13 +50,13 @@ export function askDetailed(index: OsnovaIndex, question: string, options?: AskO
   const queryTokens = [...new Set(tokenize(question))];
   const identifiers = new Set((question.match(/[$A-Za-z_][$\w]*/g) ?? []).map((name) => name.toLowerCase()));
   const qualified = new Set((question.match(/[$A-Za-z_][$\w]*(?:\.[$A-Za-z_][$\w]*)+/g) ?? []).map((name) => name.toLowerCase()));
+  const filter = options?.in ?? "";
+  const filesSearched = [...index.files.keys()].filter((path) => matchInPath([path], filter)).length;
   if ((queryTokens.length === 0 && identifiers.size === 0) || index.files.size === 0) {
-    return { scope: "indexed-definitions-and-text", hits: [], filesSearched: 0, totalCandidates: 0, omittedHits: 0, truncated: false };
+    return { scope: "indexed-definitions-and-text", hits: [], filesSearched, totalCandidates: 0, omittedHits: 0, truncated: false };
   }
   const ctx = queryContext(index);
   const full = options?.full ?? false;
-  const filter = options?.in ?? "";
-  const filesSearched = [...ctx.lines.keys()].filter((path) => matchInPath([path], filter)).length;
   const scored: Array<{ document: SearchDocument; score: number; exact: boolean }> = [];
   for (const document of ctx.documents) {
     if (!matchInPath([document.file], filter)) continue;
