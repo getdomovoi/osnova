@@ -36,6 +36,18 @@ describe("grammar loader", () => {
       rust: "fn main() {}",
       java: "class A { void m() {} }",
       c_sharp: "class A { void M() {} }",
+      c: "#include <stdio.h>",
+      cpp: "namespace geo {",
+      ruby: "module Greeting",
+      php: "<?php",
+      kotlin: "package app",
+      swift: "struct Point { var x: Int; var y: Int }",
+      scala: "package app",
+      dart: "class Greeter {",
+      elixir: "defmodule Greeter do",
+      ocaml: "module Greeter = struct",
+      zig: "const Greeter = struct {",
+      bash: "#!/usr/bin/env bash",
     };
     for (const [language, source] of Object.entries(samples)) {
       const parser = await getParser(language as never);

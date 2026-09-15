@@ -60,6 +60,17 @@ pnpm test:install  # fresh registry-backed package install and consumer
 - **web-tree-sitter is pinned exactly** (0.25.10). The prebuilt grammars in `tree-sitter-wasms@0.1.13` use the older dynamic-linking format that 0.27 cannot load. Do not bump without probing every grammar (`test/grammar.test.ts`).
 - **Edge semantics v1**: direct calls, imports, name references only. No type inference. Document precision limits in the README rather than working around them silently.
 
+## Adding a language
+
+Breadth-tier languages need four things, each small:
+
+1. A registry row in `src/grammar/languages.ts`: the `LanguageId`, its extensions in `extensionLanguage`, its WASM file in `grammarFile` (must exist in the pinned `tree-sitter-wasms` bundle), and `tier: "generic"` in `languageTier`. Add the id to `LanguageId` in `src/types.ts`.
+2. A query in `src/grammar/queries/<language>.ts` exporting a string in the tags convention: `@definition.<kind>` with a paired `@name`, and `@reference.call` with `@name`. Register it in `src/grammar/queries/index.ts`. Editing a query changes `extractionVersion`, so old caches rebuild.
+3. A fixture under `test/fixtures/sample-repo/src/breadth/` with one container, one nested definition, one free function and one call.
+4. A golden case in `test/extract.test.ts`, a parse snippet in `test/grammar.test.ts`, and a sample in `src/diagnostics/doctor.ts`.
+
+Probe node names with `pnpm tsx -e` and `tree.rootNode.toString()` on the fixture. Run `pnpm test`.
+
 ## Code style
 
 - TypeScript ESM, strict tsconfig chain including `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, and `verbatimModuleSyntax`. Optional properties are declared `?: T | undefined`.

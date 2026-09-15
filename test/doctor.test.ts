@@ -4,6 +4,9 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { doctor } from "../src/diagnostics/doctor.js";
 
+const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
+const cacheDir = ".tmp-coverage-cache";
+
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
@@ -30,4 +33,16 @@ it("reports missing workspace and file-valued cache instead of healthy empty res
   expect(report.ok).toBe(false);
   expect(report.checks.find((check) => check.id === "workspace")?.status).toBe("error");
   expect(report.checks.find((check) => check.id === "cache")?.status).toBe("error");
+});
+
+it("reports every breadth language as tags extraction with name heuristics", async () => {
+  const report = await doctor(FIXTURE, { cacheDir });
+  const rows = report.capabilities.filter((row) => row.extraction === "tags");
+  expect(rows.map((row) => row.language).sort()).toEqual(["bash", "c", "cpp", "dart", "elixir", "kotlin", "ocaml", "php", "ruby", "scala", "swift", "zig"]);
+  for (const row of rows) {
+    expect(row.status, row.language).toBe("ok");
+    expect(row.resolution).toBe("name-heuristics");
+    expect(row.limitations.join(" ")).toMatch(/import|export/);
+  }
+  expect(report.capabilities).toHaveLength(20);
 });

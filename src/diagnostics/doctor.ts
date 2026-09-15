@@ -3,7 +3,7 @@ import { access, stat } from "node:fs/promises";
 import path from "node:path";
 import { resolveCacheDir } from "../cache/cache.js";
 import { getParser } from "../grammar/loader.js";
-import { extensionLanguage, grammarFile } from "../grammar/languages.js";
+import { extensionLanguage, grammarFile, languageTier } from "../grammar/languages.js";
 import type { LanguageId } from "../types.js";
 
 export interface DiagnosticCheck {
@@ -16,7 +16,7 @@ export interface LanguageCapability {
   readonly language: LanguageId;
   readonly extensions: readonly string[];
   readonly status: "ok" | "error";
-  readonly extraction: "syntax";
+  readonly extraction: "syntax" | "tags";
   readonly resolution: "binding-and-receiver-hints" | "name-heuristics";
   readonly typeInference: false;
   readonly limitations: readonly string[];
@@ -94,6 +94,14 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     zig: "fn probe() i32 { return 1; }",
     bash: "probe() { echo 1; }",
   };
+  const genericLimitations: readonly string[] = [
+    "Definitions and bare call names come from a tags query; imports, exports, bindings and receivers are not analyzed.",
+    "Name-based resolution can be ambiguous or incomplete.",
+    "No binding-aware receiver identity or runtime dispatch proof.",
+  ];
+  const extraLimitations: Partial<Record<LanguageId, readonly string[]>> = {
+    dart: ["Call edges are not extracted for Dart; the tags query only records definitions."],
+  };
   const capabilities: LanguageCapability[] = [];
   for (const language of Object.keys(grammarFile).sort() as LanguageId[]) {
     let status: "ok" | "error" = "ok";
@@ -108,16 +116,19 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     } catch {
       status = "error";
     }
+    const generic = languageTier[language] === "generic";
     const bindingHints = ["typescript", "tsx", "javascript", "python"].includes(language);
     capabilities.push({
       language, status,
       extensions: Object.entries(extensionLanguage).filter(([, value]) => value === language).map(([ext]) => ext).sort(),
-      extraction: "syntax",
+      extraction: generic ? "tags" : "syntax",
       resolution: bindingHints ? "binding-and-receiver-hints" : "name-heuristics",
       typeInference: false,
-      limitations: bindingHints
-        ? ["Hints are not runtime type proofs.", "Dynamic dispatch, arbitrary value flow and inheritance are not resolved.", "Ambiguous or unsupported bindings remain unresolved."]
-        : ["Name-based resolution can be ambiguous or incomplete.", "No binding-aware receiver identity or runtime dispatch proof."],
+      limitations: generic
+        ? [...genericLimitations, ...(extraLimitations[language] ?? [])]
+        : bindingHints
+          ? ["Hints are not runtime type proofs.", "Dynamic dispatch, arbitrary value flow and inheritance are not resolved.", "Ambiguous or unsupported bindings remain unresolved."]
+          : ["Name-based resolution can be ambiguous or incomplete.", "No binding-aware receiver identity or runtime dispatch proof."],
     });
     checks.push({ id: `grammar:${language}`, status, message: status === "ok" ? "Packaged WASM loaded and parsed a synthetic snippet without syntax errors." : "WASM load or synthetic parse failed; check installed parser and grammar assets. No download attempted." });
   }

@@ -2,7 +2,7 @@
 
 Deterministic repository context engine. Osnova maps a codebase into a symbol and edge graph using tree-sitter WASM, then serves it through a CLI and an MCP stdio server. The structural core uses no embeddings, network or telemetry. Optional explicitly configured language-server processes are trusted external programs and are not network-sandboxed by Osnova.
 
-- Languages v1: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Java, C#. Every other file type gets a bare file card (path, hash, no symbols).
+- Languages v1: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Java, C# through hand-written adapters; C, C++, Ruby, PHP, Kotlin, Swift, Scala, Dart, Elixir, OCaml, Zig and Bash through a generic tags-query tier that records definitions and bare call names only (no imports, exports, bindings or receivers). Every other file type gets a bare file card (path, hash, no symbols). `osnova doctor` lists each language's tier and limits.
 - Query surface: `ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `indexHealth`, `scopedAsk`, `impact`, `taskContext`.
 - Edge semantics v1: direct calls, imports and exports, name references. No type inference and no dynamic dispatch resolution; expect per-language precision limits.
 - Determinism: incremental updates produce byte-identical artifacts to full rebuilds. All paths, symbols, and edges are sorted before serialization.
@@ -158,7 +158,7 @@ The perf script enforces first-build and incremental-refresh budgets on a genera
 
 `doctor` is read-only: it checks runtime, workspace/cache access and all packaged grammar assets without scanning source or writing probes. Its capability matrix states where binding/receiver hints exist and where only name heuristics remain. `setup --preview` produces complete owned local MCP configuration content and detects conflicts; it never writes or launches commands, and no apply operation is provided. Setup previews require absolute executable and CLI paths.
 
-Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all eight grammars, executes lifecycle/retrieval/doctor/preview APIs, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. `test:package` reuses locally installed dependency targets without downloads; `test:install` performs a fresh registry-backed dependency install with install scripts disabled, then runs the same consumer checks. Linux/Windows execution runs in CI.
+Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all twenty grammars, executes lifecycle/retrieval/doctor/preview APIs, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. `test:package` reuses locally installed dependency targets without downloads; `test:install` performs a fresh registry-backed dependency install with install scripts disabled, then runs the same consumer checks. Linux/Windows execution runs in CI.
 
 ### Optional LSP evidence
 
