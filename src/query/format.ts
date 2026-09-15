@@ -90,6 +90,35 @@ export function formatSkeleton(result: SkeletonResult): string {
   return [header, ...lines].join("\n");
 }
 
+export function formatSkeletonBounded(index: OsnovaIndex, result: SkeletonResult, maxCodeUnits: number): string {
+  if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 256) {
+    throw new RangeError("osnova: skeleton budget must be a safe integer of at least 256 code units");
+  }
+  const complete = formatSkeleton(result);
+  if (complete.length <= maxCodeUnits) return complete;
+  const header = `${result.file} (${result.language}, ${result.lineCount} lines, ${result.entries.length} symbols)`;
+  const line = (entry: SkeletonResult["entries"][number]): string =>
+    `${entry.symbol.kind} ${entry.symbol.name} (L${entry.symbol.span.startLine}-L${entry.symbol.span.endLine}): ${entry.signature}`;
+  const ranked = [...result.entries].sort((a, b) => {
+    const aDegree = index.incoming(a.symbol.qualifiedName).length + index.outgoing(a.symbol.qualifiedName).length;
+    const bDegree = index.incoming(b.symbol.qualifiedName).length + index.outgoing(b.symbol.qualifiedName).length;
+    return bDegree - aDegree || a.symbol.span.startLine - b.symbol.span.startLine ||
+      a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1);
+  });
+  const selected: SkeletonResult["entries"][number][] = [];
+  for (const entry of ranked) {
+    const candidate = [...selected, entry].sort((a, b) => a.symbol.span.startLine - b.symbol.span.startLine ||
+      a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1));
+    const omitted = result.entries.length - candidate.length;
+    const footer = `omitted: ${omitted} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
+    if ([header, ...candidate.map(line), footer].join("\n").length <= maxCodeUnits) selected.push(entry);
+  }
+  selected.sort((a, b) => a.symbol.span.startLine - b.symbol.span.startLine ||
+    a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1));
+  const omitted = result.entries.length - selected.length;
+  return [header, ...selected.map(line), `omitted: ${omitted} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`].join("\n");
+}
+
 export function formatCallers(result: CallersResult): string {
   const target = `${result.target.kind} ${result.target.qualifiedName}`;
   if (result.hits.length === 0) return `${target}: no edges`;

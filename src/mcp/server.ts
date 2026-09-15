@@ -12,11 +12,12 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexHealthSummary, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
 const OSNOVA_VERSION = "0.1.0";
+const maximumMcpSkeletonCodeUnits = 4_096;
 
 const toolDefinitions = [
   {
@@ -52,7 +53,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_skeleton",
-    description: "Every definition's signature plus line span for one indexed file.",
+    description: "Task-focused signatures and line spans for one indexed file. MCP output is degree-selected under 4096 code units with an exact omission count; the skeleton API returns every signature.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -115,6 +116,7 @@ export function createOsnovaMcpServer(
     try {
       const index = await refresh();
       const generation = `generation ${indexGeneration(index)}`;
+      const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
       const respond = (text: string): ReturnType<typeof textResult> =>
         textResult([generation, formatIndexHealthSummary(index), text].filter(Boolean).join("\n"));
       switch (name) {
@@ -143,7 +145,8 @@ export function createOsnovaMcpServer(
         }
         case "osnova_skeleton": {
           const file = requireString(args, "file");
-          return respond(formatSkeleton(skeleton(index, file)));
+          const available = maximumMcpSkeletonCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${formatSkeletonBounded(index, skeleton(index, file), available)}`);
         }
         case "osnova_callers": {
           const symbol = requireString(args, "symbol");

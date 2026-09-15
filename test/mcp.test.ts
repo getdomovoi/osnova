@@ -118,4 +118,17 @@ describe("mcp stdio server", () => {
       await client.close();
     }
   }, 60_000);
+
+  it("bounds large skeleton responses with explicit omissions", async () => {
+    write("src/large.ts", Array.from({ length: 150 }, (_, index) => `export function ordinaryFunction${index}(value: string): string { return value; }`).join("\n"));
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_skeleton", { file: "src/large.ts" });
+      expect(text.length).toBeLessThanOrEqual(4_096);
+      expect(text).toMatch(/omitted: \d+ of 150 signatures/);
+      expect(text).toContain("Use skeleton API for the complete file");
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
 });
