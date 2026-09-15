@@ -207,12 +207,14 @@ describe("extraction adapters", () => {
       "function:src/breadth/greeter.ex#Greeter.greet",
       "function:src/breadth/greeter.ex#Greeter.format",
     ]);
-    const greetCalls = index.outgoing("src/breadth/greeter.ex#Greeter.greet").map((e) => e.toName);
-    expect(greetCalls).toContain("format");
+    const greetCalls = index.outgoing("src/breadth/greeter.ex#Greeter.greet");
+    expect(greetCalls).toHaveLength(1);
+    expect(greetCalls[0]?.toName).toBe("format");
     const allCalls = index.edges.filter((e) => e.fromFile === "src/breadth/greeter.ex" && e.kind === "calls");
     expect(allCalls.map((e) => e.toName)).not.toContain("def");
     expect(allCalls.map((e) => e.toName)).not.toContain("defp");
     expect(allCalls.map((e) => e.toName)).not.toContain("defmodule");
+    expect(allCalls.some((e) => e.toSymbol !== undefined && e.toSymbol === e.fromSymbol)).toBe(false);
   });
 
   it("extracts ocaml definitions and calls through the generic tier", () => {

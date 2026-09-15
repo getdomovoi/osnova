@@ -69,7 +69,8 @@ export function makeGenericAdapter(
     extract(tree: Tree, source: string): AdapterOutput {
       query ??= compile(queryText);
       const rawPending: Pending[] = [];
-      const calls: Array<{ name: string; node: Node }> = [];
+      const rawCalls: Array<{ name: string; node: Node }> = [];
+      const headSpans = new Set<string>();
       for (const match of query.matches(tree.rootNode)) {
         const nameCapture = match.captures.find((capture) => capture.name === "name");
         if (nameCapture === undefined) continue;
@@ -79,10 +80,13 @@ export function makeGenericAdapter(
           const kind = definitionKinds[capture.name];
           if (kind !== undefined) rawPending.push({ name, kind, node: capture.node });
           else if (capture.name === "reference.call") {
-            if (!ignoreCallNames.has(name)) calls.push({ name, node: capture.node });
+            if (!ignoreCallNames.has(name)) rawCalls.push({ name, node: capture.node });
+          } else if (capture.name === "definition.head") {
+            headSpans.add(`${capture.node.startIndex}:${capture.node.endIndex}`);
           }
         }
       }
+      const calls = rawCalls.filter((call) => !headSpans.has(`${call.node.startIndex}:${call.node.endIndex}`));
       const pending = dedupeSharedNodes(rawPending);
       pending.sort((a, b) => a.node.startIndex - b.node.startIndex || b.node.endIndex - a.node.endIndex);
       const qualified: string[] = [];
