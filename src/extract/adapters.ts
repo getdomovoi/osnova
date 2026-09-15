@@ -6,6 +6,10 @@ import { goAdapter } from "./go.js";
 import { rustAdapter } from "./rust.js";
 import { javaAdapter } from "./java.js";
 import { csharpAdapter } from "./csharp.js";
+import { makeGenericAdapter } from "./generic.js";
+import { queryFor } from "../grammar/queries/index.js";
+import { genericLanguages } from "../grammar/languages.js";
+import { loadedLanguage } from "../grammar/loader.js";
 import type { LanguageId } from "../types.js";
 
 const adapters: Partial<Record<LanguageId, LanguageAdapter>> = {
@@ -18,6 +22,12 @@ const adapters: Partial<Record<LanguageId, LanguageAdapter>> = {
   java: javaAdapter,
   c_sharp: csharpAdapter,
 };
+
+for (const language of genericLanguages) {
+  const query = queryFor(language);
+  if (query === undefined) continue;
+  adapters[language] = makeGenericAdapter(language, query, (source) => loadedLanguage(language).query(source));
+}
 
 export function adapterFor(language: LanguageId): LanguageAdapter {
   const adapter = adapters[language];

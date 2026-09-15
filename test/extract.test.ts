@@ -113,6 +113,19 @@ describe("extraction adapters", () => {
     expect(startCalls).toContain("src/Program.cs#Program.Describe");
   });
 
+  it("extracts c definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/util.c")).toEqual([
+      "struct:src/breadth/util.c#Point",
+      "enum:src/breadth/util.c#Mode",
+      "function:src/breadth/util.c#helper",
+      "function:src/breadth/util.c#compute",
+    ]);
+    const calls = index.outgoing("src/breadth/util.c#compute");
+    expect(calls.map((e) => e.toName).sort()).toEqual(["helper", "printf"]);
+    expect(calls.find((e) => e.toName === "helper")?.toSymbol).toBe("src/breadth/util.c#helper");
+    expect(calls.find((e) => e.toName === "printf")?.evidence).toMatchObject({ source: "syntax", resolution: { status: "unresolved" } });
+  });
+
   it("gives unindexed files a bare fallback card", () => {
     const card = index.files.get("docs/notes.txt");
     expect(card).toBeDefined();
