@@ -200,6 +200,8 @@ The [re-export results](benchmarks/results/reexports-2026-09-14.json) retain the
 
 The [receiver results](benchmarks/results/receivers-2026-09-14.json) retain the frozen receiver-hint evaluation, real-workload regressions and unsupported runtime behaviors. The measurements do not turn syntax-backed hints into type proofs.
 
+The [refresh optimization record](benchmarks/results/refresh-optimization-2026-09-15.json) contains an apples-to-apples seven-sample before/after profile, stage timings, compression tradeoff and correctness limits. It records the measured repository/host method rather than claiming universal latency.
+
 ## License
 
 Apache-2.0
