@@ -3,3 +3,4 @@ module Greeter = struct
   let greet name = format name
 end
 let run () = Greeter.greet "x"
+let answer = 42

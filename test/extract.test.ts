@@ -237,6 +237,7 @@ describe("extraction adapters", () => {
       "function:src/breadth/greeter.ml#Greeter.format",
       "function:src/breadth/greeter.ml#Greeter.greet",
       "function:src/breadth/greeter.ml#run",
+      "constant:src/breadth/greeter.ml#answer",
     ]);
     expect(index.outgoing("src/breadth/greeter.ml#Greeter.greet").map((e) => e.toName)).toContain("format");
   });
