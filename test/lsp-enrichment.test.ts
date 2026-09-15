@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -219,6 +220,28 @@ describe("opt-in LSP sidecar", () => {
     expect(result.diagnostics.some((d) => d.code === "cache-busy")).toBe(true);
     expect(await fs.readFile(lock, "utf8")).toBe("owned elsewhere");
     await expect(fs.access(path.join(f.cacheDir, "typescript.log"))).rejects.toThrow();
+  });
+
+  it("reclaims a writer lock whose owning process has exited", async () => {
+    const f = await setup();
+    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const lock = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp/writer.lock");
+    const exited = spawnSync(process.execPath, ["-e", ""]);
+    await fs.writeFile(lock, JSON.stringify({ pid: exited.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000000" }));
+    const result = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
+    expect(result.status, JSON.stringify(result.diagnostics)).toBe("complete");
+    await expect(fs.access(lock)).rejects.toThrow();
+  });
+
+  it("keeps a writer lock whose owning process is still alive", async () => {
+    const f = await setup();
+    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const lock = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp/writer.lock");
+    const owner = JSON.stringify({ pid: process.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000001" });
+    await fs.writeFile(lock, owner);
+    const result = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
+    expect(result.diagnostics.some((d) => d.code === "cache-busy")).toBe(true);
+    expect(await fs.readFile(lock, "utf8")).toBe(owner);
   });
 
   it("bounds requests per server without starving later languages and retries failures", async () => {

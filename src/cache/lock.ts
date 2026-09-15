@@ -11,7 +11,7 @@ export interface LockOptions {
   readonly lockPollMs?: number | undefined;
 }
 
-interface Owner {
+export interface LockOwner {
   readonly pid: number;
   readonly host: string;
   readonly token: string;
@@ -29,21 +29,21 @@ export function holdsCacheLock(lockPath: string): boolean {
   return held.getStore()?.get(path.resolve(lockPath))?.active === true;
 }
 
-async function readOwner(lockPath: string): Promise<Owner | undefined> {
+async function readOwner(lockPath: string): Promise<LockOwner | undefined> {
   try {
     const value: unknown = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
     if (typeof value !== "object" || value === null) return undefined;
-    const owner = value as Partial<Owner>;
+    const owner = value as Partial<LockOwner>;
     if (!Number.isSafeInteger(owner.pid) || (owner.pid ?? 0) <= 0 || typeof owner.host !== "string" ||
       typeof owner.token !== "string" || !/^[0-9a-f-]{36}$/.test(owner.token)) return undefined;
-    return owner as Owner;
+    return owner as LockOwner;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return undefined;
     throw error;
   }
 }
 
-function ownerExited(owner: Owner): boolean {
+export function lockOwnerExited(owner: LockOwner): boolean {
   if (owner.host !== os.hostname()) return false;
   try {
     process.kill(owner.pid, 0);
@@ -55,7 +55,7 @@ function ownerExited(owner: Owner): boolean {
 
 async function recoverExitedOwner(lockPath: string): Promise<void> {
   const owner = await readOwner(lockPath);
-  if (owner === undefined || !ownerExited(owner)) return;
+  if (owner === undefined || !lockOwnerExited(owner)) return;
   const names = await fs.readdir(lockPath).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
@@ -69,7 +69,7 @@ async function recoverExitedOwner(lockPath: string): Promise<void> {
     throw error;
   }
   const current = await readOwner(lockPath);
-  if (current?.token !== owner.token || !ownerExited(current) ||
+  if (current?.token !== owner.token || !lockOwnerExited(current) ||
     (await fs.readdir(lockPath)).some((name) => name !== "owner.json" && name !== "recovery")) {
     await fs.rmdir(recovery);
     return;
@@ -81,7 +81,7 @@ async function recoverExitedOwner(lockPath: string): Promise<void> {
   await fs.rmdir(abandoned);
 }
 
-async function releaseOwnedLock(lockPath: string, owner: Owner): Promise<void> {
+async function releaseOwnedLock(lockPath: string, owner: LockOwner): Promise<void> {
   if ((await readOwner(lockPath))?.token !== owner.token) {
     throw new IndexingError({ phase: "cache", path: lockPath, code: "cache-lock-ownership-lost" });
   }
@@ -110,7 +110,7 @@ export async function withCacheLock<T>(
   if (!Number.isFinite(timeout) || timeout < 0 || !Number.isFinite(poll) || poll <= 0) {
     throw new RangeError("osnova: lock timeout must be nonnegative and poll interval positive");
   }
-  const owner: Owner = { pid: process.pid, host: os.hostname(), token: randomUUID() };
+  const owner: LockOwner = { pid: process.pid, host: os.hostname(), token: randomUUID() };
   const deadline = performance.now() + timeout;
   try {
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
