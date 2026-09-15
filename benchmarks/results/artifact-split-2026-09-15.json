@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+    "indexedFiles": 7653,
+    "editedFile": "packages/pyright-internal/src/common/pathUtils.ts"
+  },
+  "baseline": {
+    "revision": "9e39e0c",
+    "noChangeMs": [
+      1031.752708,
+      1011.2029999999977,
+      1013.7821249999979,
+      1016.411165999998,
+      1006.2431250000009,
+      1006.2065829999992,
+      1002.6800409999996
+    ],
+    "editedMs": [
+      2512.5232080000005,
+      2407.1270839999997,
+      2401.7104160000017,
+      2516.704958000002,
+      2405.3380419999958,
+      2411.475666999999,
+      2472.1785409999866
+    ],
+    "noChangeMedianMs": 1011.2029999999977,
+    "editedMedianMs": 2411.475666999999,
+    "noChangeP95Ms": 1031.752708,
+    "editedP95Ms": 2516.704958000002
+  },
+  "optimized": {
+    "revision": "257c400",
+    "noChangeMs": [
+      843.2807080000002,
+      871.4369159999987,
+      843.1912080000002,
+      842.7794170000016,
+      839.4542910000018,
+      838.9314999999988,
+      838.9525829999984
+    ],
+    "editedMs": [
+      1989.76375,
+      1973.1196670000008,
+      1971.5455409999995,
+      1979.7512920000008,
+      1969.382832999996,
+      1956.2825840000005,
+      1980.533083000002
+    ],
+    "noChangeMedianMs": 842.7794170000016,
+    "editedMedianMs": 1973.1196670000008,
+    "noChangeP95Ms": 871.4369159999987,
+    "editedP95Ms": 1989.76375
+  },
+  "improvement": {
+    "noChangeMedianPercent": 16.66,
+    "editedMedianPercent": 18.18,
+    "noChangeP95Percent": 15.54,
+    "editedP95Percent": 20.94
+  },
+  "artifact": {
+    "serializedArtifactBytesBefore": 61150506,
+    "serializedArtifactBytesAfter": 35593098,
+    "storedArtifactBytesBefore": 8707477,
+    "storedArtifactBytesAfter": 2936866,
+    "textSidecarBytesAfter": 24760138
+  },
+  "method": "Same host, pinned source and dependencies; disposable source/cache; one initial build; seven warm no-change refreshes and seven one-file edited refreshes with untimed restoration/equality verification; nearest-rank p95; filesystem caches not flushed. Baseline built from the commit before the artifact-split work (9e39e0c); optimized built from the tip of the artifact-split branch (257c400). Both runs used the same disposable checkout and the same manifest snapshot fingerprint. The text-sidecar byte count was measured with a separate one-shot build against the same checkout using the optimized tree's buildIndex/saveArtifact functions, since the benchmark harness does not report it.",
+  "correctness": {
+    "incrementalEqualsFull": true,
+    "textSidecarVerified": true
+  },
+  "limitations": [
+    "The benchmark harness (scripts/bench/runner.ts) does not emit per-stage timings (artifactLoad, scanAndMetadata, publication); stageProfileMedianMs is omitted from this record because the harness does not report it.",
+    "The benchmark is one repository and one machine with warm filesystem caches, not a universal latency claim.",
+    "The harness's non-worker CLI wrapper enforces a 60-second child-process timeout (scripts/bench/cli.ts); the baseline tree's full seven-sample run exceeds that wall time, so both runs were invoked via the harness's own documented --worker mode directly (same arguments the wrapper would pass) rather than through the timed wrapper. No harness file was modified.",
+    "The pinned checkout referenced in the task brief no longer exists on this machine; a fresh disposable clone at the manifest revision was used instead and is not retained as an approved long-lived fixture.",
+    "workerPeakRssBytes and firstBuildMs are reported by the harness but not part of this record's required fields; see the task report for those values if needed."
+  ]
+}
