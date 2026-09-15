@@ -15,3 +15,7 @@ int compute(int a) {
   printf("%d\n", b);
   return b;
 }
+
+int *make(int n) {
+  return &n;
+}

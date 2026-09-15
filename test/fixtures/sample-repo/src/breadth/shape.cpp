@@ -7,3 +7,4 @@ class Shape {
 };
 }
 int describe(geo::Shape& s) { return s.area(); }
+int (*pick(int n))(int) { return 0; }

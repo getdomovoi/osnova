@@ -119,6 +119,7 @@ describe("extraction adapters", () => {
       "enum:src/breadth/util.c#Mode",
       "function:src/breadth/util.c#helper",
       "function:src/breadth/util.c#compute",
+      "function:src/breadth/util.c#make",
     ]);
     const calls = index.outgoing("src/breadth/util.c#compute");
     expect(calls.map((e) => e.toName).sort()).toEqual(["helper", "printf"]);
@@ -132,6 +133,7 @@ describe("extraction adapters", () => {
       "class:src/breadth/shape.cpp#geo.Shape",
       "method:src/breadth/shape.cpp#geo.Shape.area",
       "function:src/breadth/shape.cpp#describe",
+      "function:src/breadth/shape.cpp#pick",
     ]);
     expect(index.outgoing("src/breadth/shape.cpp#describe").map((e) => e.toName)).toContain("area");
   });
