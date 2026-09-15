@@ -69,7 +69,7 @@ Breadth-tier languages need four things, each small:
 3. A fixture under `test/fixtures/sample-repo/src/breadth/` with one container, one nested definition, one free function and one call.
 4. A golden case in `test/extract.test.ts`, a parse snippet in `test/grammar.test.ts`, and a sample in `src/diagnostics/doctor.ts`.
 
-Probe node names with `pnpm tsx -e` and `tree.rootNode.toString()` on the fixture. Run `pnpm test`.
+Probe node names with `pnpm tsx -e` and `tree.rootNode.toString()` on the fixture. Run `pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm perf`.
 
 ## Code style
 
