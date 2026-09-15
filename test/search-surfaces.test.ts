@@ -75,19 +75,18 @@ describe("CLI search completeness", () => {
 });
 
 describe("MCP search completeness", () => {
-  it("discloses query and presentation limits independently", async () => {
+  it("discloses the same defaults as CLI", async () => {
     const result = await searchMcp({ pattern: "needle" });
     expect(result.isError).toBeFalsy();
-    expect(result.text).toContain("indexed-text search: 104/561 matches, 11/51 groups");
-    expect(result.text).toContain("omitted: 457 of 561 matches; 40 of 51 groups");
-    expect(result.text).toContain("query selection omitted 61 matches and 1 groups");
+    expect(result.text).toContain("indexed-text search: 500/561 matches, 50/51 groups");
+    expect(result.text).toContain("truncated: 61 matches omitted; 1 groups omitted");
   });
 
   it("honors explicit limits and path scope without claiming completeness", async () => {
     const result = await searchMcp({ pattern: "needle", in: "file-0.txt", limit: 1 });
     expect(result.isError).toBeFalsy();
     expect(result.text).toContain("10/11 matches, 1/1 groups");
-    expect(result.text).toContain("omitted: 1 of 11 matches; 0 of 1 groups");
+    expect(result.text).toContain("truncated: 1 matches omitted; 0 groups omitted");
   });
 
   it("reports invalid numeric limits as tool errors", async () => {

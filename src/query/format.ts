@@ -1,6 +1,5 @@
 import type {
   AskResult,
-  AskDetailedResult,
   CallersResult,
   CallersDetailedResult,
   FindTextGroup,
@@ -56,40 +55,6 @@ export function formatAsk(result: AskResult): string {
   return blocks.join("\n\n");
 }
 
-export function formatAskDetailedBounded(result: AskDetailedResult, maxCodeUnits: number): string {
-  if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 512) {
-    throw new RangeError("osnova: ask budget must be a safe integer of at least 512 code units");
-  }
-  const header = (): string => `indexed definition/text search: ${selected.length}/${result.totalCandidates} candidates; ${result.filesSearched} files searched`;
-  const selected: string[] = [];
-  let compactedLines = 0;
-  const blocks = result.hits.map((hit) => {
-    let compacted = 0;
-    const symbol = hit.symbol?.qualifiedName ?? "<file>";
-    const title = `${compactField(hit.file, 180)}:${hit.line} ${hit.symbol?.kind ?? "file"} ${compactField(symbol, 180)}`;
-    const lines = hit.excerpt.split("\n").map((line, index) => {
-      const compact = compactField(line, 220);
-      if (compact !== line) compacted += 1;
-      return `L${hit.excerptStartLine + index}: ${compact}`;
-    });
-    return { text: [title, ...lines].join("\n"), compacted };
-  });
-  const footer = (): string => {
-    const omitted = result.totalCandidates - selected.length;
-    const presentation = result.hits.length - selected.length;
-    const parts = [`omitted: ${omitted} of ${result.totalCandidates} ranked candidates (${result.omittedHits} by query limit; ${presentation} by MCP budget)`];
-    if (compactedLines > 0) parts.push(`${compactedLines} source lines compacted`);
-    return `${parts.join("; ")}. Use askDetailed API for complete structured results.`;
-  };
-  if (result.totalCandidates === 0) return `${header()}\nno matches in indexed definitions or text`;
-  for (const block of blocks) {
-    compactedLines += block.compacted;
-    if ([header(), ...selected, block.text, footer()].join("\n\n").length <= maxCodeUnits) {
-      selected.push(block.text);
-    } else compactedLines -= block.compacted;
-  }
-  return [header(), ...selected, footer()].join("\n\n");
-}
 
 export function formatFindText(groups: readonly FindTextGroup[]): string {
   if (groups.length === 0) return "no matches";
@@ -120,53 +85,6 @@ export function formatFindTextResult(result: FindTextResult): string {
   return lines.join("\n");
 }
 
-export function formatFindTextResultBounded(result: FindTextResult, maxCodeUnits: number): string {
-  if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 512) {
-    throw new RangeError("osnova: find-text budget must be a safe integer of at least 512 code units");
-  }
-  const selected = new Map<number, { label: string; lines: string[] }>();
-  let displayedMatches = 0;
-  let compactedLines = 0;
-  const render = (): string => {
-    const summary = `indexed-text search: ${displayedMatches}/${result.totalMatches} matches, ${selected.size}/${result.totalGroups} groups`;
-    const blocks = [...selected.values()].map((group) => [group.label, ...group.lines].join("\n"));
-    const omittedMatches = result.totalMatches - displayedMatches;
-    const omittedGroups = result.totalGroups - selected.size;
-    const notes: string[] = [];
-    if (omittedMatches > 0 || omittedGroups > 0) {
-      notes.push(`omitted: ${omittedMatches} of ${result.totalMatches} matches; ${omittedGroups} of ${result.totalGroups} groups`);
-      notes.push(`query selection omitted ${result.omittedMatches} matches and ${result.omittedGroups} groups`);
-    }
-    if (compactedLines > 0) notes.push(`${compactedLines} source lines compacted`);
-    if (notes.length > 0) notes.push("Use findTextDetailed API for complete structured results.");
-    if (result.totalMatches === 0) notes.push("no matches in indexed text");
-    return [summary, ...blocks, notes.join("; ")].filter(Boolean).join("\n");
-  };
-  for (let groupIndex = 0; groupIndex < result.groups.length; groupIndex += 1) {
-    const group = result.groups[groupIndex];
-    if (group === undefined) continue;
-    const symbol = group.symbol === null ? `<module> ${compactField(group.file, 180)}`
-      : `${group.symbol.kind} ${compactField(group.symbol.qualifiedName, 180)}`;
-    for (const match of group.matches) {
-      const source = match.text.trim();
-      const compact = compactField(source, 180);
-      const line = `${compactField(group.file, 180)}:${match.line}:${match.col + 1}: ${compact}`;
-      const existing = selected.get(groupIndex);
-      if (existing === undefined) selected.set(groupIndex, { label: `${symbol} (${group.incomingEdges} in)`, lines: [line] });
-      else existing.lines.push(line);
-      displayedMatches += 1;
-      if (compact !== source) compactedLines += 1;
-      if (render().length > maxCodeUnits) {
-        displayedMatches -= 1;
-        if (compact !== source) compactedLines -= 1;
-        const current = selected.get(groupIndex);
-        current?.lines.pop();
-        if (current?.lines.length === 0) selected.delete(groupIndex);
-      }
-    }
-  }
-  return render();
-}
 
 export function formatSkeleton(result: SkeletonResult): string {
   const header = `${result.file} (${result.language}, ${result.lineCount} lines, ${result.entries.length} symbols)`;

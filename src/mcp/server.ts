@@ -7,12 +7,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { refreshWorkspace, indexGeneration } from "../api.js";
 import { resolveCacheDir } from "../cache/cache.js";
-import { askDetailed } from "../query/ask.js";
+import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAskDetailedBounded, formatCallersDetailedBounded, formatFindTextResultBounded, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
+import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
@@ -20,14 +20,12 @@ const OSNOVA_VERSION = "0.1.0";
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
-const maximumMcpAskCodeUnits = 4_096;
-const maximumMcpFindTextCodeUnits = 3_072;
 
 const toolDefinitions = [
   {
     name: "osnova_ask",
     description:
-      "Ranked indexed definition/text search. MCP output is bounded under 4096 code units with candidate, query-limit and presentation-limit omissions; askDetailed returns complete structured candidates. full=true still respects MCP presentation limits.",
+      "Keyword search over an indexed workspace. Returns ranked hits with exact file:line and a short excerpt of the enclosing definition; full=true inlines the whole definition span. askDetailed provides complete candidate counts through the API.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -42,7 +40,7 @@ const toolDefinitions = [
   {
     name: "osnova_find_text",
     description:
-      "Regex or literal indexed-text search grouped by enclosing symbol. MCP output preserves displayed file:line evidence under 3072 code units with exact query/presentation omissions; findTextDetailed returns complete structured matches.",
+      "Regex or literal search over indexed text, grouped by enclosing symbol and ranked by incoming-edge count. Shows at most 10 matches per group and 50 groups by default, with totals and explicit omission counts.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -124,13 +122,12 @@ export function createOsnovaMcpServer(
       switch (name) {
         case "osnova_ask": {
           const question = requireString(args, "question");
-          const result = askDetailed(index, question, {
+          const result = ask(index, question, {
             in: optionalString(args, "in"),
             limit: optionalNumber(args, "limit"),
             full: optionalBoolean(args, "full"),
           });
-          const available = maximumMcpAskCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${formatAskDetailedBounded(result, available)}`);
+          return textResult(`${prefix}\n${formatAsk(result)}`);
         }
         case "osnova_find_text": {
           const pattern = requireString(args, "pattern");
@@ -144,8 +141,7 @@ export function createOsnovaMcpServer(
             limit: args.limit ?? 50,
             matchesPerGroup: 10,
           });
-          const available = maximumMcpFindTextCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${formatFindTextResultBounded(result, available)}`);
+          return textResult(`${prefix}\n${formatFindTextResult(result)}`);
         }
         case "osnova_skeleton": {
           const file = requireString(args, "file");
