@@ -14,7 +14,7 @@ it("probes every grammar and reports cache access without creating it or reading
   const report = await doctor(root, { cacheDir: path.join(root, "absent", "cache") });
   expect(report.ok).toBe(true);
   expect(report.checks.find((check) => check.id === "cache")?.status).toBe("warning");
-  expect(report.capabilities).toHaveLength(8);
+  expect(report.capabilities).toHaveLength(20);
   expect(report.capabilities.every((capability) => capability.status === "ok")).toBe(true);
   expect(report.capabilities.every((capability) => capability.typeInference === false)).toBe(true);
   expect(JSON.stringify(report)).not.toContain("not-for-output");

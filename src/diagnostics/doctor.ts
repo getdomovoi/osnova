@@ -81,6 +81,18 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     rust: "fn probe() {}",
     java: "class Probe { void probe() {} }",
     c_sharp: "class Probe { void Run() {} }",
+    c: "int probe() { return 1; }",
+    cpp: "int probe() { return 1; }",
+    ruby: "def probe\n  1\nend\n",
+    php: "<?php\nfunction probe() { return 1; }\n",
+    kotlin: "fun probe(): Int { return 1 }",
+    swift: "func probe() -> Int { return 1 }",
+    scala: "object Probe { def probe(): Int = 1 }",
+    dart: "int probe() { return 1; }",
+    elixir: "defmodule Probe do\n  def probe do\n    1\n  end\nend\n",
+    ocaml: "let probe () = 1",
+    zig: "fn probe() i32 { return 1; }",
+    bash: "probe() { echo 1; }",
   };
   const capabilities: LanguageCapability[] = [];
   for (const language of Object.keys(grammarFile).sort() as LanguageId[]) {

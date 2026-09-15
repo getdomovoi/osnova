@@ -13,7 +13,7 @@ import type { LspCacheOptions, LspDiagnostic, LspEnrichmentResult, LspLaunchSpec
 
 export const lspEnrichmentLimits = Object.freeze({ maxServers: 16, maxQueries: 256, maxLocations: 256, maxFiles: 4_096, maxSourceBytes: 67_108_864, maxSidecarBytes: 16_777_216, refreshTimeoutMs: 30_000 });
 const languageIds: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
-const protocolLanguages: Record<LanguageId, string> = { typescript: "typescript", tsx: "typescriptreact", javascript: "javascript", python: "python", go: "go", rust: "rust", java: "java", c_sharp: "csharp" };
+const protocolLanguages: Readonly<Partial<Record<LanguageId, string>>> = { typescript: "typescript", tsx: "typescriptreact", javascript: "javascript", python: "python", go: "go", rust: "rust", java: "java", c_sharp: "csharp" };
 const queues = new Map<string, Promise<unknown>>();
 
 function digest(value: string | Buffer): string { return createHash("sha256").update(value).digest("hex"); }

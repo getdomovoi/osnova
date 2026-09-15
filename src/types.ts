@@ -8,7 +8,19 @@ export type LanguageId =
   | "go"
   | "rust"
   | "java"
-  | "c_sharp";
+  | "c_sharp"
+  | "c"
+  | "cpp"
+  | "ruby"
+  | "php"
+  | "kotlin"
+  | "swift"
+  | "scala"
+  | "dart"
+  | "elixir"
+  | "ocaml"
+  | "zig"
+  | "bash";
 
 export type CardLanguage = LanguageId | "fallback";
 
@@ -28,7 +40,8 @@ export type SymbolKind =
   | "trait"
   | "enum"
   | "type"
-  | "constant";
+  | "constant"
+  | "module";
 
 export interface OsnovaSymbol {
   readonly name: string;

@@ -27,9 +27,11 @@ import { rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
 import { lazyTextCard, serializeText } from "./textStore.js";
+import { grammarFile } from "../grammar/languages.js";
+import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = "structural-7.scan-3.tree-sitter-0.25.10.grammars-0.1.13";
+export const extractionVersion = `structural-8.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 class ExtractionVersionError extends Error {}
@@ -179,7 +181,7 @@ export function deserializeArtifact(data: string, textPath: string | undefined, 
   const files = new Map<string, FileCard>();
   for (const file of artifact.files) {
     if (typeof file !== "object" || file === null || !validRelativePath(file.path) || files.has(file.path) ||
-      !["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp", "fallback"].includes(file.language) ||
+      !(Object.keys(grammarFile).includes(file.language) || file.language === "fallback") ||
       typeof file.hash !== "string" || !/^[a-f0-9]{64}$/.test(file.hash) ||
       !nonnegativeInteger(file.size) || !nonnegativeInteger(file.lineCount) ||
       !nonnegativeInteger(file.to) || !nonnegativeInteger(file.tl) || file.to + file.tl > artifact.textBytes ||
@@ -200,7 +202,7 @@ export function deserializeArtifact(data: string, textPath: string | undefined, 
     const symbols = file.symbols.map((symbol: SerializedSymbol) => {
       if (typeof symbol !== "object" || symbol === null || typeof symbol.name !== "string" ||
         typeof symbol.q !== "string" || !symbol.q.startsWith(`${file.path}#`) || typeof symbol.signature !== "string" ||
-        !["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant"].includes(symbol.kind) ||
+        !["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant", "module"].includes(symbol.kind) ||
         typeof symbol.span !== "object" || symbol.span === null || !positiveInteger(symbol.span.s) ||
         !positiveInteger(symbol.span.e) || symbol.span.e < symbol.span.s || symbol.span.e > file.lineCount ||
         !nonnegativeInteger(symbol.span.sc) || !nonnegativeInteger(symbol.span.ec) ||

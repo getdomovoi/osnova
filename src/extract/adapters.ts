@@ -8,7 +8,7 @@ import { javaAdapter } from "./java.js";
 import { csharpAdapter } from "./csharp.js";
 import type { LanguageId } from "../types.js";
 
-const adapters: Readonly<Record<LanguageId, LanguageAdapter>> = {
+const adapters: Partial<Record<LanguageId, LanguageAdapter>> = {
   typescript: makeTsLikeAdapter("typescript"),
   tsx: makeTsLikeAdapter("tsx"),
   javascript: makeTsLikeAdapter("javascript"),
@@ -20,7 +20,9 @@ const adapters: Readonly<Record<LanguageId, LanguageAdapter>> = {
 };
 
 export function adapterFor(language: LanguageId): LanguageAdapter {
-  return adapters[language];
+  const adapter = adapters[language];
+  if (adapter === undefined) throw new Error(`osnova: no adapter for ${language}`);
+  return adapter;
 }
 
 export const fallbackAdapter: LanguageAdapter = {
