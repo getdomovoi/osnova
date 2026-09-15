@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+    "indexedFiles": 7653,
+    "editedFile": "packages/pyright-internal/src/common/pathUtils.ts"
+  },
+  "baseline": {
+    "revision": "af40f15",
+    "noChangeMs": [
+      829.9925840000005,
+      828.3782090000004,
+      828.5093750000015,
+      833.651208000003,
+      828.1337910000002,
+      833.0981670000037,
+      822.2923340000052
+    ],
+    "editedMs": [
+      2512.5232080000005,
+      2407.1270839999997,
+      2401.7104160000017,
+      2516.704958000002,
+      2405.3380419999958,
+      2411.475666999999,
+      2472.1785409999866
+    ],
+    "noChangeMedianMs": 828.5093750000015,
+    "editedMedianMs": 1885.2169159999994,
+    "noChangeP95Ms": 833.651208000003,
+    "editedP95Ms": 1925.4734579999995,
+    "firstBuildMs": 3920.541583,
+    "workerPeakRssBytes": 1398030336
+  },
+  "optimized": {
+    "revision": "2b06e03",
+    "noChangeMs": [
+      823.2275410000002,
+      819.7818749999988,
+      821.4013750000013,
+      826.0024999999987,
+      823.502916999998,
+      825.3822500000024,
+      820.2669580000002
+    ],
+    "editedMs": [
+      1987.1998750000002,
+      1962.731291,
+      1962.5268749999996,
+      1956.9362089999995,
+      1959.736499999999,
+      1961.6344160000008,
+      1965.0339170000007
+    ],
+    "noChangeMedianMs": 823.2275410000002,
+    "editedMedianMs": 1962.5268749999996,
+    "noChangeP95Ms": 826.0024999999987,
+    "editedP95Ms": 1987.1998750000002,
+    "firstBuildMs": 4077.489708,
+    "workerPeakRssBytes": 1226293248
+  },
+  "improvement": {
+    "noChangeMedianPercent": 0.64,
+    "editedMedianPercent": -4.1,
+    "noChangeP95Percent": 0.92,
+    "editedP95Percent": -3.21
+  },
+  "sections": {
+    "before": {
+      "indexJsonRawBytes": 35593105,
+      "indexJsonStoredBytes": 2936848,
+      "textBinBytes": 24760138
+    },
+    "after": {
+      "indexJsonRawBytes": 8381423,
+      "indexJsonStoredBytes": 1703855,
+      "edgesJsonRawBytes": 8343146,
+      "edgesJsonStoredBytes": 897336,
+      "indexShaBytes": 65,
+      "textBinBytes": 24760138
+    }
+  },
+  "queries": {
+    "method": "One buildIndex into a scratch cache per tree, then a fresh Node process per measurement: loadIndex (timed), the first index.edges.length access (timed; realizes the lazy edges.json read on the optimized tree, already realized on the baseline tree), the first ask(index, \"resolve import path from stub file\", { limit: 5 }) (timed), then the first and second scopedAsk(index, \"resolve import path\") in the same process (timed). Each of the three trials per tree is a separate fresh-process run against a freshly rebuilt scratch cache; medians are reported.",
+    "before": {
+      "loadIndexMedianMs": 221.58979100000002,
+      "firstEdgesAccessMedianMs": 0.00041700000002720117,
+      "firstAskMedianMs": 743.204667,
+      "firstScopedAskMedianMs": 1254.195333,
+      "secondScopedAskMedianMs": 1229.0930830000002,
+      "trials": {
+        "loadIndexMs": [218.33425, 230.038083, 221.58979100000002],
+        "firstEdgesAccessMs": [0.00041700000002720117, 0.0006250000000136424, 0.00041699999997035775],
+        "firstAskMs": [732.598125, 749.3183750000001, 743.204667],
+        "firstScopedAskMs": [1251.9740000000002, 1254.195333, 1264.635],
+        "secondScopedAskMs": [1207.4098330000002, 1229.0930830000002, 1255.541542]
+      }
+    },
+    "after": {
+      "loadIndexMedianMs": 64.00191699999999,
+      "firstEdgesAccessMedianMs": 48.116209,
+      "firstAskMedianMs": 753.14475,
+      "firstScopedAskMedianMs": 578.069583,
+      "secondScopedAskMedianMs": 562.9878750000003,
+      "trials": {
+        "loadIndexMs": [61.781333, 64.00191699999999, 64.05458300000001],
+        "firstEdgesAccessMs": [46.913583, 48.15774999999999, 48.116209],
+        "firstAskMs": [774.461209, 753.14475, 752.965375],
+        "firstScopedAskMs": [580.098292, 578.069583, 573.1713340000001],
+        "secondScopedAskMs": [567.5907500000003, 559.787542, 562.9878750000003]
+      }
+    }
+  },
+  "method": "Same host, pinned source and dependencies; disposable scratch caches; one initial build; seven warm no-change refreshes and seven one-file edited refreshes with untimed restoration/equality verification; nearest-rank p95; filesystem caches not flushed. Baseline built from the commit before this task set (af40f15); optimized built from the tip of this branch (2b06e03). Both runs used the same disposable checkout and the same manifest snapshot fingerprint, invoked through the harness's own documented --worker mode directly (same arguments the non-worker CLI wrapper would pass) because the baseline tree's full seven-sample run exceeds the wrapper's 60-second child-process timeout (scripts/bench/cli.ts). No harness file was modified. Section sizes and cold-query timings were measured separately from the harness with small scripts against each tree's dist/index.js, since the harness reports only serializedArtifactBytes/storedArtifactBytes for the structural core and no per-file query timings; those scripts are not part of the committed record.",
+  "correctness": {
+    "incrementalEqualsFull": true,
+    "lazyEdgesVerified": true,
+    "copyOnPublishVerified": true,
+    "probeFirstVerified": true
+  },
+  "limitations": [
+    "editedRefreshMs regressed on this workload relative to the pre-task-set baseline (median -4.10%, p95 -3.21%) while noChangeRefreshMs improved marginally (median +0.64%, p95 +0.92%); format 9's lazy edges, string tables and copy-on-publish target artifact size, memory and cold-query latency, not edited-refresh wall time, and the extra index.sha and edges.json writes on a dirty refresh add file-system overhead the format-8 single-file core did not have.",
+    "Cold ask() latency is roughly unchanged between trees (before median 743.20ms, after median 753.14ms); the per-file document cache that helps warm asks does not help a fully cold first query, and format 9's smaller core reduces parse cost but not the extraction/indexing cost that dominates a cold ask.",
+    "The benchmark harness (scripts/bench/runner.ts) has no scopedAsk case kind, so scopedAsk timings and hit counts come only from the separate cold-query script, not from the recorded harness cases; the round-robin scope merge from the prior commit was reverted pending a scoped-ask acceptance gate (see benchmarks/results/scope-ranking-2026-09-15.json), so these scopedAsk numbers reflect round-robin merge behavior, not the reverted comparable-score candidate.",
+    "The benchmark is one repository and one machine with warm filesystem caches, not a universal latency claim.",
+    "incrementalEqualsFull, lazyEdgesVerified and copyOnPublishVerified are established by the repository's own test suite (test/incremental.test.ts's determinism and randomized incremental-equals-full property test; test/copy-on-publish.test.ts's shared-file-descriptor publish test; test/artifact-format9.test.ts's lazy edges.json load test), not re-verified independently by this record; probeFirstVerified is established by test/probe-first.test.ts.",
+    "workerPeakRssBytes and firstBuildMs are reported by the harness but not the primary subject of this record; baseline (af40f15) firstBuildMs 3920.541583 and workerPeakRssBytes 1398030336, optimized (2b06e03) firstBuildMs 4077.489708 and workerPeakRssBytes 1226293248."
+  ]
+}
