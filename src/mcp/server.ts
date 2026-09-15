@@ -12,7 +12,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAskDetailedBounded, formatCallersDetailedBounded, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
+import { formatAskDetailedBounded, formatCallersDetailedBounded, formatFindTextResultBounded, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
@@ -21,6 +21,7 @@ const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpAskCodeUnits = 4_096;
+const maximumMcpFindTextCodeUnits = 3_072;
 
 const toolDefinitions = [
   {
@@ -41,7 +42,7 @@ const toolDefinitions = [
   {
     name: "osnova_find_text",
     description:
-      "Regex or literal search over indexed text, grouped by enclosing symbol and ranked by incoming-edge count. Shows at most 10 matches per group and 50 groups by default, with totals and explicit omission counts.",
+      "Regex or literal indexed-text search grouped by enclosing symbol. MCP output preserves displayed file:line evidence under 3072 code units with exact query/presentation omissions; findTextDetailed returns complete structured matches.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -120,8 +121,6 @@ export function createOsnovaMcpServer(
       const index = await refresh();
       const generation = `generation ${indexGeneration(index)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
-      const respond = (text: string): ReturnType<typeof textResult> =>
-        textResult([generation, formatIndexHealthSummary(index), text].filter(Boolean).join("\n"));
       switch (name) {
         case "osnova_ask": {
           const question = requireString(args, "question");
@@ -145,7 +144,8 @@ export function createOsnovaMcpServer(
             limit: args.limit ?? 50,
             matchesPerGroup: 10,
           });
-          return respond(formatFindTextResult(result));
+          const available = maximumMcpFindTextCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${formatFindTextResultBounded(result, available)}`);
         }
         case "osnova_skeleton": {
           const file = requireString(args, "file");
