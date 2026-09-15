@@ -50,12 +50,27 @@ async function loadIgnoreFile(absPath: string): Promise<string[]> {
 export interface ScanResult {
   readonly paths: string[];
   readonly truncated: number;
+  readonly metadata: ReadonlyMap<string, FileMetadata>;
+}
+
+export interface FileMetadata {
+  readonly size: number;
+  readonly mtimeNs: string;
+  readonly ctimeNs: string;
+  readonly ino: string;
+  readonly dev: string;
+}
+
+export function sameFileMetadata(a: FileMetadata | undefined, b: FileMetadata | undefined): boolean {
+  return a !== undefined && b !== undefined && a.size === b.size && a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs && a.ino === b.ino && a.dev === b.dev;
 }
 
 export async function scanFiles(absRoot: string, cacheDir?: string): Promise<ScanResult> {
   absRoot = await canonicalWorkspaceRoot(absRoot);
 
   const paths: string[] = [];
+  const metadata = new Map<string, FileMetadata>();
   let truncated = 0;
 
   const walk = async (dir: string, relDir: string, inherited: readonly { base: string; rules: Ignore }[]): Promise<void> => {
@@ -93,19 +108,23 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
       if (ignored(rel)) continue;
       let stat;
       try {
-        stat = await fs.stat(path.join(dir, entry.name));
+        stat = await fs.stat(path.join(dir, entry.name), { bigint: true });
       } catch (error) {
         throw new IndexingError({ phase: "scan", path: rel, code: "stat-failed" }, error);
       }
-      if (stat.size > maximumIndexedFileSizeBytes) {
+      if (stat.size > BigInt(maximumIndexedFileSizeBytes)) {
         truncated += 1;
         continue;
       }
       paths.push(rel);
+      metadata.set(rel, {
+        size: Number(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs),
+        ino: String(stat.ino), dev: String(stat.dev),
+      });
     }
   };
 
   await walk(absRoot, "", []);
   paths.sort();
-  return { paths, truncated };
+  return { paths, truncated, metadata };
 }

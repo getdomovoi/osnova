@@ -23,6 +23,7 @@ import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimi
 import type { CachePolicy } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
 import { IndexingError } from "./diagnostics.js";
+import { rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
 
@@ -239,7 +240,9 @@ export function deserializeArtifact(data: string): OsnovaIndexImpl {
   if (artifact.checksum !== sha256Hex(JSON.stringify({ root: artifact.root, files: artifact.files, edges: artifact.edges }))) {
     throw new Error("osnova: corrupt artifact checksum");
   }
-  return new OsnovaIndexImpl(artifact.root, files, edges);
+  const index = new OsnovaIndexImpl(artifact.root, files, edges);
+  rememberIndexGeneration(index, data);
+  return index;
 }
 
 function nonnegativeInteger(value: unknown): value is number {
@@ -325,7 +328,8 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
     try {
       await fs.mkdir(dir, { recursive: true });
       if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error("cache workspace must not be a symlink");
-      const raw = serializeArtifact(index);
+    const raw = serializeArtifact(index);
+    rememberIndexGeneration(index, raw);
       const gzipped = raw.length > GZIP_THRESHOLD_BYTES;
       const finalPath = path.join(dir, "index.json");
       tmpPath = `${finalPath}.tmp-${process.pid}-${randomUUID()}`;

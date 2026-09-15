@@ -138,7 +138,7 @@ it("publishes compressed and plain generations through one atomic artifact path"
   for (let i = 0; i < 6; i += 1) await fs.unlink(path.join(root, `${i}.txt`));
   const small = await refreshWorkspace(root, { cacheDir });
   expect((await fs.readFile(target)).toString()).toBe(serializeArtifact(small).toString());
-  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "index.json"]);
+  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "index.json", "verification.json"]);
 });
 
 it("reports an unwritable cache target explicitly", async () => {

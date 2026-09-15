@@ -121,7 +121,7 @@ export async function evictLru(cacheDir: string, policy: number | CachePolicy = 
       try {
         await withCacheLock(`${victim.dir}.lock`, async () => {
           const names = await fs.readdir(victim.dir);
-          const owned = names.filter((name) => ["index.json", "index.json.gz", "access"].includes(name));
+          const owned = names.filter((name) => ["index.json", "index.json.gz", "access", "verification.json"].includes(name));
           const access = Number(await fs.readFile(path.join(victim.dir, "access"), "utf8").catch((error: unknown) => {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") return "0";
             throw error;

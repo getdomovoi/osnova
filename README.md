@@ -134,6 +134,8 @@ Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the
 
 Nested `.gitignore` and `.osnovaignore` rules are applied by directory with negation support. Runtime Osnova cache directories inside a workspace are always excluded. Cache artifacts carry envelope/content checksums and extraction-version identity; text, size, line count and source hashes are validated on load. Access metadata drives LRU eviction, with count and artifact-byte caps. Sidecars not owned by the core artifact lifecycle are preserved.
 
+Successful full verification writes a generation-bound metadata sidecar with file size, nanosecond mtime/ctime, inode and device. Subsequent workspace refreshes can skip content reads when every field and the artifact generation still match; any path/metadata change hashes affected files, while missing/corrupt/mismatched sidecars fall back to full hashing. Public `freshness()` always hashes content. Structural generation IDs are cached from exact serialized bytes.
+
 Scanning applies root and nested `.gitignore` plus optional `.osnovaignore` rules with scoped negation, skips dotfiles and configured output/dependency directories, and excludes files above 1 MB. Binary or non-UTF8 files get fallback cards with source hashes and empty text rather than searchable contents.
 
 ## Development

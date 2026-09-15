@@ -3,11 +3,26 @@ import type { FreshnessReport, OsnovaIndex } from "../types.js";
 import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
-import { scanFiles, sha256Hex, sourceText } from "./scan.js";
+import { scanFiles, sameFileMetadata, sha256Hex, sourceText } from "./scan.js";
+import type { FileMetadata } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, indexCacheDirectory, workspaceFilePath, workspaceRelativePath } from "./workspace.js";
 
 export async function freshness(index: OsnovaIndex, root: string): Promise<FreshnessReport> {
+  return (await inspectFreshness(index, root)).report;
+}
+
+export interface FreshnessInspection {
+  readonly report: FreshnessReport;
+  readonly metadata: ReadonlyMap<string, FileMetadata>;
+  readonly hashedFiles: number;
+}
+
+export async function inspectFreshness(
+  index: OsnovaIndex,
+  root: string,
+  verified?: ReadonlyMap<string, FileMetadata>,
+): Promise<FreshnessInspection> {
   const absRoot = await canonicalWorkspaceRoot(root);
   if (index.root !== absRoot) {
     throw new Error(
@@ -19,6 +34,7 @@ export async function freshness(index: OsnovaIndex, root: string): Promise<Fresh
   const added: string[] = [];
   const changed: string[] = [];
   const deleted: string[] = [];
+  let hashedFiles = 0;
 
   for (const relPath of scan.paths) {
     const card = index.files.get(relPath);
@@ -26,7 +42,9 @@ export async function freshness(index: OsnovaIndex, root: string): Promise<Fresh
       added.push(relPath);
       continue;
     }
+    if (sameFileMetadata(verified?.get(relPath), scan.metadata.get(relPath))) continue;
     try {
+      hashedFiles += 1;
       const buffer = await fs.readFile(await workspaceFilePath(absRoot, relPath));
       if (sha256Hex(buffer) !== card.hash || card.size !== buffer.length || card.text !== (sourceText(buffer) ?? "")) changed.push(relPath);
     } catch (error) {
@@ -43,7 +61,7 @@ export async function freshness(index: OsnovaIndex, root: string): Promise<Fresh
   added.sort();
   changed.sort();
   deleted.sort();
-  return { added, changed, deleted };
+  return { report: { added, changed, deleted }, metadata: scan.metadata, hashedFiles };
 }
 
 export function isStale(report: FreshnessReport): boolean {
@@ -72,6 +90,16 @@ export async function applyChanges(
   root: string,
   paths: Iterable<string>,
 ): Promise<OsnovaIndex> {
+  const inspection = await inspectFreshness(index, root);
+  return applyFreshnessReport(index, root, paths, inspection.report);
+}
+
+export async function applyFreshnessReport(
+  index: OsnovaIndex,
+  root: string,
+  paths: Iterable<string>,
+  report: FreshnessReport,
+): Promise<OsnovaIndex> {
   const absRoot = await canonicalWorkspaceRoot(root);
   if (index.root !== absRoot) {
     throw new Error(
@@ -89,7 +117,6 @@ export async function applyChanges(
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
-  const report = await freshness(index, absRoot);
   const normalized = [...new Set([...requested, ...report.added, ...report.changed, ...report.deleted])].sort();
   if (normalized.length === 0) return index;
   const deleted = new Set(report.deleted);

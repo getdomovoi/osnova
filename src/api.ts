@@ -6,9 +6,10 @@ import { canonicalWorkspaceRoot, workspaceIdentity, validRelativePath } from "./
 import type { WorkspaceOptions } from "./index/workspace.js";
 import { withCacheLock } from "./cache/lock.js";
 import { buildIndexSnapshot } from "./index/build.js";
-import { freshness, applyChanges, isStale } from "./index/incremental.js";
-import { sha256Hex } from "./index/scan.js";
+import { applyFreshnessReport, inspectFreshness, isStale } from "./index/incremental.js";
+import { loadVerification, saveVerification } from "./index/verification.js";
 import { IndexingError } from "./index/diagnostics.js";
+import { knownIndexGeneration, rememberIndexGeneration } from "./index/generation.js";
 
 export type { WorkspaceOptions } from "./index/workspace.js";
 export type { CachePolicy } from "./cache/cache.js";
@@ -22,7 +23,7 @@ export interface EvidenceFingerprint {
 }
 
 export function indexGeneration(index: OsnovaIndex): string {
-  return sha256Hex(serializeArtifact(index));
+  return knownIndexGeneration(index) ?? rememberIndexGeneration(index, serializeArtifact(index));
 }
 
 export function evidenceFingerprint(index: OsnovaIndex, paths: Iterable<string> = index.files.keys()): EvidenceFingerprint {
@@ -52,9 +53,11 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
   const task = withCacheLock(workspaceLockPath(canonicalCache, canonicalRoot), async () => {
     let index: OsnovaIndex | undefined = await loadArtifact(canonicalRoot, canonicalCache);
     let dirty = index === undefined;
+    let verified = index === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, indexGeneration(index)))?.files;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
-      const report = await freshness(index, canonicalRoot);
+      const inspection = await inspectFreshness(index, canonicalRoot, verified);
+      const report = inspection.report;
       if (!isStale(report)) {
         if (dirty) await saveArtifact(index, canonicalCache, options);
         else {
@@ -64,9 +67,15 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
           }
           await evictLru(canonicalCache, options);
         }
+        try {
+          await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
+        } catch (error) {
+          throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
+        }
         return index;
       }
-      index = await applyChanges(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted]);
+      index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
+      verified = inspection.metadata;
       dirty = true;
     }
     throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });

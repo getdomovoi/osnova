@@ -17,13 +17,14 @@ import { OsnovaIndexImpl, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { resolveCacheDir, workspaceLockPath } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
-import { saveArtifact } from "./serialize.js";
+import { saveArtifact, serializeArtifact } from "./serialize.js";
+import { saveVerification } from "./verification.js";
 import { resolveEdges } from "./resolve.js";
 import { scanFiles, sha256Hex, sourceText } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
 import type { WorkspaceOptions } from "./workspace.js";
-import { freshness, isStale } from "./incremental.js";
+import { inspectFreshness, isStale } from "./incremental.js";
 
 function languageOf(relPath: string): CardLanguage {
   return languageForPath(relPath) ?? "fallback";
@@ -143,9 +144,11 @@ export async function buildIndex(root: string, options?: WorkspaceOptions): Prom
   return withCacheLock(workspaceLockPath(canonicalCache, absRoot), async () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const index = await buildIndexSnapshot(absRoot, options?.onProgress, canonicalCache);
-      if (isStale(await freshness(index, absRoot))) continue;
+      const inspection = await inspectFreshness(index, absRoot);
+      if (isStale(inspection.report)) continue;
       options?.onProgress?.({ phase: "save", done: 0, total: 0 });
       await saveArtifact(index, canonicalCache, options);
+      await saveVerification(canonicalCache, absRoot, sha256Hex(serializeArtifact(index)), inspection.metadata);
       return index;
     }
     throw new IndexingError({ phase: "scan", path: absRoot, code: "workspace-changing" });
