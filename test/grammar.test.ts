@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getParser, loadLanguage, probeGrammars } from "../src/grammar/loader.js";
 import { languageForPath, genericLanguages, languageTier, grammarFile } from "../src/grammar/languages.js";
 import { queryFor, queriesFingerprint } from "../src/grammar/queries/index.js";
+import { adapterFor } from "../src/extract/adapters.js";
 
 describe("grammar loader", () => {
   it("probes the typescript grammar without ABI errors", async () => {
@@ -103,6 +104,24 @@ describe("breadth registry", () => {
     for (const language of genericLanguages) {
       const loaded = await loadLanguage(language);
       expect(loaded.abiVersion, language).toBeGreaterThanOrEqual(13);
+    }
+  });
+
+  it("compiles a fresh breadth-tier query without the deprecated Language.query warning", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const source = "class Greeter {\n  void greet() {}\n}\n";
+    try {
+      const parser = await getParser("dart");
+      const tree = parser.parse(source);
+      expect(tree).not.toBeNull();
+      adapterFor("dart").extract(tree!, source);
+      tree?.delete();
+      expect(stderrSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 });

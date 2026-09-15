@@ -1,3 +1,4 @@
+import { Query } from "web-tree-sitter";
 import { EMPTY_ADAPTER_OUTPUT } from "./adapter.js";
 import type { LanguageAdapter } from "./adapter.js";
 import { makeTsLikeAdapter } from "./typescript.js";
@@ -33,7 +34,7 @@ for (const language of genericLanguages) {
   adapters[language] = makeGenericAdapter(
     language,
     query,
-    (source) => loadedLanguage(language).query(source),
+    (source) => new Query(loadedLanguage(language), source),
     genericIgnoreCallNames[language] ?? new Set(),
   );
 }
