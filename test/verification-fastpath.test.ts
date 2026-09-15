@@ -42,6 +42,44 @@ it("uses generation-bound metadata after a full authoritative build", async () =
   expect(serializeArtifact(refreshed)).toEqual(serializeArtifact(built));
 });
 
+it("reuses an immutable loaded index while the published artifact identity is unchanged", async () => {
+  const first = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  const second = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  expect(second).toBe(first);
+  await fs.writeFile(path.join(workspace, "file-0.ts"), "export function changed() { return 0; }\n");
+  const changed = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  expect(changed).not.toBe(first);
+  expect(await refreshWorkspace(workspace, { cacheDir, reuseMemory: true })).toBe(changed);
+});
+
+it("does not reuse a caller-visible index object unless explicitly enabled", async () => {
+  const first = await refreshWorkspace(workspace, { cacheDir });
+  const second = await refreshWorkspace(workspace, { cacheDir });
+  expect(second).not.toBe(first);
+  expect(indexGeneration(second)).toBe(indexGeneration(first));
+});
+
+it("invalidates in-memory data when another process could have published the artifact", async () => {
+  const first = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  const artifact = path.join(workspaceDirFor(cacheDir, first.root), "index.json");
+  const future = new Date(Date.now() + 5_000);
+  await fs.utimes(artifact, future, future);
+  const reloaded = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  expect(reloaded).not.toBe(first);
+  expect(indexGeneration(reloaded)).toBe(indexGeneration(first));
+});
+
+it("does not hide externally corrupted or deleted artifacts behind memory", async () => {
+  const first = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  const artifact = path.join(workspaceDirFor(cacheDir, first.root), "index.json");
+  await fs.writeFile(artifact, "corrupt");
+  await expect(refreshWorkspace(workspace, { cacheDir, reuseMemory: true })).rejects.toThrow(/cache-read-failed/);
+  await fs.rm(artifact);
+  const rebuilt = await refreshWorkspace(workspace, { cacheDir, reuseMemory: true });
+  expect(indexGeneration(rebuilt)).toBe(indexGeneration(first));
+  expect(rebuilt).not.toBe(first);
+});
+
 it("recovers generation identity from exact persisted artifact bytes", async () => {
   const built = await buildIndex(workspace, { cacheDir });
   const loaded = await (await import("../src/index/serialize.js")).loadArtifact(built.root, cacheDir);

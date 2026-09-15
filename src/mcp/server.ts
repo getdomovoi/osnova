@@ -102,7 +102,7 @@ export function createOsnovaMcpServer(
   const cacheDir = resolveCacheDir(options?.cacheDir);
   const absRoot = path.resolve(workspace);
   async function refresh(): Promise<OsnovaIndex> {
-    return refreshWorkspace(absRoot, { cacheDir });
+    return refreshWorkspace(absRoot, { cacheDir, reuseMemory: true });
   }
 
   const server = new Server(

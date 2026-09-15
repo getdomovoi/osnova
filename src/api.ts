@@ -36,6 +36,21 @@ export function evidenceFingerprint(index: OsnovaIndex, paths: Iterable<string> 
 }
 
 const refreshing = new Map<string, Promise<OsnovaIndex>>();
+const loadedIndexes = new Map<string, { index: OsnovaIndex; artifact: string }>();
+
+async function artifactSignature(root: string, cacheDir: string): Promise<string | undefined> {
+  const artifact = await artifactPathFor(root, cacheDir);
+  if (artifact === undefined) return undefined;
+  const stat = await fs.stat(artifact, { bigint: true });
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function rememberLoaded(key: string, index: OsnovaIndex, artifact: string | undefined, limit: number): void {
+  loadedIndexes.delete(key);
+  if (artifact === undefined || limit === 0) return;
+  loadedIndexes.set(key, { index, artifact });
+  while (loadedIndexes.size > limit) loadedIndexes.delete(loadedIndexes.keys().next().value as string);
+}
 
 export async function refreshWorkspace(root: string, options: WorkspaceOptions = {}): Promise<OsnovaIndex> {
   const canonicalRoot = await canonicalWorkspaceRoot(root);
@@ -47,11 +62,15 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
     throw new IndexingError({ phase: "cache", path: cacheDir, code: "cache-write-failed" }, error);
   }
   const canonicalCache = await fs.realpath(cacheDir);
-  const key = JSON.stringify([canonicalCache, canonicalRoot, limits, options.lockTimeoutMs, options.lockPollMs]);
-  const running = refreshing.get(key);
+  const indexKey = JSON.stringify([canonicalCache, canonicalRoot]);
+  const taskKey = JSON.stringify([indexKey, limits, options.lockTimeoutMs, options.lockPollMs, options.reuseMemory]);
+  const running = refreshing.get(taskKey);
   if (running !== undefined) return running;
   const task = withCacheLock(workspaceLockPath(canonicalCache, canonicalRoot), async () => {
-    let index: OsnovaIndex | undefined = await loadArtifact(canonicalRoot, canonicalCache);
+    const published = await artifactSignature(canonicalRoot, canonicalCache);
+    const cached = loadedIndexes.get(indexKey);
+    let index: OsnovaIndex | undefined = options.reuseMemory === true && cached !== undefined && cached.artifact === published
+      ? cached.index : await loadArtifact(canonicalRoot, canonicalCache);
     let dirty = index === undefined;
     let verified = index === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, indexGeneration(index)))?.files;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -72,6 +91,9 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
         } catch (error) {
           throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
         }
+        if (options.reuseMemory === true) {
+          rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
+        }
         return index;
       }
       index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
@@ -80,11 +102,11 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
     }
     throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
   }, options);
-  refreshing.set(key, task);
+  refreshing.set(taskKey, task);
   try {
     return await task;
   } finally {
-    if (refreshing.get(key) === task) refreshing.delete(key);
+    if (refreshing.get(taskKey) === task) refreshing.delete(taskKey);
   }
 }
 
