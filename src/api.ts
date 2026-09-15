@@ -109,7 +109,7 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
       index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
       const inspection = clean && known !== undefined && attempt === 0 && !dirty
         ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
-        : await inspectFreshness(index, canonicalRoot, known);
+        : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
       const report = inspection.report;
       if (!isStale(report)) {
         if (dirty) await saveArtifact(index, canonicalCache, options);

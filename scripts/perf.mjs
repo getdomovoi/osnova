@@ -16,6 +16,7 @@ const BUDGET_CORE_LOAD_MS = 30;
 const BUDGET_SCAN_MS = 10;
 const BUDGET_EDGES_LOAD_MS = 40;
 const BUDGET_NOCHANGE_REFRESH_MS = 120;
+const BUDGET_CHANGED_REFRESH_MS = 800;
 
 function generate(root) {
   fs.rmSync(root, { recursive: true, force: true });
@@ -87,6 +88,7 @@ async function main() {
   const edgesStart = performance.now();
   const edgeCount = reloaded.edges.length;
   const edgesLoadMs = performance.now() - edgesStart;
+  await refreshWorkspace(repo, { cacheDir });
   const noChangeStart = performance.now();
   await refreshWorkspace(repo, { cacheDir });
   const noChangeMs = performance.now() - noChangeStart;
@@ -94,8 +96,17 @@ async function main() {
   if (edgesLoadMs > BUDGET_EDGES_LOAD_MS) failures.push(`edgesLoad ${edgesLoadMs.toFixed(0)}ms > ${BUDGET_EDGES_LOAD_MS}ms`);
   if (noChangeMs > BUDGET_NOCHANGE_REFRESH_MS) failures.push(`noChangeRefresh ${noChangeMs.toFixed(0)}ms > ${BUDGET_NOCHANGE_REFRESH_MS}ms`);
 
+  const changedRelPath = "mod0/file0.ts";
+  fs.appendFileSync(path.join(repo, "mod0", "file0.ts"), `export function perfProbeMarker(v: number): number { return v + 1; }\n`);
+  const changedStart = performance.now();
+  const changedIndex = await refreshWorkspace(repo, { cacheDir });
+  const changedRefreshMs = performance.now() - changedStart;
+  const changedCard = changedIndex.files.get(changedRelPath);
+  if (changedCard === undefined || !changedCard.text.includes("perfProbeMarker")) failures.push("changed refresh missed the edit");
+  if (changedRefreshMs > BUDGET_CHANGED_REFRESH_MS) failures.push(`changedRefresh ${changedRefreshMs.toFixed(0)}ms > ${BUDGET_CHANGED_REFRESH_MS}ms`);
+
   console.log(`files: ${index.files.size} symbols: ${index.symbols.size} edges: ${index.edges.length}`);
-  console.log(`build: ${buildMs.toFixed(0)}ms incremental: ${incrementalMs.toFixed(0)}ms coreLoad: ${coreLoadMs.toFixed(0)}ms scan: ${scanMs.toFixed(0)}ms edgesLoad: ${edgesLoadMs.toFixed(0)}ms noChangeRefresh: ${noChangeMs.toFixed(0)}ms artifact: ${(artifactBytes / 1024).toFixed(0)}KiB heap: ${(heapUsed / 1024 / 1024).toFixed(0)}MiB`);
+  console.log(`build: ${buildMs.toFixed(0)}ms incremental: ${incrementalMs.toFixed(0)}ms coreLoad: ${coreLoadMs.toFixed(0)}ms scan: ${scanMs.toFixed(0)}ms edgesLoad: ${edgesLoadMs.toFixed(0)}ms noChangeRefresh: ${noChangeMs.toFixed(0)}ms changedRefresh: ${changedRefreshMs.toFixed(0)}ms artifact: ${(artifactBytes / 1024).toFixed(0)}KiB heap: ${(heapUsed / 1024 / 1024).toFixed(0)}MiB`);
 
   if (buildMs > BUDGET_BUILD_MS) failures.push(`build ${buildMs.toFixed(0)}ms > ${BUDGET_BUILD_MS}ms`);
   if (incrementalMs > BUDGET_INCREMENTAL_MS) failures.push(`incremental ${incrementalMs.toFixed(0)}ms > ${BUDGET_INCREMENTAL_MS}ms`);

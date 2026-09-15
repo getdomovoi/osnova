@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { refreshWorkspace, indexGeneration } from "../src/api.js";
+import { scanFiles } from "../src/index/scan.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
 const dirs: string[] = [];
@@ -34,5 +35,35 @@ describe("probe-first refresh", () => {
     vi.spyOn(fs, "readFile").mockImplementation(async (p, ...rest) => { if (String(p).endsWith("index.json")) order.push("core"); return readFile(p, ...rest as [never]); });
     await refreshWorkspace(FIXTURE, { cacheDir });
     expect(order.indexOf("scan")).toBeLessThan(order.indexOf("core"));
+  });
+
+  it("dirty refresh walks the tree once more than a clean refresh, not twice more", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-probe-tree-")); dirs.push(dir);
+    const root = path.join(dir, "root");
+    const cacheDir = path.join(dir, "cache");
+    await fs.mkdir(path.join(root, "sub"), { recursive: true });
+    await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n");
+    await fs.writeFile(path.join(root, "sub", "b.ts"), "export const b = 1;\n");
+    await buildIndex(root, { cacheDir });
+
+    const readdir = fs.readdir;
+    async function countTreeReaddirs(fn: () => Promise<unknown>): Promise<number> {
+      let count = 0;
+      const spy = vi.spyOn(fs, "readdir").mockImplementation((async (p: Parameters<typeof fs.readdir>[0], ...rest: unknown[]) => {
+        if (String(p).startsWith(root)) count += 1;
+        return readdir(p, ...rest as [never]);
+      }) as typeof fs.readdir);
+      await fn();
+      spy.mockRestore();
+      return count;
+    }
+
+    const walkCalls = await countTreeReaddirs(() => scanFiles(root));
+    const cleanCalls = await countTreeReaddirs(() => refreshWorkspace(root, { cacheDir }));
+    expect(cleanCalls).toBe(walkCalls);
+
+    await fs.appendFile(path.join(root, "sub", "b.ts"), "export const c = 2;\n");
+    const dirtyCalls = await countTreeReaddirs(() => refreshWorkspace(root, { cacheDir }));
+    expect(dirtyCalls).toBe(cleanCalls + walkCalls);
   });
 });
