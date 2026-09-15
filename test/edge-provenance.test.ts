@@ -3,6 +3,7 @@ import { resolveEdges } from "../src/index/resolve.js";
 import { OsnovaIndexImpl } from "../src/index/indexImpl.js";
 import type { RawEdgeItem } from "../src/index/indexImpl.js";
 import { deserializeArtifact, serializeArtifact } from "../src/index/serialize.js";
+import { serializeText } from "../src/index/textStore.js";
 import { callers, callersDetailed } from "../src/query/callers.js";
 import { formatCallersDetailed } from "../src/query/format.js";
 import type { CardLanguage, FileCard } from "../src/types.js";
@@ -79,7 +80,7 @@ describe("edge provenance", () => {
   it("persists evidence through artifact round trips", () => {
     const original = index([card("a.ts", ["A.work", "B.work", "entry"])], "a.ts", [call]);
     const bytes = serializeArtifact(original);
-    const loaded = deserializeArtifact(bytes.toString());
+    const loaded = deserializeArtifact(bytes.toString(), undefined, serializeText(original).bytes);
     expect(loaded.edges[0]?.evidence?.source).toBe("syntax");
     expect(loaded.edges).toEqual(original.edges);
     expect(serializeArtifact(loaded)).toEqual(bytes);
@@ -98,7 +99,7 @@ describe("edge provenance", () => {
     const edge = artifact.edges[0];
     if (edge === undefined) throw new Error("expected edge");
     edge.e = { source: "syntax", resolution: { status: "resolved", method: "invented" } };
-    expect(() => deserializeArtifact(JSON.stringify(artifact))).toThrow(/corrupt edge evidence/);
+    expect(() => deserializeArtifact(JSON.stringify(artifact), undefined, serializeText(graph).bytes)).toThrow(/corrupt edge evidence/);
   });
 
   it("exposes source call sites separately from callee definition locations", () => {

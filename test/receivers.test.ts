@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex, applyChanges, loadIndex, serializeArtifact } from "../src/index.js";
 import { deserializeArtifact } from "../src/index/serialize.js";
+import { serializeText } from "../src/index/textStore.js";
 
 let temporary: string;
 let workspace: string;
@@ -149,6 +150,6 @@ describe("receiver identity", () => {
     const edge = artifact.edges[0];
     if (edge === undefined) throw new Error("expected call");
     edge.b = { kind: "member", owner: { kind: "instance", owner: {} }, member: "send", mode: "instance", basis: "lexical" };
-    expect(() => deserializeArtifact(JSON.stringify(artifact))).toThrow(/corrupt binding/);
+    expect(() => deserializeArtifact(JSON.stringify(artifact), undefined, serializeText(index).bytes)).toThrow(/corrupt binding/);
   });
 });

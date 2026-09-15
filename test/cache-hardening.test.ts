@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { deserializeArtifact, loadArtifact, serializeArtifact } from "../src/index/serialize.js";
+import { serializeText } from "../src/index/textStore.js";
 import { evictLru, workspaceDirFor } from "../src/cache/cache.js";
 import { refreshWorkspace } from "../src/api.js";
 import { gzipSync } from "node:zlib";
@@ -51,13 +52,10 @@ it("rejects cache artifacts from a different workspace", async () => {
 
 it("rejects altered cached source even when the envelope checksum was recomputed", async () => {
   const { root, cacheDir } = await fixture();
-  const data = JSON.parse(serializeArtifact(await buildIndex(root, { cacheDir })).toString()) as {
-    root: string; files: Array<{ text: string; size: number }>; edges: unknown[]; checksum: string;
-  };
-  data.files[0]!.text = "export const a = 2;\n";
-  data.files[0]!.size = Buffer.byteLength(data.files[0]!.text);
-  data.checksum = sha256Hex(JSON.stringify({ root: data.root, files: data.files, edges: data.edges }));
-  expect(() => deserializeArtifact(JSON.stringify(data))).toThrow(/corrupt/);
+  await buildIndex(root, { cacheDir });
+  const textPath = path.join(workspaceDirFor(cacheDir, root), "text.bin");
+  await fs.appendFile(textPath, "x");
+  await expect(loadArtifact(root, cacheDir)).rejects.toThrow(/cache-read-failed/);
 });
 
 it("round-trips non-UTF8 input as an explicitly non-text fallback card", async () => {
@@ -72,7 +70,7 @@ it.each(["../escape.ts", "/absolute.ts", "a/../a.ts", "a\\b.ts"])("rejects unsaf
   const { root, cacheDir } = await fixture();
   const data = JSON.parse(serializeArtifact(await buildIndex(root, { cacheDir })).toString()) as { files: { path: string }[] };
   data.files[0]!.path = file;
-  expect(() => deserializeArtifact(JSON.stringify(data))).toThrow(/corrupt/);
+  expect(() => deserializeArtifact(JSON.stringify(data), undefined)).toThrow(/corrupt/);
 });
 
 it("invalidates mismatched extraction inputs", async () => {
@@ -103,7 +101,8 @@ it("evicts by reads rather than publication age and enforces artifact bytes", as
 it.each(["files", "edges", "symbols", "span", "hash", "duplicate", "target"])("rejects malformed %s without returning empty data", async (field) => {
   const { root, cacheDir } = await fixture();
   await fs.writeFile(path.join(root, "a.ts"), "export function a() {}\na();\n");
-  const data = JSON.parse(serializeArtifact(await buildIndex(root, { cacheDir })).toString()) as {
+  const index = await buildIndex(root, { cacheDir });
+  const data = JSON.parse(serializeArtifact(index).toString()) as {
     files: Array<Record<string, unknown>>; edges: Array<Record<string, unknown>>;
   };
   const file = data.files[0]!;
@@ -114,7 +113,7 @@ it.each(["files", "edges", "symbols", "span", "hash", "duplicate", "target"])("r
   if (field === "hash") file.hash = "bad";
   if (field === "duplicate") data.files.push(file);
   if (field === "target") data.edges[0]!.tf = "../outside.ts";
-  expect(() => deserializeArtifact(JSON.stringify(data))).toThrow(/corrupt/);
+  expect(() => deserializeArtifact(JSON.stringify(data), undefined, serializeText(index).bytes)).toThrow(/corrupt/);
 });
 
 it("rejects corrupt compressed artifacts and preserves a valid cache when a smaller cap is requested", async () => {
@@ -129,17 +128,18 @@ it("rejects corrupt compressed artifacts and preserves a valid cache when a smal
 
 it("publishes compressed and plain generations through one atomic artifact path", async () => {
   const { root, cacheDir } = await fixture();
-  for (let i = 0; i < 6; i += 1) await fs.writeFile(path.join(root, `${i}.txt`), "plain text\n".repeat(80_000));
+  const declarations = Array.from({ length: 7000 }, (_, i) => `export const x${i} = ${i};`).join("\n");
+  for (let i = 0; i < 6; i += 1) await fs.writeFile(path.join(root, `${i}.ts`), `${declarations}\n`);
   const large = await refreshWorkspace(root, { cacheDir });
   const target = path.join(workspaceDirFor(cacheDir, root), "index.json");
   const compressed = await fs.readFile(target);
   expect([...compressed.subarray(0, 2)]).toEqual([0x1f, 0x8b]);
   expect(compressed[8]).toBe(4);
   expect(serializeArtifact((await loadArtifact(root, cacheDir))!).toString()).toBe(serializeArtifact(large).toString());
-  for (let i = 0; i < 6; i += 1) await fs.unlink(path.join(root, `${i}.txt`));
+  for (let i = 0; i < 6; i += 1) await fs.unlink(path.join(root, `${i}.ts`));
   const small = await refreshWorkspace(root, { cacheDir });
   expect((await fs.readFile(target)).toString()).toBe(serializeArtifact(small).toString());
-  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "index.json", "verification.json"]);
+  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "index.json", "text.bin", "verification.json"]);
 });
 
 it("reports an unwritable cache target explicitly", async () => {

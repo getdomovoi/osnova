@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex, applyChanges, callersDetailed, loadIndex, serializeArtifact } from "../src/index.js";
 import { deserializeArtifact } from "../src/index/serialize.js";
+import { serializeText } from "../src/index/textStore.js";
 
 let temporary: string;
 let workspace: string;
@@ -210,7 +211,7 @@ describe("import bindings", () => {
     const edge = data.edges[0];
     if (edge === undefined) throw new Error("expected recursive call");
     edge.b = { kind: "import", source: 42, importedName: "repeat" };
-    expect(() => deserializeArtifact(JSON.stringify(data))).toThrow(/corrupt binding/);
+    expect(() => deserializeArtifact(JSON.stringify(data), undefined, serializeText(index).bytes)).toThrow(/corrupt binding/);
   });
 
   it("does not expose a type-only class export as a runtime value", async () => {

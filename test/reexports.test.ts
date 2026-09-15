@@ -230,7 +230,7 @@ describe("re-export resolution", () => {
     const file = artifact.files[0];
     if (file === undefined) throw new Error("missing fixture");
     file.reExports = [{ kind: "star", source: 42, line: 1 }];
-    expect(() => deserializeArtifact(JSON.stringify(artifact))).toThrow(/corrupt re-export/);
+    expect(() => deserializeArtifact(JSON.stringify(artifact), undefined)).toThrow(/corrupt re-export/);
   });
 
   it("bounds wide export searches without pretending the unvisited paths are empty", () => {
