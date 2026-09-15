@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor, artifactTextPathFor, isTextSidecarInconsistency } from "./index/serialize.js";
+import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor, artifactTextPathFor, artifactEdgesPathFor, isSectionInconsistency } from "./index/serialize.js";
 import { resolveCacheDir, workspaceLockPath, workspaceKey, cacheLimits, evictLru } from "./cache/cache.js";
 import type { LoadIndexOptions, OsnovaIndex } from "./types.js";
 import { canonicalWorkspaceRoot, workspaceIdentity, validRelativePath } from "./index/workspace.js";
@@ -40,10 +40,11 @@ const loadedIndexes = new Map<string, { index: OsnovaIndex; artifact: string }>(
 
 async function artifactSignature(root: string, cacheDir: string): Promise<string | undefined> {
   const artifact = await artifactPathFor(root, cacheDir);
+  const edges = await artifactEdgesPathFor(root, cacheDir);
   const text = await artifactTextPathFor(root, cacheDir);
-  if (artifact === undefined || text === undefined) return undefined;
+  if (artifact === undefined || edges === undefined || text === undefined) return undefined;
   const parts: string[] = [];
-  for (const file of [artifact, text]) {
+  for (const file of [artifact, edges, text]) {
     const stat = await fs.stat(file, { bigint: true });
     parts.push([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":"));
   }
@@ -81,7 +82,7 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
       try {
         index = await loadArtifact(canonicalRoot, canonicalCache);
       } catch (error) {
-        if (!isTextSidecarInconsistency(error)) throw error;
+        if (!isSectionInconsistency(error)) throw error;
         index = undefined;
       }
     }

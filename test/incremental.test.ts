@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { applyChanges, freshness } from "../src/index/incremental.js";
-import { serializeArtifact } from "../src/index/serialize.js";
+import { serializeArtifact, serializeSections } from "../src/index/serialize.js";
 import { serializeText } from "../src/index/textStore.js";
 import type { OsnovaIndex } from "../src/types.js";
 
@@ -98,6 +98,9 @@ describe("incremental equals full", () => {
         const incrementalText = serializeText(index).bytes;
         const fullText = serializeText(await buildIndex(dir)).bytes;
         expect(incrementalText.equals(fullText)).toBe(true);
+        const incrementalEdges = serializeSections(index).edges.bytes;
+        const fullEdges = serializeSections(await buildIndex(dir)).edges.bytes;
+        expect(incrementalEdges.equals(fullEdges)).toBe(true);
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

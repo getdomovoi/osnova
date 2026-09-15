@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import type { EdgeBinding, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import { deserializeEdges } from "./edgeStore.js";
+import { IndexingError } from "./diagnostics.js";
+import { sha256Hex } from "./scan.js";
 
 export interface RawEdgesByFile {
   readonly [file: string]: readonly RawEdgeItem[];
@@ -31,44 +36,88 @@ export function buildSymbolTable(files: ReadonlyMap<string, FileCard>): Map<stri
   return symbols;
 }
 
+export interface EdgeSource {
+  readonly path: string;
+  readonly hash: string;
+  readonly bytes: number;
+  readonly paths: readonly string[];
+}
+
+interface LoadedEdges {
+  readonly edges: OsnovaEdge[];
+  readonly incoming: Map<string, OsnovaEdge[]>;
+  readonly outgoing: Map<string, OsnovaEdge[]>;
+  readonly byFile: Map<string, OsnovaEdge[]>;
+}
+
 export class OsnovaIndexImpl implements OsnovaIndex {
   readonly root: string;
   readonly files: Map<string, FileCard>;
   readonly symbols: Map<string, OsnovaSymbol>;
-  readonly edges: OsnovaEdge[];
   readonly diagnostics: readonly IndexDiagnostic[];
-  private readonly incomingBySymbol: Map<string, OsnovaEdge[]>;
-  private readonly outgoingBySymbol: Map<string, OsnovaEdge[]>;
-  private readonly edgesByFile: Map<string, OsnovaEdge[]>;
+  private readonly source: EdgeSource | undefined;
+  private loaded: LoadedEdges | undefined;
 
-  constructor(root: string, files: Map<string, FileCard>, edges: readonly OsnovaEdge[]) {
+  constructor(root: string, files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource) {
     this.root = root;
     this.files = files;
     this.symbols = buildSymbolTable(files);
     this.diagnostics = [...files.values()].flatMap((file) => file.diagnostics ?? []).sort((a, b) =>
       compareStr(a.path, b.path) || compareStr(a.phase, b.phase) || compareStr(a.code, b.code));
-    const sorted = [...edges].sort(compareEdges);
-    this.edges = dedupeEdges(sorted);
-    this.incomingBySymbol = new Map();
-    this.outgoingBySymbol = new Map();
-    this.edgesByFile = new Map();
-    for (const edge of this.edges) {
-      pushToMap(this.edgesByFile, edge.fromFile, edge);
-      if (edge.toSymbol !== undefined) pushToMap(this.incomingBySymbol, edge.toSymbol, edge);
-      if (edge.fromSymbol.length > 0) pushToMap(this.outgoingBySymbol, edge.fromSymbol, edge);
+    if (Array.isArray(edges)) {
+      this.source = undefined;
+      this.loaded = OsnovaIndexImpl.build(edges);
+    } else {
+      this.source = edges as EdgeSource;
+      this.loaded = undefined;
     }
   }
 
+  private static build(edges: readonly OsnovaEdge[]): LoadedEdges {
+    const sorted = dedupeEdges([...edges].sort(compareEdges));
+    const incoming = new Map<string, OsnovaEdge[]>();
+    const outgoing = new Map<string, OsnovaEdge[]>();
+    const byFile = new Map<string, OsnovaEdge[]>();
+    for (const edge of sorted) {
+      pushToMap(byFile, edge.fromFile, edge);
+      if (edge.toSymbol !== undefined) pushToMap(incoming, edge.toSymbol, edge);
+      if (edge.fromSymbol.length > 0) pushToMap(outgoing, edge.fromSymbol, edge);
+    }
+    return { edges: sorted, incoming, outgoing, byFile };
+  }
+
+  private ensure(): LoadedEdges {
+    if (this.loaded !== undefined) return this.loaded;
+    const source = this.source!;
+    try {
+      const data = readFileSync(source.path);
+      const raw = data[0] === 0x1f && data[1] === 0x8b ? gunzipSync(data, { maxOutputLength: 512 * 1024 * 1024 }) : data;
+      if (raw.length !== source.bytes || sha256Hex(raw) !== source.hash) throw new Error("osnova: cache edge section mismatch");
+      this.loaded = OsnovaIndexImpl.build(deserializeEdges(raw, source.paths, this.files));
+    } catch (error) {
+      throw new IndexingError({ phase: "cache", path: source.path, code: "cache-read-failed" }, error);
+    }
+    return this.loaded;
+  }
+
+  get edges(): OsnovaEdge[] {
+    return this.ensure().edges;
+  }
+
   incoming(qualifiedName: string): readonly OsnovaEdge[] {
-    return this.incomingBySymbol.get(qualifiedName) ?? [];
+    return this.ensure().incoming.get(qualifiedName) ?? [];
   }
 
   outgoing(qualifiedName: string): readonly OsnovaEdge[] {
-    return this.outgoingBySymbol.get(qualifiedName) ?? [];
+    return this.ensure().outgoing.get(qualifiedName) ?? [];
   }
 
   edgesForFile(path: string): readonly OsnovaEdge[] {
-    return this.edgesByFile.get(path) ?? [];
+    return this.ensure().byFile.get(path) ?? [];
+  }
+
+  edgesLoaded(): boolean {
+    return this.loaded !== undefined;
   }
 }
 

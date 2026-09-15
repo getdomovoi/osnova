@@ -8,6 +8,7 @@ import * as loader from "../src/grammar/loader.js";
 import { runCli } from "../src/cli/cli.js";
 import { renderMapCard } from "../src/query/mapCard.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
+import { sha256Hex } from "../src/index/scan.js";
 
 let temporary: string;
 let workspace: string;
@@ -102,7 +103,9 @@ describe("index health", () => {
     const index = await buildIndex(workspace, { cacheDir });
     const artifact = JSON.parse(serializeArtifact(index).toString()) as { formatVersion: number };
     artifact.formatVersion = version;
-    await fs.writeFile(path.join(workspaceDirFor(cacheDir, workspace), "index.json"), JSON.stringify(artifact));
+    const raw = Buffer.from(JSON.stringify(artifact));
+    await fs.writeFile(path.join(workspaceDirFor(cacheDir, workspace), "index.json"), raw);
+    await fs.writeFile(path.join(workspaceDirFor(cacheDir, workspace), "index.sha"), `${sha256Hex(raw)}\n`);
     expect(await loadIndex(workspace, { cacheDir })).toBeUndefined();
   });
 
