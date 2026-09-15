@@ -7,12 +7,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { refreshWorkspace, indexGeneration } from "../api.js";
 import { resolveCacheDir } from "../cache/cache.js";
-import { ask } from "../query/ask.js";
+import { askDetailed } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
+import { formatAskDetailedBounded, formatCallersDetailedBounded, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
@@ -20,12 +20,13 @@ const OSNOVA_VERSION = "0.1.0";
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
+const maximumMcpAskCodeUnits = 4_096;
 
 const toolDefinitions = [
   {
     name: "osnova_ask",
     description:
-      "Keyword search over an indexed workspace. Returns ranked hits with exact file:line and a short excerpt of the enclosing definition; full=true inlines the whole definition span.",
+      "Ranked indexed definition/text search. MCP output is bounded under 4096 code units with candidate, query-limit and presentation-limit omissions; askDetailed returns complete structured candidates. full=true still respects MCP presentation limits.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -124,12 +125,13 @@ export function createOsnovaMcpServer(
       switch (name) {
         case "osnova_ask": {
           const question = requireString(args, "question");
-          const result = ask(index, question, {
+          const result = askDetailed(index, question, {
             in: optionalString(args, "in"),
             limit: optionalNumber(args, "limit"),
             full: optionalBoolean(args, "full"),
           });
-          return respond(formatAsk(result));
+          const available = maximumMcpAskCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${formatAskDetailedBounded(result, available)}`);
         }
         case "osnova_find_text": {
           const pattern = requireString(args, "pattern");

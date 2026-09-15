@@ -1,4 +1,4 @@
-import type { AskHit, AskOptions, AskResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { AskDetailedResult, AskHit, AskOptions, AskResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { idf, matchInPath, queryContext, tokenize } from "./context.js";
 import type { QueryContext, SearchDocument } from "./context.js";
 
@@ -40,19 +40,23 @@ function excerptFor(
 }
 
 export function ask(index: OsnovaIndex, question: string, options?: AskOptions): AskResult {
-  const limit = options?.limit ?? DEFAULT_LIMIT;
-  if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError("osnova: ask limit must be a nonnegative safe integer");
+  const result = askDetailed(index, question, { ...options, limit: options?.limit ?? DEFAULT_LIMIT });
+  return { hits: result.hits, filesSearched: result.filesSearched };
+}
+
+export function askDetailed(index: OsnovaIndex, question: string, options?: AskOptions): AskDetailedResult {
+  const limit = options?.limit ?? Infinity;
+  if (options?.limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0)) throw new RangeError("osnova: ask limit must be a nonnegative safe integer");
   const queryTokens = [...new Set(tokenize(question))];
   const identifiers = new Set((question.match(/[$A-Za-z_][$\w]*/g) ?? []).map((name) => name.toLowerCase()));
   const qualified = new Set((question.match(/[$A-Za-z_][$\w]*(?:\.[$A-Za-z_][$\w]*)+/g) ?? []).map((name) => name.toLowerCase()));
   if ((queryTokens.length === 0 && identifiers.size === 0) || index.files.size === 0) {
-    return { hits: [], filesSearched: 0 };
+    return { scope: "indexed-definitions-and-text", hits: [], filesSearched: 0, totalCandidates: 0, omittedHits: 0, truncated: false };
   }
   const ctx = queryContext(index);
   const full = options?.full ?? false;
   const filter = options?.in ?? "";
   const filesSearched = [...ctx.lines.keys()].filter((path) => matchInPath([path], filter)).length;
-  if (limit === 0) return { hits: [], filesSearched };
   const scored: Array<{ document: SearchDocument; score: number; exact: boolean }> = [];
   for (const document of ctx.documents) {
     if (!matchInPath([document.file], filter)) continue;
@@ -79,13 +83,18 @@ export function ask(index: OsnovaIndex, question: string, options?: AskOptions):
     (a.document.symbol?.span.startLine ?? 0) - (b.document.symbol?.span.startLine ?? 0) ||
     (a.document.symbol?.span.startCol ?? 0) - (b.document.symbol?.span.startCol ?? 0) ||
     compare(a.document.symbol?.qualifiedName ?? "", b.document.symbol?.qualifiedName ?? ""));
-  const hits: AskHit[] = [];
+  const candidates: Array<{ document: SearchDocument; score: number; exact: boolean }> = [];
   const seen = new Set<string>();
   for (const { document, score, exact } of scored) {
     const symbol = document.symbol;
     const key = symbol === null ? `file:${document.file}` : `symbol:${symbol.qualifiedName}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    candidates.push({ document, score, exact });
+  }
+  const hits: AskHit[] = [];
+  for (const { document, score, exact } of candidates.slice(0, limit)) {
+    const symbol = document.symbol;
     const lines = ctx.lines.get(document.file) ?? [];
     const bestLine = exact && symbol !== null ? symbol.span.startLine : bestMatchLine(document, ctx, queryTokens);
     const excerpt = excerptFor(lines, bestLine, symbol, full);
@@ -97,9 +106,12 @@ export function ask(index: OsnovaIndex, question: string, options?: AskOptions):
       excerpt: excerpt.text,
       excerptStartLine: excerpt.startLine,
     });
-    if (hits.length === limit) break;
   }
-  return { hits, filesSearched };
+  const omittedHits = candidates.length - hits.length;
+  return {
+    scope: "indexed-definitions-and-text", hits, filesSearched,
+    totalCandidates: candidates.length, omittedHits, truncated: omittedHits > 0,
+  };
 }
 
 function bestMatchLine(document: SearchDocument, ctx: QueryContext, query: readonly string[]): number {

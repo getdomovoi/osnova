@@ -150,6 +150,13 @@ export interface AskResult {
   readonly filesSearched: number;
 }
 
+export interface AskDetailedResult extends AskResult {
+  readonly scope: "indexed-definitions-and-text";
+  readonly totalCandidates: number;
+  readonly omittedHits: number;
+  readonly truncated: boolean;
+}
+
 export interface FindTextMatch {
   readonly line: number;
   readonly col: number;

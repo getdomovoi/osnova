@@ -160,4 +160,16 @@ describe("mcp stdio server", () => {
       await client.close();
     }
   }, 60_000);
+
+  it("bounds broad ask results with ranked-candidate omissions", async () => {
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_ask", { question: "ordinary function" });
+      expect(text.length).toBeLessThanOrEqual(4_096);
+      expect(text).toMatch(/omitted: \d+ of \d+ ranked candidates/);
+      expect(text).toContain("Use askDetailed API for complete structured results");
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
 });
