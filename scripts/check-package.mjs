@@ -34,6 +34,10 @@ export async function checkPackage(root) {
   assert((await readFile(path.join(root, manifest.bin.osnova), "utf8")).startsWith("#!/usr/bin/env node\n"), "Missing executable shebang");
   assert.equal(manifest.dependencies["web-tree-sitter"], "0.25.10");
   assert.equal(manifest.dependencies["tree-sitter-wasms"], "0.1.13");
+  const distIndex = await readFile(path.join(root, "dist/index.js"), "utf8");
+  for (const name of ["buildIndex", "loadIndex", "scanFiles"]) {
+    assert(new RegExp(`\\b${name}\\b`).test(distIndex), `Missing ${name} export in dist/index.js`);
+  }
   return manifest;
 }
 

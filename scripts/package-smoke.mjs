@@ -51,7 +51,7 @@ async function consumer() {
   const packageBefore = await snapshot(packageRoot);
   assert((await realpath(packageRoot)).startsWith(await realpath(root)), "Package must be extracted, not linked to checkout");
   const api = await import("@getdomovoi/osnova");
-  for (const name of ["buildIndex", "loadIndex", "refreshWorkspace", "indexGeneration", "evidenceFingerprint", "applyChanges", "freshness", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "impact", "scopedAsk", "taskContext", "doctor", "previewSetup", "configureLspEnrichment", "loadLspEnrichment", "refreshLspEnrichment", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
+  for (const name of ["buildIndex", "loadIndex", "refreshWorkspace", "indexGeneration", "evidenceFingerprint", "applyChanges", "freshness", "scanFiles", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "impact", "scopedAsk", "taskContext", "doctor", "previewSetup", "configureLspEnrichment", "loadLspEnrichment", "refreshLspEnrichment", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
   for (const entry of Object.keys(manifest.exports)) await import(entry === "." ? manifest.name : manifest.name + entry.slice(1));
   const workspace = path.join(root, "workspace");
   const cacheDir = path.join(root, "cache");
@@ -61,6 +61,9 @@ async function consumer() {
   const index = await api.buildIndex(workspace, { cacheDir });
   for (const file of Object.keys(samples)) assert(api.skeleton(index, file).entries.length > 0, `Grammar/extraction failed: ${file}`);
   assert(api.ask(index, "probe").hits.length > 0);
+  const scanned = await api.scanFiles(workspace, cacheDir);
+  assert(Array.isArray(scanned.paths) && scanned.paths.length > 0, "scanFiles returned no paths");
+  assert.deepEqual(scanned.paths, [...scanned.paths].sort(), "scanFiles paths must be sorted");
   assert.deepEqual(await snapshot(workspace), before, "Core build mutated workspace");
   const diagnostics = await import(pathToFileURL(path.join(packageRoot, "dist/diagnostics.js")).href);
   const report = await diagnostics.doctor(workspace, { cacheDir });

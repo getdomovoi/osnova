@@ -66,7 +66,7 @@ const hits = ask(index, "where do we validate tokens", { limit: 5 });
 const card = await renderMapCard(index); // <= 16,384 code units
 ```
 
-Exports include lifecycle (`buildIndex`, `loadIndex`, `refreshWorkspace`, `indexGeneration`, `evidenceFingerprint`, `applyChanges`, `freshness`, `indexHealth`), retrieval (`ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `scopedAsk`, `impact`, `taskContext`), diagnostics/setup preview, optional LSP enrichment, index types, and the MCP stdio main (`runMcpStdio`).
+Exports include lifecycle (`buildIndex`, `loadIndex`, `refreshWorkspace`, `indexGeneration`, `evidenceFingerprint`, `applyChanges`, `freshness`, `indexHealth`), retrieval (`ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `scopedAsk`, `impact`, `taskContext`), workspace scanning (`scanFiles`), diagnostics/setup preview, optional LSP enrichment, index types, and the MCP stdio main (`runMcpStdio`).
 
 ### Definition retrieval
 

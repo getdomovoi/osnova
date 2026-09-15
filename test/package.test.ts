@@ -30,6 +30,8 @@ it("rejects absent exported declaration and executable files", async () => {
     await writeFile(path.join(root, "dist/index.d.ts"), "export {};\n");
     await expect(checkPackage(root)).rejects.toThrow(/bin\.js/);
     await writeFile(path.join(root, "dist/bin.js"), "#!/usr/bin/env node\n");
+    await expect(checkPackage(root)).rejects.toThrow(/buildIndex/);
+    await writeFile(path.join(root, "dist/index.js"), "export function buildIndex() {}\nexport function loadIndex() {}\nexport function scanFiles() {}\n");
     await expect(checkPackage(root)).resolves.toHaveProperty("name", "@getdomovoi/osnova");
     const checker = path.join(root, "check-package.mjs");
     await copyFile(path.resolve("scripts/check-package.mjs"), checker);
