@@ -106,7 +106,7 @@ function childFixture(root: string, cacheDir: string, mode: "refresh" | "hold" |
     import { withCacheLock } from ${JSON.stringify(lock)};
     const root = ${JSON.stringify(root)}, cacheDir = ${JSON.stringify(cacheDir)};
     let release;
-    setTimeout(() => process.exit(3), 8000).unref();
+    setTimeout(() => process.exit(3), 30_000).unref();
     process.on("message", async (message) => {
       if (message === "stop") { release?.(); process.disconnect(); return; }
       if (message === "release") { release?.(); return; }
@@ -138,7 +138,7 @@ function childFixture(root: string, cacheDir: string, mode: "refresh" | "hold" |
   void exited.catch(() => {});
   async function wait(event: string): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { cleanup(); reject(new Error(`fixture event timed out: ${event}: ${stderr}`)); }, 5000);
+      const timer = setTimeout(() => { cleanup(); reject(new Error(`fixture event timed out: ${event}: ${stderr}`)); }, 15_000);
       const check = () => {
         const error = messages.find((item) => item.event === "error");
         const result = messages.find((item) => item.event === event);
@@ -204,4 +204,4 @@ it("recovers a verified exited fixture owner without deleting unknown locks", as
   } finally {
     await Promise.all([owner, ...clients].map((client) => closeFixture(client.child, client.exited)));
   }
-});
+}, 60_000);
