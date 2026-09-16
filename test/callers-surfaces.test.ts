@@ -41,9 +41,9 @@ it("MCP exposes ambiguity and raw unresolved call sites", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-    const ambiguous = await client.callTool({ name: "osnova_callers", arguments: { symbol: "work" } });
+    const ambiguous = await client.callTool({ name: "osnova_warp", arguments: { symbol: "work" } });
     expect(JSON.stringify(ambiguous)).toContain("ambiguous symbol");
-    const result = await client.callTool({ name: "osnova_callers", arguments: { symbol: "a.ts#work", direction: "out" } });
+    const result = await client.callTool({ name: "osnova_warp", arguments: { symbol: "a.ts#work", direction: "out" } });
     expect(result.isError).toBeFalsy();
     const content = (result as { content?: ContentBlock[] }).content ?? [];
     const text = content.map((block) => block.type === "text" ? block.text : "").join("\n");

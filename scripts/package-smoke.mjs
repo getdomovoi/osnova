@@ -114,23 +114,24 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
     assert.equal(client.getServerVersion()?.name, "osnova");
     const tools = await client.listTools({}, { timeout: 10_000 });
     const calls = {
-      osnova_ask: { question: "probe" },
-      osnova_find_text: { pattern: "probe", fixed: true },
-      osnova_skeleton: { file: "probe.ts" },
-      osnova_callers: { symbol: "probe" },
-      osnova_map: {},
+      osnova_ground: { question: "probe" },
+      osnova_thread: { pattern: "probe", fixed: true },
+      osnova_outline: { file: "probe.ts" },
+      osnova_warp: { symbol: "probe" },
+      osnova_groundwork: {},
     };
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), Object.keys(calls).sort());
+    const aliases = ["osnova_ask", "osnova_find_text", "osnova_skeleton", "osnova_callers", "osnova_map"];
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...Object.keys(calls), ...aliases].sort());
     for (const [name, args] of Object.entries(calls)) {
       const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 10_000 });
       assert(!result.isError, `${name} returned an error`);
       assert(result.content.some((item) => item.type === "text" && item.text.length > 0), `${name} returned no text`);
-      if (name !== "osnova_map") assert(JSON.stringify(result.content).includes(name === "osnova_callers" ? "caller" : "probe"), `${name} omitted expected evidence`);
+      if (name !== "osnova_groundwork") assert(JSON.stringify(result.content).includes(name === "osnova_warp" ? "caller" : "probe"), `${name} omitted expected evidence`);
     }
     assert.deepEqual(await snapshot(workspace), before, "MCP tools mutated workspace");
     await writeFile(path.join(workspace, "probe.ts"), "export function refreshedProbe() { return 2; }\n");
     const edited = await snapshot(workspace);
-    const refreshed = await client.callTool({ name: "osnova_skeleton", arguments: { file: "probe.ts" } }, undefined, { timeout: 10_000 });
+    const refreshed = await client.callTool({ name: "osnova_outline", arguments: { file: "probe.ts" } }, undefined, { timeout: 10_000 });
     assert(!refreshed.isError && JSON.stringify(refreshed.content).includes("refreshedProbe"), "MCP did not refresh source edit");
     assert.deepEqual(await snapshot(workspace), edited, "Refresh mutated workspace");
     child.stdin.end();

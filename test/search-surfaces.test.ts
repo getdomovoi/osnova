@@ -41,7 +41,7 @@ async function searchMcp(args: Record<string, unknown>): Promise<{ text: string;
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-    const result = await client.callTool({ name: "osnova_find_text", arguments: args });
+    const result = await client.callTool({ name: "osnova_thread", arguments: args });
     const content = (result as { content?: ContentBlock[] }).content ?? [];
     return { text: content.map((block) => block.type === "text" ? block.text : "").join("\n"), isError: result.isError };
   } finally {
