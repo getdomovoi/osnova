@@ -12,7 +12,7 @@ const hits = ask(index, "where do we validate tokens", { limit: 5 });
 const card = await renderMapCard(index); // <= 16,384 code units
 ```
 
-Exports include lifecycle (`buildIndex`, `loadIndex`, `refreshWorkspace`, `indexGeneration`, `evidenceFingerprint`, `applyChanges`, `freshness`, `indexHealth`), retrieval (`ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `scopedAsk`, `impact`, `taskContext`), workspace scanning (`scanFiles`), diagnostics/setup preview, optional LSP enrichment, index types, and the MCP stdio main (`runMcpStdio`).
+Exports include lifecycle (`buildIndex`, `loadIndex`, `refreshWorkspace`, `indexGeneration`, `evidenceFingerprint`, `applyChanges`, `freshness`, `indexHealth`), retrieval (`ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `scopedAsk`, `impact`, `taskContext`), workspace scanning (`scanFiles`), diagnostics, optional LSP enrichment, index types, and the MCP stdio main (`runMcpStdio`).
 
 ### Definition retrieval
 
@@ -104,9 +104,9 @@ pnpm test:install
 
 The perf script enforces first-build and incremental-refresh budgets on a generated fixture repo. Tests include per-language extraction goldens, an incremental-equals-full property test over randomized edit sequences, CLI round-trips, and MCP handshake plus tool round-trips over an in-memory transport.
 
-`doctor` is read-only: it checks runtime, workspace/cache access and all packaged grammar assets without scanning source or writing probes. Its capability matrix states where binding/receiver hints exist and where only name heuristics remain. `setup --preview` produces complete owned local MCP configuration content and detects conflicts; it never writes or launches commands, and no apply operation is provided. Setup previews require absolute executable and CLI paths.
+`doctor` is read-only: it checks runtime, workspace/cache access and all packaged grammar assets without scanning source or writing probes. Its capability matrix states where binding/receiver hints exist and where only name heuristics remain.
 
-Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all twenty grammars, executes lifecycle/retrieval/doctor/preview APIs, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. `test:package` reuses locally installed dependency targets without downloads; `test:install` performs a fresh registry-backed dependency install with install scripts disabled, then runs the same consumer checks. Linux/Windows execution runs in CI.
+Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all twenty grammars, executes lifecycle/retrieval/doctor APIs, and drives a real stdio MCP child through initialization, all seven tools, refresh and EOF shutdown while rejecting stdout contamination. `test:package` reuses locally installed dependency targets without downloads; `test:install` performs a fresh registry-backed dependency install with install scripts disabled, then runs the same consumer checks. Linux/Windows execution runs in CI.
 
 ### Optional LSP evidence
 

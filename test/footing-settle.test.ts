@@ -69,7 +69,7 @@ describe("footing formatting", () => {
     expect(text).toContain("- a.ts#target function lines 1-1\n  function target() { return 1; }");
     expect(text).toContain("- b.ts#middle -> a.ts#target calls line 1");
     expect(text).toContain("candidate tests:\n- c.test.ts via c.test.ts#check");
-    expect(text).toContain("omitted: 0 definitions, 0 relationships, 0 candidate tests, 0 retrieval hits, 0 uncertain edges, 0 out-of-scope edges, 0 depth frontier, 0 unknown symbols");
+    expect(text).toContain("omitted: 0 definitions, 0 relationships, 0 candidate tests, 0 lower-ranked candidates, 0 uncertain edges, 0 out-of-scope edges, 0 depth frontier, 0 unknown symbols");
     expect(text).toContain("limitations: indexed-structural-evidence-only");
   });
 
