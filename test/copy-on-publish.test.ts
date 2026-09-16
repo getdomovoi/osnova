@@ -18,7 +18,7 @@ import { buildIndex } from "../src/index/build.js";
 import { refreshWorkspace, loadIndex } from "../src/api.js";
 import { serializeText } from "../src/index/textStore.js";
 import { serializeSections } from "../src/index/serialize.js";
-import { workspaceDirFor } from "../src/cache/cache.js";
+import { workspaceDirFor, workspaceLockPath } from "../src/cache/cache.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -68,5 +68,61 @@ describe("copy-on-publish", () => {
     expect(refreshed.files.get("b.ts")!.text).toBe("export function beta() { return 2; }\nbeta();\n");
     const fresh = serializeText(await buildIndex(repo, { cacheDir: path.join(dir, "cache2") })).bytes;
     expect((await fs.readFile(textPath)).equals(fresh)).toBe(true);
+  });
+
+  it("rebuilds when the cache text section disappears or is truncated after load", async () => {
+    for (const fault of ["missing", "short"] as const) {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), `osnova-copy-${fault}-`)); dirs.push(dir);
+      const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
+      await fs.mkdir(repo);
+      await fs.writeFile(path.join(repo, "a.ts"), "export function alpha() { return 1; }\nalpha();\n");
+      await fs.writeFile(path.join(repo, "b.ts"), "export function beta() { return 2; }\nbeta();\n");
+      const built = await buildIndex(repo, { cacheDir });
+      const ws = workspaceDirFor(await fs.realpath(cacheDir), built.root);
+      await fs.appendFile(path.join(repo, "a.ts"), "export const changed = 1;\n");
+      let triggered = false;
+      const readFile = fs.readFile;
+      const spy = vi.spyOn(fs, "readFile").mockImplementation(async (p, ...rest) => {
+        const result = await readFile(p, ...rest as [never]);
+        if (String(p) === path.join(ws, "edges.json") && !triggered) {
+          triggered = true;
+          if (fault === "missing") await fs.unlink(path.join(ws, "text.bin"));
+          else await fs.truncate(path.join(ws, "text.bin"), 0);
+        }
+        return result;
+      });
+      let refreshed;
+      try {
+        refreshed = await refreshWorkspace(repo, { cacheDir });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(triggered).toBe(true);
+      expect(refreshed.files.get("a.ts")!.text).toContain("changed");
+      const fresh = serializeSections(await buildIndex(repo, { cacheDir: path.join(dir, "full") }));
+      expect((await fs.readFile(path.join(ws, "index.json"))).equals(fresh.core)).toBe(true);
+      expect((await fs.readFile(path.join(ws, "edges.json"))).equals(fresh.edges.bytes)).toBe(true);
+      expect((await fs.readFile(path.join(ws, "text.bin"))).equals(fresh.text.bytes)).toBe(true);
+      await expect(fs.stat(workspaceLockPath(cacheDir, built.root))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)("still reports an unreadable workspace file as a read failure", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-copy-unreadable-")); dirs.push(dir);
+    const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
+    await fs.mkdir(repo);
+    const source = path.join(repo, "a.ts");
+    await fs.writeFile(source, "export function alpha() { return 1; }\nalpha();\n");
+    await fs.writeFile(path.join(repo, "b.ts"), "export function beta() { return 2; }\nbeta();\n");
+    const built = await buildIndex(repo, { cacheDir });
+    await fs.appendFile(source, "export const changed = 1;\n");
+    await fs.chmod(source, 0);
+    try {
+      await expect(refreshWorkspace(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { phase: "read", code: "file-unreadable" } });
+    } finally {
+      await fs.chmod(source, 0o600);
+    }
+    await expect(fs.stat(workspaceLockPath(cacheDir, built.root))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(refreshWorkspace(repo, { cacheDir })).resolves.toBeDefined();
   });
 });

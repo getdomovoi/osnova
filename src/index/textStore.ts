@@ -93,9 +93,12 @@ export function readTextSlice(textPath: string, offset: number, length: number):
       if (count === 0) break;
       read += count;
     }
-    if (read !== length) throw new Error(`osnova: short text read (${read} of ${length} bytes)`);
+    if (read !== length) throw new SectionError(`osnova: short text read (${read} of ${length} bytes)`);
   } catch (error) {
-    throw new IndexingError({ phase: "cache", path: textPath, code: "cache-read-failed" }, error);
+    const cause = (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? new SectionError("osnova: cache text sidecar missing", { cause: error })
+      : error;
+    throw new IndexingError({ phase: "cache", path: textPath, code: "cache-read-failed" }, cause);
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
