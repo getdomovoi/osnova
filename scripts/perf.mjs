@@ -86,6 +86,10 @@ async function main() {
   const coreLoadMs = performance.now() - loadStart;
   if (reloaded === undefined) failures.push("core load returned undefined");
 
+  const edgesStart = performance.now();
+  const edgeCount = reloaded.edges.length;
+  const edgesLoadMs = performance.now() - edgesStart;
+
   scopedAsk(reloaded, "chain widget", { limit: 8 });
   const scopedAskStart = performance.now();
   scopedAsk(reloaded, "chain widget", { limit: 8 });
@@ -93,9 +97,6 @@ async function main() {
   if (scopedAskMs > BUDGET_SCOPED_ASK_MS) failures.push(`scopedAsk ${scopedAskMs.toFixed(0)}ms > ${BUDGET_SCOPED_ASK_MS}ms`);
 
   const { refreshWorkspace } = await import("../dist/index.js");
-  const edgesStart = performance.now();
-  const edgeCount = reloaded.edges.length;
-  const edgesLoadMs = performance.now() - edgesStart;
   await refreshWorkspace(repo, { cacheDir });
   const noChangeStart = performance.now();
   await refreshWorkspace(repo, { cacheDir });

@@ -5,7 +5,8 @@ import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { applyChanges, freshness } from "../src/index/incremental.js";
 import { saveArtifact, serializeArtifact, serializeSections } from "../src/index/serialize.js";
-import { serializeText } from "../src/index/textStore.js";
+import { previousTextFrom, serializeText } from "../src/index/textStore.js";
+import { loadIndex } from "../src/api.js";
 import type { OsnovaIndex } from "../src/types.js";
 
 function copyFixture(): string {
@@ -114,6 +115,10 @@ describe("incremental equals full", () => {
         const publishedIncrementalEdges = fs.readFileSync(path.join(publishedIncrementalDir, "edges.json"));
         const publishedFreshEdges = fs.readFileSync(path.join(publishedFreshDir, "edges.json"));
         expect(publishedIncrementalEdges.equals(publishedFreshEdges), `step ${step} published edges`).toBe(true);
+        const reloaded = await loadIndex(dir, { cacheDir: incrementalCacheDir });
+        expect(reloaded, `step ${step} reload`).toBeDefined();
+        index = reloaded!;
+        expect(previousTextFrom(index), `step ${step} lazy text source`).toBeDefined();
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

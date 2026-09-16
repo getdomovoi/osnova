@@ -95,6 +95,11 @@ describe("diff impact evidence", () => {
     expect(indexReceipt(index([a, b])).generation).not.toBe(indexReceipt(index([a, b], [edge("b.ts#run", "a.ts#work")])).generation);
   });
 
+  it("memoizes the receipt per index", () => {
+    const repo = index([card("a.ts", ["work"]), card("b.ts", ["run"])]);
+    expect(indexReceipt(repo)).toBe(indexReceipt(repo));
+  });
+
   it("rejects malformed diffs rather than silently reporting no impact", () => {
     expect(() => impact(index([]), index([]), { diff: "not a diff" })).toThrow(/diff/);
     expect(() => impact(index([]), index([]), { diff: "--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n" })).toThrow(/diff/);
