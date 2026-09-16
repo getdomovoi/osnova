@@ -13,7 +13,7 @@ npx -y @getdomovoi/osnova mcp --workspace /path/to/repo
 - **Exact answers.** Every hit carries a `file:line` span, a source hash and an index generation. An agent can cite it and you can check it.
 - **Deterministic by design.** Incremental refresh produces the same bytes as a full rebuild. Paths, symbols and edges are sorted before they are written. Runs are reproducible.
 - **Honest about limits.** Results state what was omitted and why. Partial indexes say so on every response. Absence of a caller never claims deletion is safe.
-- **Local and read-only.** One cache directory, no writes inside your repository, no network access, no usage reporting.
+- **Local and read-only.** One cache directory, no writes inside your repository, no per-agent files to keep in sync, no network access, no usage reporting.
 - **Refreshes as you type.** Query commands hash the working tree first and apply only what changed, uncommitted edits included.
 - **Nineteen languages.** Deep adapters for TypeScript, JavaScript, Python, Go, Rust, Java and C#. A generic tier for C, C++, Ruby, PHP, Kotlin, Swift, Scala, Dart, Elixir, OCaml, Zig and Bash. Grammars ship as WASM, so there is nothing to compile.
 
@@ -30,20 +30,39 @@ osnova callers src/auth.ts#verify   # who calls it
 osnova map                          # directory clusters, hubs, hotspots
 ```
 
-Add it to an MCP client:
+## Install once, use everywhere
 
-```json
-{
-  "mcpServers": {
-    "osnova": {
-      "command": "npx",
-      "args": ["-y", "@getdomovoi/osnova", "mcp", "--workspace", "/path/to/repo"]
-    }
-  }
-}
+One global install serves every repository and every agent. `osnova mcp` with no `--workspace` uses the directory the client starts it in, and MCP clients start servers in the project root. So each client needs one entry, in its own global config, and nothing per project. Osnova never writes inside your repository and never touches another client's configuration.
+
+Claude Code:
+
+```sh
+claude mcp add --scope user osnova -- osnova mcp
 ```
 
-`osnova setup --preview --cli-path <path>` prints the exact configuration for your client without writing anything. `osnova doctor` checks the runtime, the cache and every packaged grammar.
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.osnova]
+command = "osnova"
+args = ["mcp"]
+```
+
+Kilo, in `~/.config/kilo/kilo.jsonc`:
+
+```json
+{ "mcp": { "osnova": { "type": "local", "command": ["osnova", "mcp"], "enabled": true } } }
+```
+
+Cursor, in `~/.cursor/mcp.json`, and any other client that takes the common `mcpServers` shape:
+
+```json
+{ "mcpServers": { "osnova": { "command": "osnova", "args": ["mcp"] } } }
+```
+
+No global install? Replace `osnova` with `npx -y @getdomovoi/osnova` in any of the above. Pin a workspace with `osnova mcp --workspace /path/to/repo` when the client does not start in the project root.
+
+`osnova doctor` checks the runtime, the cache and every packaged grammar. `osnova setup --preview --cli-path <path>` prints a configuration preview without writing anything.
 
 ## The seven tools
 
@@ -83,7 +102,7 @@ osnova impact --base-cache ... # compare two preserved indexes
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
 osnova doctor                  # read-only runtime and asset checks
 osnova setup --preview ...     # print client configuration; never applies
-osnova mcp --workspace <path>  # MCP stdio server
+osnova mcp [--workspace <path>] # MCP stdio server (default: current directory)
 ```
 
 ## Library

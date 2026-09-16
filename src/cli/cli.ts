@@ -40,7 +40,7 @@ usage:
   osnova impact --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup --preview --cli-path <absolute path> [--executable <absolute path>] [--workspace <path>]
-  osnova mcp --workspace <path> [--cache-dir <path>]
+  osnova mcp [--workspace <path>] [--cache-dir <path>]   (default workspace: current directory)
 
 queries refresh the index first so answers describe current disk state.`;
 
