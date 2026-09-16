@@ -39,7 +39,7 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 describe("mcp stdio server", () => {
-  it("exposes the five foundation tools plus one deprecated alias each", async () => {
+  it("exposes the seven foundation tools plus one deprecated alias for the first five", async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
@@ -49,6 +49,8 @@ describe("mcp stdio server", () => {
         "osnova_outline",
         "osnova_warp",
         "osnova_groundwork",
+        "osnova_footing",
+        "osnova_settle",
         "osnova_ask",
         "osnova_find_text",
         "osnova_skeleton",
@@ -66,6 +68,7 @@ describe("mcp stdio server", () => {
       for (const [name, verb] of [
         ["osnova_ground", "Search:"], ["osnova_thread", "Text search:"], ["osnova_outline", "Outline:"],
         ["osnova_warp", "Call graph:"], ["osnova_groundwork", "Repository map:"],
+        ["osnova_footing", "Task context:"], ["osnova_settle", "Change impact:"],
       ] as const) {
         expect(byName.get(name)?.description?.startsWith(verb) ?? false, name).toBe(true);
       }
@@ -143,6 +146,41 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("answers footing and settle from the live index", async () => {
+    write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
+    write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
+    const client = await connect();
+    try {
+      const footing = await callTool(client, "osnova_footing", { question: "shout", task: "change" });
+      expect(footing).toMatch(/^osnova generation [a-f0-9]{64}\nosnova footing: change, scope \., /);
+      expect(footing).toContain("- src/loud.ts#shout function lines 1-1");
+      expect(footing).toContain("- src/greet.ts#greet -> src/loud.ts#shout calls line 2");
+      const bySymbol = await callTool(client, "osnova_footing", { symbols: ["src/loud.ts#shout"] });
+      expect(bySymbol).toContain("osnova footing: understand,");
+      const diff = "--- a/src/loud.ts\n+++ b/src/loud.ts\n@@ -1,1 +1,1 @@\n-export function shout(text: string): string { return text.toUpperCase(); }\n+export function shout(text: string): string { return text.toLowerCase(); }\n";
+      const settle = await callTool(client, "osnova_settle", { diff });
+      expect(settle).toContain("osnova settle: 1 symbol changes; 1 dependents; 0 frontier items omitted");
+      expect(settle).toContain("changed: src/loud.ts#shout -> src/loud.ts#shout");
+      expect(settle).toContain("current d1 src/greet.ts#greet");
+      expect(settle).toContain("base-snapshot-is-current-index");
+      const bad = await client.callTool({ name: "osnova_settle", arguments: { diff: "not a diff" } });
+      expect(bad.isError).toBe(true);
+      const missing = await client.callTool({ name: "osnova_footing", arguments: {} });
+      expect(missing.isError).toBe(true);
+      for (const args of [{ symbols: [] }, { question: "shout", task: 42 }, { question: "shout", task: "" }, { question: "shout", task: null }, { question: "shout", depth: "bad" },
+        { question: "shout", depth: null }, { question: "shout", limit: "3" }, { symbols: ["src/loud.ts#shout", 7] }]) {
+        const rejected = await client.callTool({ name: "osnova_footing", arguments: args });
+        expect(rejected.isError, JSON.stringify(args)).toBe(true);
+      }
+      const long = await client.callTool({ name: "osnova_footing", arguments: { question: "shout", task: "x".repeat(9_000) } });
+      expect(long.isError).toBe(true);
+      const longContent = (long as { content?: readonly ContentBlock[] }).content ?? [];
+      expect(longContent.map((c) => (c.type === "text" ? c.text : "")).join("").length).toBeLessThanOrEqual(8_192);
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
   it("returns isError for tool failures without crashing the server", async () => {
     const client = await connect();
     try {
@@ -159,7 +197,7 @@ describe("mcp stdio server", () => {
       const text = content.map((c) => (c.type === "text" ? c.text : "")).join("");
       expect(text).toContain("osnova error");
       const still = await client.listTools();
-      expect(still.tools).toHaveLength(10);
+      expect(still.tools).toHaveLength(12);
     } finally {
       await client.close();
     }

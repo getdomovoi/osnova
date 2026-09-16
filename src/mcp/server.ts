@@ -12,7 +12,9 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatIndexHealthSummary, formatSkeletonBounded } from "../query/format.js";
+import { taskContext } from "../query/task-context.js";
+import { impact } from "../query/impact.js";
+import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
@@ -20,6 +22,9 @@ const OSNOVA_VERSION = "0.2.0";
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
+const maximumMcpFootingCodeUnits = 8_192;
+const maximumMcpSettleCodeUnits = 4_096;
+const mcpFootingExcerptLines = 8;
 
 const canonicalToolDefinitions = [
   {
@@ -87,6 +92,35 @@ const canonicalToolDefinitions = [
       properties: {
         maxDirs: { type: "number", description: "Maximum directory clusters (default 16)" },
       },
+    },
+  },
+  {
+    name: "osnova_footing",
+    description:
+      "Task context: definitions, graph relationships and candidate tests around a question or named symbols, sized for one task (understand, change or review). MCP output stays under 8192 code units with exact omission counts; the taskContext API returns the complete structured result.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        question: { type: "string", description: "Natural-language or keyword query used to pick seed symbols (ignored when symbols is given)" },
+        symbols: { type: "array", items: { type: "string" }, description: "Seed qualified names (file#Class.method) instead of a question" },
+        task: { type: "string", enum: ["understand", "change", "review"], description: "Task shape (default understand)" },
+        in: { type: "string", description: "Restrict to a file or directory path (repo-relative)" },
+        limit: { type: "number", description: "Maximum retrieval seeds (default 8)" },
+        depth: { type: "number", description: "Relationship walk depth (default 3)" },
+      },
+    },
+  },
+  {
+    name: "osnova_settle",
+    description:
+      "Change impact: symbols whose spans a unified diff touches, plus their indexed dependents, against the current index only. Deleted symbols are not visible and diff ranges are not verified against source. MCP output stays under 4096 code units; the impact API compares two indexes.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths" },
+        depth: { type: "number", description: "Dependent walk depth (default 1)" },
+      },
+      required: ["diff"],
     },
   },
 ] as const;
@@ -192,26 +226,65 @@ export function createOsnovaMcpServer(
           });
           return textResult(`${generation}\n${card}`);
         }
+        case "osnova_footing": {
+          const task = args.task === undefined ? "understand" : args.task;
+          if (task !== "understand" && task !== "change" && task !== "review") {
+            throw new Error(`task must be "understand", "change" or "review", got ${JSON.stringify(task)}`);
+          }
+          const symbols = optionalStringArray(args, "symbols");
+          const question = optionalString(args, "question");
+          if (symbols === undefined && question === undefined) throw new Error("osnova_footing needs a question or a non-empty symbols array");
+          for (const key of ["limit", "depth"]) {
+            if (args[key] !== undefined && typeof args[key] !== "number") throw new RangeError(`osnova: footing ${key} must be a nonnegative safe integer`);
+          }
+          const available = maximumMcpFootingCodeUnits - prefix.length - 1;
+          const result = taskContext(index, {
+            task, question: question ?? "", symbols, in: optionalString(args, "in"),
+            limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines,
+            measure: (partial) => formatTaskContext(partial).length,
+          });
+          return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);
+        }
+        case "osnova_settle": {
+          const diff = requireString(args, "diff");
+          if (args.depth !== undefined && typeof args.depth !== "number") {
+            throw new RangeError("osnova: settle depth must be a nonnegative safe integer");
+          }
+          const result = impact(index, index, { diff, maxDepth: optionalNumber(args, "depth") ?? 1 });
+          const available = maximumMcpSettleCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
+        }
         default:
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
     } catch (error) {
-      return errorResult(error instanceof Error ? error.message : String(error));
+      return errorResult(error instanceof Error ? error.message : String(error), toolErrorBudget(name));
     }
   });
 
   return { server, refresh };
 }
 
-function textResult(text: string): { content: Array<{ type: "text"; text: string }> } {
-  return { content: [{ type: "text", text: boundText(text) }] };
+function textResult(text: string, maxCodeUnits?: number): { content: Array<{ type: "text"; text: string }> } {
+  return { content: [{ type: "text", text: boundText(text, maxCodeUnits) }] };
 }
 
-function errorResult(message: string): {
+function toolErrorBudget(name: string): number | undefined {
+  switch (name) {
+    case "osnova_outline": return maximumMcpSkeletonCodeUnits;
+    case "osnova_warp": return maximumMcpCallersCodeUnits;
+    case "osnova_groundwork": return maximumMcpMapCodeUnits;
+    case "osnova_footing": return maximumMcpFootingCodeUnits;
+    case "osnova_settle": return maximumMcpSettleCodeUnits;
+    default: return undefined;
+  }
+}
+
+function errorResult(message: string, maxCodeUnits?: number): {
   content: Array<{ type: "text"; text: string }>;
   isError: true;
 } {
-  return { ...textResult(`osnova error: ${message}`), isError: true };
+  return { ...textResult(`osnova error: ${message}`, maxCodeUnits), isError: true };
 }
 
 function requireString(args: Record<string, unknown>, key: string): string {
@@ -225,6 +298,15 @@ function requireString(args: Record<string, unknown>, key: string): string {
 function optionalString(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalStringArray(args: Record<string, unknown>, key: string): readonly string[] | undefined {
+  const value = args[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === "string" && item.length > 0)) {
+    throw new Error(`argument "${key}" must be a non-empty array of non-empty strings`);
+  }
+  return value as string[];
 }
 
 function optionalNumber(args: Record<string, unknown>, key: string): number | undefined {
