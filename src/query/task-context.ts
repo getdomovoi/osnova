@@ -1,7 +1,8 @@
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { compareText, indexReceipt, isReliableEdge, relationshipEvidence, sourceReceipt } from "./impact.js";
 import type { DefinitionEvidence, IndexReceipt, RelationshipEvidence, SourceReceipt } from "./impact.js";
-import { inScope, normalizeScope, scopedAsk } from "./scoped.js";
+import { inScope, normalizeScope } from "./scoped.js";
+import { askDetailed } from "./ask.js";
 
 export interface TaskContextOptions {
   readonly task: "understand" | "change" | "review";
@@ -48,6 +49,8 @@ export interface TaskContextResult {
   readonly limitations: readonly string[];
 }
 
+const seedOverfetch = 4;
+
 export function taskContext(index: OsnovaIndex, options: TaskContextOptions): TaskContextResult {
   const maxCodeUnits = options.maxCodeUnits ?? 16_384;
   const maxDepth = options.maxDepth ?? 3;
@@ -67,12 +70,13 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
       else seeds.push(symbol);
     }
   } else {
-    const retrieved = scopedAsk(index, options.question, { in: scope, limit: options.limit ?? 8 });
-    retrievalHits = retrieved.omittedHits;
+    const limit = options.limit ?? 8;
+    if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError("osnova: task context limit must be a nonnegative safe integer");
+    const retrieved = askDetailed(index, options.question, { in: scope, limit: limit * seedOverfetch });
     for (const hit of retrieved.hits) {
-      if (hit.symbol !== null) seeds.push(hit.symbol);
-      else retrievalHits++;
+      if (hit.symbol !== null && seeds.length < limit) seeds.push(hit.symbol);
     }
+    retrievalHits = retrieved.totalCandidates - seeds.length;
   }
   const sources = [...new Set(seeds.map((symbol) => symbol.file))].sort(compareText).map((file) => sourceReceipt(index, file, receipt));
   const definitions = new Map<string, ContextDefinition>();
@@ -85,20 +89,19 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt });
   };
   for (const seed of seeds) addDefinition(seed);
-  const relationships = new Map<string, RelationshipEvidence>();
+  const relationships = new Map<number, RelationshipEvidence>();
   const candidateTests = new Map<string, CandidateTest>();
-  const uncertain = new Set<string>(), outside = new Set<string>(), frontier = new Set<string>();
-  const reliable = new Map<string, RelationshipEvidence>();
-  for (const edge of index.edges) {
-    const key = JSON.stringify(edge);
+  const frontier = new Set<string>();
+  let uncertain = 0, outside = 0;
+  const sortedEdges: [number, RelationshipEvidence][] = [];
+  index.edges.forEach((edge, key) => {
     const evidence = relationshipEvidence(index, edge, receipt);
-    if (evidence === null || !isReliableEdge(edge)) { uncertain.add(key); continue; }
+    if (evidence === null || !isReliableEdge(edge)) { uncertain++; return; }
     if (!inScope(evidence.source.file, scope) || !inScope(evidence.target.file, scope) ||
-      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside.add(key); continue; }
-    reliable.set(key, evidence);
-  }
-  const sortedEdges = [...reliable].sort(([a], [b]) => compareText(a, b));
-  const inbound = new Map<string, [string, RelationshipEvidence][]>(), outbound = new Map<string, [string, RelationshipEvidence][]>();
+      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside++; return; }
+    sortedEdges.push([key, evidence]);
+  });
+  const inbound = new Map<string, [number, RelationshipEvidence][]>(), outbound = new Map<string, [number, RelationshipEvidence][]>();
   for (const [key, evidence] of sortedEdges) {
     const from = evidence.edge.fromSymbol || evidence.edge.fromFile;
     const to = evidence.edge.toSymbol ?? evidence.edge.toFile;
@@ -133,7 +136,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     task: options.task, scope, receipt, sources,
     definitions: [] as ContextDefinition[], relationships: [] as RelationshipEvidence[], candidateTests: [] as CandidateTest[],
     omitted: { definitions: definitions.size, relationships: relationships.size, candidateTests: candidateTests.size,
-      retrievalHits, uncertainEdges: uncertain.size, outOfScopeEdges: outside.size, depthFrontier: frontier.size, unknownSymbols },
+      retrievalHits, uncertainEdges: uncertain, outOfScopeEdges: outside, depthFrontier: frontier.size, unknownSymbols },
     limitations: ["indexed-structural-evidence-only", "test-candidates-not-coverage", "receipts-not-disk-freshness", "uncertainty-counts-cover-entire-index",
       ...(receipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])],
   };

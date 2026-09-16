@@ -57,6 +57,21 @@ describe("settle on a single index", () => {
   });
 });
 
+describe("footing seeds", () => {
+  it("skips prose documents and keeps looking for definitions", () => {
+    const prose = Array.from({ length: 6 }, (_, i) => ({ ...card(`docs/guide-${i}.md`, [], `# How the resolver walks a package on disk\n\nThe resolver walks the package on disk. ${i}\n`), language: "fallback" as const }));
+    const code = card("src/lookup.ts", ["findModule", "walkPackage", "readEntry"]);
+    const one = index([...prose, code], [edge("src/lookup.ts#findModule", "src/lookup.ts#walkPackage"), edge("src/lookup.ts#walkPackage", "src/lookup.ts#readEntry")]);
+    const question = "how the resolver walks a package on disk";
+    const plain = one.files.get("docs/guide-0.md");
+    expect(plain?.symbols).toHaveLength(0);
+    const result = taskContext(one, { task: "understand", question, limit: 1 });
+    expect(result.sources.map((source) => source.file)).toEqual(["src/lookup.ts"]);
+    expect(result.definitions.map((definition) => definition.symbol.name)).toContain("walkPackage");
+    expect(result.omitted.retrievalHits).toBeGreaterThan(0);
+  });
+});
+
 describe("footing formatting", () => {
   const current = index([card("a.ts", ["target"]), card("b.ts", ["middle"]), card("c.test.ts", ["check"])],
     [edge("b.ts#middle", "a.ts#target"), edge("c.test.ts#check", "b.ts#middle")]);
