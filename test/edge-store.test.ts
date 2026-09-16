@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { serializeEdges, deserializeEdges, edgeKinds } from "../src/index/edgeStore.js";
 import { sha256Hex } from "../src/index/scan.js";
+import type { OsnovaEdge } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
 
@@ -31,6 +32,23 @@ describe("edge store", () => {
     const fileIndexes = lines.slice(1, -1).map((line) => (JSON.parse(line) as number[])[1]!);
     expect([...fileIndexes]).toEqual([...fileIndexes].sort((a, b) => a - b));
     expect(edgeKinds).toEqual(["calls", "references", "imports"]);
+  });
+
+  it("emits interned tables in canonical key order whatever order the inputs were built in", () => {
+    const paths = ["a.ts", "b.ts"];
+    const base = { kind: "calls" as const, fromFile: "a.ts", fromSymbol: "a.ts#x", toName: "y", line: 1, toSymbol: "b.ts#y", toFile: "b.ts" };
+    const sorted = serializeEdges([{ ...base, evidence: { source: "syntax", resolution: { method: "import-binding", status: "resolved" } } } as OsnovaEdge], paths);
+    const reordered = serializeEdges([{ ...base, evidence: { resolution: { status: "resolved", method: "import-binding" }, source: "syntax" } } as OsnovaEdge], paths);
+    expect(reordered.bytes.equals(sorted.bytes)).toBe(true);
+    const header = JSON.parse(reordered.bytes.toString("utf8").split("\n")[0]!) as { evidence: unknown[] };
+    expect(JSON.stringify(header.evidence[0])).toBe('{"resolution":{"method":"import-binding","status":"resolved"},"source":"syntax"}');
+  });
+
+  it("refuses to serialize an unknown edge kind", async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const first = index.edges[0]!;
+    expect(() => serializeEdges([{ ...first, kind: "invokes" as OsnovaEdge["kind"] }], paths)).toThrow(/unknown edge kind/);
   });
 
   it("rejects tuples that point outside the tables", async () => {

@@ -26,11 +26,11 @@ function canonical(value: unknown): string {
 }
 
 function intern<T>(values: Iterable<T | undefined>): { table: T[]; indexOf: (value: T | undefined) => number } {
-  const byKey = new Map<string, T>();
-  for (const value of values) if (value !== undefined) byKey.set(canonical(value), value);
-  const keys = [...byKey.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const byKey = new Set<string>();
+  for (const value of values) if (value !== undefined) byKey.add(canonical(value));
+  const keys = [...byKey].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const position = new Map(keys.map((key, i) => [key, i]));
-  return { table: keys.map((key) => byKey.get(key)!), indexOf: (value) => value === undefined ? -1 : position.get(canonical(value))! };
+  return { table: keys.map((key) => JSON.parse(key) as T), indexOf: (value) => value === undefined ? -1 : position.get(canonical(value))! };
 }
 
 export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly string[]): EdgeLayout {
@@ -43,7 +43,9 @@ export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly str
     const fromFile = pathIndex.get(edge.fromFile);
     const toFile = edge.toFile === undefined ? -1 : pathIndex.get(edge.toFile);
     if (fromFile === undefined || toFile === undefined) throw new Error(`osnova: edge references unknown file ${edge.fromFile}`);
-    const tuple: Tuple = [edgeKinds.indexOf(edge.kind), fromFile, edge.fromSymbol, edge.toName, edge.line, edge.toSymbol ?? null, toFile,
+    const kind = edgeKinds.indexOf(edge.kind);
+    if (kind < 0) throw new Error(`osnova: unknown edge kind ${JSON.stringify(edge.kind)}`);
+    const tuple: Tuple = [kind, fromFile, edge.fromSymbol, edge.toName, edge.line, edge.toSymbol ?? null, toFile,
       evidence.indexOf(edge.evidence ?? { source: "unknown" }), bindings.indexOf(edge.binding)];
     lines.push(JSON.stringify(tuple));
   }

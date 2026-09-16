@@ -1,4 +1,3 @@
-import { OsnovaIndexImpl } from "../index/indexImpl.js";
 import type { AskHit, AskOptions, OsnovaIndex } from "../types.js";
 import { askDetailed } from "./ask.js";
 import { compareText, indexReceipt, sourceReceipt } from "./impact.js";
@@ -145,24 +144,6 @@ export function detectScopes(index: OsnovaIndex): PackageScope[] {
     scopes.set(dir, { path: dir, name: scopeNameForDirectory(index, dir), manifests: [] });
   }
   return [...scopes.values()].sort((a, b) => compareText(a.path, b.path));
-}
-
-export function isolatedIndex(index: OsnovaIndex, paths: ReadonlySet<string>): OsnovaIndex {
-  const files = new Map([...index.files].filter(([path]) => paths.has(path)));
-  const edges = index.edges.filter((edge) => {
-    const target = edge.toSymbol === undefined ? edge.toFile : index.symbols.get(edge.toSymbol)?.file ?? edge.toFile;
-    if (!paths.has(edge.fromFile) || target !== undefined && !paths.has(target)) return false;
-    if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "resolved") {
-      const resolution = edge.evidence.resolution;
-      if (resolution.via?.some((hop) => !paths.has(hop.file) || !paths.has(hop.targetFile))) return false;
-      if (resolution.method === "receiver-hint") {
-        const owner = index.symbols.get(resolution.receiver.classSymbol);
-        if (owner === undefined || !paths.has(owner.file)) return false;
-      }
-    }
-    return true;
-  });
-  return new OsnovaIndexImpl(index.root, files, edges);
 }
 
 export function scopedAsk(index: OsnovaIndex, question: string, options: AskOptions = {}): ScopedAskResult {
