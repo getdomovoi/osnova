@@ -26,7 +26,7 @@ const maximumMcpFootingCodeUnits = 8_192;
 const maximumMcpSettleCodeUnits = 4_096;
 const mcpFootingExcerptLines = 8;
 
-const canonicalToolDefinitions = [
+const toolDefinitions = [
   {
     name: "osnova_ground",
     description:
@@ -125,25 +125,6 @@ const canonicalToolDefinitions = [
   },
 ] as const;
 
-type CanonicalToolName = (typeof canonicalToolDefinitions)[number]["name"];
-
-const deprecatedToolAliases: ReadonlyMap<string, CanonicalToolName> = new Map([
-  ["osnova_ask", "osnova_ground"],
-  ["osnova_find_text", "osnova_thread"],
-  ["osnova_skeleton", "osnova_outline"],
-  ["osnova_callers", "osnova_warp"],
-  ["osnova_map", "osnova_groundwork"],
-]);
-
-const toolDefinitions = [
-  ...canonicalToolDefinitions,
-  ...[...deprecatedToolAliases].map(([alias, canonical]) => {
-    const definition = canonicalToolDefinitions.find((tool) => tool.name === canonical);
-    if (definition === undefined) throw new Error(`osnova: alias ${alias} names an unknown tool ${canonical}`);
-    return { name: alias, description: `Deprecated alias of ${canonical}; removed in the next release.`, inputSchema: definition.inputSchema };
-  }),
-];
-
 export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
 }
@@ -166,7 +147,7 @@ export function createOsnovaMcpServer(
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const name = deprecatedToolAliases.get(request.params.name) ?? request.params.name;
+    const name = request.params.name;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
       const index = await refresh();
