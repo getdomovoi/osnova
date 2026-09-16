@@ -1,24 +1,2 @@
 #!/bin/sh
-# Pre-commit gate: lint and typecheck on staged content.
-# Tests run in the pre-push hook; keeping commit fast is deliberate.
-
-set -u
-
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "osnova: pnpm not found, skipping commit gates (do not bypass habitually)" >&2
-  exit 0
-fi
-
-echo "osnova: linting staged changes"
-if ! pnpm lint >/dev/null 2>&1; then
-  echo "osnova: commit blocked — lint failed. Run 'pnpm lint' for details." >&2
-  exit 1
-fi
-
-echo "osnova: typechecking staged changes"
-if ! pnpm typecheck >/dev/null 2>&1; then
-  echo "osnova: commit blocked — typecheck failed. Run 'pnpm typecheck' for details." >&2
-  exit 1
-fi
-
-exit 0
+exec node "$(git rev-parse --show-toplevel)/scripts/git-gates.mjs" commit

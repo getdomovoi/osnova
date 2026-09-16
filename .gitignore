@@ -4,3 +4,5 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .osnova-cache/
+/docs/superpowers/
+/.superpowers/

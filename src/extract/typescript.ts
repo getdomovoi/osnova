@@ -1,6 +1,7 @@
 import type { Node, Tree } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectBindings, memberKindOf } from "./bindings.js";
 
 const FUNCTION_VALUE_NODES = new Set([
   "function_expression",
@@ -12,37 +13,19 @@ const FUNCTION_VALUE_NODES = new Set([
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-type ScopeKind = "module" | "class" | "function";
-
-interface ScopeFrame {
-  readonly name: string;
-  readonly kind: ScopeKind;
-}
-
 class TsExtractor {
   readonly out = new Extractor();
-  private readonly frames: ScopeFrame[] = [{ name: "", kind: "module" }];
 
-  get inFunctionScope(): boolean {
-    return this.frames.some((frame) => frame.kind === "function");
-  }
-
-  get atModuleLevel(): boolean {
-    return this.frames.length === 1;
-  }
-
-  pushFrame(name: string, kind: ScopeKind): void {
-    this.frames.push({ name, kind });
+  pushFrame(name: string): void {
     this.out.push(name);
   }
 
   popFrame(): void {
-    this.frames.pop();
     this.out.pop();
   }
 
   def(name: string, kind: Parameters<Extractor["addDef"]>[1], node: Node, sigNode?: Node): void {
-    if (this.inFunctionScope || !IDENTIFIER_RE.test(name)) return;
+    if (!IDENTIFIER_RE.test(name)) return;
     this.out.addDef(name, kind, node, sigNode);
   }
 }
@@ -95,7 +78,7 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
       ex.def(name, "class", declarator, valueNode);
       continue;
     }
-    if (isConst && ex.atModuleLevel && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+    if (isConst && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
       ex.def(name, "constant", declarator, declarator);
     }
   }
@@ -103,15 +86,15 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
 
 function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node) => void): void {
   ex.def(name, "class", node);
-  ex.pushFrame(name, "class");
+  ex.pushFrame(name);
   for (const child of childrenOf(node)) {
     if (child.type === "class_body" || child.type === "declaration_list") {
       for (const member of childrenOf(child)) {
         if (member.type === "method_definition") {
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {
-            ex.out.addDef(methodName, "method", member);
-            ex.pushFrame(methodName, "function");
+            ex.out.addDef(methodName, "method", member, undefined, memberKindOf(member, false));
+            ex.pushFrame(methodName);
             for (const bodyPart of childrenOf(member)) visit(bodyPart);
             ex.popFrame();
           } else {
@@ -131,6 +114,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
 export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript"): LanguageAdapter {
   const extract = (tree: Tree): AdapterOutput => {
     const ex = new TsExtractor();
+    const bindings = collectBindings(tree.rootNode, false);
     const visit = (node: Node): void => {
       switch (node.type) {
         case "import_statement": {
@@ -156,7 +140,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         case "generator_function_declaration": {
           const name = declarationName(node);
           if (name !== null) ex.def(name, "function", node);
-          ex.pushFrame(name ?? "", "function");
+          ex.pushFrame(name ?? "");
           for (const child of childrenOf(node)) visit(child);
           ex.popFrame();
           return;
@@ -200,6 +184,18 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
           }
           return;
         }
+        case "variable_declarator": {
+          const value = node.childForFieldName("value");
+          const name = node.childForFieldName("name");
+          if (name?.type === "identifier" && value !== null && FUNCTION_VALUE_NODES.has(value.type)) {
+            ex.pushFrame(name.text);
+            visit(value);
+            ex.popFrame();
+          } else {
+            for (const child of childrenOf(node)) visit(child);
+          }
+          return;
+        }
         case "call_expression": {
           const fn = node.childForFieldName("function");
           if (
@@ -221,13 +217,13 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
             return;
           }
           const target = callTarget(node);
-          if (target !== null) ex.out.addEdge("calls", target, node);
+          if (target !== null) ex.out.addEdge("calls", target, node, bindings.at(fn, node));
           for (const child of childrenOf(node)) visit(child);
           return;
         }
         case "new_expression": {
           const target = newTarget(node);
-          if (target !== null) ex.out.addEdge("calls", target, node);
+          if (target !== null) ex.out.addEdge("calls", target, node, bindings.at(node.childForFieldName("constructor"), node));
           for (const child of childrenOf(node)) visit(child);
           return;
         }
@@ -237,7 +233,9 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
       }
     };
     for (const child of childrenOf(tree.rootNode)) visit(child);
-    return { definitions: ex.out.definitions, edges: ex.out.edges };
+    return { definitions: ex.out.definitions.map((definition) => ({
+      ...definition, exportedNames: bindings.exportedNames(definition.name, definition.parent),
+    })), edges: ex.out.edges, reExports: bindings.reExports };
   };
   return { language, extract };
 }

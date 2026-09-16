@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "core-v1",
+  "source": {
+    "kind": "inline",
+    "files": {
+      "packages/retry/timer.ts": "export interface RetryOptions { attempts: number; }\n\nexport class RetryTimer {\n  tick(): number { return 1; }\n}\n",
+      "packages/retry/direct.ts": "import { RetryTimer } from './timer.js';\n\nexport function startTimer() { return new RetryTimer(); }\n",
+      "packages/retry/alias.ts": "import { RetryTimer as Clock } from './timer.js';\n\nexport function aliasTimer() { return new Clock(); }\n",
+      "packages/network/client.ts": "export function connectClient() { return sendPacket(); }\n\nexport function sendPacket() { return 1; }\n",
+      "python/labels.py": "def normalize_label(value):\n    return value.strip().lower()\n",
+      "python/consumer.py": "from .labels import normalize_label as tidy\n\ndef display_label(value):\n    return tidy(value)\n",
+      "notes.txt": "needle\nneedle\nneedle\nneedle\nneedle\nneedle\nneedle\nneedle\nneedle\nneedle\nneedle\n"
+    }
+  },
+  "edit": { "file": "packages/network/client.ts", "append": "\n// benchmark edit\n" },
+  "cases": [
+    {
+      "id": "exact-class", "split": "development", "kind": "ask", "question": "RetryTimer",
+      "expected": ["packages/retry/timer.ts#RetryTimer"],
+      "anchors": [{ "file": "packages/retry/timer.ts", "text": "export class RetryTimer" }]
+    },
+    {
+      "id": "exact-function", "split": "development", "kind": "ask", "question": "connectClient",
+      "expected": ["packages/network/client.ts#connectClient"],
+      "anchors": [{ "file": "packages/network/client.ts", "text": "export function connectClient" }]
+    },
+    {
+      "id": "direct-and-aliased-constructors", "split": "development", "kind": "callers", "symbol": "packages/retry/timer.ts#RetryTimer",
+      "expected": ["packages/retry/direct.ts#startTimer", "packages/retry/alias.ts#aliasTimer"],
+      "anchors": [
+        { "file": "packages/retry/direct.ts", "text": "new RetryTimer()" },
+        { "file": "packages/retry/alias.ts", "text": "RetryTimer as Clock" },
+        { "file": "packages/retry/alias.ts", "text": "new Clock()" }
+      ]
+    },
+    {
+      "id": "direct-caller", "split": "development", "kind": "callers", "symbol": "packages/network/client.ts#sendPacket",
+      "expected": ["packages/network/client.ts#connectClient"],
+      "anchors": [{ "file": "packages/network/client.ts", "text": "connectClient() { return sendPacket(); }" }]
+    },
+    {
+      "id": "text-beyond-default-cap", "split": "development", "kind": "findText", "pattern": "needle", "fixed": true,
+      "expected": ["notes.txt:1:0", "notes.txt:2:0", "notes.txt:3:0", "notes.txt:4:0", "notes.txt:5:0", "notes.txt:6:0", "notes.txt:7:0", "notes.txt:8:0", "notes.txt:9:0", "notes.txt:10:0", "notes.txt:11:0"],
+      "anchors": [{ "file": "notes.txt", "text": "needle\nneedle" }]
+    },
+    {
+      "id": "python-definition", "split": "evaluation", "kind": "ask", "question": "normalize_label value strip",
+      "expected": ["python/labels.py#normalize_label"],
+      "anchors": [{ "file": "python/labels.py", "text": "def normalize_label(value):" }]
+    },
+    {
+      "id": "python-alias-caller", "split": "evaluation", "kind": "callers", "symbol": "python/labels.py#normalize_label",
+      "expected": ["python/consumer.py#display_label"],
+      "anchors": [{ "file": "python/consumer.py", "text": "normalize_label as tidy" }, { "file": "python/consumer.py", "text": "return tidy(value)" }]
+    },
+    {
+      "id": "no-callers", "split": "evaluation", "kind": "callers", "symbol": "python/consumer.py#display_label",
+      "expected": [],
+      "anchors": [{ "file": "python/consumer.py", "text": "def display_label(value):" }]
+    }
+  ]
+}

@@ -1,0 +1,475 @@
+{
+  "schemaVersion": 1,
+  "decision": "reverted",
+  "reason": "scripts/bench/runner.ts only exercises ask, callersDetailed and findTextDetailed; it has no scopedAsk case kind, so this gate cannot observe any scopedAsk merge-rule change at all, regardless of which merge rule ships. Per project rule (no retrieval-ranking change ships without a measurable acceptance gate), the comparable-score merge rule from the prior commit was reverted back to round-robin pending that gate. Workspace-glob scope discovery and the additive alsoMatched field are unaffected and remain shipped.",
+  "candidateRevision": "51608981e5b65e66bbd527a1fe21059a1439f20c",
+  "implementationBefore": {
+    "revision": "c1e8872a130248dcdbea60143eddf939e644e53e",
+    "engineFingerprint": "0edba51bbd59cb2ea3fd516f7f4104ebf5e07ede084e024f77bfb7cd6b57b994",
+    "harnessFingerprint": "b0e8e4aba9051376a2bdfe0e2dce3fc21007907ae5b93116d74c4a2d2d651ce8"
+  },
+  "implementation": {
+    "revision": "08f77fd412c405c6ab693db93d8d1f2f5e0ce09b",
+    "engineFingerprint": "46285d49b65229440a848daa60871059d4a89dc42b8fb9d792b1cf5cab7b4b91",
+    "harnessFingerprint": "b0e8e4aba9051376a2bdfe0e2dce3fc21007907ae5b93116d74c4a2d2d651ce8"
+  },
+  "method": "Development split run first with --samples 3, then evaluation with --candidate-report from the matching development output; the harness's --worker mode was invoked directly (same arguments the non-worker CLI wrapper would pass) for every corpus because the pyright-v1 development and evaluation runs (~32-33s each) leave little margin under the CLI wrapper's 60s child-process timeout, and this kept all eight before/after runs consistent. Before runs were captured at commit c1e8872a130248dcdbea60143eddf939e644e53e (pre-task-6 HEAD). After runs in this record were captured against the reverted (round-robin merge, glob scopes kept) working tree, re-run after the revert so implementation.revision/engineFingerprint reflect the code actually being recorded here rather than the earlier, since-reverted comparable-score candidate.",
+  "workloads": [
+    {
+      "corpus": "core-v1",
+      "source": {
+        "revision": null,
+        "editedFile": "packages/network/client.ts"
+      },
+      "hasRootWorkspaceGlobs": false,
+      "manifestFingerprint": "7c6086fee2e8ab2384185d640924b7630c599b3b951607db382d5f2acd737cc1",
+      "development": {
+        "before": {
+          "caseCount": 5,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "after": {
+          "caseCount": 5,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "beforeCases": [
+          {
+            "id": "exact-class",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "exact-function",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "direct-and-aliased-constructors",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "direct-caller",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "text-beyond-default-cap",
+            "kind": "findText",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "exact-class",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "exact-function",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "direct-and-aliased-constructors",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "direct-caller",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "text-beyond-default-cap",
+            "kind": "findText",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          }
+        ]
+      },
+      "evaluation": {
+        "before": {
+          "caseCount": 3,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "after": {
+          "caseCount": 3,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "beforeCases": [
+          {
+            "id": "python-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "python-alias-caller",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "no-callers",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "python-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "python-alias-caller",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "no-callers",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          }
+        ],
+        "evaluationReceipt": {
+          "candidateReportFingerprint": "2233a941e4b9c6890334f9ce1f8a1b747bb9433ed697c5f649456e72c5954ebd",
+          "manifestFingerprint": "7c6086fee2e8ab2384185d640924b7630c599b3b951607db382d5f2acd737cc1",
+          "engineFingerprint": "46285d49b65229440a848daa60871059d4a89dc42b8fb9d792b1cf5cab7b4b91",
+          "harnessFingerprint": "b0e8e4aba9051376a2bdfe0e2dce3fc21007907ae5b93116d74c4a2d2d651ce8",
+          "snapshotFingerprint": "bca6f63f678bda6001d6bfb0bb715ef91d4780c52ec863519b9b7a5b03ebe9e8"
+        }
+      }
+    },
+    {
+      "corpus": "zod-v1",
+      "source": {
+        "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+        "editedFile": "packages/zod/src/v4/core/util.ts"
+      },
+      "hasRootWorkspaceGlobs": true,
+      "manifestFingerprint": "addc1093f83ec61d6a4d59b99e8ccd1aae764b4ef29dd8d2fa535c296e673d44",
+      "development": {
+        "before": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 0.75
+        },
+        "after": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 0.75
+        },
+        "beforeCases": [
+          {
+            "id": "assert-never-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 0.5
+          },
+          {
+            "id": "json-replacer-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "assert-never-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 0.5
+          },
+          {
+            "id": "json-replacer-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ]
+      },
+      "evaluation": {
+        "before": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "after": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "beforeCases": [
+          {
+            "id": "primitive-join-dependency",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "regex-cleaning-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "primitive-join-dependency",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "regex-cleaning-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "evaluationReceipt": {
+          "candidateReportFingerprint": "ba743781b7e0cb98067e9c573cd20c97e1a99963f64cd5b74ca443dd00fa7573",
+          "manifestFingerprint": "addc1093f83ec61d6a4d59b99e8ccd1aae764b4ef29dd8d2fa535c296e673d44",
+          "engineFingerprint": "46285d49b65229440a848daa60871059d4a89dc42b8fb9d792b1cf5cab7b4b91",
+          "harnessFingerprint": "b0e8e4aba9051376a2bdfe0e2dce3fc21007907ae5b93116d74c4a2d2d651ce8",
+          "snapshotFingerprint": "e706286c62f84c5a7374da97f311b9952ce5b57bdc1d953b6a9c1c7a019488c5"
+        }
+      }
+    },
+    {
+      "corpus": "click-v1",
+      "source": {
+        "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+        "editedFile": "src/click/utils.py"
+      },
+      "hasRootWorkspaceGlobs": false,
+      "manifestFingerprint": "30f4f726722d40b7e22a070157ca847d5d520f3d5e39d3b967cd495f9c595a1d",
+      "development": {
+        "before": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "after": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "beforeCases": [
+          {
+            "id": "echo-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "app-directory-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "echo-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "app-directory-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ]
+      },
+      "evaluation": {
+        "before": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "after": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "beforeCases": [
+          {
+            "id": "app-name-dependency",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "lazy-file-opening",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "app-name-dependency",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          },
+          {
+            "id": "lazy-file-opening",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "evaluationReceipt": {
+          "candidateReportFingerprint": "a1a632eb18db2cb332358f8a44dff7366d42e8426808c6596f89f958ef46bfc0",
+          "manifestFingerprint": "30f4f726722d40b7e22a070157ca847d5d520f3d5e39d3b967cd495f9c595a1d",
+          "engineFingerprint": "46285d49b65229440a848daa60871059d4a89dc42b8fb9d792b1cf5cab7b4b91",
+          "harnessFingerprint": "b0e8e4aba9051376a2bdfe0e2dce3fc21007907ae5b93116d74c4a2d2d651ce8",
+          "snapshotFingerprint": "58bda71585b03d93a0dceec30ace521da5bc1df756203b5f39cc5fa1ef4147d8"
+        }
+      }
+    },
+    {
+      "corpus": "pyright-v1",
+      "source": {
+        "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+        "editedFile": "packages/pyright-internal/src/common/pathUtils.ts"
+      },
+      "hasRootWorkspaceGlobs": true,
+      "manifestFingerprint": "e6e5ddfe7d25d3581e50de9cd4de4b0b657d8b9687292f09e14c79ee49ba3f47",
+      "development": {
+        "before": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "after": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "beforeCases": [
+          {
+            "id": "path-root-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "directory-root-dependency",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "path-root-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "directory-root-dependency",
+            "kind": "callers",
+            "recallAt5": null,
+            "reciprocalRankAt5": null
+          }
+        ]
+      },
+      "evaluation": {
+        "before": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "after": {
+          "caseCount": 2,
+          "errorCount": 0,
+          "meanRecallAt5": 1,
+          "meanReciprocalRankAt5": 1
+        },
+        "beforeCases": [
+          {
+            "id": "wildcard-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "path-normalization-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "afterCases": [
+          {
+            "id": "wildcard-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          },
+          {
+            "id": "path-normalization-definition",
+            "kind": "ask",
+            "recallAt5": 1,
+            "reciprocalRankAt5": 1
+          }
+        ],
+        "evaluationReceipt": {
+          "candidateReportFingerprint": "726a8f388e74bbcfa63ba26d5359edfe3c4b2a1fd47c76d0c5598840f43da50d",
+          "manifestFingerprint": "e6e5ddfe7d25d3581e50de9cd4de4b0b657d8b9687292f09e14c79ee49ba3f47",
+          "engineFingerprint": "46285d49b65229440a848daa60871059d4a89dc42b8fb9d792b1cf5cab7b4b91",
+          "harnessFingerprint": "b0e8e4aba9051376a2bdfe0e2dce3fc21007907ae5b93116d74c4a2d2d651ce8",
+          "snapshotFingerprint": "4060853b8ce40ac03576f18a2f0cdf13389bd4955d33e776b3cc021ddb817914"
+        }
+      }
+    }
+  ],
+  "anyRecallOrMrrDropped": false,
+  "limitations": [
+    "Four corpora (core-v1 inline fixture, zod-v1, click-v1, pyright-v1 checkouts), 2-3 cases per split; small public task sets, not general accuracy or agent-success estimates.",
+    "The harness (scripts/bench/runner.ts) has no scopedAsk case kind; it only drives ask, callersDetailed and findTextDetailed. Before/after Recall@5 and MRR@5 in this record are therefore identical by construction and cannot detect any scopedAsk merge-rule change, comparable-score or round-robin. Two of the four corpora (zod-v1: root package.json workspaces; pyright-v1: root pnpm-workspace.yaml packages) do contain root workspace globs that the new detectScopes glob discovery would now surface as additional scopes, but nothing in this gate queries scopedAsk against them.",
+    "zod-v1 and click-v1 checkouts were created fresh for this task under the session scratchpad via git clone --filter=blob:none --no-checkout followed by checkout to the manifest revision; they are disposable and not retained as long-lived fixtures.",
+    "callers-kind cases report null Recall@5/MRR@5 (they use set-based callerPrecision/callerRecall instead); those fields are omitted from the recall/MRR comparison above."
+  ],
+  "followUp": "add a scopedAsk benchmark case kind and a pinned multi-scope corpus before any comparable-score merge ships"
+}

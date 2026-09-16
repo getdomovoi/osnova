@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "nested-bindings-v1",
+  "source": {
+    "kind": "inline",
+    "files": {
+      "api.ts": "export function step() { return 1; }\n",
+      "entry.ts": "import { step } from './api.js';\nexport const entry = () => {\n  const call = () => step();\n  return call();\n};\n",
+      "host.ts": "export function host() {\n  function inner() { return 2; }\n  const bridge = () => inner();\n  return bridge();\n}\n"
+    }
+  },
+  "edit": { "file": "api.ts", "append": "\n// measured edit\n" },
+  "cases": [
+    {
+      "id": "nested-import-call", "split": "development", "kind": "callers", "symbol": "api.ts#step",
+      "expected": ["entry.ts#entry.call"],
+      "anchors": [{ "file": "entry.ts", "text": "const call = () => step()" }]
+    },
+    {
+      "id": "nested-local-call", "split": "evaluation", "kind": "callers", "symbol": "host.ts#host.inner",
+      "expected": ["host.ts#host.bridge"],
+      "anchors": [{ "file": "host.ts", "text": "function inner()" }, { "file": "host.ts", "text": "const bridge = () => inner()" }]
+    }
+  ]
+}

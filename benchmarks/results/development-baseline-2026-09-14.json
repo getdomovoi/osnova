@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "split": "development",
+  "scoringScope": "structured-query",
+  "implementation": {
+    "revision": "d686333070afc797b5dc4defef6a9545d278acfd",
+    "engineFingerprint": "67aab9d35069778529d12ad9b335483d8c6c6fa141626cc9b0e2f9380067fd51",
+    "harnessFingerprint": "24860642a949265b29fd25491bcfd6fde4972d3760250bdb0098e82ff65fe100"
+  },
+  "environment": { "node": "v26.8.2", "platform": "darwin", "arch": "arm64", "execution": "tsx-source" },
+  "limitations": [
+    "Two development cases per repository; these are smoke workloads, not representative task-success measurements.",
+    "Five refresh samples per workload; percentiles use nearest rank.",
+    "First build excludes process startup; filesystem caches were not flushed.",
+    "Worker peak RSS includes the runtime, source snapshot, query evaluation, and repeated full-rebuild verification.",
+    "Partial analysis is reported as diagnostics, not hidden; clean checkout status was verified after each run.",
+    "Evaluation splits and provider-backed agent trials were not run."
+  ],
+  "unmeasured": { "taskSuccess": null, "contextTokens": null, "agentToolCalls": null, "packageBytes": null },
+  "workloads": [
+    {
+      "corpus": "zod-v1",
+      "sourceRevision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "manifestFingerprint": "addc1093f83ec61d6a4d59b99e8ccd1aae764b4ef29dd8d2fa535c296e673d44",
+      "snapshotFingerprint": "e706286c62f84c5a7374da97f311b9952ce5b57bdc1d953b6a9c1c7a019488c5",
+      "snapshotExclusions": [".codex/skills", ".cursorrules", "CLAUDE.md", "README.md"],
+      "index": { "files": 702, "symbols": 7612, "edges": 54673 },
+      "summary": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 0, "meanReciprocalRankAt5": 0, "callerPrecision": null, "callerRecall": null },
+      "diagnosticCount": 4,
+      "performance": {
+        "firstBuildMs": 1565.4975,
+        "noChangeRefreshMs": { "samples": [69.71754199999987, 47.23474999999962, 40.04925000000003, 54.340916000001016, 38.198083000001134], "p50": 47.23474999999962, "p95": 69.71754199999987 },
+        "editedRefreshMs": { "samples": [525.5127499999999, 434.12816699999985, 377.46029199999975, 437.12208400000054, 371.50245899999936], "p50": 434.12816699999985, "p95": 525.5127499999999 },
+        "serializedArtifactBytes": 27325282, "storedArtifactBytes": 3242763, "workerPeakRssBytes": 724959232,
+        "incrementalEqualsFull": true
+      }
+    },
+    {
+      "corpus": "click-v1",
+      "sourceRevision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+      "manifestFingerprint": "30f4f726722d40b7e22a070157ca847d5d520f3d5e39d3b967cd495f9c595a1d",
+      "snapshotFingerprint": "58bda71585b03d93a0dceec30ace521da5bc1df756203b5f39cc5fa1ef4147d8",
+      "snapshotExclusions": [],
+      "index": { "files": 160, "symbols": 1983, "edges": 7519 },
+      "summary": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 0.5, "meanReciprocalRankAt5": 0.5, "callerPrecision": null, "callerRecall": null },
+      "diagnosticCount": 0,
+      "performance": {
+        "firstBuildMs": 166.586,
+        "noChangeRefreshMs": { "samples": [13.974499999999978, 7.51541700000007, 7.316792000000078, 11.565458000000035, 6.795791000000008], "p50": 7.51541700000007, "p95": 13.974499999999978 },
+        "editedRefreshMs": { "samples": [41.127875000000074, 26.733165999999983, 27.37470799999994, 28.277666999999838, 24.419167000000016], "p50": 27.37470799999994, "p95": 41.127875000000074 },
+        "serializedArtifactBytes": 4036641, "storedArtifactBytes": 4036641, "workerPeakRssBytes": 315719680,
+        "incrementalEqualsFull": true
+      }
+    },
+    {
+      "corpus": "pyright-v1",
+      "sourceRevision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+      "manifestFingerprint": "e6e5ddfe7d25d3581e50de9cd4de4b0b657d8b9687292f09e14c79ee49ba3f47",
+      "snapshotFingerprint": "4060853b8ce40ac03576f18a2f0cdf13389bd4955d33e776b3cc021ddb817914",
+      "snapshotExclusions": [],
+      "index": { "files": 7653, "symbols": 17971, "edges": 69622 },
+      "summary": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 0, "meanReciprocalRankAt5": 0, "callerPrecision": 1, "callerRecall": 1 },
+      "diagnosticCount": 43,
+      "performance": {
+        "firstBuildMs": 2071.2140420000005,
+        "noChangeRefreshMs": { "samples": [331.3774169999997, 329.7993750000005, 332.1448339999988, 337.18958399999974, 338.36245800000324], "p50": 332.1448339999988, "p95": 338.36245800000324 },
+        "editedRefreshMs": { "samples": [1029.0564999999997, 1055.942500000001, 1027.0528749999994, 1036.0190409999996, 1039.7399159999986], "p50": 1036.0190409999996, "p95": 1055.942500000001 },
+        "serializedArtifactBytes": 56837994, "storedArtifactBytes": 6421391, "workerPeakRssBytes": 1154105344,
+        "incrementalEqualsFull": true
+      }
+    }
+  ]
+}

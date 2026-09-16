@@ -27,5 +27,5 @@ pub fn generic_call(v: u32) -> u32 {
 }
 
 pub fn with_display(d: &dyn Display) -> String {
-    format!(\"{}\", d)
+    format!("{}", d)
 }

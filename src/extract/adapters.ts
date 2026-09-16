@@ -1,3 +1,4 @@
+import { Query } from "web-tree-sitter";
 import { EMPTY_ADAPTER_OUTPUT } from "./adapter.js";
 import type { LanguageAdapter } from "./adapter.js";
 import { makeTsLikeAdapter } from "./typescript.js";
@@ -6,9 +7,13 @@ import { goAdapter } from "./go.js";
 import { rustAdapter } from "./rust.js";
 import { javaAdapter } from "./java.js";
 import { csharpAdapter } from "./csharp.js";
+import { makeGenericAdapter } from "./generic.js";
+import { queryFor } from "../grammar/queries/index.js";
+import { genericLanguages } from "../grammar/languages.js";
+import { loadedLanguage } from "../grammar/loader.js";
 import type { LanguageId } from "../types.js";
 
-const adapters: Readonly<Record<LanguageId, LanguageAdapter>> = {
+const adapters: Partial<Record<LanguageId, LanguageAdapter>> = {
   typescript: makeTsLikeAdapter("typescript"),
   tsx: makeTsLikeAdapter("tsx"),
   javascript: makeTsLikeAdapter("javascript"),
@@ -19,8 +24,28 @@ const adapters: Readonly<Record<LanguageId, LanguageAdapter>> = {
   c_sharp: csharpAdapter,
 };
 
+const genericIgnoreCallNames: Partial<Record<LanguageId, ReadonlySet<string>>> = {
+  elixir: new Set([
+    "def", "defp", "defmodule", "defmacro", "import", "alias", "require", "use",
+    "defstruct", "defmacrop", "defguard", "defimpl", "defprotocol", "do",
+  ]),
+};
+
+for (const language of genericLanguages) {
+  const query = queryFor(language);
+  if (query === undefined) continue;
+  adapters[language] = makeGenericAdapter(
+    language,
+    query,
+    (source) => new Query(loadedLanguage(language), source),
+    genericIgnoreCallNames[language] ?? new Set(),
+  );
+}
+
 export function adapterFor(language: LanguageId): LanguageAdapter {
-  return adapters[language];
+  const adapter = adapters[language];
+  if (adapter === undefined) throw new Error(`osnova: no adapter for ${language}`);
+  return adapter;
 }
 
 export const fallbackAdapter: LanguageAdapter = {

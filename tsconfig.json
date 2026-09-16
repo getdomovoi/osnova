@@ -18,5 +18,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "test", "scripts/perf.mjs", "tsup.config.ts", "vitest.config.ts", "eslint.config.js"]
+  "include": ["src", "test", "scripts", "tsup.config.ts", "vitest.config.ts", "eslint.config.js"]
 }

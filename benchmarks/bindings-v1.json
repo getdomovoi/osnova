@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "bindings-v1",
+  "source": {
+    "kind": "inline",
+    "files": {
+      "api.ts": "export function transmit() { return 1; }\nexport class Endpoint {}\n",
+      "client.ts": "import { transmit as send, Endpoint as Client } from './api.js';\nexport function deliver() { send(); return new Client(); }\nexport function guarded(send: () => void) { return send(); }\n",
+      "python/engine.py": "def capture():\n    return 1\n",
+      "python/client.py": "from .engine import capture as save\n\ndef emit():\n    return save()\n\ndef guarded(save):\n    return save()\n",
+      "validation/rules.ts": "export function sanitize(value: string) { return value; }\n",
+      "validation/entry.ts": "import { sanitize as clean } from './rules.js';\nexport function process(value: string) { return clean(value); }\nexport function decorate(clean: (value: string) => string) { return clean('local'); }\n",
+      "checks/rules.py": "def verify(value):\n    return value\n",
+      "checks/entry.py": "from .rules import verify as check\n\ndef run(value):\n    return check(value)\n\ndef local(value):\n    check = lambda x: x\n    return check(value)\n\ndef prior(value):\n    result = check(value)\n    check = lambda x: x\n    return result\n"
+    }
+  },
+  "edit": { "file": "api.ts", "append": "\n// measured edit\n" },
+  "cases": [
+    {
+      "id": "named-function-alias", "split": "development", "kind": "callers", "symbol": "api.ts#transmit",
+      "expected": ["client.ts#deliver"],
+      "anchors": [{ "file": "client.ts", "text": "transmit as send" }, { "file": "client.ts", "text": "function guarded(send:" }]
+    },
+    {
+      "id": "named-constructor-alias", "split": "development", "kind": "callers", "symbol": "api.ts#Endpoint",
+      "expected": ["client.ts#deliver"],
+      "anchors": [{ "file": "client.ts", "text": "Endpoint as Client" }, { "file": "client.ts", "text": "new Client()" }]
+    },
+    {
+      "id": "python-function-alias", "split": "development", "kind": "callers", "symbol": "python/engine.py#capture",
+      "expected": ["python/client.py#emit"],
+      "anchors": [{ "file": "python/client.py", "text": "capture as save" }, { "file": "python/client.py", "text": "def guarded(save):" }]
+    },
+    {
+      "id": "typescript-parameter-shadow", "split": "evaluation", "kind": "callers", "symbol": "validation/rules.ts#sanitize",
+      "expected": ["validation/entry.ts#process"],
+      "anchors": [{ "file": "validation/entry.ts", "text": "sanitize as clean" }, { "file": "validation/entry.ts", "text": "function decorate(clean:" }]
+    },
+    {
+      "id": "python-function-scope-shadow", "split": "evaluation", "kind": "callers", "symbol": "checks/rules.py#verify",
+      "expected": ["checks/entry.py#run"],
+      "anchors": [{ "file": "checks/entry.py", "text": "verify as check" }, { "file": "checks/entry.py", "text": "check = lambda x: x" }]
+    }
+  ]
+}

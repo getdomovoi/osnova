@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+    "indexedFiles": 7653,
+    "editedFile": "packages/pyright-internal/src/common/pathUtils.ts"
+  },
+  "baseline": {
+    "revision": "4dabb77",
+    "noChangeMs": [1384.092291, 1344.947333000002, 1411.8486249999987, 1386.5195420000018, 1365.8953340000007, 1329.4054999999935, 1385.6596250000002],
+    "editedMs": [4231.077208, 4268.466583000001, 4290.654459000001, 4297.341625000001, 4199.108374999996, 4103.201042000001, 4108.637541999997],
+    "noChangeMedianMs": 1384.092291,
+    "editedMedianMs": 4231.077208,
+    "noChangeP95Ms": 1411.8486249999987,
+    "editedP95Ms": 4297.341625000001
+  },
+  "optimized": {
+    "revision": "ac93e58",
+    "noChangeMs": [679.1014580000001, 669.1829999999991, 635.6811249999992, 617.7917080000007, 652.7547080000004, 624.8142079999998, 624.3182080000006],
+    "editedMs": [1586.999334, 1505.1472079999985, 1506.0501669999994, 1511.6129999999976, 1647.9540419999976, 1525.1481249999997, 1548.6747499999983],
+    "noChangeMedianMs": 635.6811249999992,
+    "editedMedianMs": 1525.1481249999997,
+    "noChangeP95Ms": 679.1014580000001,
+    "editedP95Ms": 1647.9540419999976
+  },
+  "improvement": {
+    "noChangeMedianPercent": 54.07,
+    "editedMedianPercent": 63.95,
+    "noChangeP95Percent": 51.90,
+    "editedP95Percent": 61.65
+  },
+  "longLivedMcp": {
+    "revision": "50be8c7",
+    "reuseMemory": true,
+    "firstRefreshMs": 731.3828750000002,
+    "subsequentNoChangeMs": [328.4340000000002, 294.9913750000005, 273.73041600000033, 272.1764579999999, 274.4518339999995, 289.564625, 274.34420899999986],
+    "subsequentMedianMs": 274.4518339999995,
+    "subsequentP95Ms": 328.4340000000002,
+    "medianImprovementFromBaselinePercent": 80.17,
+    "invalidatesOnExternalArtifactIdentityChange": true,
+    "publicDefault": false
+  },
+  "stageProfileMedianMs": {
+    "artifactLoad": 356.03170800000044,
+    "scanAndMetadata": 270.8125830000008,
+    "changedExtractionAndGlobalResolution": 112.30591600000116,
+    "artifactPublicationBeforeFastGzip": 777.2780000000021,
+    "verificationSidecar": 8.210417000002053
+  },
+  "compressionProfile": {
+    "logicalArtifactBytes": 61150485,
+    "level6": { "medianMs": 496.7184580000003, "storedBytes": 6711196 },
+    "level1": { "medianMs": 152.95608400000037, "storedBytes": 8707447 }
+  },
+  "method": "Same host, pinned source and dependencies; disposable source/cache; one initial build; seven warm no-change refreshes and seven one-file edited refreshes with untimed restoration/equality verification; nearest-rank p95; filesystem caches not flushed.",
+  "correctness": {
+    "publicFreshnessAlwaysHashes": true,
+    "corruptOrMismatchedSidecarFallsBackToHashing": true,
+    "sameSizeRestoredMtimeEditDetected": true,
+    "incrementalEqualsFull": true,
+    "structuralArtifactRemainsDeterministic": true
+  },
+  "limitations": [
+    "Metadata acceleration assumes the filesystem reports changes through size, mtime, ctime, inode or device; it is not an adversarial filesystem/content attestation.",
+    "The benchmark is one repository and one machine with warm filesystem caches, not a universal latency claim.",
+    "Level-1 compression increases this stored artifact by about 2.0 MiB; configured cache byte limits still apply.",
+    "Global edge resolution was not optimized because it was not the dominant measured stage."
+  ]
+}

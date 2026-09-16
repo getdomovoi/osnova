@@ -52,6 +52,13 @@ async function ensureInit(): Promise<void> {
 
 const languageCache = new Map<LanguageId, Promise<Language>>();
 const parserCache = new Map<LanguageId, Promise<Parser>>();
+const loadedLanguages = new Map<LanguageId, Language>();
+
+export function loadedLanguage(language: LanguageId): Language {
+  const loaded = loadedLanguages.get(language);
+  if (loaded === undefined) throw new Error(`osnova: grammar "${language}" not loaded`);
+  return loaded;
+}
 
 export async function loadLanguage(language: LanguageId): Promise<Language> {
   let pending = languageCache.get(language);
@@ -60,7 +67,9 @@ export async function loadLanguage(language: LanguageId): Promise<Language> {
       await ensureInit();
       const wasmPath = packageFile("tree-sitter-wasms", path.join("out", grammarFile[language]));
       try {
-        return await Language.load(wasmPath);
+        const loaded = await Language.load(wasmPath);
+        loadedLanguages.set(language, loaded);
+        return loaded;
       } catch (error) {
         throw new Error(
           `osnova: failed to load tree-sitter grammar "${language}" from ${wasmPath}. ` +

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { skeleton } from "../src/query/skeleton.js";
-import { callers } from "../src/query/callers.js";
+import { callers, callersDetailed } from "../src/query/callers.js";
 import { renderMapCard } from "../src/query/mapCard.js";
 import { maximumOsnovaMapCardCodeUnits } from "../src/types.js";
 
@@ -39,5 +39,14 @@ describe("self-hosting", () => {
     const card = await renderMapCard(index, { staleCount: 0 });
     expect(card.length).toBeLessThanOrEqual(maximumOsnovaMapCardCodeUnits);
     expect(card).toContain("osnova osnova");
+  }, 120_000);
+
+  it("traces buildIndex callers through the public barrel", async () => {
+    const index = await buildIndex(path.join(import.meta.dirname, ".."));
+    const result = callersDetailed(index, "src/index/build.ts#buildIndex");
+    if (result.status !== "found") throw new Error("expected qualified target");
+    const hit = result.hits.find((entry) => entry.qualifiedName === "scripts/bench/runner.ts#runBenchmark");
+    expect(hit).toBeDefined();
+    expect(hit?.edge.evidence).toMatchObject({ resolution: { method: "re-export-binding" } });
   }, 120_000);
 });

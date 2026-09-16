@@ -1,5 +1,6 @@
-import type { AskHit, AskOptions, AskResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
-import { idf, innermostSymbolAt, matchInPath, queryContext, tokenize } from "./context.js";
+import type { AskDetailedResult, AskHit, AskOptions, AskResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import { idf, matchInPath, queryContext, tokenize } from "./context.js";
+import type { QueryContext, SearchDocument } from "./context.js";
 
 const DEFAULT_LIMIT = 8;
 const EXCERPT_LINES = 8;
@@ -22,6 +23,10 @@ function excerptFor(
     return { text: lines.slice(start - 1, end).join("\n"), startLine: start };
   }
   if (symbol !== null) {
+    if (bestLine < symbol.span.startLine) {
+      const start = Math.max(1, bestLine);
+      return { text: lines.slice(start - 1, Math.min(symbol.span.endLine, start + EXCERPT_LINES - 1)).join("\n"), startLine: start };
+    }
     const start = Math.max(
       symbol.span.startLine,
       Math.min(bestLine - 2, symbol.span.endLine - EXCERPT_LINES + 1),
@@ -35,64 +40,66 @@ function excerptFor(
 }
 
 export function ask(index: OsnovaIndex, question: string, options?: AskOptions): AskResult {
-  const ctx = queryContext(index);
+  const result = askDetailed(index, question, { ...options, limit: options?.limit ?? DEFAULT_LIMIT });
+  return { hits: result.hits, filesSearched: result.filesSearched };
+}
+
+export function askDetailed(index: OsnovaIndex, question: string, options?: AskOptions): AskDetailedResult {
+  const limit = options?.limit ?? Infinity;
+  if (options?.limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0)) throw new RangeError("osnova: ask limit must be a nonnegative safe integer");
   const queryTokens = [...new Set(tokenize(question))];
-  if (queryTokens.length === 0 || ctx.fileCount === 0) {
-    return { hits: [], filesSearched: 0 };
-  }
-  const limit = options?.limit ?? DEFAULT_LIMIT;
-  const full = options?.full ?? false;
+  const identifiers = new Set((question.match(/[$A-Za-z_][$\w]*/g) ?? []).map((name) => name.toLowerCase()));
+  const qualified = new Set((question.match(/[$A-Za-z_][$\w]*(?:\.[$A-Za-z_][$\w]*)+/g) ?? []).map((name) => name.toLowerCase()));
   const filter = options?.in ?? "";
-  const questionLower = question.toLowerCase();
-
-  const paths = [...index.files.keys()].sort();
-  const scored: Array<{ path: string; score: number }> = [];
-  for (const path of paths) {
-    if (!matchInPath([path], filter)) continue;
-    const counts = ctx.termCounts.get(path);
-    if (counts === undefined) continue;
-    let score = 0;
-    for (const term of queryTokens) {
-      const tf = counts.get(term);
-      if (tf === undefined) continue;
-      score += (tf / (ctx.docLen.get(path) ?? 1)) * idf(ctx, term);
-    }
-    const card = index.files.get(path);
-    if (card !== undefined) {
-      for (const symbol of card.symbols) {
-        const nameLower = symbol.name.toLowerCase();
-        if (nameLower.length >= 2 && questionLower.includes(nameLower)) {
-          score += 4 * idf(ctx, nameLower) + 1;
-        }
-        for (const token of ctx.symbolTokens.get(symbol.qualifiedName) ?? []) {
-          if (queryTokens.includes(token)) {
-            score += idf(ctx, token);
-          }
-        }
-      }
-    }
-    if (score > 0) scored.push({ path, score });
+  const filesSearched = [...index.files.keys()].filter((path) => matchInPath([path], filter)).length;
+  if ((queryTokens.length === 0 && identifiers.size === 0) || index.files.size === 0) {
+    return { scope: "indexed-definitions-and-text", hits: [], filesSearched, totalCandidates: 0, omittedHits: 0, truncated: false };
   }
-  scored.sort((a, b) => b.score - a.score || (a.path < b.path ? -1 : 1));
-
-  const hits: AskHit[] = [];
-  for (const { path, score } of scored.slice(0, limit)) {
-    const card = index.files.get(path);
-    if (card === undefined) continue;
-    const lines = card.text.length === 0 ? [] : card.text.split("\n");
-    let bestLine = 1;
-    for (let i = 0; i < lines.length; i += 1) {
-      const lineLower = (lines[i] ?? "").toLowerCase();
-      if (queryTokens.some((t) => lineLower.includes(t))) {
-        bestLine = i + 1;
-        break;
-      }
+  const ctx = queryContext(index);
+  const full = options?.full ?? false;
+  const scored: Array<{ document: SearchDocument; score: number; exact: boolean }> = [];
+  for (const document of ctx.documents) {
+    if (!matchInPath([document.file], filter)) continue;
+    const symbol = document.symbol;
+    const localName = symbol?.qualifiedName.split("#").slice(1).join("#").toLowerCase() ?? "";
+    const priority = symbol !== null && localName.includes(".") && qualified.has(localName) ? 2
+      : symbol !== null && identifiers.has(symbol.name.toLowerCase()) ? 1 : 0;
+    let lexical = 0;
+    const normalization = 1.2 * (0.25 + 0.75 * document.length / ctx.averageLength);
+    for (const term of queryTokens) {
+      const tf = document.body.get(term) ?? 0;
+      lexical += idf(ctx, term) * (
+        (document.name.has(term) ? 8 : 0) + (document.signature.has(term) ? 4 : 0) +
+        (document.documentation.has(term) ? 3 : 0) + (document.path.has(term) ? 1 : 0) +
+        (tf === 0 ? 0 : 2.2 * tf / (tf + normalization))
+      );
     }
-    const symbolQ = innermostSymbolAt(index, path, bestLine);
-    const symbol = symbolQ !== null ? (index.symbols.get(symbolQ) ?? null) : null;
+    if (priority > 0 || lexical > 0) {
+      scored.push({ document, score: priority + lexical / (1 + lexical), exact: priority > 0 });
+    }
+  }
+  const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+  scored.sort((a, b) => b.score - a.score || compare(a.document.file, b.document.file) ||
+    (a.document.symbol?.span.startLine ?? 0) - (b.document.symbol?.span.startLine ?? 0) ||
+    (a.document.symbol?.span.startCol ?? 0) - (b.document.symbol?.span.startCol ?? 0) ||
+    compare(a.document.symbol?.qualifiedName ?? "", b.document.symbol?.qualifiedName ?? ""));
+  const candidates: Array<{ document: SearchDocument; score: number; exact: boolean }> = [];
+  const seen = new Set<string>();
+  for (const { document, score, exact } of scored) {
+    const symbol = document.symbol;
+    const key = symbol === null ? `file:${document.file}` : `symbol:${symbol.qualifiedName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({ document, score, exact });
+  }
+  const hits: AskHit[] = [];
+  for (const { document, score, exact } of candidates.slice(0, limit)) {
+    const symbol = document.symbol;
+    const lines = ctx.lines.get(document.file) ?? [];
+    const bestLine = exact && symbol !== null ? symbol.span.startLine : bestMatchLine(document, ctx, queryTokens);
     const excerpt = excerptFor(lines, bestLine, symbol, full);
     hits.push({
-      file: path,
+      file: document.file,
       line: bestLine,
       score,
       symbol,
@@ -100,5 +107,27 @@ export function ask(index: OsnovaIndex, question: string, options?: AskOptions):
       excerptStartLine: excerpt.startLine,
     });
   }
-  return { hits, filesSearched: scored.length };
+  const omittedHits = candidates.length - hits.length;
+  return {
+    scope: "indexed-definitions-and-text", hits, filesSearched,
+    totalCandidates: candidates.length, omittedHits, truncated: omittedHits > 0,
+  };
+}
+
+function bestMatchLine(document: SearchDocument, ctx: QueryContext, query: readonly string[]): number {
+  const lines = ctx.lines.get(document.file) ?? [];
+  const ranges = document.documentationRange === null ? document.ranges : [document.documentationRange, ...document.ranges];
+  let best = document.symbol?.span.startLine ?? 1;
+  let bestScore = 0;
+  for (const range of ranges) {
+    for (let line = range.start; line <= range.end; line += 1) {
+      const tokens = new Set(tokenize(lines[line - 1] ?? ""));
+      const score = query.reduce((sum, term) => sum + (tokens.has(term) ? idf(ctx, term) : 0), 0);
+      if (score > bestScore) {
+        best = line;
+        bestScore = score;
+      }
+    }
+  }
+  return best;
 }
