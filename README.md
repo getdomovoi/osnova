@@ -41,7 +41,7 @@ Query commands refresh the index first (hash diff plus incremental apply), inclu
 osnova mcp --workspace /path/to/repo
 ```
 
-Exposes five read-only tools. Osnova is the Slavic word for base or foundation, and the tool names follow that image:
+Exposes seven read-only tools. Osnova is the Slavic word for base or foundation, and the tool names follow that image:
 
 | Tool | Meaning | Does |
 | --- | --- | --- |
@@ -50,10 +50,14 @@ Exposes five read-only tools. Osnova is the Slavic word for base or foundation, 
 | `osnova_outline` | the outline of one part | Signatures and line spans for one file |
 | `osnova_warp` | the warp threads that hold the weave | Call graph: callers and callees, direct or transitive |
 | `osnova_groundwork` | the groundwork under everything | Repository map: directory clusters and hotspots |
+| `osnova_footing` | the footing you build on | Task context: definitions, relationships and candidate tests around a question or named symbols |
+| `osnova_settle` | how the ground settles after a change | Change impact: symbols a unified diff touches and their indexed dependents |
 
-Arguments mirror the API. A successful search, text search, outline or call graph response opens with `osnova generation <id>`, and on a partial index adds one `osnova foundation:` line that counts diagnostics by phase and code. A repository map response opens with the same generation line and carries the foundation state inside the map card header without the per-code counts. Tool failures return an error result that begins with `osnova error:` and no prefix.
+Arguments mirror the API. A successful search, text search, outline, call graph, task context or change impact response opens with `osnova generation <id>`, and on a partial index adds one `osnova foundation:` line that counts diagnostics by phase and code. A repository map response opens with the same generation line and carries the foundation state inside the map card header without the per-code counts. Tool failures return an error result that begins with `osnova error:` and no prefix.
 
 The previous names `osnova_ask`, `osnova_find_text`, `osnova_skeleton`, `osnova_callers` and `osnova_map` remain as deprecated aliases for this release only. They accept the same arguments and return the same text. The next release removes them.
+
+`osnova_footing` mirrors the CLI `context` command and takes `question` or `symbols`, plus `task` (`understand`, `change` or `review`), `in`, `limit` and `depth`. `osnova_settle` takes a unified `diff` and `depth`. It compares the diff against the current index only, so it reports symbols whose spans the diff touches and their dependents, and it cannot see deleted symbols; the CLI `impact` command compares two indexes when a baseline cache is available.
 
 The server never writes outside the cache directory and performs no network access.
 

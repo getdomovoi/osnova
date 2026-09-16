@@ -10,6 +10,8 @@ import type {
   CallerEvidenceHit,
   OsnovaEdge,
 } from "../types.js";
+import type { ImpactResult } from "./impact.js";
+import type { TaskContextResult } from "./task-context.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
   if (index.diagnostics === undefined) return "osnova foundation: unverified; index health could not be checked";
@@ -267,4 +269,41 @@ export function formatMap(result: MapResult): string {
     }
   }
   return lines.join("\n");
+}
+
+const contextExcerptLines = 8;
+
+export function formatTaskContext(result: TaskContextResult): string {
+  const lines = [
+    `osnova footing: ${result.task}, scope ${result.scope === "" ? "." : result.scope}, ${result.definitions.length} definitions, ${result.relationships.length} relationships, ${result.candidateTests.length} candidate tests`,
+  ];
+  if (result.definitions.length > 0) lines.push("definitions:");
+  for (const definition of result.definitions) {
+    const { symbol } = definition;
+    lines.push(`- ${symbol.qualifiedName} ${symbol.kind} lines ${symbol.span.startLine}-${symbol.span.endLine}`);
+    const excerpt = definition.excerpt.split("\n");
+    for (const line of excerpt.slice(0, contextExcerptLines)) lines.push(`  ${line}`);
+    if (excerpt.length > contextExcerptLines) lines.push(`  [+${excerpt.length - contextExcerptLines} more lines]`);
+  }
+  if (result.relationships.length > 0) lines.push("relationships:");
+  for (const relationship of result.relationships) {
+    const { edge } = relationship;
+    const via = relationship.viaSources.length > 0 ? ` via ${relationship.viaSources.map((source) => source.file).join(", ")}` : "";
+    lines.push(`- ${edge.fromSymbol || edge.fromFile} -> ${edge.toSymbol ?? edge.toFile ?? edge.toName} ${edge.kind} line ${edge.line}${via}`);
+  }
+  if (result.candidateTests.length > 0) lines.push("candidate tests:");
+  for (const test of result.candidateTests) lines.push(`- ${test.file}${test.symbol === null ? "" : ` via ${test.symbol.qualifiedName}`}`);
+  const omitted = result.omitted;
+  lines.push(`omitted: ${omitted.definitions} definitions, ${omitted.relationships} relationships, ${omitted.candidateTests} candidate tests, ${omitted.retrievalHits} retrieval hits, ${omitted.uncertainEdges} uncertain edges, ${omitted.outOfScopeEdges} out-of-scope edges, ${omitted.depthFrontier} depth frontier, ${omitted.unknownSymbols} unknown symbols`);
+  lines.push(`limitations: ${result.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+export function formatImpact(result: ImpactResult): string {
+  return [
+    `osnova settle: ${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
+    ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
+    ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
+    `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
+  ].join("\n");
 }
