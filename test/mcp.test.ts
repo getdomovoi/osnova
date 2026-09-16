@@ -39,17 +39,36 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 describe("mcp stdio server", () => {
-  it("exposes exactly the five osnova tools", async () => {
+  it("exposes the five foundation tools plus one deprecated alias each", async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name).sort()).toEqual([
+      expect(tools.map((t) => t.name)).toEqual([
+        "osnova_ground",
+        "osnova_thread",
+        "osnova_outline",
+        "osnova_warp",
+        "osnova_groundwork",
         "osnova_ask",
-        "osnova_callers",
         "osnova_find_text",
-        "osnova_map",
         "osnova_skeleton",
+        "osnova_callers",
+        "osnova_map",
       ]);
+      const byName = new Map(tools.map((t) => [t.name, t]));
+      for (const [alias, canonical] of [
+        ["osnova_ask", "osnova_ground"], ["osnova_find_text", "osnova_thread"], ["osnova_skeleton", "osnova_outline"],
+        ["osnova_callers", "osnova_warp"], ["osnova_map", "osnova_groundwork"],
+      ] as const) {
+        expect(byName.get(alias)?.description).toBe(`Deprecated alias of ${canonical}; removed in the next release.`);
+        expect(byName.get(alias)?.inputSchema).toEqual(byName.get(canonical)?.inputSchema);
+      }
+      for (const [name, verb] of [
+        ["osnova_ground", "Search:"], ["osnova_thread", "Text search:"], ["osnova_outline", "Outline:"],
+        ["osnova_warp", "Call graph:"], ["osnova_groundwork", "Repository map:"],
+      ] as const) {
+        expect(byName.get(name)?.description?.startsWith(verb) ?? false, name).toBe(true);
+      }
     } finally {
       await client.close();
     }
@@ -61,19 +80,19 @@ describe("mcp stdio server", () => {
 
     const client = await connect();
     try {
-      const askText = await callTool(client, "osnova_ask", { question: "greet name hello" });
+      const askText = await callTool(client, "osnova_ground", { question: "greet name hello" });
       expect(askText).toContain("src/greet.ts");
 
-      const findText = await callTool(client, "osnova_find_text", { pattern: "toUpperCase", fixed: true });
+      const findText = await callTool(client, "osnova_thread", { pattern: "toUpperCase", fixed: true });
       expect(findText).toContain("src/loud.ts");
 
-      const skeleton = await callTool(client, "osnova_skeleton", { file: "src/greet.ts" });
+      const skeleton = await callTool(client, "osnova_outline", { file: "src/greet.ts" });
       expect(skeleton).toContain("function greet");
 
-      const callers = await callTool(client, "osnova_callers", { symbol: "src/loud.ts#shout" });
+      const callers = await callTool(client, "osnova_warp", { symbol: "src/loud.ts#shout" });
       expect(callers).toContain("src/greet.ts#greet");
 
-      const mapCard = await callTool(client, "osnova_map", {});
+      const mapCard = await callTool(client, "osnova_groundwork", {});
       expect(mapCard).toContain("osnova");
       expect(mapCard).toContain("files 2");
     } finally {
@@ -86,14 +105,14 @@ describe("mcp stdio server", () => {
     write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
     const client = await connect();
     try {
-      const before = await callTool(client, "osnova_skeleton", { file: "src/greet.ts" });
+      const before = await callTool(client, "osnova_outline", { file: "src/greet.ts" });
       expect(before).not.toContain("farewell");
 
       write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function farewell(): string { return shout("bye"); }\n');
 
-      const after = await callTool(client, "osnova_skeleton", { file: "src/greet.ts" });
-      const beforeGeneration = before.match(/generation ([a-f0-9]{64})/)?.[1];
-      const afterGeneration = after.match(/generation ([a-f0-9]{64})/)?.[1];
+      const after = await callTool(client, "osnova_outline", { file: "src/greet.ts" });
+      const beforeGeneration = before.match(/osnova generation ([a-f0-9]{64})/)?.[1];
+      const afterGeneration = after.match(/osnova generation ([a-f0-9]{64})/)?.[1];
       expect(beforeGeneration).toBeDefined();
       expect(afterGeneration).toBeDefined();
       expect(afterGeneration).not.toBe(beforeGeneration);
@@ -104,16 +123,43 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("answers deprecated aliases with the same text as the new names", async () => {
+    write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
+    write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
+    const client = await connect();
+    try {
+      const pairs: Array<[string, string, Record<string, unknown>]> = [
+        ["osnova_ask", "osnova_ground", { question: "greet" }],
+        ["osnova_find_text", "osnova_thread", { pattern: "shout", fixed: true }],
+        ["osnova_skeleton", "osnova_outline", { file: "src/greet.ts" }],
+        ["osnova_callers", "osnova_warp", { symbol: "src/loud.ts#shout" }],
+        ["osnova_map", "osnova_groundwork", {}],
+      ];
+      for (const [alias, canonical, args] of pairs) {
+        expect(await callTool(client, alias, args), alias).toBe(await callTool(client, canonical, args));
+      }
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
   it("returns isError for tool failures without crashing the server", async () => {
     const client = await connect();
     try {
-      const result = await client.callTool({ name: "osnova_skeleton", arguments: { file: "missing.ts" } });
+      const result = await client.callTool({ name: "osnova_outline", arguments: { file: "missing.ts" } });
       expect(result.isError).toBe(true);
+      for (const inherited of ["toString", "constructor", "__proto__"]) {
+        const odd = await client.callTool({ name: inherited, arguments: {} });
+        expect(odd.isError, inherited).toBe(true);
+        const oddContent = (odd as { content?: readonly ContentBlock[] }).content ?? [];
+        const oddText = oddContent.map((c) => (c.type === "text" ? c.text : "")).join("");
+        expect(oddText, inherited).toBe(`osnova error: unknown tool ${JSON.stringify(inherited)}`);
+      }
       const content = (result as { content?: readonly ContentBlock[] }).content ?? [];
       const text = content.map((c) => (c.type === "text" ? c.text : "")).join("");
       expect(text).toContain("osnova error");
       const still = await client.listTools();
-      expect(still.tools).toHaveLength(5);
+      expect(still.tools).toHaveLength(10);
     } finally {
       await client.close();
     }
@@ -123,7 +169,7 @@ describe("mcp stdio server", () => {
     write("src/large.ts", Array.from({ length: 150 }, (_, index) => `export function ordinaryFunction${index}(value: string): string { return value; }`).join("\n"));
     const client = await connect();
     try {
-      const text = await callTool(client, "osnova_skeleton", { file: "src/large.ts" });
+      const text = await callTool(client, "osnova_outline", { file: "src/large.ts" });
       expect(text.length).toBeLessThanOrEqual(4_096);
       expect(text).toMatch(/omitted: \d+ of 150 signatures/);
       expect(text).toContain("Use skeleton API for the complete file");
@@ -139,7 +185,7 @@ describe("mcp stdio server", () => {
     }
     const client = await connect();
     try {
-      const text = await callTool(client, "osnova_callers", { symbol: "src/caller-target.ts#callerTarget" });
+      const text = await callTool(client, "osnova_warp", { symbol: "src/caller-target.ts#callerTarget" });
       expect(text.length).toBeLessThanOrEqual(2_048);
       expect(text).toMatch(/omitted: \d+ of 100 confirmed relationships/);
       expect(text).toContain("Use callersDetailed API for complete structured results");
@@ -152,7 +198,7 @@ describe("mcp stdio server", () => {
   it("bounds map output while preserving dropped-detail counts", async () => {
     const client = await connect();
     try {
-      const text = await callTool(client, "osnova_map", {});
+      const text = await callTool(client, "osnova_groundwork", {});
       expect(text.length).toBeLessThanOrEqual(2_048);
       expect(text).toContain("dropped:");
       expect(text).not.toContain("[output truncated:");

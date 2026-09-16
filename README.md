@@ -41,7 +41,21 @@ Query commands refresh the index first (hash diff plus incremental apply), inclu
 osnova mcp --workspace /path/to/repo
 ```
 
-Exposes five read-only tools: `osnova_ask`, `osnova_find_text`, `osnova_skeleton`, `osnova_callers`, `osnova_map`. Arguments mirror the API. The server never writes outside the cache directory and performs no network access.
+Exposes five read-only tools. Osnova is the Slavic word for base or foundation, and the tool names follow that image:
+
+| Tool | Meaning | Does |
+| --- | --- | --- |
+| `osnova_ground` | the ground you stand on | Keyword search: ranked hits with exact `file:line` and an excerpt |
+| `osnova_thread` | the thread you follow through the cloth | Text search: regex or literal matches grouped by enclosing symbol |
+| `osnova_outline` | the outline of one part | Signatures and line spans for one file |
+| `osnova_warp` | the warp threads that hold the weave | Call graph: callers and callees, direct or transitive |
+| `osnova_groundwork` | the groundwork under everything | Repository map: directory clusters and hotspots |
+
+Arguments mirror the API. A successful search, text search, outline or call graph response opens with `osnova generation <id>`, and on a partial index adds one `osnova foundation:` line that counts diagnostics by phase and code. A repository map response opens with the same generation line and carries the foundation state inside the map card header without the per-code counts. Tool failures return an error result that begins with `osnova error:` and no prefix.
+
+The previous names `osnova_ask`, `osnova_find_text`, `osnova_skeleton`, `osnova_callers` and `osnova_map` remain as deprecated aliases for this release only. They accept the same arguments and return the same text. The next release removes them.
+
+The server never writes outside the cache directory and performs no network access.
 
 Example client configuration:
 
@@ -88,7 +102,7 @@ An experimental graph adjustment was measured and rejected after improving autho
 
 Optional `limit` and `matchesPerGroup` bound the detailed result; both must be nonnegative safe integers. Counts include matches excluded by either limit. Zero limits can hide existing matches and are reported as truncation, not absence.
 
-The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_find_text` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These count limits are separate from the presentation budget below.
+The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_thread` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These count limits are separate from the presentation budget below.
 
 ### Presentation budget
 
@@ -120,7 +134,7 @@ Python's bare, unshadowed `staticmethod`, `classmethod` and `property` decorator
 
 This is declaration-aware analysis of static export syntax, not execution or compiler validation. Rebinding conflicts, type-only runtime calls, Python wildcard imports, `global`/`nonlocal` and match scopes are conservative; CommonJS export assignments, exported namespace objects, anonymous defaults and arbitrary receiver/value flow remain unsupported. Missing local definitions and blocked bindings remain explicit unresolved evidence.
 
-CLI `callers` and MCP `osnova_callers` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
+CLI `callers` and MCP `osnova_warp` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
 
 ### Index health
 

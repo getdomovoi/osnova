@@ -37,8 +37,8 @@ export async function renderMapCard(
   const lines: CardLine[] = [];
   const staleText =
     staleCount === 0 ? "fresh" : staleCount === undefined || staleCount < 0 ? "unavailable" : `stale: ${staleCount} file${staleCount === 1 ? "" : "s"}`;
-  const analysisText = index.diagnostics === undefined ? " | analysis health unverified"
-    : index.diagnostics.length > 0 ? ` | partial analysis: ${index.diagnostics.length} diagnostics` : "";
+  const analysisText = index.diagnostics === undefined ? " | osnova foundation: unverified"
+    : index.diagnostics.length > 0 ? ` | osnova foundation: partial, ${index.diagnostics.length} diagnostics` : "";
   lines.push({
     text: `osnova ${basename(index.root)} | files ${mapResult.fileCount} | symbols ${mapResult.symbolCount} | edges ${mapResult.edgeCount} | ${staleText}${analysisText}`,
     rank: RANK_HEADER,

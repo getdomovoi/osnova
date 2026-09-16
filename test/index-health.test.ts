@@ -69,7 +69,7 @@ describe("index health", () => {
     expect((await indexHealth(index)).state).toBe("partial");
     const loaded = await loadIndex(workspace, { cacheDir });
     expect(loaded?.diagnostics).toEqual(index.diagnostics);
-    expect(await renderMapCard(index, { staleCount: 0 })).toContain("partial analysis");
+    expect(await renderMapCard(index, { staleCount: 0 })).toContain("osnova foundation: partial");
   });
 
   it("clears repaired diagnostics and preserves incremental/full equality", async () => {

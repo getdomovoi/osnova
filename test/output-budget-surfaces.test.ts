@@ -43,8 +43,8 @@ it("caps MCP success and error responses with an explicit clipping notice", asyn
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const requests = [
-      { name: "osnova_find_text", arguments: { pattern: "needle" } },
-      { name: "osnova_skeleton", arguments: { file: "missing".repeat(4000) } },
+      { name: "osnova_thread", arguments: { pattern: "needle" } },
+      { name: "osnova_outline", arguments: { file: "missing".repeat(4000) } },
     ];
     for (const request of requests) {
       const result = await client.callTool(request);
@@ -52,7 +52,7 @@ it("caps MCP success and error responses with an explicit clipping notice", asyn
       const text = content.map((block) => block.type === "text" ? block.text : "").join("\n");
       expect(text.length).toBeLessThanOrEqual(16_384);
       expect(text).toContain("[output truncated:");
-      expect(Boolean(result.isError)).toBe(request.name === "osnova_skeleton");
+      expect(Boolean(result.isError)).toBe(request.name === "osnova_outline");
     }
   } finally {
     await client.close();

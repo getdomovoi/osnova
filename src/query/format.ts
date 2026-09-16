@@ -12,9 +12,9 @@ import type {
 } from "../types.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
-  if (index.diagnostics === undefined) return "partial analysis: index health is unverified";
+  if (index.diagnostics === undefined) return "osnova foundation: unverified; index health could not be checked";
   if (index.diagnostics.length === 0) return "";
-  const lines = [`partial analysis: ${index.diagnostics.length} diagnostics; results may be incomplete`];
+  const lines = [`osnova foundation: partial, ${index.diagnostics.length} diagnostics; results may be incomplete`];
   for (const diagnostic of index.diagnostics.slice(0, 10)) {
     lines.push(`${diagnostic.phase} ${diagnostic.path}: ${diagnostic.code}`);
   }
@@ -23,7 +23,7 @@ export function formatIndexDiagnostics(index: OsnovaIndex): string {
 }
 
 export function formatIndexHealthSummary(index: OsnovaIndex): string {
-  if (index.diagnostics === undefined) return "analysis health unverified; details via doctor or indexHealth";
+  if (index.diagnostics === undefined) return "osnova foundation: unverified; details via doctor or indexHealth";
   if (index.diagnostics.length === 0) return "";
   const counts = new Map<string, number>();
   for (const diagnostic of index.diagnostics) {
@@ -34,7 +34,7 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
   const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   const shown = categories.slice(0, 4).map(([category, count]) => `${category}=${count}`);
   if (categories.length > 4) shown.push(`+${categories.length - 4} categories`);
-  return `partial analysis: ${index.diagnostics.length} diagnostics (${shown.join(", ")}); results may be incomplete; details via doctor or indexHealth`;
+  return `osnova foundation: partial, ${index.diagnostics.length} diagnostics (${shown.join(", ")}); results may be incomplete; details via doctor or indexHealth`;
 }
 
 export function formatAsk(result: AskResult): string {
