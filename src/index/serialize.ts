@@ -21,7 +21,7 @@ import type { EdgeLayout } from "./edgeStore.js";
 import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits } from "../cache/cache.js";
 import type { CachePolicy } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
-import { IndexingError } from "./diagnostics.js";
+import { IndexingError, SectionError } from "./diagnostics.js";
 import { rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
@@ -35,8 +35,6 @@ export const extractionVersion = `structural-9.scan-4.tree-sitter-0.25.10.gramma
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 class ExtractionVersionError extends Error {}
-
-class SectionError extends Error {}
 
 class ArtifactVersionError extends Error {
   constructor(readonly version: unknown) {
@@ -266,7 +264,7 @@ function deserializeParsedArtifact(
       if (!binaryCard && (sha256Hex(text) !== file.hash || (text.length === 0 ? 0 : text.split("\n").length) !== file.lineCount)) throw new Error("osnova: corrupt file content");
       files.set(filePath, { ...base, text });
     } else if (textPath !== undefined) {
-      files.set(filePath, lazyTextCard(base, textPath, file.to, file.tl, file.hash));
+      files.set(filePath, lazyTextCard(base, textPath, file.to, file.tl, file.hash, artifact.textHash, artifact.textBytes));
     } else {
       throw new Error("osnova: text source required");
     }
@@ -358,7 +356,7 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
       await fs.writeFile(textTmp, layout.bytes, { flag: "wx" });
       await fs.rename(textTmp, textFinal);
       textTmp = undefined;
-      rebindPublishedText(index, textFinal, layout.offsets);
+      rebindPublishedText(index, textFinal, layout.offsets, layout.hash, layout.bytes.length);
       await fs.writeFile(edgesTmp, edgesPayload, { flag: "wx" });
       await fs.rename(edgesTmp, edgesFinal);
       edgesTmp = undefined;
@@ -450,7 +448,12 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
 }
 
 export function isSectionInconsistency(error: unknown): boolean {
-  return error instanceof IndexingError && error.cause instanceof SectionError;
+  let cause: unknown = error;
+  for (let depth = 0; depth < 8 && cause !== null && cause !== undefined; depth += 1) {
+    if (cause instanceof SectionError) return true;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export const isTextSidecarInconsistency = isSectionInconsistency;

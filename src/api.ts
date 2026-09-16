@@ -105,34 +105,43 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
     }
     let dirty = index === undefined;
     let known = index === undefined || indexGeneration(index) !== generation ? undefined : verified;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
-      const inspection = clean && known !== undefined && attempt === 0 && !dirty
-        ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
-        : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
-      const report = inspection.report;
-      if (!isStale(report)) {
-        if (dirty) await saveArtifact(index, canonicalCache, options);
-        else {
-          const artifact = await artifactPathFor(canonicalRoot, canonicalCache);
-          if (limits.maxWorkspaces === 0 || artifact === undefined || (await fs.stat(artifact)).size > limits.maxBytes) {
-            throw new IndexingError({ phase: "cache", path: canonicalCache, code: "cache-limit-exceeded" });
+    let rebuiltAfterSectionFailure = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
+        const inspection = clean && known !== undefined && attempt === 0 && !dirty
+          ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
+          : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
+        const report = inspection.report;
+        if (!isStale(report)) {
+          if (dirty) await saveArtifact(index, canonicalCache, options);
+          else {
+            const artifact = await artifactPathFor(canonicalRoot, canonicalCache);
+            if (limits.maxWorkspaces === 0 || artifact === undefined || (await fs.stat(artifact)).size > limits.maxBytes) {
+              throw new IndexingError({ phase: "cache", path: canonicalCache, code: "cache-limit-exceeded" });
+            }
+            await evictLru(canonicalCache, options);
           }
-          await evictLru(canonicalCache, options);
+          try {
+            await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
+          } catch (error) {
+            throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
+          }
+          if (options.reuseMemory === true) {
+            rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
+          }
+          return index;
         }
-        try {
-          await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
-        } catch (error) {
-          throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
-        }
-        if (options.reuseMemory === true) {
-          rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
-        }
-        return index;
+        index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
+        known = inspection.metadata;
+        dirty = true;
+      } catch (error) {
+        if (rebuiltAfterSectionFailure || !isSectionInconsistency(error)) throw error;
+        rebuiltAfterSectionFailure = true;
+        index = undefined;
+        known = undefined;
+        dirty = true;
       }
-      index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
-      known = inspection.metadata;
-      dirty = true;
     }
     throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
   }, options);

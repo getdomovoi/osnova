@@ -17,6 +17,7 @@ vi.mock("node:fs", async (importOriginal) => {
 import { buildIndex } from "../src/index/build.js";
 import { refreshWorkspace, loadIndex } from "../src/api.js";
 import { serializeText } from "../src/index/textStore.js";
+import { serializeSections } from "../src/index/serialize.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
 
 const dirs: string[] = [];
@@ -43,5 +44,29 @@ describe("copy-on-publish", () => {
     expect(published.equals(fresh)).toBe(true);
     const loaded = (await loadIndex(repo, { cacheDir }))!;
     expect(loaded.files.get("src/app.ts")!.text).toBe(refreshed.files.get("src/app.ts")!.text);
+    const freshSections = serializeSections(await buildIndex(repo, { cacheDir: path.join(dir, "cache3") }));
+    const publishedDir = workspaceDirFor(cacheDir, refreshed.root);
+    expect((await fs.readFile(path.join(publishedDir, "index.json"))).equals(freshSections.core)).toBe(true);
+    expect((await fs.readFile(path.join(publishedDir, "edges.json"))).equals(freshSections.edges.bytes)).toBe(true);
+  });
+
+  it("refuses to reuse an unverified previous text section and republishes a full rebuild", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-copy-tamper-")); dirs.push(dir);
+    const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
+    await fs.mkdir(repo);
+    await fs.writeFile(path.join(repo, "a.ts"), "export function alpha() { return 1; }\nalpha();\n");
+    await fs.writeFile(path.join(repo, "b.ts"), "export function beta() { return 2; }\nbeta();\n");
+    const built = await buildIndex(repo, { cacheDir });
+    const textPath = path.join(workspaceDirFor(cacheDir, built.root), "text.bin");
+    const original = await fs.readFile(textPath);
+    const tampered = Buffer.from(original.toString("utf8").replace("return 2", "return 9"), "utf8");
+    expect(tampered.length).toBe(original.length);
+    expect(tampered.equals(original)).toBe(false);
+    await fs.writeFile(textPath, tampered);
+    await fs.appendFile(path.join(repo, "a.ts"), "export const added = 3;\n");
+    const refreshed = await refreshWorkspace(repo, { cacheDir });
+    expect(refreshed.files.get("b.ts")!.text).toBe("export function beta() { return 2; }\nbeta();\n");
+    const fresh = serializeText(await buildIndex(repo, { cacheDir: path.join(dir, "cache2") })).bytes;
+    expect((await fs.readFile(textPath)).equals(fresh)).toBe(true);
   });
 });

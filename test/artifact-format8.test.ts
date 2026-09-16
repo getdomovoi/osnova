@@ -47,7 +47,7 @@ describe("text sidecar", () => {
     const source = index.files.get("src/util.ts")!;
     const [offset, length] = layout.offsets.get("src/util.ts")!;
     const { text: _drop, ...rest } = source;
-    const card = lazyTextCard(rest, textPath, offset, length, source.hash);
+    const card = lazyTextCard(rest, textPath, offset, length, source.hash, layout.hash, layout.bytes.length);
     expect(card.text).toBe(source.text);
     await fs.rm(textPath);
     expect(card.text).toBe(source.text);
@@ -62,10 +62,10 @@ describe("text sidecar", () => {
     const source = index.files.get("src/util.ts")!;
     const [offset, length] = layout.offsets.get("src/util.ts")!;
     const { text: _drop, ...rest } = source;
-    const card = lazyTextCard(rest, textPath, offset, length, source.hash);
+    const card = lazyTextCard(rest, textPath, offset, length, source.hash, layout.hash, layout.bytes.length);
     expect(() => card.text).toThrow(/cache-read-failed/);
     await fs.writeFile(textPath, layout.bytes);
-    const wrongHash = lazyTextCard(rest, textPath, offset, length, "0".repeat(64));
+    const wrongHash = lazyTextCard(rest, textPath, offset, length, "0".repeat(64), layout.hash, layout.bytes.length);
     expect(() => wrongHash.text).toThrow(/cache-read-failed/);
     expect(readTextSlice(textPath, offset, length)).toBe(source.text);
   });
