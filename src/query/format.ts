@@ -282,8 +282,10 @@ export function formatTaskContext(result: TaskContextResult): string {
     const { symbol } = definition;
     lines.push(`- ${symbol.qualifiedName} ${symbol.kind} lines ${symbol.span.startLine}-${symbol.span.endLine}`);
     const excerpt = definition.excerpt.split("\n");
+    const marker = /^\[\+\d+ more lines\]$/.test(excerpt.at(-1) ?? "") ? excerpt.pop() : undefined;
     for (const line of excerpt.slice(0, contextExcerptLines)) lines.push(`  ${line}`);
-    if (excerpt.length > contextExcerptLines) lines.push(`  [+${excerpt.length - contextExcerptLines} more lines]`);
+    if (marker !== undefined) lines.push(`  ${marker}`);
+    else if (excerpt.length > contextExcerptLines) lines.push(`  [+${excerpt.length - contextExcerptLines} more lines]`);
   }
   if (result.relationships.length > 0) lines.push("relationships:");
   for (const relationship of result.relationships) {

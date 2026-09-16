@@ -24,6 +24,7 @@ const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 8_192;
 const maximumMcpSettleCodeUnits = 4_096;
+const mcpFootingExcerptLines = 8;
 
 const canonicalToolDefinitions = [
   {
@@ -239,7 +240,8 @@ export function createOsnovaMcpServer(
           const available = maximumMcpFootingCodeUnits - prefix.length - 1;
           const result = taskContext(index, {
             task, question: question ?? "", symbols, in: optionalString(args, "in"),
-            limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available,
+            limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines,
+            measure: (partial) => formatTaskContext(partial).length,
           });
           return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);
         }

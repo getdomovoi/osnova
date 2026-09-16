@@ -73,6 +73,38 @@ describe("footing formatting", () => {
     expect(text).toContain("limitations: indexed-structural-evidence-only");
   });
 
+  it("stores clipped excerpts when excerptLines is set so the budget matches printed text", () => {
+    const body = Array.from({ length: 200 }, (_, i) => `  const v${i} = ${i};`).join("\n");
+    const text = `function big() {\n${body}\n}\nfunction small() { return big(); }\n`;
+    const big: OsnovaSymbol = { name: "big", qualifiedName: "big.ts#big", kind: "function", file: "big.ts",
+      span: { startLine: 1, startCol: 0, endLine: 202, endCol: 1 }, signature: "function big()", lineCount: 202 };
+    const small: OsnovaSymbol = { name: "small", qualifiedName: "big.ts#small", kind: "function", file: "big.ts",
+      span: { startLine: 203, startCol: 0, endLine: 203, endCol: 34 }, signature: "function small()", lineCount: 1 };
+    const file: FileCard = { ...card("big.ts", [], text), language: "typescript", symbols: [big, small] };
+    const one = index([file], [edge("big.ts#small", "big.ts#big")]);
+    const full = taskContext(one, { task: "change", question: "", symbols: ["big.ts#big"], maxCodeUnits: 3_072 });
+    expect(full.definitions.map((definition) => definition.symbol.name)).not.toContain("big");
+    expect(full.omitted.definitions).toBe(1);
+    const clipped = taskContext(one, { task: "change", question: "", symbols: ["big.ts#big"], maxCodeUnits: 3_072, excerptLines: 8 });
+    expect(clipped.definitions[0]?.excerpt).toBe(`${text.split("\n").slice(0, 8).join("\n")}\n[+194 more lines]`);
+    expect(clipped.definitions.map((definition) => definition.symbol.name)).toEqual(["big", "small"]);
+    expect(clipped.relationships).toHaveLength(1);
+    expect(clipped.omitted).toMatchObject({ definitions: 0, relationships: 0 });
+    expect(formatTaskContext(clipped)).toContain("  const v6 = 6;\n  [+194 more lines]\n- big.ts#small");
+  });
+
+  it("fits by the caller's measure instead of JSON size", () => {
+    const names = Array.from({ length: 12 }, (_, i) => `fn${i}`);
+    const one = index([card("many.ts", names)], names.slice(1).map((name) => edge(`many.ts#${name}`, "many.ts#fn0")));
+    const byJson = taskContext(one, { task: "change", question: "", symbols: ["many.ts#fn0"], maxCodeUnits: 2_600 });
+    const byText = taskContext(one, { task: "change", question: "", symbols: ["many.ts#fn0"], maxCodeUnits: 2_600,
+      measure: (partial) => formatTaskContext(partial).length });
+    expect(byJson.relationships.length).toBeLessThan(byText.relationships.length);
+    expect(byText.relationships).toHaveLength(11);
+    expect(byText.omitted.relationships).toBe(0);
+    expect(formatTaskContext(byText).length).toBeLessThanOrEqual(2_600);
+  });
+
   it("clips long excerpts to eight lines with a count", () => {
     const body = Array.from({ length: 12 }, (_, i) => `  const v${i} = ${i};`).join("\n");
     const text = `function big() {\n${body}\n}\n`;
