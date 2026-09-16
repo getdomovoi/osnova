@@ -78,7 +78,7 @@ async function consumer() {
   console.log(`packed consumer: exports, 20 WASM grammars, doctor, preview, build/ask, 5 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
 }
 
-export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [] }) {
+export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [], omitWorkspaceArg = false }) {
   const before = await snapshot(workspace);
   const errors = [];
   let stdout = "";
@@ -99,7 +99,7 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
   }
   const transport = new ObservedTransport({
     command: process.execPath,
-    args: [...nodeArgs, cliPath, "mcp", "--workspace", workspace],
+    args: [...nodeArgs, cliPath, "mcp", ...(omitWorkspaceArg ? [] : ["--workspace", workspace])],
     cwd,
     env: { OSNOVA_CACHE_DIR: cacheDir, HOME: path.join(cacheDir, "smoke-home"), USERPROFILE: path.join(cacheDir, "smoke-home"), TSX_DISABLE_CACHE: "1" },
     stderr: "pipe",
@@ -122,8 +122,7 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
       osnova_footing: { question: "probe" },
       osnova_settle: { diff: "--- a/probe.ts\n+++ b/probe.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" },
     };
-    const aliases = ["osnova_ask", "osnova_find_text", "osnova_skeleton", "osnova_callers", "osnova_map"];
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...Object.keys(calls), ...aliases].sort());
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), Object.keys(calls).sort());
     for (const [name, args] of Object.entries(calls)) {
       const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 10_000 });
       assert(!result.isError, `${name} returned an error`);

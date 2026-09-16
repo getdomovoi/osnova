@@ -22,6 +22,24 @@ it("initializes real stdio, exercises all seven tools, refreshes and shuts down 
   }
 }, 45_000);
 
+it("serves the working directory when --workspace is omitted", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "osnova-stdio-cwd-"));
+  try {
+    const workspace = path.join(root, "workspace");
+    await mkdir(workspace);
+    await writeFile(path.join(workspace, "probe.ts"), "export function probe() { return 1; }\nexport function caller() { return probe(); }\n");
+    const { smokeStdio } = await import(pathToFileURL(path.resolve("scripts/package-smoke.mjs")).href);
+    const frames = await smokeStdio({
+      cliPath: path.resolve("src/cli/bin.ts"), workspace, cacheDir: path.join(root, "cache"),
+      cwd: workspace, nodeArgs: ["--import", pathToFileURL(path.resolve("node_modules/tsx/dist/loader.mjs")).href], omitWorkspaceArg: true,
+    });
+    expect(frames).toBeGreaterThanOrEqual(8);
+    expect((await readdir(root)).sort()).toEqual(["cache", "workspace"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
+
 it("detects injected stdout noise from an otherwise functional real server", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "osnova-stdio-noise-"));
   try {

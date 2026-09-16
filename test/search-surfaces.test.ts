@@ -29,7 +29,7 @@ afterAll(async () => {
 async function grep(pattern: string, args: string[] = []): Promise<string> {
   const lines: string[] = [];
   const code = await runCli([
-    "grep", pattern, "--workspace", workspace, "--cache-dir", cacheDir, ...args,
+    "thread", pattern, "--workspace", workspace, "--cache-dir", cacheDir, ...args,
   ], { stdout: (text) => lines.push(text), stderr: (text) => lines.push(text) });
   expect(code).toBe(0);
   return lines.join("\n");
