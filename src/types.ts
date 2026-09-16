@@ -1,4 +1,4 @@
-export const indexFormatVersion = 1 as const;
+export const indexFormatVersion = 9 as const;
 
 export type LanguageId =
   | "typescript"
@@ -8,7 +8,19 @@ export type LanguageId =
   | "go"
   | "rust"
   | "java"
-  | "c_sharp";
+  | "c_sharp"
+  | "c"
+  | "cpp"
+  | "ruby"
+  | "php"
+  | "kotlin"
+  | "swift"
+  | "scala"
+  | "dart"
+  | "elixir"
+  | "ocaml"
+  | "zig"
+  | "bash";
 
 export type CardLanguage = LanguageId | "fallback";
 
@@ -28,7 +40,8 @@ export type SymbolKind =
   | "trait"
   | "enum"
   | "type"
-  | "constant";
+  | "constant"
+  | "module";
 
 export interface OsnovaSymbol {
   readonly name: string;
@@ -38,9 +51,50 @@ export interface OsnovaSymbol {
   readonly span: SourceSpan;
   readonly signature: string;
   readonly lineCount: number;
+  readonly exportedNames?: readonly string[] | undefined;
+  readonly memberKind?: MemberKind | undefined;
 }
 
+export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
+export type ReceiverMode = "instance" | "class";
+export type ReceiverBasis = "constructor" | "lexical" | "class-reference";
+
 export type EdgeKind = "calls" | "references" | "imports";
+
+export type EdgeResolution =
+  | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition"; readonly via?: undefined }
+  | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
+  | { readonly status: "resolved"; readonly method: "receiver-hint"; readonly receiver: { readonly classSymbol: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }; readonly via?: readonly ExportHop[] | undefined }
+  | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" };
+
+export type ReExport =
+  | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }
+  | { readonly kind: "star"; readonly source: string; readonly line: number }
+  | { readonly kind: "blocked"; readonly exportedName: string; readonly line: number };
+
+export interface ExportHop {
+  readonly file: string;
+  readonly line: number;
+  readonly kind: "named" | "star";
+  readonly exportedName: string;
+  readonly importedName: string;
+  readonly source: string;
+  readonly targetFile: string;
+}
+
+export type SymbolBinding =
+  | { readonly kind: "import"; readonly source: string; readonly importedName: string }
+  | { readonly kind: "local"; readonly name: string };
+
+export type EdgeBinding = SymbolBinding
+  | { readonly kind: "instance"; readonly owner: SymbolBinding; readonly basis: "constructor" | "lexical" }
+  | { readonly kind: "member"; readonly owner: SymbolBinding; readonly member: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }
+  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" };
+
+export type EdgeEvidence =
+  | { readonly source: "syntax"; readonly resolution: EdgeResolution }
+  | { readonly source: "unknown" };
 
 export interface OsnovaEdge {
   readonly kind: EdgeKind;
@@ -50,6 +104,8 @@ export interface OsnovaEdge {
   readonly line: number;
   readonly toSymbol?: string | undefined;
   readonly toFile?: string | undefined;
+  readonly evidence?: EdgeEvidence | undefined;
+  readonly binding?: EdgeBinding | undefined;
 }
 
 export interface FileCard {
@@ -60,6 +116,8 @@ export interface FileCard {
   readonly lineCount: number;
   readonly text: string;
   readonly symbols: readonly OsnovaSymbol[];
+  readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
+  readonly reExports?: readonly ReExport[] | undefined;
 }
 
 export interface OsnovaIndex {
@@ -67,9 +125,22 @@ export interface OsnovaIndex {
   readonly files: ReadonlyMap<string, FileCard>;
   readonly symbols: ReadonlyMap<string, OsnovaSymbol>;
   readonly edges: readonly OsnovaEdge[];
+  readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
   incoming(qualifiedName: string): readonly OsnovaEdge[];
   outgoing(qualifiedName: string): readonly OsnovaEdge[];
   edgesForFile(path: string): readonly OsnovaEdge[];
+}
+
+export interface IndexDiagnostic {
+  readonly phase: "scan" | "read" | "parse" | "cache";
+  readonly path: string;
+  readonly code: string;
+}
+
+export interface IndexHealthReport {
+  readonly state: "fresh" | "stale" | "partial" | "unavailable";
+  readonly diagnostics: readonly IndexDiagnostic[];
+  readonly freshness: FreshnessReport | null;
 }
 
 export interface AskHit {
@@ -92,6 +163,13 @@ export interface AskResult {
   readonly filesSearched: number;
 }
 
+export interface AskDetailedResult extends AskResult {
+  readonly scope: "indexed-definitions-and-text";
+  readonly totalCandidates: number;
+  readonly omittedHits: number;
+  readonly truncated: boolean;
+}
+
 export interface FindTextMatch {
   readonly line: number;
   readonly col: number;
@@ -110,6 +188,20 @@ export interface FindTextOptions {
   readonly ignoreCase?: boolean | undefined;
   readonly in?: string | undefined;
   readonly limit?: number | undefined;
+}
+
+export interface FindTextDetailedOptions extends FindTextOptions {
+  readonly matchesPerGroup?: number | undefined;
+}
+
+export interface FindTextResult {
+  readonly scope: "indexed-text";
+  readonly groups: FindTextGroup[];
+  readonly totalGroups: number;
+  readonly totalMatches: number;
+  readonly omittedGroups: number;
+  readonly omittedMatches: number;
+  readonly truncated: boolean;
 }
 
 export interface SkeletonEntry {
@@ -141,6 +233,32 @@ export interface CallersResult {
   readonly hits: readonly CallerHit[];
 }
 
+export interface CallerEvidenceHit extends CallerHit {
+  readonly edge: OsnovaEdge;
+}
+
+export interface CallersOptions {
+  readonly direction?: EdgeDirection | undefined;
+  readonly depth?: number | undefined;
+}
+
+export interface UnresolvedCallerEdge {
+  readonly edge: OsnovaEdge;
+  readonly depth: number;
+}
+
+export type CallersDetailedResult =
+  | { readonly status: "ambiguous"; readonly candidates: readonly OsnovaSymbol[] }
+  | {
+      readonly status: "found";
+      readonly scope: "indexed-graph";
+      readonly direction: EdgeDirection;
+      readonly depth: number;
+      readonly target: OsnovaSymbol;
+      readonly hits: readonly CallerEvidenceHit[];
+      readonly unresolved: readonly UnresolvedCallerEdge[];
+    };
+
 export interface DirCluster {
   readonly dir: string;
   readonly fileCount: number;
@@ -148,6 +266,7 @@ export interface DirCluster {
   readonly internalEdges: number;
   readonly externalEdges: number;
   readonly hubs: readonly HubEntry[];
+  readonly droppedHubs: number;
 }
 
 export interface HubEntry {
@@ -170,6 +289,7 @@ export interface MapResult {
   readonly clusters: readonly DirCluster[];
   readonly hotspots: readonly HubEntry[];
   readonly droppedDirs: number;
+  readonly droppedHotspots: number;
 }
 
 export interface MapCardOptions {
@@ -200,5 +320,6 @@ export interface LoadIndexOptions {
 }
 
 export const maximumOsnovaMapCardCodeUnits = 16_384 as const;
+export const maximumTextResponseCodeUnits = 16_384 as const;
 
 export const maximumIndexedFileSizeBytes = 1_000_000 as const;

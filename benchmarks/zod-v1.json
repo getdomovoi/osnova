@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "zod-v1",
+  "source": { "kind": "checkout", "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21", "repository": "https://github.com/colinhacks/zod", "exclude": [".codex/skills", ".cursorrules", "CLAUDE.md", "README.md"] },
+  "edit": { "file": "packages/zod/src/v4/core/util.ts", "append": "\n// benchmark edit\n" },
+  "cases": [
+    {
+      "id": "assert-never-definition", "split": "development", "kind": "ask", "question": "assertNever",
+      "expected": ["packages/zod/src/v4/core/util.ts#assertNever"],
+      "anchors": [{ "file": "packages/zod/src/v4/core/util.ts", "text": "export function assertNever(_x: never): never" }]
+    },
+    {
+      "id": "json-replacer-definition", "split": "development", "kind": "ask", "question": "jsonStringifyReplacer bigint",
+      "expected": ["packages/zod/src/v4/core/util.ts#jsonStringifyReplacer"],
+      "anchors": [{ "file": "packages/zod/src/v4/core/util.ts", "text": "export function jsonStringifyReplacer(_: string, value: any): any" }]
+    },
+    {
+      "id": "primitive-join-dependency", "split": "evaluation", "kind": "callers", "symbol": "packages/zod/src/v4/core/util.ts#joinValues", "direction": "out",
+      "expected": ["packages/zod/src/v4/core/util.ts#stringifyPrimitive"],
+      "anchors": [
+        { "file": "packages/zod/src/v4/core/util.ts", "text": "export function joinValues<T extends Primitive[]>" },
+        { "file": "packages/zod/src/v4/core/util.ts", "text": "stringifyPrimitive(val)" }
+      ]
+    },
+    {
+      "id": "regex-cleaning-definition", "split": "evaluation", "kind": "ask", "question": "cleanRegex source anchors",
+      "expected": ["packages/zod/src/v4/core/util.ts#cleanRegex"],
+      "anchors": [{ "file": "packages/zod/src/v4/core/util.ts", "text": "export function cleanRegex(source: string): string" }]
+    }
+  ]
+}

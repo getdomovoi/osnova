@@ -19,6 +19,10 @@ export async function renderMapCard(
   options?: MapCardOptions,
 ): Promise<string> {
   const maxCodeUnits = options?.maxCodeUnits ?? maximumOsnovaMapCardCodeUnits;
+  if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 0) {
+    throw new RangeError("osnova: map-card budget must be a nonnegative safe integer");
+  }
+  if (maxCodeUnits === 0) return "";
   let staleCount = options?.staleCount;
   if (staleCount === undefined) {
     try {
@@ -32,9 +36,11 @@ export async function renderMapCard(
 
   const lines: CardLine[] = [];
   const staleText =
-    staleCount === 0 ? "fresh" : staleCount === undefined || staleCount < 0 ? "stale: unknown" : `stale: ${staleCount} file${staleCount === 1 ? "" : "s"}`;
+    staleCount === 0 ? "fresh" : staleCount === undefined || staleCount < 0 ? "unavailable" : `stale: ${staleCount} file${staleCount === 1 ? "" : "s"}`;
+  const analysisText = index.diagnostics === undefined ? " | osnova foundation: unverified"
+    : index.diagnostics.length > 0 ? ` | osnova foundation: partial, ${index.diagnostics.length} diagnostics` : "";
   lines.push({
-    text: `osnova ${basename(index.root)} | files ${mapResult.fileCount} | symbols ${mapResult.symbolCount} | edges ${mapResult.edgeCount} | ${staleText}`,
+    text: `osnova ${basename(index.root)} | files ${mapResult.fileCount} | symbols ${mapResult.symbolCount} | edges ${mapResult.edgeCount} | ${staleText}${analysisText}`,
     rank: RANK_HEADER,
   });
 
@@ -62,47 +68,34 @@ export async function renderMapCard(
   }
 
   const dropped: Partial<Record<number, number>> = {};
-  const fitted = fitLines(lines, maxCodeUnits, (rank) => {
-    dropped[rank] = (dropped[rank] ?? 0) + 1;
-  });
-
-  const droppedClusters = mapResult.droppedDirs + (dropped[RANK_CLUSTER] ?? 0);
-  const droppedHubs = dropped[RANK_HUB] ?? 0;
-  const droppedHotspots = dropped[RANK_HOTSPOT] ?? 0;
-  if (droppedClusters > 0 || droppedHubs > 0 || droppedHotspots > 0) {
+  const remaining = [...lines];
+  const footer = (): string | null => {
+    const droppedClusters = mapResult.droppedDirs + (dropped[RANK_CLUSTER] ?? 0);
+    const droppedHubs = mapResult.clusters.reduce((count, cluster) => count + cluster.droppedHubs, 0) + (dropped[RANK_HUB] ?? 0);
+    const droppedHotspots = mapResult.droppedHotspots + (dropped[RANK_HOTSPOT] ?? 0);
+    if (droppedClusters === 0 && droppedHubs === 0 && droppedHotspots === 0) return null;
     const parts: string[] = [];
     if (droppedClusters > 0) parts.push(`${droppedClusters} cluster lines`);
     if (droppedHubs > 0) parts.push(`${droppedHubs} hub lines`);
     if (droppedHotspots > 0) parts.push(`${droppedHotspots} hotspot lines`);
-    fitted.push(`dropped: ${parts.join(", ")}`);
+    return `dropped: ${parts.join(", ")}`;
+  };
+  const render = (): string => [...remaining.map((line) => line.text), footer()].filter((line): line is string => line !== null).join("\n");
+  for (const rank of [RANK_HOTSPOT, RANK_SECTION, RANK_HUB, RANK_CLUSTER]) {
+    while (render().length > maxCodeUnits) {
+      const index = findLastIndexOfRank(remaining, rank);
+      if (index === -1) break;
+      const countedRank = rank === RANK_SECTION ? RANK_HOTSPOT : rank;
+      dropped[countedRank] = (dropped[countedRank] ?? 0) + 1;
+      remaining.splice(index, 1);
+    }
+    if (render().length <= maxCodeUnits) break;
   }
-
-  let card = fitted.join("\n");
+  let card = render();
   if (card.length > maxCodeUnits) {
     card = card.slice(0, Math.max(0, maxCodeUnits - 1)) + "…";
   }
   return card;
-}
-
-function fitLines(
-  lines: readonly CardLine[],
-  maxCodeUnits: number,
-  onDrop: (rank: number) => void,
-): string[] {
-  const remaining = [...lines];
-  const totalUnits = (): number =>
-    remaining.reduce((acc, line) => acc + line.text.length + 1, 0);
-  const dropRanks = [RANK_HOTSPOT, RANK_SECTION, RANK_HUB, RANK_CLUSTER];
-  for (const rank of dropRanks) {
-    while (totalUnits() > maxCodeUnits) {
-      const index = findLastIndexOfRank(remaining, rank);
-      if (index === -1) break;
-      onDrop(rank === RANK_SECTION ? RANK_HOTSPOT : rank);
-      remaining.splice(index, 1);
-    }
-    if (totalUnits() <= maxCodeUnits) break;
-  }
-  return remaining.map((line) => line.text);
 }
 
 function findLastIndexOfRank(lines: readonly CardLine[], rank: number): number {

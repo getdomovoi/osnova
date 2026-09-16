@@ -1,4 +1,5 @@
 import type { FindTextGroup, FindTextMatch, FindTextOptions, OsnovaIndex } from "../types.js";
+import type { FindTextDetailedOptions, FindTextResult } from "../types.js";
 import { matchInPath } from "./context.js";
 
 const DEFAULT_GROUP_LIMIT = 50;
@@ -13,6 +14,23 @@ export function findText(
   pattern: string,
   options?: FindTextOptions,
 ): FindTextGroup[] {
+  return findTextDetailed(index, pattern, {
+    ...options,
+    limit: options?.limit ?? DEFAULT_GROUP_LIMIT,
+    matchesPerGroup: MATCHES_PER_GROUP,
+  }).groups;
+}
+
+export function findTextDetailed(
+  index: OsnovaIndex,
+  pattern: string,
+  options?: FindTextDetailedOptions,
+): FindTextResult {
+  for (const value of [options?.limit, options?.matchesPerGroup]) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+      throw new RangeError("osnova: search limits must be nonnegative safe integers");
+    }
+  }
   const source = options?.fixed === true ? escapeRegExp(pattern) : pattern;
   let regex: RegExp;
   try {
@@ -23,7 +41,9 @@ export function findText(
     });
   }
   const filter = options?.in ?? "";
-  const groupLimit = options?.limit ?? DEFAULT_GROUP_LIMIT;
+  const groupLimit = options?.limit ?? Infinity;
+  const matchLimit = options?.matchesPerGroup ?? Infinity;
+  let totalMatches = 0;
 
   interface Group {
     file: string;
@@ -43,6 +63,7 @@ export function findText(
       regex.lastIndex = 0;
       let match: RegExpExecArray | null = regex.exec(line);
       while (match !== null) {
+        totalMatches += 1;
         const symbolQ = innermostForLine(card.symbols, i + 1);
         const key = `${path}\u0000${symbolQ ?? "<module>"}`;
         let group = byKey.get(key);
@@ -51,7 +72,7 @@ export function findText(
           byKey.set(key, group);
           groups.push(group);
         }
-        if (group.matches.length < MATCHES_PER_GROUP) {
+        if (group.matches.length < matchLimit) {
           const hit: FindTextMatch = { line: i + 1, col: match.index, text: line };
           const last = group.matches[group.matches.length - 1];
           if (last === undefined || last.line !== hit.line || last.col !== hit.col) {
@@ -78,12 +99,22 @@ export function findText(
       (a.group.file < b.group.file ? -1 : a.group.file > b.group.file ? 1 : 0) ||
       (a.group.symbolQ ?? "").localeCompare(b.group.symbolQ ?? ""),
   );
-  return ranked.slice(0, groupLimit).map(({ group, incoming, symbol }) => ({
+  const selected = ranked.slice(0, groupLimit).map(({ group, incoming, symbol }) => ({
     file: group.file,
     symbol,
     incomingEdges: incoming,
     matches: group.matches,
   }));
+  const omittedMatches = totalMatches - selected.reduce((count, group) => count + group.matches.length, 0);
+  return {
+    scope: "indexed-text",
+    groups: selected,
+    totalGroups: groups.length,
+    totalMatches,
+    omittedGroups: groups.length - selected.length,
+    omittedMatches,
+    truncated: omittedMatches > 0,
+  };
 }
 
 function innermostForLine(

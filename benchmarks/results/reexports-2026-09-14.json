@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "corpus": "reexports-v1",
+  "implementation": {
+    "revision": "75070e3822f332acf1bd1e63dbab014342d5f5fc",
+    "engineFingerprint": "7cda0023c98d9f6a9da2f2ad455bcb277ba866595a62c9ef621a105786990626",
+    "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547"
+  },
+  "development": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": null, "meanReciprocalRankAt5": null, "callerPrecision": 1, "callerRecall": 1, "searchPrecision": null, "searchRecall": null },
+  "evaluation": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": null, "meanReciprocalRankAt5": null, "callerPrecision": 1, "callerRecall": 1, "searchPrecision": null, "searchRecall": null },
+  "evaluationCases": [
+    { "id": "ambiguous-star-is-not-a-caller", "actual": [], "expected": [], "falsePositives": 0 },
+    { "id": "cycle-with-valid-exit", "actual": ["cycle/engine.ts#launch"], "expected": ["cycle/engine.ts#launch"], "falsePositives": 0 }
+  ],
+  "evaluationReceipt": {
+    "candidateReportFingerprint": "01aee5dc12c2a15b9aa670a2bada988491ad8152e0ec8c7f6e20edc4a0df500a",
+    "manifestFingerprint": "c1d0c494f3142dd1ecabc21777418e88bc4b65c56fe7c601e28cc3797ad61163",
+    "engineFingerprint": "7cda0023c98d9f6a9da2f2ad455bcb277ba866595a62c9ef621a105786990626",
+    "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+    "snapshotFingerprint": "4e4b9bd609fa5adb383d7f22e80a28958e624e30c0740abd137bef56d71812af"
+  },
+  "realDevelopmentRegressions": [
+    { "corpus": "zod-v1", "index": { "files": 702, "symbols": 9160, "edges": 54686 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 0.75 },
+    { "corpus": "click-v1", "index": { "files": 160, "symbols": 1983, "edges": 7357 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 },
+    { "corpus": "pyright-v1", "index": { "files": 7653, "symbols": 25121, "edges": 68213 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 }
+  ],
+  "incrementalEqualsFull": true,
+  "limits": { "exportStates": 4096, "forwardingHops": 128, "artifactFormat": 6 },
+  "limitations": [
+    "Two development and two evaluation cases, including a negative case; not a general caller-accuracy or agent-success estimate.",
+    "Cases were pinned before implementation and reported evaluation used a matching development receipt after the implementation commit.",
+    "A positive case uses cyclic module topology; unit tests separately exercise pure cycles, valid exits, diamond paths and traversal budgets.",
+    "Static export syntax only. CommonJS export assignments, namespace objects, Python wildcard exports and dynamic receiver/value flow remain unsupported or conservative.",
+    "No type/compiler validation, model calls, token-cost measurement or performance-speedup claim is represented here."
+  ],
+  "localTestsPassed": 265
+}

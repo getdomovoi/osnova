@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "implementation": {
+    "revision": "372d416f5b9993d335d3d64cd9293ff9df6755af",
+    "engineFingerprint": "ab26ea37fb61f1c9852f515df3bc943de766f65a8e29180b21da8be8d6f38745",
+    "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547"
+  },
+  "environment": { "node": "v26.8.2", "platform": "darwin", "arch": "arm64", "execution": "tsx-source" },
+  "scoringScope": "structured-query",
+  "baseline": "development-baseline-2026-09-14.json",
+  "limitations": [
+    "Seven development retrieval cases and five evaluation retrieval cases; these are small public task sets, not general accuracy or agent-success estimates.",
+    "The reported evaluation runs used matching development receipts after the implementation commit. No ranker changes followed those evaluation results.",
+    "Public evaluation labels and the authored corpus are not a sealed or blind test set; harness plumbing tests also exercise the authored evaluation path.",
+    "The versioned exact-name ambiguity remains: one development query returns the requested definition second.",
+    "Alias resolution and graph reranking were not changed by this candidate. Known caller misses remain recorded below.",
+    "First query timings include lazy query-document construction, scoring and formatting. They are single observations, not latency distributions.",
+    "No speedup claim is supported by these results; first-query costs increased on the real workloads. Refresh equivalence and the synthetic perf gate remained green."
+  ],
+  "knownMisses": [
+    { "corpus": "core-v1", "split": "development", "case": "direct-and-aliased-constructors", "expected": ["packages/retry/direct.ts#startTimer", "packages/retry/alias.ts#aliasTimer"], "actual": ["packages/retry/direct.ts#startTimer"] },
+    { "corpus": "core-v1", "split": "evaluation", "case": "python-alias-caller", "expected": ["python/consumer.py#display_label"], "actual": [] }
+  ],
+  "workloads": [
+    {
+      "corpus": "core-v1",
+      "development": { "caseCount": 5, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1, "callerPrecision": 1, "callerRecall": 0.75, "searchPrecision": 1, "searchRecall": 1 },
+      "evaluation": { "caseCount": 3, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1, "callerPrecision": 0.5, "callerRecall": 0.5, "searchPrecision": null, "searchRecall": null },
+      "evaluationReceipt": {
+        "candidateReportFingerprint": "cd84484774f23bdb2c62085e627f793e59ead8ce07d1dac2f8a571c76b77a8e5",
+        "manifestFingerprint": "7c6086fee2e8ab2384185d640924b7630c599b3b951607db382d5f2acd737cc1",
+        "engineFingerprint": "ab26ea37fb61f1c9852f515df3bc943de766f65a8e29180b21da8be8d6f38745",
+        "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+        "snapshotFingerprint": "bca6f63f678bda6001d6bfb0bb715ef91d4780c52ec863519b9b7a5b03ebe9e8"
+      },
+      "firstDevelopmentQueryMs": 0.8735839999999939,
+      "incrementalEqualsFull": true
+    },
+    {
+      "corpus": "zod-v1",
+      "development": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 0.75, "callerPrecision": null, "callerRecall": null, "searchPrecision": null, "searchRecall": null },
+      "evaluation": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1, "callerPrecision": 1, "callerRecall": 1, "searchPrecision": null, "searchRecall": null },
+      "evaluationReceipt": {
+        "candidateReportFingerprint": "8df8f226c9a9c6d33bdd190e7d55d1c27499695402a62610c45154d537abd34f",
+        "manifestFingerprint": "addc1093f83ec61d6a4d59b99e8ccd1aae764b4ef29dd8d2fa535c296e673d44",
+        "engineFingerprint": "ab26ea37fb61f1c9852f515df3bc943de766f65a8e29180b21da8be8d6f38745",
+        "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+        "snapshotFingerprint": "e706286c62f84c5a7374da97f311b9952ce5b57bdc1d953b6a9c1c7a019488c5"
+      },
+      "firstDevelopmentQueryMs": 245.25933400000008,
+      "incrementalEqualsFull": true
+    },
+    {
+      "corpus": "click-v1",
+      "development": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1, "callerPrecision": null, "callerRecall": null, "searchPrecision": null, "searchRecall": null },
+      "evaluation": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1, "callerPrecision": 1, "callerRecall": 1, "searchPrecision": null, "searchRecall": null },
+      "evaluationReceipt": {
+        "candidateReportFingerprint": "8c6a6aa146416643587724d96d42a8c997533cb0ad42d1a2eca7ec1735e2b558",
+        "manifestFingerprint": "30f4f726722d40b7e22a070157ca847d5d520f3d5e39d3b967cd495f9c595a1d",
+        "engineFingerprint": "ab26ea37fb61f1c9852f515df3bc943de766f65a8e29180b21da8be8d6f38745",
+        "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+        "snapshotFingerprint": "58bda71585b03d93a0dceec30ace521da5bc1df756203b5f39cc5fa1ef4147d8"
+      },
+      "firstDevelopmentQueryMs": 55.04841699999997,
+      "incrementalEqualsFull": true
+    },
+    {
+      "corpus": "pyright-v1",
+      "development": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1, "callerPrecision": 1, "callerRecall": 1, "searchPrecision": null, "searchRecall": null },
+      "evaluation": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1, "callerPrecision": null, "callerRecall": null, "searchPrecision": null, "searchRecall": null },
+      "evaluationReceipt": {
+        "candidateReportFingerprint": "ffcb6ecbdd7261674ccda8c4d65e22f17bd71515a4240e2c54fefb7dbc83e0d9",
+        "manifestFingerprint": "e6e5ddfe7d25d3581e50de9cd4de4b0b657d8b9687292f09e14c79ee49ba3f47",
+        "engineFingerprint": "ab26ea37fb61f1c9852f515df3bc943de766f65a8e29180b21da8be8d6f38745",
+        "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+        "snapshotFingerprint": "4060853b8ce40ac03576f18a2f0cdf13389bd4955d33e776b3cc021ddb817914"
+      },
+      "firstDevelopmentQueryMs": 658.3982919999999,
+      "incrementalEqualsFull": true
+    }
+  ],
+  "unmeasured": { "taskSuccess": null, "tokens": null, "agentToolCalls": null }
+}

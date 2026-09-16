@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "receivers-v1",
+  "source": {
+    "kind": "inline",
+    "files": {
+      "sender.ts": "export class Sender {\n  send() { return 1; }\n  invoke() { return this.send(); }\n}\nexport class Other { send() { return 2; } }\n",
+      "client.ts": "import { Sender } from './sender.js';\nexport function dispatch() { const instance = new Sender(); return instance.send(); }\nexport function unknown(value: any) { return value.send(); }\n",
+      "records.py": "class Recorder:\n    def write(self):\n        return 1\n    def invoke(self):\n        return self.write()\n\nclass Other:\n    def write(self):\n        return 2\n",
+      "factory.ts": "export class Factory { static create() { return 3; } }\n",
+      "factory_api.ts": "export { Factory as Builder } from './factory.js';\n",
+      "factory_client.ts": "import { Builder } from './factory_api.js';\nexport function build() { return Builder.create(); }\n",
+      "services.py": "class Service:\n    @classmethod\n    def finish(cls):\n        return 4\n    @classmethod\n    def launch(cls):\n        return cls.finish()\n"
+    }
+  },
+  "edit": { "file": "sender.ts", "append": "\n// measured edit\n" },
+  "cases": [
+    {
+      "id": "constructed-and-this", "split": "development", "kind": "callers", "symbol": "sender.ts#Sender.send",
+      "expected": ["sender.ts#Sender.invoke", "client.ts#dispatch"],
+      "anchors": [{ "file": "sender.ts", "text": "return this.send()" }, { "file": "client.ts", "text": "new Sender()" }]
+    },
+    {
+      "id": "python-self-owner", "split": "development", "kind": "callers", "symbol": "records.py#Recorder.write",
+      "expected": ["records.py#Recorder.invoke"],
+      "anchors": [{ "file": "records.py", "text": "return self.write()" }]
+    },
+    {
+      "id": "static-through-barrel", "split": "evaluation", "kind": "callers", "symbol": "factory.ts#Factory.create",
+      "expected": ["factory_client.ts#build"],
+      "anchors": [{ "file": "factory_api.ts", "text": "Factory as Builder" }, { "file": "factory_client.ts", "text": "Builder.create()" }]
+    },
+    {
+      "id": "python-class-receiver", "split": "evaluation", "kind": "callers", "symbol": "services.py#Service.finish",
+      "expected": ["services.py#Service.launch"],
+      "anchors": [{ "file": "services.py", "text": "return cls.finish()" }]
+    }
+  ]
+}

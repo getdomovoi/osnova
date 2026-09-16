@@ -4,6 +4,7 @@ import type { DirCluster, HubEntry, MapOptions, MapResult, OsnovaIndex } from ".
 const DEFAULT_MAX_DIRS = 16;
 const HUBS_PER_DIR = 3;
 const HOTSPOT_LIMIT = 10;
+const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 
 function dirOf(filePath: string): string {
   const dir = path.posix.dirname(filePath);
@@ -67,15 +68,15 @@ export function map(index: OsnovaIndex, options?: MapOptions): MapResult {
 
   const clusters: DirCluster[] = [];
   for (const stat of dirStats.values()) {
-    const hubs = stat.symbolQs
+    const rankedHubs = stat.symbolQs
       .map(degreeOf)
       .filter((hub) => hub.inEdges + hub.outEdges > 0)
       .sort(
         (a, b) =>
           b.inEdges + b.outEdges - (a.inEdges + a.outEdges) ||
-          a.qualifiedName.localeCompare(b.qualifiedName),
-      )
-      .slice(0, HUBS_PER_DIR);
+          compare(a.qualifiedName, b.qualifiedName),
+      );
+    const hubs = rankedHubs.slice(0, HUBS_PER_DIR);
     clusters.push({
       dir: stat.dir,
       fileCount: stat.files,
@@ -83,24 +84,25 @@ export function map(index: OsnovaIndex, options?: MapOptions): MapResult {
       internalEdges: stat.internal,
       externalEdges: stat.external,
       hubs,
+      droppedHubs: rankedHubs.length - hubs.length,
     });
   }
   clusters.sort(
     (a, b) =>
       b.internalEdges + b.externalEdges - (a.internalEdges + a.externalEdges) ||
       b.symbolCount - a.symbolCount ||
-      a.dir.localeCompare(b.dir),
+      compare(a.dir, b.dir),
   );
 
-  const hotspots = [...index.symbols.keys()]
+  const rankedHotspots = [...index.symbols.keys()]
     .map(degreeOf)
     .filter((hub) => hub.inEdges + hub.outEdges > 0)
     .sort(
       (a, b) =>
         b.inEdges + b.outEdges - (a.inEdges + a.outEdges) ||
-        a.qualifiedName.localeCompare(b.qualifiedName),
-    )
-    .slice(0, HOTSPOT_LIMIT);
+        compare(a.qualifiedName, b.qualifiedName),
+    );
+  const hotspots = rankedHotspots.slice(0, HOTSPOT_LIMIT);
 
   return {
     fileCount: index.files.size,
@@ -109,5 +111,6 @@ export function map(index: OsnovaIndex, options?: MapOptions): MapResult {
     clusters: clusters.slice(0, maxDirs),
     hotspots,
     droppedDirs: Math.max(0, clusters.length - maxDirs),
+    droppedHotspots: rankedHotspots.length - hotspots.length,
   };
 }

@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "finalImplementation": {
+    "revision": "93a94375d3f197cafe7608ce6022524a8ead2356",
+    "engineFingerprint": "54125736058def0149732a94a60998e9447860867fd60fb8e625ed197b145570",
+    "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547"
+  },
+  "initialBindingImplementation": "4f593ec04c5799c2d280760699fb75bf4f7ef6fd",
+  "limitations": [
+    "Small authored case sets, not general caller-accuracy or task-success evidence.",
+    "The initial frozen binding candidate passed its new cases but a later real-workload check exposed omitted nested declarations. That coverage issue was corrected in a separate candidate.",
+    "The follow-up used separately pinned nested-definition cases; previously exposed binding and core cases are regression evidence only.",
+    "Re-export chains, anonymous defaults and dynamic receiver/value flow remain unresolved by the binding pass. Ordinary member calls can still use name heuristics.",
+    "Artifact format 5 invalidates older extraction coverage. More retained declarations may increase index and query-document costs.",
+    "No model calls, token-cost measurements, performance-speedup claim or integration work is represented here."
+  ],
+  "initialBindingEvaluation": {
+    "corpus": "bindings-v1",
+    "developmentCases": 3,
+    "evaluationCases": 2,
+    "callerPrecision": 1,
+    "callerRecall": 1,
+    "receipt": {
+      "candidateReportFingerprint": "c9dbfbac447f03d60cc10b29df3a1272023ad9d43b4798b39270874610fd7704",
+      "manifestFingerprint": "b4ec099295270c655c31e7234eb800e88124a28371b0c71e87993dbba2a50de5",
+      "engineFingerprint": "eb9d6bf3920195c131fa16522e7b5f2e9aae7a29e9ebfb56a20ce977abd6b2f2",
+      "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+      "snapshotFingerprint": "c4ecf2c416d0e18dc6f1041b21a3ba1d2a2873bc7e55f198317eb251346c8291"
+    }
+  },
+  "finalNestedEvaluation": {
+    "corpus": "nested-bindings-v1",
+    "developmentCases": 1,
+    "evaluationCases": 1,
+    "callerPrecision": 1,
+    "callerRecall": 1,
+    "receipt": {
+      "candidateReportFingerprint": "4b76fded638fc7a5aaa9630acb6e73c1f13e1672f62328104921fec2a012fe55",
+      "manifestFingerprint": "21baf21ede48b39943d3341d646b78d4bd926d9c9067f37c4ab8291b4df4e5a5",
+      "engineFingerprint": "54125736058def0149732a94a60998e9447860867fd60fb8e625ed197b145570",
+      "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+      "snapshotFingerprint": "10aab8f3886b25d99299bf229ad15153288165731691c0284861a09706953576"
+    }
+  },
+  "finalExposedRegressions": [
+    { "corpus": "bindings-v1", "developmentCases": 3, "exposedCases": 2, "callerPrecision": 1, "callerRecall": 1 },
+    { "corpus": "core-v1", "developmentCases": 5, "exposedCases": 3, "callerPrecision": 1, "callerRecall": 1 }
+  ],
+  "finalRealDevelopment": [
+    { "corpus": "zod-v1", "index": { "files": 702, "symbols": 9160, "edges": 54686 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 0.75 },
+    { "corpus": "click-v1", "index": { "files": 160, "symbols": 1983, "edges": 7357 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 },
+    { "corpus": "pyright-v1", "index": { "files": 7653, "symbols": 25121, "edges": 68213 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 }
+  ],
+  "incrementalEqualsFull": true,
+  "localTestsPassed": 242
+}

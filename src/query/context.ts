@@ -1,4 +1,4 @@
-import type { OsnovaIndex } from "../types.js";
+import type { CardLanguage, FileCard, OsnovaIndex, OsnovaSymbol } from "../types.js";
 
 const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "of", "in", "to", "for", "and", "or", "how",
@@ -7,8 +7,8 @@ const STOPWORDS = new Set([
 ]);
 
 export function tokenize(text: string): string[] {
-  const camelSplit = text.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-  const raw = camelSplit.toLowerCase().split(/[^a-z0-9_]+/);
+  const camelSplit = text.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  const raw = camelSplit.toLowerCase().split(/[^a-z0-9]+/);
   const out: string[] = [];
   for (const token of raw) {
     if (token.length < 2 || token.length > 64) continue;
@@ -18,77 +18,147 @@ export function tokenize(text: string): string[] {
   return out;
 }
 
-export interface QueryContext {
-  readonly index: OsnovaIndex;
-  readonly termCounts: Map<string, Map<string, number>>;
-  readonly docLen: Map<string, number>;
-  readonly df: Map<string, number>;
-  readonly fileCount: number;
-  readonly symbolTokens: Map<string, string[]>;
+export interface SearchDocument {
+  readonly file: string;
+  readonly symbol: OsnovaSymbol | null;
+  readonly name: ReadonlySet<string>;
+  readonly signature: ReadonlySet<string>;
+  readonly documentation: ReadonlySet<string>;
+  readonly path: ReadonlySet<string>;
+  readonly documentationRange: { start: number; end: number } | null;
+  readonly ranges: Array<{ start: number; end: number }>;
+  readonly body: Map<string, number>;
+  length: number;
 }
 
+export interface QueryContext {
+  readonly documents: readonly SearchDocument[];
+  readonly lines: ReadonlyMap<string, readonly string[]>;
+  readonly df: ReadonlyMap<string, number>;
+  readonly averageLength: number;
+}
+
+function documentationRange(lines: readonly string[], symbol: OsnovaSymbol, language: CardLanguage): { start: number; end: number } | null {
+  let start = symbol.span.startLine;
+  for (let line = start - 1; line >= Math.max(1, symbol.span.startLine - 24); line -= 1) {
+    if (!/^\s*(\/\/|\/\*|\*|#)/.test(lines[line - 1] ?? "")) break;
+    start = line;
+  }
+  let end = symbol.span.startLine - 1;
+  let headerEnd = symbol.span.startLine;
+  if (language === "python") {
+    while (headerEnd < Math.min(symbol.span.endLine, symbol.span.startLine + 24) &&
+      !/:\s*(?:#.*)?$/.test(lines[headerEnd - 1] ?? "")) headerEnd += 1;
+  }
+  const firstBody = language === "python" ? lines[headerEnd]?.trim() ?? "" : "";
+  const quote = firstBody.startsWith('"""') ? '"""' : firstBody.startsWith("'''") ? "'''" : null;
+  if (quote !== null) {
+    end = headerEnd + 1;
+    if (!firstBody.slice(3).includes(quote)) {
+      while (end < Math.min(symbol.span.endLine, headerEnd + 24)) {
+        end += 1;
+        if ((lines[end - 1] ?? "").includes(quote)) break;
+      }
+    }
+  }
+  return end >= start ? { start, end } : null;
+}
+
+interface FileDocuments {
+  readonly documents: readonly SearchDocument[];
+  readonly lines: readonly string[];
+  readonly documentTerms: readonly ReadonlySet<string>[];
+  readonly length: number;
+}
+
+const fileCache = new Map<string, FileDocuments>();
 const contextCache = new WeakMap<OsnovaIndex, QueryContext>();
+
+const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}`;
+
+function buildFileDocuments(file: string, card: FileCard): FileDocuments {
+  const lines = card.text.length > 0 ? card.text.split("\n") : [];
+  const pathTokens = new Set(tokenize(file));
+  const create = (symbol: OsnovaSymbol | null): SearchDocument => {
+    const docRange = symbol === null ? null : documentationRange(lines, symbol, card.language);
+    return {
+      file, symbol, path: pathTokens,
+      name: new Set(tokenize(symbol?.qualifiedName.split("#").slice(1).join("#") ?? "")),
+      signature: new Set(tokenize(symbol?.signature ?? "")),
+      documentation: new Set(tokenize(docRange === null ? "" : lines.slice(docRange.start - 1, docRange.end).join("\n"))),
+      documentationRange: docRange, ranges: [], body: new Map(), length: 0,
+    };
+  };
+  const module = create(null);
+  const definitions = [...card.symbols].sort((a, b) => a.span.startLine - b.span.startLine ||
+    a.span.startCol - b.span.startCol || b.span.endLine - a.span.endLine || b.span.endCol - a.span.endCol).map(create);
+  let active: SearchDocument[] = [];
+  let cursor = 0;
+  for (let line = 1; line <= lines.length; line += 1) {
+    while (cursor < definitions.length) {
+      const doc = definitions[cursor];
+      if (doc?.symbol === undefined || doc.symbol === null || doc.symbol.span.startLine > line) break;
+      active.push(doc);
+      cursor += 1;
+    }
+    active = active.filter((doc) => (doc.symbol?.span.endLine ?? 0) >= line);
+    const owner = active[active.length - 1] ?? module;
+    const last = owner.ranges[owner.ranges.length - 1];
+    if (last?.end === line - 1) last.end = line;
+    else owner.ranges.push({ start: line, end: line });
+    const tokens = tokenize(lines[line - 1] ?? "");
+    owner.length += tokens.length;
+    for (const token of tokens) owner.body.set(token, (owner.body.get(token) ?? 0) + 1);
+  }
+  const documents = [module, ...definitions];
+  const documentTerms: Set<string>[] = [];
+  let length = 0;
+  for (const document of documents) {
+    length += document.length;
+    documentTerms.push(new Set([...document.name, ...document.signature, ...document.documentation, ...document.path, ...document.body.keys()]));
+  }
+  return { documents, lines, documentTerms, length };
+}
 
 export function queryContext(index: OsnovaIndex): QueryContext {
   const cached = contextCache.get(index);
   if (cached !== undefined) return cached;
-  const termCounts = new Map<string, Map<string, number>>();
-  const docLen = new Map<string, number>();
+  const documents: SearchDocument[] = [];
+  const fileLines = new Map<string, readonly string[]>();
   const df = new Map<string, number>();
-  const symbolTokens = new Map<string, string[]>();
-  for (const [path, card] of index.files) {
-    const counts = new Map<string, number>();
-    const tokens = [
-      ...tokenize(path),
-      ...tokenize(card.text),
-    ];
-    for (const symbol of card.symbols) {
-      tokens.push(...tokenize(symbol.name));
-      symbolTokens.set(symbol.qualifiedName, tokenize(symbol.name));
+  let totalLength = 0;
+  const live = new Set<string>();
+  for (const [file, card] of index.files) {
+    const key = cacheKey(card);
+    live.add(key);
+    let entry = fileCache.get(key);
+    if (entry === undefined) {
+      entry = buildFileDocuments(file, card);
+      fileCache.set(key, entry);
     }
-    for (const token of tokens) {
-      counts.set(token, (counts.get(token) ?? 0) + 1);
-    }
-    termCounts.set(path, counts);
-    docLen.set(path, Math.max(1, Math.sqrt(tokens.length)));
-    for (const token of counts.keys()) {
-      df.set(token, (df.get(token) ?? 0) + 1);
+    documents.push(...entry.documents);
+    fileLines.set(file, entry.lines);
+    totalLength += entry.length;
+    for (const terms of entry.documentTerms) {
+      for (const term of terms) df.set(term, (df.get(term) ?? 0) + 1);
     }
   }
-  const ctx: QueryContext = {
-    index,
-    termCounts,
-    docLen,
-    df,
-    fileCount: index.files.size,
-    symbolTokens,
-  };
+  for (const key of fileCache.keys()) {
+    if (!live.has(key) && fileCache.size > live.size * 2) fileCache.delete(key);
+  }
+  const ctx: QueryContext = { documents, lines: fileLines, df, averageLength: Math.max(1, totalLength / Math.max(1, documents.length)) };
   contextCache.set(index, ctx);
   return ctx;
 }
 
-export function idf(ctx: QueryContext, term: string): number {
-  const n = ctx.df.get(term);
-  if (n === undefined || ctx.fileCount === 0) return 0;
-  return Math.log(1 + ctx.fileCount / n);
+export function fileDocumentsCached(index: OsnovaIndex, file: string): boolean {
+  const card = index.files.get(file);
+  return card !== undefined && fileCache.has(cacheKey(card));
 }
 
-export function innermostSymbolAt(
-  index: OsnovaIndex,
-  file: string,
-  line: number,
-): string | null {
-  const card = index.files.get(file);
-  if (card === undefined) return null;
-  let best: { q: string; size: number } | null = null;
-  for (const symbol of card.symbols) {
-    if (line < symbol.span.startLine || line > symbol.span.endLine) continue;
-    const size = symbol.span.endLine - symbol.span.startLine;
-    if (best === null || size < best.size) {
-      best = { q: symbol.qualifiedName, size };
-    }
-  }
-  return best !== null ? best.q : null;
+export function idf(ctx: QueryContext, term: string): number {
+  const frequency = ctx.df.get(term);
+  return frequency === undefined ? 0 : Math.log(1 + (ctx.documents.length - frequency + 0.5) / (frequency + 0.5));
 }
 
 export function matchInPath(paths: readonly string[], filter: string): boolean {

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { promises as fs } from "node:fs";
 import { getParser } from "../grammar/loader.js";
 import { languageForPath } from "../grammar/languages.js";
@@ -6,21 +5,26 @@ import { adapterFor } from "../extract/adapters.js";
 import { localJoin } from "../extract/util.js";
 import type { RawDefinition, RawEdge } from "../extract/adapter.js";
 import type {
-  BuildOptions,
   CardLanguage,
   FileCard,
   OsnovaIndex,
   OsnovaSymbol,
   ProgressEvent,
+  IndexDiagnostic,
+  ReExport,
 } from "../types.js";
 import { OsnovaIndexImpl, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
-import { resolveCacheDir } from "../cache/cache.js";
-import { saveArtifact } from "./serialize.js";
+import { resolveCacheDir, workspaceLockPath } from "../cache/cache.js";
+import { withCacheLock } from "../cache/lock.js";
+import { saveArtifact, serializeArtifact } from "./serialize.js";
+import { saveVerification } from "./verification.js";
 import { resolveEdges } from "./resolve.js";
-import { scanFiles, sha256Hex } from "./scan.js";
-
-const BINARY_SNIFF_BYTES = 8192;
+import { scanFiles, sha256Hex, sourceText } from "./scan.js";
+import { IndexingError } from "./diagnostics.js";
+import { bindIndexCache, canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
+import type { WorkspaceOptions } from "./workspace.js";
+import { inspectFreshness, isStale } from "./incremental.js";
 
 function languageOf(relPath: string): CardLanguage {
   return languageForPath(relPath) ?? "fallback";
@@ -30,12 +34,15 @@ export async function extractCard(
   absRoot: string,
   relPath: string,
 ): Promise<{ card: FileCard; rawEdges: RawEdgeItem[] }> {
-  const abs = path.join(absRoot, relPath);
-  const buffer = await fs.readFile(abs);
+  const abs = await workspaceFilePath(absRoot, relPath);
+  const buffer = await fs.readFile(abs).catch((error: unknown) => {
+    throw new IndexingError({ phase: "read", path: relPath, code: "file-unreadable" }, error);
+  });
   const hash = sha256Hex(buffer);
   const language = languageOf(relPath);
-  const binary = buffer.subarray(0, Math.min(buffer.length, BINARY_SNIFF_BYTES)).includes(0);
-  const text = binary ? "" : buffer.toString("utf8");
+  const decoded = sourceText(buffer);
+  const binary = decoded === null;
+  const text = decoded ?? "";
   const lineCount = text.length === 0 ? 0 : text.split("\n").length;
 
   if (binary || language === "fallback") {
@@ -47,32 +54,47 @@ export async function extractCard(
       lineCount,
       text,
       symbols: [],
+      diagnostics: [],
+      reExports: [],
     };
     return { card, rawEdges: [] };
   }
 
   let definitions: RawDefinition[] = [];
   let rawEdges: RawEdgeItem[] = [];
+  let reExports: readonly ReExport[] = [];
+  const diagnostics: IndexDiagnostic[] = [];
+  const parser = await getParser(language).catch((error: unknown) => {
+    throw new IndexingError({ phase: "parse", path: relPath, code: "grammar-unavailable" }, error);
+  });
   try {
-    const parser = await getParser(language);
     const tree = parser.parse(text);
     if (tree !== null) {
       try {
+        if (tree.rootNode.hasError) {
+          diagnostics.push({ phase: "parse", path: relPath, code: "syntax-errors" });
+        }
         const output = adapterFor(language).extract(tree, text);
         definitions = [...output.definitions];
+        reExports = output.reExports ?? [];
         rawEdges = output.edges.map((edge: RawEdge) => ({
           kind: edge.kind,
           toName: edge.toName,
           line: edge.line,
           enclosing: edge.enclosing,
+          ...(edge.binding === undefined ? {} : { binding: edge.binding }),
         }));
       } finally {
         tree.delete();
       }
+    } else {
+      diagnostics.push({ phase: "parse", path: relPath, code: "empty-parse" });
     }
   } catch {
     definitions = [];
     rawEdges = [];
+    reExports = [];
+    diagnostics.push({ phase: "parse", path: relPath, code: "extraction-failed" });
   }
 
   definitions.sort((a, b) => a.span.startLine - b.span.startLine || a.span.endLine - b.span.endLine || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -86,6 +108,8 @@ export async function extractCard(
       span: def.span,
       signature: def.signature,
       lineCount: Math.max(1, def.span.endLine - def.span.startLine + 1),
+      ...(def.exportedNames === undefined ? {} : { exportedNames: def.exportedNames }),
+      ...(def.memberKind === undefined ? {} : { memberKind: def.memberKind }),
     };
   });
 
@@ -97,6 +121,8 @@ export async function extractCard(
     lineCount,
     text,
     symbols,
+    diagnostics,
+    reExports,
   };
   return { card, rawEdges };
 }
@@ -110,11 +136,28 @@ export function finalizeIndex(
   return new OsnovaIndexImpl(root, files, edges);
 }
 
-export async function buildIndex(root: string, options?: BuildOptions): Promise<OsnovaIndex> {
-  const absRoot = path.resolve(root);
-  const onProgress = options?.onProgress;
+export async function buildIndex(root: string, options?: WorkspaceOptions): Promise<OsnovaIndex> {
+  const absRoot = await canonicalWorkspaceRoot(root);
+  const cacheDir = resolveCacheDir(options?.cacheDir);
+  await fs.mkdir(cacheDir, { recursive: true });
+  const canonicalCache = await fs.realpath(cacheDir);
+  return withCacheLock(workspaceLockPath(canonicalCache, absRoot), async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const index = await buildIndexSnapshot(absRoot, options?.onProgress, canonicalCache);
+      const inspection = await inspectFreshness(index, absRoot);
+      if (isStale(inspection.report)) continue;
+      options?.onProgress?.({ phase: "save", done: 0, total: 0 });
+      await saveArtifact(index, canonicalCache, options);
+      await saveVerification(canonicalCache, absRoot, sha256Hex(serializeArtifact(index)), inspection.metadata);
+      return index;
+    }
+    throw new IndexingError({ phase: "scan", path: absRoot, code: "workspace-changing" });
+  }, options);
+}
+
+export async function buildIndexSnapshot(absRoot: string, onProgress?: WorkspaceOptions["onProgress"], cacheDir?: string): Promise<OsnovaIndex> {
   onProgress?.({ phase: "scan", done: 0, total: 0 } satisfies ProgressEvent);
-  const scan = await scanFiles(absRoot);
+  const scan = await scanFiles(absRoot, cacheDir);
   const files = new Map<string, FileCard>();
   const rawEdges = new Map<string, RawEdgeItem[]>();
   for (let i = 0; i < scan.paths.length; i += 1) {
@@ -126,9 +169,5 @@ export async function buildIndex(root: string, options?: BuildOptions): Promise<
     onProgress?.({ phase: "extract", done: i + 1, total: scan.paths.length } satisfies ProgressEvent);
   }
   onProgress?.({ phase: "resolve", done: 0, total: 0 } satisfies ProgressEvent);
-  const index = finalizeIndex(absRoot, files, rawEdges);
-  const cacheDir = resolveCacheDir(options?.cacheDir);
-  onProgress?.({ phase: "save", done: 0, total: 0 } satisfies ProgressEvent);
-  await saveArtifact(index, cacheDir);
-  return index;
+  return bindIndexCache(finalizeIndex(absRoot, files, rawEdges), cacheDir);
 }

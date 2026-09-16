@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { makeSpan, makeSignature } from "./adapter.js";
 import type { RawDefinition, RawEdge } from "./adapter.js";
-import type { EdgeKind, SourceSpan, SymbolKind } from "../types.js";
+import type { EdgeBinding, EdgeKind, MemberKind, SourceSpan, SymbolKind } from "../types.js";
 
 export type VisitResult = boolean | void;
 
@@ -60,18 +60,19 @@ export class Extractor {
     this.stack.pop();
   }
 
-  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node): void {
+  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node, memberKind?: MemberKind): void {
     const def: RawDefinition = {
       name,
       kind,
       span: spanOf(node),
       signature: signatureOf(signatureNode ?? node),
       parent: this.enclosing,
+      ...(memberKind === undefined ? {} : { memberKind }),
     };
     this.definitions.push(def);
   }
 
-  addEdge(kind: EdgeKind, toName: string, node: Node): void {
+  addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding): void {
     const name = toName.trim();
     if (name.length === 0 || name.length > 300) return;
     const edge: RawEdge = {
@@ -79,6 +80,7 @@ export class Extractor {
       toName: name,
       line: node.startPosition.row + 1,
       enclosing: this.enclosing,
+      ...(binding === undefined ? {} : { binding }),
     };
     this.edges.push(edge);
   }

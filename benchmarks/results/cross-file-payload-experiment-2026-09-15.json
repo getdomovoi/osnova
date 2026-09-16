@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "decision": "rejected",
+  "acceptanceThresholdPercent": 25,
+  "exactPriorQueryReplay": {
+    "responses": 3,
+    "beforeCodeUnits": 8173,
+    "candidateCodeUnits": 7249,
+    "savedCodeUnits": 924,
+    "savedPercent": 11.31,
+    "beforeTokensCl100k": 2073,
+    "candidateTokensCl100k": 1826,
+    "savedTokens": 247,
+    "beforeByResponse": { "ask": 2959, "findText": 3977, "callers": 1237 },
+    "candidateByResponse": { "ask": 3020, "findText": 2992, "callers": 1237 }
+  },
+  "reason": "Combined reduction missed the 25% offline gate and ask grew because completeness metadata exceeded excerpt savings. No provider run was performed.",
+  "retained": ["askDetailed structured completeness API"],
+  "reverted": ["4096-code-unit MCP ask formatter", "3072-code-unit MCP find-text formatter"],
+  "limitations": [
+    "One pinned repository/query sequence, not a general payload distribution.",
+    "Token counts use cl100k_base and are not provider billing.",
+    "Structured ask completeness remains additive; legacy ask/MCP shapes remain compatible."
+  ]
+}

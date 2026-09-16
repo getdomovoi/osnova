@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectBindings } from "./bindings.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -24,6 +25,7 @@ export const pythonAdapter: LanguageAdapter = {
   language: "python",
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
+    const bindings = collectBindings(tree.rootNode, true);
     let inClassDepth = 0;
 
     const addConstant = (node: Node, name: string): void => {
@@ -59,7 +61,7 @@ export const pythonAdapter: LanguageAdapter = {
           const name = nameField(node);
           const isMethod = inClassDepth > 0;
           if (name !== null && IDENTIFIER_RE.test(name)) {
-            out.addDef(name, isMethod ? "method" : "function", node);
+            out.addDef(name, isMethod ? "method" : "function", node, undefined, isMethod ? bindings.memberKind(node) : undefined);
             out.push(name);
             const pushDepth = inClassDepth;
             if (isMethod) inClassDepth = 0;
@@ -93,18 +95,19 @@ export const pythonAdapter: LanguageAdapter = {
         }
         case "call": {
           const target = callTarget(node);
-          if (target !== null) out.addEdge("calls", target, node);
+          if (target !== null) out.addEdge("calls", target, node, bindings.at(node.childForFieldName("function"), node));
           for (const child of childrenOf(node)) visit(child);
           return;
         }
         case "import_statement": {
           for (const child of childrenOf(node)) {
             if (child.type === "dotted_name" || child.type === "aliased_import") {
-              out.addEdge("imports", child.text, child);
+              out.addEdge("imports", child.type === "aliased_import" ? child.childForFieldName("name")?.text ?? child.text : child.text, child);
             }
           }
           return;
-        }        case "import_from_statement": {
+        }
+        case "import_from_statement": {
           const moduleNode = node.childForFieldName("module_name");
           if (moduleNode !== null) {
             out.addEdge("imports", moduleNode.text, moduleNode);
@@ -114,7 +117,7 @@ export const pythonAdapter: LanguageAdapter = {
             }
           }
           for (const child of childrenOf(node)) {
-            if (child === moduleNode || child.type === "relative_import") continue;
+            if (child.id === moduleNode?.id || child.type === "relative_import") continue;
             if (child.type === "wildcard_import") continue;
             if (child.type === "dotted_name" || child.type === "aliased_import") {
               const imported = child.text.split(" as ")[0]?.trim() ?? child.text;
@@ -133,6 +136,8 @@ export const pythonAdapter: LanguageAdapter = {
       }
     };
     for (const child of childrenOf(tree.rootNode)) visit(child);
-    return { definitions: out.definitions, edges: out.edges };
+    return { definitions: out.definitions.map((definition) => ({
+      ...definition, exportedNames: bindings.exportedNames(definition.name, definition.parent),
+    })), edges: out.edges, reExports: bindings.reExports };
   },
 };

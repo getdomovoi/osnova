@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "corpus": "receivers-v1",
+  "implementation": {
+    "revision": "ebfaf32c6f48118f36af2591a26203effe538355",
+    "engineFingerprint": "2351a80d620a241103847cf43e694e24d146079562c2dcab7413754ca5a65fb6",
+    "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547"
+  },
+  "development": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": null, "meanReciprocalRankAt5": null, "callerPrecision": 1, "callerRecall": 1, "searchPrecision": null, "searchRecall": null },
+  "evaluation": { "caseCount": 2, "errorCount": 0, "meanRecallAt5": null, "meanReciprocalRankAt5": null, "callerPrecision": 1, "callerRecall": 1, "searchPrecision": null, "searchRecall": null },
+  "evaluationReceipt": {
+    "candidateReportFingerprint": "8fac2c2463dd3f8ecd7e2dd466ea057d42bf16a7e77f28d5c7ead931f9bdae19",
+    "manifestFingerprint": "4f9af287d577bfaf60f37bdfc9a36fb75dde24ff09ce3f8a6266684909797f9b",
+    "engineFingerprint": "2351a80d620a241103847cf43e694e24d146079562c2dcab7413754ca5a65fb6",
+    "harnessFingerprint": "ed6a34becc2a4d2486c9460d6b4f3e53889addaad6c2a12c2d4813a5c1221547",
+    "snapshotFingerprint": "40dc7c52dabd47f47b68a5c2fec037eff9e9c0b77c2dee7977f66001b5ff6f46"
+  },
+  "evaluationCases": [
+    { "id": "static-through-barrel", "actual": ["factory_client.ts#build"], "expected": ["factory_client.ts#build"] },
+    { "id": "python-class-receiver", "actual": ["services.py#Service.launch"], "expected": ["services.py#Service.launch"] }
+  ],
+  "realDevelopmentRegressions": [
+    { "corpus": "zod-v1", "index": { "files": 702, "symbols": 9160, "edges": 54692 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 0.75 },
+    { "corpus": "click-v1", "index": { "files": 160, "symbols": 1983, "edges": 7357 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 },
+    { "corpus": "pyright-v1", "index": { "files": 7653, "symbols": 25121, "edges": 68252 }, "meanRecallAt5": 1, "meanReciprocalRankAt5": 1 }
+  ],
+  "incrementalEqualsFull": true,
+  "artifactFormat": 7,
+  "localTestsPassed": 285,
+  "limitations": [
+    "Two development and two evaluation cases, not a general caller-accuracy estimate or blind agent-success trial.",
+    "The candidate was committed before the reported evaluation and was not retuned afterward.",
+    "Receiver hints use syntax: constructor sites, explicit class references and lexical method receivers. They are not runtime type proofs.",
+    "Inheritance, annotations, arbitrary alias/value flow, dynamic dispatch and cross-object/cross-file mutation remain unsupported. Other language adapters retain existing heuristics.",
+    "No model calls, token-cost measurements or performance-speedup claim is represented here."
+  ]
+}
