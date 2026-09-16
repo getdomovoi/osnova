@@ -120,6 +120,30 @@ describe("format 9", () => {
     expect(loaded.edges).toEqual(built.edges);
   });
 
+  it("returns undefined for a pre-bump format 9 extraction identity and rebuilds bytes equal to a full build", async () => {
+    const { refreshWorkspace } = await import("../src/api.js");
+    const dir = await scratch(); const cacheDir = path.join(dir, "cache"); const fullCache = path.join(dir, "full");
+    const repo = path.join(dir, "repo");
+    await fs.cp(FIXTURE, repo, { recursive: true });
+    const index = await buildIndex(repo, { cacheDir });
+    const ws = workspaceDirFor(cacheDir, index.root);
+    const corePath = path.join(ws, "index.json");
+    const original = (await fs.readFile(corePath)).toString("utf8");
+    expect(original).toContain('"structural-9.1.scan-4');
+    const stale = Buffer.from(original.replace('"structural-9.1.scan-4', '"structural-9.scan-4'), "utf8");
+    expect(stale.toString("utf8")).not.toBe(original);
+    await fs.writeFile(corePath, stale);
+    await fs.writeFile(path.join(ws, "index.sha"), sha256Hex(stale));
+    await expect(loadIndex(repo, { cacheDir })).resolves.toBeUndefined();
+    await refreshWorkspace(repo, { cacheDir });
+    const full = await buildIndex(repo, { cacheDir: fullCache });
+    for (const name of ["index.json", "edges.json", "text.bin"]) {
+      const rebuilt = await fs.readFile(path.join(ws, name));
+      const expected = await fs.readFile(path.join(workspaceDirFor(fullCache, full.root), name));
+      expect(rebuilt.equals(expected), name).toBe(true);
+    }
+  });
+
   it("returns undefined for a format 8 core", async () => {
     const dir = await scratch(); const cacheDir = path.join(dir, "cache");
     const index = await buildIndex(FIXTURE, { cacheDir });

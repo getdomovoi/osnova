@@ -77,6 +77,29 @@ describe("edge store", () => {
     }
   });
 
+  it("serializes content-identical evidence and bindings to the same bytes whatever the property insertion order", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-order-")); dirs.push(dir);
+    const repo = path.join(dir, "repo");
+    await fs.mkdir(repo);
+    await fs.writeFile(path.join(repo, "a.ts"), "export class A { run() { return 1; } }\nexport function alpha() { return 1; }\nalpha();\n");
+    await fs.writeFile(path.join(repo, "b.ts"), "import { A, alpha } from \"./a\";\nexport function beta() { const x = new A(); return x.run() + alpha(); }\n");
+    const index = await buildIndex(repo, { cacheDir: path.join(dir, "cache") });
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const reverse = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(reverse)
+        : value !== null && typeof value === "object"
+          ? Object.fromEntries(Object.entries(value as Record<string, unknown>).reverse().map(([key, item]) => [key, reverse(item)]))
+          : value;
+    const reversed = index.edges.map((edge) => reverse(edge) as OsnovaEdge);
+    expect(reversed.some((edge) => edge.binding !== undefined && Object.keys(edge.binding).length > 1)).toBe(true);
+    expect(reversed.some((edge) => edge.evidence !== undefined && Object.keys(edge.evidence).length > 1)).toBe(true);
+    const first = serializeEdges(index.edges, paths);
+    const second = serializeEdges(reversed, paths);
+    expect(second.bytes.equals(first.bytes)).toBe(true);
+    expect(second.hash).toBe(first.hash);
+  });
+
   it("refuses to serialize an unknown edge kind", async () => {
     const index = await buildIndex(FIXTURE);
     const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));

@@ -149,7 +149,7 @@ function dedupeEdges(sorted: OsnovaEdge[]): OsnovaEdge[] {
       prev.line === edge.line &&
       prev.toSymbol === edge.toSymbol &&
       prev.toFile === edge.toFile &&
-      JSON.stringify(prev.binding ?? null) === JSON.stringify(edge.binding ?? null)
+      canonical(prev.binding ?? null) === canonical(edge.binding ?? null)
     ) {
       continue;
     }
