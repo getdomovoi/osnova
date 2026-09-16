@@ -25,7 +25,7 @@ export function workspaceIdentity(root: string): string {
   const suffix: string[] = [];
   for (;;) {
     try {
-      return path.join(realpathSync(ancestor), ...suffix);
+      return path.join(realpathSync.native(ancestor), ...suffix);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const parent = path.dirname(ancestor);
