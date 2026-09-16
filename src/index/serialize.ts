@@ -295,6 +295,14 @@ function textIdentityFromParsed(parsed: unknown): { hash: string; bytes: number 
   return { hash: value.textHash, bytes: value.textBytes };
 }
 
+function legacyFormatVersion(raw: Buffer): number | undefined {
+  const head = raw.subarray(0, 512).toString("utf8");
+  const match = /"formatVersion"\s*:\s*(\d{1,4})/.exec(head);
+  if (match === null) return undefined;
+  const version = Number(match[1]);
+  return Number.isInteger(version) && version > 0 && version < indexFormatVersion ? version : undefined;
+}
+
 function nonnegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -395,8 +403,10 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
         ? gunzipSync(data, { maxOutputLength: MAX_ARTIFACT_BYTES }) : data;
       const shaPath = path.join(dir, "index.sha");
       const shaText = await fs.readFile(shaPath, "utf8").catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SectionError("osnova: cache core checksum missing");
-        throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        const legacy = legacyFormatVersion(raw);
+        if (legacy !== undefined) throw new ArtifactVersionError(legacy);
+        throw new SectionError("osnova: cache core checksum missing");
       });
       const sha = shaText.trim();
       if (!/^[a-f0-9]{64}$/.test(sha)) throw new SectionError("osnova: cache core checksum corrupt");

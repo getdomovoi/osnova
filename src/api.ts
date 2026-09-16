@@ -93,7 +93,8 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
     const clean = verified !== undefined && scan.paths.length === verified.size &&
       scan.paths.every((p) => sameFileMetadata(verified.get(p), scan.metadata.get(p)));
     let index: OsnovaIndex | undefined;
-    if (options.reuseMemory === true && cached !== undefined && cached.artifact === published) {
+    if (options.reuseMemory === true && cached !== undefined && cached.artifact === published &&
+      generation !== undefined && /^[a-f0-9]{64}$/.test(generation) && indexGeneration(cached.index) === generation) {
       index = cached.index;
     } else if (clean || generation !== undefined) {
       try {

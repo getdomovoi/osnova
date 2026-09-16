@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
-import { refreshWorkspace, indexGeneration } from "../src/api.js";
+import { refreshWorkspace, indexGeneration, loadIndex } from "../src/api.js";
+import { workspaceDirFor } from "../src/cache/cache.js";
 import { scanFiles } from "../src/index/scan.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
@@ -23,6 +24,35 @@ describe("probe-first refresh", () => {
     expect(second).toBe(first);
     expect(opened.filter((p) => /index\.json|edges\.json|text\.bin/.test(p))).toEqual([]);
     expect(indexGeneration(second)).toBe(indexGeneration(first));
+  });
+
+  it("refuses memory reuse when the probed digest is not the cached generation", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-probe-sha-")); dirs.push(dir);
+    const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
+    await fs.cp(FIXTURE, repo, { recursive: true });
+    const built = await buildIndex(repo, { cacheDir });
+    const shaPath = path.join(workspaceDirFor(cacheDir, built.root), "index.sha");
+    const first = await refreshWorkspace(repo, { cacheDir, reuseMemory: true });
+    await fs.writeFile(shaPath, `${"0".repeat(64)}\n`);
+    const second = await refreshWorkspace(repo, { cacheDir, reuseMemory: true });
+    expect(second).not.toBe(first);
+    expect((await fs.readFile(shaPath, "utf8")).trim()).toBe(indexGeneration(built));
+    await expect(loadIndex(repo, { cacheDir })).resolves.toBeDefined();
+  });
+
+  it("returns undefined for a checksum-less format 8 cache and rejects a checksum-less format 9 cache", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-probe-legacy-")); dirs.push(dir);
+    const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
+    await fs.cp(FIXTURE, repo, { recursive: true });
+    const built = await buildIndex(repo, { cacheDir });
+    const ws = workspaceDirFor(cacheDir, built.root);
+    const core = JSON.parse((await fs.readFile(path.join(ws, "index.json"))).toString("utf8")) as Record<string, unknown>;
+    await fs.rm(path.join(ws, "index.sha"));
+    await expect(loadIndex(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
+    await fs.writeFile(path.join(ws, "index.json"), JSON.stringify({ ...core, formatVersion: 8 }));
+    await expect(loadIndex(repo, { cacheDir })).resolves.toBeUndefined();
+    await fs.writeFile(path.join(ws, "index.json"), "{not json");
+    await expect(loadIndex(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
   });
 
   it("scans before loading the core on a cold refresh", async () => {
