@@ -5,65 +5,127 @@
     "indexedFiles": 7653,
     "editedFile": "packages/pyright-internal/src/common/pathUtils.ts"
   },
-  "baseline": {
-    "revision": "af40f15",
-    "noChangeMs": [
-      829.9925840000005,
-      828.3782090000004,
-      828.5093750000015,
-      833.651208000003,
-      828.1337910000002,
-      833.0981670000037,
-      822.2923340000052
-    ],
-    "editedMs": [
-      2512.5232080000005,
-      2407.1270839999997,
-      2401.7104160000017,
-      2516.704958000002,
-      2405.3380419999958,
-      2411.475666999999,
-      2472.1785409999866
-    ],
-    "noChangeMedianMs": 828.5093750000015,
-    "editedMedianMs": 1885.2169159999994,
-    "noChangeP95Ms": 833.651208000003,
-    "editedP95Ms": 1925.4734579999995,
-    "firstBuildMs": 3920.541583,
-    "workerPeakRssBytes": 1398030336
+  "harnessFreshness": {
+    "description": "The pnpm benchmark harness (scripts/bench/runner.ts) times two things that are not the workspace refresh path this branch changed: noChangeRefreshMs times the public freshness() call (scripts/bench/runner.ts:236), which hashes every tracked file by design regardless of artifact format, and editedRefreshMs times applyChanges without publishing the result. Neither exercises probe-first refresh, lazy edge loading, or copy-on-publish. These numbers are retained for continuity with the harness's other records but are not this record's evidence for those changes; see the refreshWorkspace block below for direct measurements.",
+    "baseline": {
+      "revision": "af40f15",
+      "noChangeMs": [
+        829.9925840000005,
+        828.3782090000004,
+        828.5093750000015,
+        833.651208000003,
+        828.1337910000002,
+        833.0981670000037,
+        822.2923340000052
+      ],
+      "editedMs": [
+        2512.5232080000005,
+        2407.1270839999997,
+        2401.7104160000017,
+        2516.704958000002,
+        2405.3380419999958,
+        2411.475666999999,
+        2472.1785409999866
+      ],
+      "noChangeMedianMs": 828.5093750000015,
+      "editedMedianMs": 1885.2169159999994,
+      "noChangeP95Ms": 833.651208000003,
+      "editedP95Ms": 1925.4734579999995,
+      "firstBuildMs": 3920.541583,
+      "workerPeakRssBytes": 1398030336
+    },
+    "optimized": {
+      "revision": "2b06e03",
+      "noChangeMs": [
+        823.2275410000002,
+        819.7818749999988,
+        821.4013750000013,
+        826.0024999999987,
+        823.502916999998,
+        825.3822500000024,
+        820.2669580000002
+      ],
+      "editedMs": [
+        1987.1998750000002,
+        1962.731291,
+        1962.5268749999996,
+        1956.9362089999995,
+        1959.736499999999,
+        1961.6344160000008,
+        1965.0339170000007
+      ],
+      "noChangeMedianMs": 823.2275410000002,
+      "editedMedianMs": 1962.5268749999996,
+      "noChangeP95Ms": 826.0024999999987,
+      "editedP95Ms": 1987.1998750000002,
+      "firstBuildMs": 4077.489708,
+      "workerPeakRssBytes": 1226293248
+    },
+    "improvement": {
+      "noChangeMedianPercent": 0.64,
+      "editedMedianPercent": -4.1,
+      "noChangeP95Percent": 0.92,
+      "editedP95Percent": -3.21
+    }
   },
-  "optimized": {
-    "revision": "2b06e03",
-    "noChangeMs": [
-      823.2275410000002,
-      819.7818749999988,
-      821.4013750000013,
-      826.0024999999987,
-      823.502916999998,
-      825.3822500000024,
-      820.2669580000002
-    ],
-    "editedMs": [
-      1987.1998750000002,
-      1962.731291,
-      1962.5268749999996,
-      1956.9362089999995,
-      1959.736499999999,
-      1961.6344160000008,
-      1965.0339170000007
-    ],
-    "noChangeMedianMs": 823.2275410000002,
-    "editedMedianMs": 1962.5268749999996,
-    "noChangeP95Ms": 826.0024999999987,
-    "editedP95Ms": 1987.1998750000002,
-    "firstBuildMs": 4077.489708,
-    "workerPeakRssBytes": 1226293248
-  },
-  "improvement": {
-    "noChangeMedianPercent": 0.64,
-    "editedMedianPercent": -4.1,
-    "noChangeP95Percent": 0.92,
-    "editedP95Percent": -3.21
+  "refreshWorkspace": {
+    "method": "For each tree, sequentially and never concurrently: git ls-files -z on the pinned pyright-src checkout, tracked files copied to a disposable workspace; one buildIndex into a disposable cache. Then, for each of seven clean samples, a fresh Node process imports that tree's dist/index.js and calls refreshWorkspace(workspace, { cacheDir }) against the untouched workspace (probe-first, cold; no cross-process memory reuse), timing only the refreshWorkspace call. Then, for each of seven edited samples, a function is appended to the edit file in the workspace and a fresh process's refreshWorkspace call detects, applies and publishes that change (copy-on-publish exercised on the optimized tree), again timing only the refreshWorkspace call. Nearest-rank p95. Script: refresh-workspace-bench.mjs (scratchpad-only, not committed).",
+    "before": {
+      "revision": "af40f15",
+      "cleanMs": [
+        370.13125,
+        377.258333,
+        357.565292,
+        355.64270799999997,
+        350.831708,
+        358.1035,
+        358.440375
+      ],
+      "editedMs": [
+        972.7652919999999,
+        946.095917,
+        966.4729169999999,
+        954.638917,
+        957.4199590000001,
+        959.538708,
+        952.791667
+      ],
+      "cleanMedianMs": 358.1035,
+      "editedMedianMs": 957.4199590000001,
+      "cleanP95Ms": 377.258333,
+      "editedP95Ms": 972.7652919999999
+    },
+    "after": {
+      "revision": "b6e2178",
+      "cleanMs": [
+        179.13750000000005,
+        176.83579200000003,
+        176.82675,
+        178.60225,
+        177.64687500000002,
+        179.50508399999998,
+        184.934375
+      ],
+      "editedMs": [
+        780.916167,
+        782.9069579999999,
+        755.990709,
+        771.564917,
+        797.896375,
+        793.780792,
+        779.656583
+      ],
+      "cleanMedianMs": 178.60225,
+      "editedMedianMs": 780.916167,
+      "cleanP95Ms": 184.934375,
+      "editedP95Ms": 797.896375
+    },
+    "improvement": {
+      "cleanMedianPercent": 50.13,
+      "cleanP95Percent": 50.98,
+      "editedMedianPercent": 18.44,
+      "editedP95Percent": 17.98
+    }
   },
   "sections": {
     "before": {
@@ -111,7 +173,7 @@
       }
     }
   },
-  "method": "Same host, pinned source and dependencies; disposable scratch caches; one initial build; seven warm no-change refreshes and seven one-file edited refreshes with untimed restoration/equality verification; nearest-rank p95; filesystem caches not flushed. Baseline built from the commit before this task set (af40f15); optimized built from the tip of this branch (2b06e03). Both runs used the same disposable checkout and the same manifest snapshot fingerprint, invoked through the harness's own documented --worker mode directly (same arguments the non-worker CLI wrapper would pass) because the baseline tree's full seven-sample run exceeds the wrapper's 60-second child-process timeout (scripts/bench/cli.ts). No harness file was modified. Section sizes and cold-query timings were measured separately from the harness with small scripts against each tree's dist/index.js, since the harness reports only serializedArtifactBytes/storedArtifactBytes for the structural core and no per-file query timings; those scripts are not part of the committed record.",
+  "method": "Same host, pinned source and dependencies; disposable scratch caches; one initial build; seven warm no-change refreshes and seven one-file edited refreshes with untimed restoration/equality verification; nearest-rank p95; filesystem caches not flushed. Baseline built from the commit before this task set (af40f15); optimized built from the tip of this branch (2b06e03, and separately b6e2178 for the refreshWorkspace block, which changes only this record and README, not engine code). Both harnessFreshness runs used the same disposable checkout and the same manifest snapshot fingerprint, invoked through the harness's own documented --worker mode directly (same arguments the non-worker CLI wrapper would pass) because the baseline tree's full seven-sample run exceeds the wrapper's 60-second child-process timeout (scripts/bench/cli.ts). No harness file was modified. Section sizes, cold-query timings and refreshWorkspace timings were measured separately from the harness with small scripts against each tree's dist/index.js, since the harness reports only serializedArtifactBytes/storedArtifactBytes for the structural core, no per-file query timings, and no direct refreshWorkspace timing; those scripts are not part of the committed record.",
   "correctness": {
     "incrementalEqualsFull": true,
     "lazyEdgesVerified": true,
@@ -119,11 +181,12 @@
     "probeFirstVerified": true
   },
   "limitations": [
-    "editedRefreshMs regressed on this workload relative to the pre-task-set baseline (median -4.10%, p95 -3.21%) while noChangeRefreshMs improved marginally (median +0.64%, p95 +0.92%); format 9's lazy edges, string tables and copy-on-publish target artifact size, memory and cold-query latency, not edited-refresh wall time, and the extra index.sha and edges.json writes on a dirty refresh add file-system overhead the format-8 single-file core did not have.",
+    "harnessFreshness's editedMs (applyChanges without publish) regressed relative to the pre-task-set baseline (median -4.10%, p95 -3.21%) while its noChangeMs (freshness(), which hashes every tracked file) improved marginally (median +0.64%, p95 +0.92%); neither harness metric exercises probe-first refresh, lazy edges, or copy-on-publish, so this does not reflect actual refresh latency for either path. The refreshWorkspace block measures those paths directly and shows a 50.13% median (50.98% p95) improvement on a clean refresh and an 18.44% median (17.98% p95) improvement on a published edited refresh.",
     "Cold ask() latency is roughly unchanged between trees (before median 743.20ms, after median 753.14ms); the per-file document cache that helps warm asks does not help a fully cold first query, and format 9's smaller core reduces parse cost but not the extraction/indexing cost that dominates a cold ask.",
     "The benchmark harness (scripts/bench/runner.ts) has no scopedAsk case kind, so scopedAsk timings and hit counts come only from the separate cold-query script, not from the recorded harness cases; the round-robin scope merge from the prior commit was reverted pending a scoped-ask acceptance gate (see benchmarks/results/scope-ranking-2026-09-15.json), so these scopedAsk numbers reflect round-robin merge behavior, not the reverted comparable-score candidate.",
     "The benchmark is one repository and one machine with warm filesystem caches, not a universal latency claim.",
     "incrementalEqualsFull, lazyEdgesVerified and copyOnPublishVerified are established by the repository's own test suite (test/incremental.test.ts's determinism and randomized incremental-equals-full property test; test/copy-on-publish.test.ts's shared-file-descriptor publish test; test/artifact-format9.test.ts's lazy edges.json load test), not re-verified independently by this record; probeFirstVerified is established by test/probe-first.test.ts.",
     "workerPeakRssBytes and firstBuildMs are reported by the harness but not the primary subject of this record; baseline (af40f15) firstBuildMs 3920.541583 and workerPeakRssBytes 1398030336, optimized (2b06e03) firstBuildMs 4077.489708 and workerPeakRssBytes 1226293248."
-  ]
+  ],
+  "followUp": "add refreshWorkspace clean and edited measurements to the benchmark harness"
 }
