@@ -1,0 +1,155 @@
+# Osnova reference
+
+Detailed behavior of the API, retrieval, caller evidence, index health, cache, optional LSP evidence and benchmarks. The [README](../README.md) is the short tour.
+
+## API
+
+```ts
+import { buildIndex, ask, renderMapCard } from "@getdomovoi/osnova";
+
+const index = await buildIndex("/path/to/repo");
+const hits = ask(index, "where do we validate tokens", { limit: 5 });
+const card = await renderMapCard(index); // <= 16,384 code units
+```
+
+Exports include lifecycle (`buildIndex`, `loadIndex`, `refreshWorkspace`, `indexGeneration`, `evidenceFingerprint`, `applyChanges`, `freshness`, `indexHealth`), retrieval (`ask`, `findText`, `findTextDetailed`, `skeleton`, `callers`, `callersDetailed`, `map`, `renderMapCard`, `scopedAsk`, `impact`, `taskContext`), workspace scanning (`scanFiles`), diagnostics/setup preview, optional LSP enrichment, index types, and the MCP stdio main (`runMcpStdio`).
+
+### Definition retrieval
+
+`ask` ranks individual definitions, not one first-matching line per file. Exact identifier and qualified-member matches take priority over lexical matches; separate name, signature, adjacent-documentation, path and body signals determine ordering within those tiers. Body term frequency is saturated so repeated references cannot win merely by volume. Scores are ranking values, not confidence probabilities.
+
+`askDetailed` retrieves every ranked candidate by default and reports `totalCandidates`, `omittedHits`, `truncated`, `filesSearched`, and scope. Supplying a limit records the omitted candidate count. Legacy `ask` and MCP keep the eight-hit default and existing presentation after a bounded-MCP experiment missed its retention gate; the [experiment record](../benchmarks/results/cross-file-payload-experiment-2026-09-15.json) preserves that decision.
+
+Camel-case, acronym and snake-case words are searchable, while exact matching preserves whole identifier boundaries, including short names. Multiple relevant definitions from one file may appear; duplicate logical symbol IDs do not. Module-level text and prose files remain searchable as fallback documents. Body text is assigned to its innermost indexed definition rather than repeated into every enclosing class.
+
+Excerpts retain exact source line numbers and may include an associated leading comment when it supplies the relevant evidence. Documentation recognition is bounded to adjacent comment-like lines and leading Python docstrings, including common multiline signatures; it is not a complete documentation parser. Query documents are cached per index instance and rebuilt for a new incremental index. `filesSearched` counts eligible indexed files, not only files with hits. API result limits must be nonnegative safe integers.
+
+An experimental graph adjustment was measured and rejected after improving authored tie cases but reducing a pinned real-repository development ranking score. `ask` remains fielded lexical definition retrieval. The [experiment record](../benchmarks/results/graph-ranking-experiment-2026-09-14.json) preserves the positive and negative evidence; no graph-ranking option is shipped.
+
+`scopedAsk` detects package scopes from indexed manifests (`package.json`, `Cargo.toml`, `pyproject.toml`/`setup.cfg`/`setup.py`, `go.mod`, `pom.xml`, `*.csproj`) and from root `package.json` `workspaces` globs and root `pnpm-workspace.yaml` `packages:` entries, expanding `dir/*` and exact `dir/name` forms against directories that contain at least one indexed file. Every scope is scored once against the same repository-wide IDF as `ask`. Scopes are merged round-robin in path order, taking one hit from each scope with remaining candidates per round until the limit is reached. `alsoMatched` is reserved for a future ranked merge and is currently always empty. Package boundaries remain indexed-manifest and workspace-glob boundaries, not verified ownership.
+
+### Search completeness
+
+`findTextDetailed(index, pattern)` returns every non-overlapping, line-based match in the indexed text by default. Its result includes `groups`, `totalGroups`, `totalMatches`, `omittedGroups`, `omittedMatches`, `truncated`, and `scope: "indexed-text"`. Completeness refers to indexed text, not ignored, unreadable or otherwise unindexed workspace content, and not fresh disk state unless the caller refreshed the index.
+
+Optional `limit` and `matchesPerGroup` bound the detailed result; both must be nonnegative safe integers. Counts include matches excluded by either limit. Zero limits can hide existing matches and are reported as truncation, not absence.
+
+The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_thread` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These count limits are separate from the presentation budget below.
+
+### Presentation budget
+
+CLI output messages and MCP text payloads are capped at 16,384 UTF-16 code units (`maximumTextResponseCodeUnits`), excluding transport framing and the CLI's terminating newline. Diagnostics and errors use the same cap. Larger payloads include an explicit output-clipping notice with the omitted code-unit count; any query counts above that notice describe the structured selection before presentation clipping. Clipping never splits a surrogate pair. These are code-unit limits, not token estimates or limits on computation/memory use.
+
+Structured query APIs are not subject to this text-presentation cap. Search callers needing every indexed occurrence should use `findTextDetailed` without limits. Ask output identifies excerpt ranges when a definition is not fully displayed, including its existing 400-line full-span limit. Map cards retain their elastic detail dropping and configurable nonnegative code-unit cap; zero returns an empty card.
+
+MCP applies smaller task-focused budgets to broad structural views: skeleton is 4,096 code units, callers is 2,048, and map is 2,048 including the generation/health prefix. Skeleton selects signatures by indexed incoming/outgoing degree and then presents them in source order; it reports exactly how many signatures were omitted. Callers prioritizes confirmed relationships, retains safety/uncertainty language, and separately counts omitted confirmed and unresolved evidence. Map defaults to eight directories and reports omitted directories, per-directory hubs and global hotspots.
+
+These limits affect MCP presentation only. `skeleton`, `callersDetailed` and `map` return structured results; `MapResult.droppedHotspots` and each `DirCluster.droppedHubs` disclose intrinsic top-list selection. Increase/narrow queries through APIs rather than treating a compact MCP view as complete.
+
+### Caller evidence
+
+`callersDetailed` returns `status: "ambiguous"` with candidate symbols when a bare name matches multiple definitions. Select a qualified name (`file#Class.method`) to continue. A `status: "found"` result contains the target, indexed `hits`, direction/depth, and separate `unresolved` entries carrying raw edges and traversal depth. Unresolved inbound evidence is name-based, not a confirmed caller; unresolved evidence is never traversed as a dependency.
+
+Each detailed hit includes its original `edge`, preserving the source call-site path/line separately from the callee definition location. Extracted edges record syntax provenance and their resolution basis: `import-path`, `same-file-name`, `imported-file-name`, or `unique-name`. Name resolution remains heuristic even when its status is `resolved`. Multiple candidates at the preferred tier stay `ambiguous` with candidate names instead of selecting one arbitrarily; unrelated language families are excluded. TypeScript, TSX and JavaScript share a family. Externally supplied edges without provenance are explicitly `unknown` when serialized.
+
+TypeScript/JavaScript and Python direct calls additionally carry lexical `binding` hints. Named imports resolve through their source module and exported name, preserving the local call-site name. Named default exports, local export aliases, direct namespace members and known local definitions are supported, with `import-binding` or `lexical-definition` evidence. Parameter, destructuring, loop, catch and assignment bindings prevent an imported name from leaking through a shadow; Python function-local assignments apply even before their textual declaration. Missing imported targets do not fall back to unrelated global names. Module-level arrow bodies are attributed to their indexed definition.
+
+Named nested TypeScript/JavaScript definitions and constants are retained under their enclosing qualified names, including declarations inside arrow bodies. Calls from nested arrows use the nested definition's identity rather than being folded into the enclosing function.
+
+Static named re-export chains, JavaScript/TypeScript `export *` barrels and Python named package exports are followed to their declaring symbols. Explicit exports take precedence over stars, stars do not forward `default`, and competing declarations remain ambiguous. Unknown competing wildcard paths, blocked exports and traversal-budget exhaustion are reported as `re-export-incomplete`; cycles without a resolved exit are reported as `re-export-cycle`. Successful chains carry `re-export-binding` evidence with a deterministic representative `via` path of export sites. These hops describe module export names, not additional definition IDs.
+
+Export lookup is bounded to 4,096 `(module, export-name)` states and 128 forwarding hops per requested export, with per-index-resolution memoization. Links persist in `FileCard.reExports`, so changing a barrel re-resolves unchanged clients. Python relative module paths are normalized within the indexed root, and a package initializer takes precedence over a same-name module file.
+
+For TypeScript/JavaScript and Python, member calls use a syntax-backed receiver hint rather than a global method-name match. Supported evidence is an explicit class reference, a direct constructor site or local constructor assignment, lexical JavaScript `this` in indexed methods (including nested arrow capture), or an unshadowed Python method receiver. The declared class and member kind must agree; missing/inherited members, conflicting member identities, properties returning callables and unknown receivers stay unresolved. `receiver-hint` evidence records the class symbol, class/instance mode and basis, retaining export hops when the class came through a barrel.
+
+Python's bare, unshadowed `staticmethod`, `classmethod` and `property` decorators are recognized conservatively. JavaScript static/instance access is distinguished. Reassigned local instances, shadowed receiver parameters, before-initialization reads of local constructed variables and explicit local property writes block affected hints. This is not full alias, mutation, inheritance, annotation or control-flow inference: cross-object/cross-file changes, custom decorators and constructor return overrides can still change runtime behavior. Receiver hints are not runtime type proofs. Other language adapters retain their existing documented name heuristics.
+
+This is declaration-aware analysis of static export syntax, not execution or compiler validation. Rebinding conflicts, type-only runtime calls, Python wildcard imports, `global`/`nonlocal` and match scopes are conservative; CommonJS export assignments, exported namespace objects, anonymous defaults and arbitrary receiver/value flow remain unsupported. Missing local definitions and blocked bindings remain explicit unresolved evidence.
+
+CLI `callers` and MCP `osnova_warp` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
+
+### Index health
+
+`await indexHealth(index)` returns a state, all diagnostics, and a freshness report (or `null` when freshness cannot be checked). States are `fresh`, `stale`, `partial`, and `unavailable`. Disk changes take precedence over partial analysis in the state; diagnostics remain present in either case. Fresh means unchanged indexed inputs and no recorded extraction failures, not complete semantic understanding of every language or file.
+
+Syntax-recovered files retain their text and recovered definitions with `syntax-errors` diagnostics. Extractor failures retain text with `extraction-failed` diagnostics. Missing grammars, unreadable ignore files, directories, file stats or file contents stop indexing/refresh rather than silently removing data. Operational failures use `IndexingError` with a structured `diagnostic` and the underlying error as `cause`.
+
+CLI queries emit detailed partial-analysis warnings on stderr. Ordinary MCP query results use one deterministic line that groups diagnostics by phase/code (at most four categories plus an omitted-category count) without repeating per-file paths; generation identity and incomplete-analysis state remain explicit. Full diagnostic paths remain available through `doctor`, `indexHealth` and CLI checks. Map cards keep their compact health indication inside the existing code-unit cap. `osnova check` exits 1 for stale, partial, or unavailable indexes, and 0 only for fresh indexes. Full builds may save partial indexes so text search and recovered definitions remain available.
+
+Artifact format 9 stores four files per workspace: `index.json` (structural core with file-path and symbol-name tables), `index.sha` (SHA-256 of the raw core bytes, verified before parsing), `edges.json` (one interned integer tuple per edge, read and hash-verified with the core, decoded on the first edge query) and `text.bin` (source text read lazily per file and verified against its recorded hash). A refresh reads `index.sha` and the verification sidecar, then scans and compares, and only then loads the core; a publish copies unchanged text byte ranges from the previous sidecar. `loadIndex` returns `undefined` for format-1 through format-8 caches; query commands rebuild them. A missing or mismatched section is reported as `cache-read-failed`, never partially trusted. Corrupt or unsupported newer artifacts and failed cache writes remain explicit errors. Repaired files clear their old diagnostics on incremental update.
+
+Cache location: explicit `cacheDir` parameter, else `OSNOVA_CACHE_DIR`, else the platform default (macOS `~/Library/Caches/osnova/`, Linux `$XDG_CACHE_HOME/osnova/`, Windows `%LOCALAPPDATA%/osnova/cache/`). One subdirectory per workspace, LRU-evicted across workspaces.
+
+`refreshWorkspace` coordinates refreshes per canonical workspace/cache identity in-process and across processes. It publishes one coherent artifact generation, verifies source stability before returning, and exposes `indexGeneration` plus `evidenceFingerprint` for source-hash receipts. Defaults: 8 workspace artifacts, 256 MiB artifact budget, 10-second lock wait and 25 ms polling. Owners are checked for verified local process exit; malformed, foreign-host or otherwise unverified locks fail closed rather than being stolen. This is bounded source verification, not an atomic filesystem snapshot.
+
+`reuseMemory: true` lets a trusted long-lived host such as the bundled MCP server reuse an immutable loaded index while the atomically published artifact's device/inode/size/mtime/ctime signature remains unchanged. External publication, corruption or deletion invalidates memory before use. The public default is `false` because JavaScript consumers can cast away readonly types and mutate returned maps; ordinary callers receive a fresh loaded object.
+
+Nested `.gitignore` and `.osnovaignore` rules are applied by directory with negation support. Runtime Osnova cache directories inside a workspace are always excluded. Cache artifacts carry envelope/content checksums and extraction-version identity; text, size, line count and source hashes are validated on load. Access metadata drives LRU eviction, with count and artifact-byte caps. Sidecars not owned by the core artifact lifecycle are preserved.
+
+Successful full verification writes a generation-bound metadata sidecar with file size, nanosecond mtime/ctime, inode and device. Subsequent workspace refreshes can skip content reads when every field and the artifact generation still match; any path/metadata change hashes affected files, while missing/corrupt/mismatched sidecars fall back to full hashing. Public `freshness()` always hashes content. Structural generation IDs are cached from exact serialized bytes.
+
+Large cache artifacts use deterministic level-1 gzip to favor edited-refresh latency over maximum compression. On the pinned 61 MB logical artifact used for profiling, level 1 compressed in 153 ms versus 497 ms at the previous default level, while increasing stored size from 6.7 MB to 8.7 MB. Cache byte limits continue to apply to the stored payload.
+
+Scanning applies root and nested `.gitignore` plus optional `.osnovaignore` rules with scoped negation, skips dotfiles and configured output/dependency directories, and excludes files above 1 MB. Binary or non-UTF8 files get fallback cards with source hashes and empty text rather than searchable contents.
+
+## Development
+
+```sh
+pnpm install
+pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm perf
+pnpm check:package
+pnpm test:package
+pnpm test:install
+```
+
+The perf script enforces first-build and incremental-refresh budgets on a generated fixture repo. Tests include per-language extraction goldens, an incremental-equals-full property test over randomized edit sequences, CLI round-trips, and MCP handshake plus tool round-trips over an in-memory transport.
+
+`doctor` is read-only: it checks runtime, workspace/cache access and all packaged grammar assets without scanning source or writing probes. Its capability matrix states where binding/receiver hints exist and where only name heuristics remain. `setup --preview` produces complete owned local MCP configuration content and detects conflicts; it never writes or launches commands, and no apply operation is provided. Setup previews require absolute executable and CLI paths.
+
+Package smoke validation packs the artifact, extracts it outside the checkout, verifies every export/declaration/shebang, loads all twenty grammars, executes lifecycle/retrieval/doctor/preview APIs, and drives a real stdio MCP child through initialization, all five tools, refresh and EOF shutdown while rejecting stdout contamination. `test:package` reuses locally installed dependency targets without downloads; `test:install` performs a fresh registry-backed dependency install with install scripts disabled, then runs the same consumer checks. Linux/Windows execution runs in CI.
+
+### Optional LSP evidence
+
+`configureLspEnrichment`, `loadLspEnrichment`, and `refreshLspEnrichment` provide an opt-in sidecar for explicitly approved local language-server executables. Configuration/load do not launch processes; refresh requires `enabled: true`, current source hashes and zero-based UTF-16 query positions. Multiple matching servers and languages are dispatched independently, so one installed server cannot shadow another.
+
+Evidence remains separate from structural edges and is labeled `source: "lsp"`, `claim: "server-locations"`, with launch identity, source hashes, workspace fingerprint and base generation. A server location is not an Osnova semantic/type proof. Missing servers, stale offsets, unsupported methods, partial locations, request limits and cache contention remain explicit diagnostics while the structural index stays usable.
+
+Default transport limits include 2-second requests, a 30-second session/refresh deadline, 128 requests and 8 pending requests per server, 1 MiB messages, 16 MiB traffic per direction, 16 servers, 256 queries/locations per result, 4,096 source files/64 MiB source snapshots, and a 16 MiB sidecar. Callers may lower transport limits, not raise hard maxima. Supplied executables are trusted processes, not OS-sandboxed. The client supplies isolated cache/config directories, rejects server-initiated requests, and stops only children it launched.
+
+Policies and results persist separately under the workspace cache. Refresh retains still-valid complete evidence, retries failures, invalidates stale generations/source hashes and never starts a server merely because stored policy exists. No real language server is bundled, installed or auto-selected.
+
+### Reproducible benchmarks
+
+```sh
+pnpm benchmark --samples 5 --output /existing/directory/candidate.json
+pnpm benchmark --split evaluation --samples 5 --candidate-report /existing/directory/candidate.json
+pnpm benchmark --manifest /path/to/corpus.json --workspace /path/to/checkout --output /existing/directory/result.json
+```
+
+The default `benchmarks/core-v1.json` is a small authored regression corpus, not representative evidence for large repositories. It separates development cases from explicitly selected evaluation cases. Evaluation labels are public and versioned, not a sealed test set. Freeze changes before evaluating; do not tune against evaluation scores. Corpus content and labels have a stable SHA-256 fingerprint, and each run also records input-snapshot, engine and harness fingerprints.
+
+Evaluation commands require `--candidate-report` from a completed development run over the same corpus. Engine, harness, manifest, runtime environment and complete development case set must match; the input snapshot is checked before indexing or executing evaluation queries. The evaluation result carries a receipt identifying that candidate. Code, harness, labels or runtime changes require another development run. This is a local reproducibility guard, not a cryptographic signature, proof of task success, or a way to make public labels secret.
+
+Additional source-pinned workloads are `benchmarks/zod-v1.json` (TypeScript), `benchmarks/click-v1.json` (Python), and `benchmarks/pyright-v1.json` (a TypeScript monorepo with Python test inputs). Their source repository and immutable revision are recorded in each manifest. They are small task sets over full checkouts, not comprehensive language coverage. Supply a clean checkout at that revision with `--workspace`; merely validating a manifest is not a measured benchmark result.
+
+The runner launches a fresh process using `tsx` source execution, writes only into a disposable copy/cache and an explicitly requested result file, and runs no workload installation or test scripts. It never downloads a checkout. External corpus manifests require a full 40-character Git revision, a matching clean checkout with no untracked files, and source anchors independent of the extractor. Tracked files are copied independently of Osnova's scanner; symlink/submodule inputs are rejected. The supplied checkout is not edited. Output files are created exclusively, never overwritten.
+
+A checkout manifest may declare `source.exclude` as exact relative files or directory prefixes, without glob syntax. Exclusions must match tracked input and cannot cover the edit file, source anchors, expected-result files, or the query target/scope. They are included in the manifest fingerprint and reported with the exact omitted paths as `snapshotExclusions`. The Zod workload excludes four enumerated agent-config/documentation symlinks; this does not relax the regular-file check for other inputs or follow symlinks.
+
+Reports include raw expected/actual IDs, errors, source-validation failures, per-case latency and bounded text payloads. Metrics score **structured query results**, not what an agent can reconstruct from clipped text. Retrieval uses Recall@5 and reciprocal rank at 5; duplicate hits consume ranking positions. Caller precision/recall score distinct direct-call symbols by default, excluding reference/import edges, with traversal depth available per case. Text-search IDs use `file:line:column`, with one-based lines and zero-based columns. Correct empty sets score 1; unexpected results on empty ground truth score precision 0. Query errors remain in the aggregate denominator as zero; invalid source anchors invalidate that metric aggregate instead of disappearing from it.
+
+Timing separates first build, unchanged hash refresh, and edited refresh including hash diff, incremental apply and cache write. Edit/revert setup and full-rebuild equivalence checks are outside the timed refresh samples. Percentiles use nearest rank; small sample counts provide only coarse smoke measurements. First build is process-cold for the parser, not a flushed filesystem-cache or process-startup measurement. Peak RSS includes the worker runtime and `tsx`, not just the graph. Serialized and on-disk artifact sizes are reported separately.
+
+Each measured response additionally records its offline `cl100k_base` token count using the pinned development tokenizer, after query timing ends. This is an encoding-specific count of emitted text, not provider usage or total agent context. Agent task success, full-context counts, agent tool calls and packed-package size remain `null` until measured by their own trials. `status: completed` means measurement finished, not that retrieval was perfect; inspect the scores. Operational/query failures produce `status: failed` and command exit 2. This benchmark does not replace `pnpm perf` or the unit-test gates.
+
+The [initial development baseline](../benchmarks/results/development-baseline-2026-09-14.json) records measured workload fingerprints, quality scores, refresh samples and limitations. It preserves misses rather than presenting successful execution as successful retrieval. Evaluation cases remain separate and were not used for that baseline.
+
+The [definition-ranking candidate](../benchmarks/results/definition-ranking-2026-09-14.json) records its frozen development/evaluation results and receipts. It improved retrieval on the small task sets, but preserves unresolved alias-caller misses and reports increased first-query costs. These results are not agent task-success claims.
+
+The [import-binding and scoped-declaration results](../benchmarks/results/import-bindings-2026-09-14.json) record two separately frozen candidates, the nested-coverage regression found between them, and the corrected outcome. Exposed cases are labeled as regressions rather than reused as fresh validation.
+
+The [re-export results](../benchmarks/results/reexports-2026-09-14.json) retain the frozen candidate receipt, positive and negative cases, development regressions and traversal limits. Self-host tests also verify callers through the public API barrel.
+
+The [receiver results](../benchmarks/results/receivers-2026-09-14.json) retain the frozen receiver-hint evaluation, real-workload regressions and unsupported runtime behaviors. The measurements do not turn syntax-backed hints into type proofs.
+
+The [refresh optimization record](../benchmarks/results/refresh-optimization-2026-09-15.json) contains apples-to-apples seven-sample before/after profiles, long-lived MCP reuse, stage timings, compression tradeoff and correctness limits. It records the measured repository/host method rather than claiming universal latency.
