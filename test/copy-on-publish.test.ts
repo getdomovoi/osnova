@@ -107,7 +107,7 @@ describe("copy-on-publish", () => {
     }
   });
 
-  it.skipIf(process.getuid?.() === 0)("still reports an unreadable workspace file as a read failure", async () => {
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")("still reports an unreadable workspace file as a read failure", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-copy-unreadable-")); dirs.push(dir);
     const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
     await fs.mkdir(repo);

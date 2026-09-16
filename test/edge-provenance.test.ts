@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveEdges } from "../src/index/resolve.js";
 import { OsnovaIndexImpl } from "../src/index/indexImpl.js";
@@ -20,9 +21,11 @@ function card(file: string, names: string[], language: CardLanguage = "typescrip
   };
 }
 
+const fixtureRoot = path.resolve("/fixture");
+
 function index(cards: FileCard[], from: string, edges: RawEdgeItem[]): OsnovaIndexImpl {
   const files = new Map(cards.map((file) => [file.path, file]));
-  return new OsnovaIndexImpl("/fixture", files, resolveEdges({ root: "/fixture", files, rawEdges: new Map([[from, edges]]) }));
+  return new OsnovaIndexImpl(fixtureRoot, files, resolveEdges({ root: fixtureRoot, files, rawEdges: new Map([[from, edges]]) }));
 }
 
 const call: RawEdgeItem = { kind: "calls", toName: "work", line: 3, enclosing: "entry" };
