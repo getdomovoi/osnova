@@ -18,7 +18,7 @@ import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { taskContext } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
-import { doctor, previewSetup } from "../diagnostics/index.js";
+import { doctor } from "../diagnostics/index.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -30,17 +30,15 @@ const USAGE = `osnova: deterministic repository context engine
 usage:
   osnova build <root> [--cache-dir <path>]
   osnova check <root> [--cache-dir <path>]
-  osnova ask "<question>" [--in <path>] [-n <n>] [--full] [--workspace <path>] [--cache-dir <path>]
-  osnova grep "<pattern>" [--fixed] [-i] [--in <path>] [-n <n>] [--workspace <path>] [--cache-dir <path>]
-  osnova skeleton <file> [--workspace <path>] [--cache-dir <path>]
-  osnova callers <symbol> [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
-  osnova map [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
-  osnova scoped-ask "<question>" [--in <path>] [-n <n>] [--workspace <path>] [--cache-dir <path>]
-  osnova context "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
-  osnova impact --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova ground "<question>" [--in <path>] [-n <n>] [--full] [--scoped] [--workspace <path>] [--cache-dir <path>]
+  osnova thread "<pattern>" [--fixed] [-i] [--in <path>] [-n <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova outline <file> [--workspace <path>] [--cache-dir <path>]
+  osnova warp <symbol> [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova groundwork [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
+  osnova settle --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
-  osnova setup --preview --cli-path <absolute path> [--executable <absolute path>] [--workspace <path>]
-  osnova mcp --workspace <path> [--cache-dir <path>]
+  osnova mcp [--workspace <path>] [--cache-dir <path>]   (default workspace: current directory)
 
 queries refresh the index first so answers describe current disk state.`;
 
@@ -145,8 +143,7 @@ export async function runCli(
       ].join("\n"));
       return EXIT_STALE;
     }
-    case "ask":
-    case "scoped-ask": {
+    case "ground": {
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
@@ -154,17 +151,18 @@ export async function runCli(
           in: { type: "string" },
           limit: { type: "string", short: "n" },
           full: { type: "boolean" },
+          scoped: { type: "boolean" },
           workspace: { type: "string" },
           "cache-dir": { type: "string" },
         },
       });
       const question = parsed.positionals.join(" ").trim();
-      if (question.length === 0) throw new Error("osnova ask: missing <question> argument");
+      if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit");
-      if (command === "scoped-ask") {
+      if (parsed.values.scoped === true) {
         const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: parsed.values.full });
-        io.stdout(`generation ${result.receipt.generation}; ${result.scopes.length} scopes; ${result.omittedHits} hits omitted\n` +
+        io.stdout(`osnova generation ${result.receipt.generation}; ${result.scopes.length} scopes; ${result.omittedHits} hits omitted\n` +
           result.hits.map((hit) => `[${hit.scope || "."}] ${hit.file}:${hit.line} ${hit.symbol?.qualifiedName ?? "<file>"}\n${hit.excerpt}`).join("\n\n"));
         return EXIT_OK;
       }
@@ -176,7 +174,7 @@ export async function runCli(
       io.stdout(formatAsk(result));
       return EXIT_OK;
     }
-    case "grep": {
+    case "thread": {
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
@@ -202,7 +200,7 @@ export async function runCli(
       io.stdout(formatFindTextResult(result));
       return EXIT_OK;
     }
-    case "skeleton": {
+    case "outline": {
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
@@ -213,7 +211,7 @@ export async function runCli(
       io.stdout(formatSkeleton(skeleton(index, file)));
       return EXIT_OK;
     }
-    case "callers": {
+    case "warp": {
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
@@ -229,7 +227,7 @@ export async function runCli(
       const depthValue = numericOption(parsed.values.depth, "depth", 1);
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") {
-        throw new Error(`osnova callers: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
+        throw new Error(`osnova warp: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
       }
       const result = callersDetailed(index, symbol, {
         ...(direction !== undefined ? { direction } : {}),
@@ -238,7 +236,7 @@ export async function runCli(
       io.stdout(formatCallersDetailed(result));
       return EXIT_OK;
     }
-    case "map": {
+    case "groundwork": {
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
@@ -259,7 +257,7 @@ export async function runCli(
       );
       return EXIT_OK;
     }
-    case "context": {
+    case "footing": {
       const parsed = parseArgs({ args: rest, allowPositionals: true, options: {
         task: { type: "string", default: "understand" }, symbol: { type: "string", multiple: true }, in: { type: "string" },
         limit: { type: "string", short: "n" }, depth: { type: "string" }, "max-code-units": { type: "string" },
@@ -273,26 +271,26 @@ export async function runCli(
       const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
         in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit"),
         maxDepth: numericOption(parsed.values.depth, "depth", 1), maxCodeUnits: budget });
-      io.stdout(jsonOutput(result, "context"));
+      io.stdout(jsonOutput(result, "footing"));
       return EXIT_OK;
     }
-    case "impact": {
+    case "settle": {
       const parsed = parseArgs({ args: rest, options: { "base-cache": { type: "string" }, depth: { type: "string" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
       const baseCache = parsed.values["base-cache"];
-      if (baseCache === undefined) throw new Error("osnova impact: --base-cache is required");
+      if (baseCache === undefined) throw new Error("osnova settle: --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
       const baseReal = await fs.realpath(baseCache).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") throw new Error(`osnova impact: baseline cache does not exist: ${baseCache}`);
+        if (error.code === "ENOENT") throw new Error(`osnova settle: baseline cache does not exist: ${baseCache}`);
         throw error;
       });
       const currentReal = await fs.realpath(cacheDir).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
         return path.resolve(cacheDir);
       });
-      if (baseReal === currentReal) throw new Error("osnova impact: base and current caches must be distinct");
+      if (baseReal === currentReal) throw new Error("osnova settle: base and current caches must be distinct");
       const base = await loadArtifact(root, baseCache);
-      if (base === undefined) throw new Error("osnova impact: baseline index is missing or incompatible");
+      if (base === undefined) throw new Error("osnova settle: baseline index is missing or incompatible");
       const current = await ensureIndex(root, cacheDir, io.stderr);
       const result = impact(base, current, { maxDepth: numericOption(parsed.values.depth, "depth", 1) });
       io.stdout([
@@ -309,15 +307,6 @@ export async function runCli(
       const report = await doctor(parsed.values.workspace ?? process.cwd(), { cacheDir: parsed.values["cache-dir"] });
       io.stdout(jsonOutput(report, "doctor"));
       return report.ok ? EXIT_OK : EXIT_STALE;
-    }
-    case "setup": {
-      const parsed = parseArgs({ args: rest, options: { preview: { type: "boolean" }, "cli-path": { type: "string" }, executable: { type: "string" }, workspace: { type: "string" } } });
-      if (parsed.values.preview !== true || parsed.values["cli-path"] === undefined) throw new Error("osnova setup requires --preview and --cli-path; no apply operation is provided");
-      const preview = await previewSetup(parsed.values.workspace ?? process.cwd(), { cliPath: parsed.values["cli-path"], executable: parsed.values.executable });
-      const text = JSON.stringify(preview);
-      if (text.length > maximumTextResponseCodeUnits) throw new RangeError("osnova: setup preview exceeds CLI budget; use previewSetup for complete content");
-      io.stdout(text);
-      return preview.canApply ? EXIT_OK : EXIT_STALE;
     }
     case "mcp": {
       const parsed = parseArgs({

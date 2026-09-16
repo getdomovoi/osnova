@@ -27,7 +27,7 @@ afterAll(async () => {
 
 it("caps CLI text without changing the structured search result", async () => {
   const output: string[] = [];
-  await runCli(["grep", "needle", "--workspace", workspace, "--cache-dir", cacheDir], {
+  await runCli(["thread", "needle", "--workspace", workspace, "--cache-dir", cacheDir], {
     stdout: (text) => output.push(text), stderr: (text) => output.push(text),
   });
   expect(output[0]?.length).toBeLessThanOrEqual(16_384);

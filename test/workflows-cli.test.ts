@@ -23,12 +23,20 @@ async function command(args: string[]) {
   return { code, text: output.join("\n") };
 }
 
+it("rejects the retired command names", async () => {
+  for (const retired of ["ask", "scoped-ask", "grep", "skeleton", "callers", "map", "context", "impact", "nonsense"]) {
+    const errors: string[] = [];
+    expect(await runCli([retired, "work"], { stdout: () => {}, stderr: (text) => errors.push(text) }), retired).toBe(2);
+    expect(errors.join("\n"), retired).toContain(`unknown command "${retired}"`);
+  }
+});
+
 it("exposes scoped retrieval and bounded task context through the CLI", async () => {
-  const scoped = await command(["scoped-ask", "work"]);
+  const scoped = await command(["ground", "work", "--scoped"]);
   expect(scoped.code).toBe(0);
   expect(scoped.text).toContain("generation");
   expect(scoped.text).toContain("api.ts#work");
-  const context = await command(["context", "work", "--task", "change", "--symbol", "api.ts#work"]);
+  const context = await command(["footing", "work", "--task", "change", "--symbol", "api.ts#work"]);
   expect(context.code).toBe(0);
   const result = JSON.parse(context.text) as { task: string; receipt: { generation: string }; definitions: unknown[] };
   expect(result.task).toBe("change");
@@ -40,46 +48,39 @@ it("exposes scoped retrieval and bounded task context through the CLI", async ()
 it("compares preserved baseline evidence without overwriting its cache", async () => {
   await runCli(["build", workspace, "--cache-dir", baseline], { stdout: () => {}, stderr: () => {} });
   await fs.writeFile(path.join(workspace, "api.ts"), "export function work() { return 2; }\n");
-  const result = await command(["impact", "--base-cache", baseline]);
+  const result = await command(["settle", "--base-cache", baseline]);
   expect(result.code).toBe(0);
   expect(result.text).toContain("changed: api.ts#work");
   expect(result.text).toContain("entry.ts#start");
-  await expect(command(["impact", "--base-cache", cache])).rejects.toThrow(/distinct/);
+  await expect(command(["settle", "--base-cache", cache])).rejects.toThrow(/distinct/);
 });
 
-it("keeps doctor and setup previews read-only", async () => {
+it("keeps doctor read-only", async () => {
   const before = await fs.readdir(workspace);
   const checked = await command(["doctor"]);
   expect(checked.code).toBe(0);
   expect((JSON.parse(checked.text) as { readOnly: boolean }).readOnly).toBe(true);
-  const output: string[] = [];
-  const code = await runCli(["setup", "--preview", "--cli-path", path.join(temporary, "bin.js"), "--workspace", workspace], {
-    stdout: (text) => output.push(text), stderr: (text) => output.push(text),
-  });
-  expect(code).toBe(0);
-  expect((JSON.parse(output.join("\n")) as { mode: string }).mode).toBe("preview");
   expect(await fs.readdir(workspace)).toEqual(before);
-  await expect(runCli(["setup", "--workspace", workspace])).rejects.toThrow(/preview/);
 });
 
 it.each([
-  ["ask", ["work", "--limit", "NaN"]],
-  ["scoped-ask", ["work", "--limit", "1.5"]],
-  ["grep", ["work", "--limit", "Infinity"]],
-  ["callers", ["api.ts#work", "--depth", "0"]],
-  ["map", ["--max-dirs", "oops"]],
-  ["context", ["work", "--depth", "NaN"]],
-  ["context", ["work", "--limit=-1"]],
-  ["context", ["work", "--max-code-units", "1.5"]],
+  ["ground", ["work", "--limit", "NaN"]],
+  ["ground", ["work", "--scoped", "--limit", "1.5"]],
+  ["thread", ["work", "--limit", "Infinity"]],
+  ["warp", ["api.ts#work", "--depth", "0"]],
+  ["groundwork", ["--max-dirs", "oops"]],
+  ["footing", ["work", "--depth", "NaN"]],
+  ["footing", ["work", "--limit=-1"]],
+  ["footing", ["work", "--max-code-units", "1.5"]],
 ] as const)("rejects invalid numeric options for %s", async (name, args) => {
   await expect(command([name, ...args])).rejects.toThrow(/safe integer/);
 });
 
 it("rejects invalid impact depth", async () => {
   await runCli(["build", workspace, "--cache-dir", baseline], { stdout: () => {}, stderr: () => {} });
-  await expect(command(["impact", "--base-cache", baseline, "--depth", "0"])).rejects.toThrow(/safe integer/);
+  await expect(command(["settle", "--base-cache", baseline, "--depth", "0"])).rejects.toThrow(/safe integer/);
 });
 
 it("reports a missing impact baseline as a usage error", async () => {
-  await expect(command(["impact", "--base-cache", path.join(temporary, "missing")])).rejects.toThrow(/does not exist/);
+  await expect(command(["settle", "--base-cache", path.join(temporary, "missing")])).rejects.toThrow(/does not exist/);
 });

@@ -1,7 +1,7 @@
 {
   "name": "@getdomovoi/osnova",
   "version": "0.2.0",
-  "description": "Deterministic repository context engine: tree-sitter symbol/edge graph with CLI and MCP stdio server.",
+  "description": "Deterministic code map for AI coding agents: a tree-sitter symbol and call graph served over MCP and a CLI, with no embeddings, network or telemetry.",
   "type": "module",
   "license": "Apache-2.0",
   "author": "getdomovoi",
@@ -13,12 +13,20 @@
     "url": "https://github.com/getdomovoi/osnova/issues"
   },
   "keywords": [
-    "tree-sitter",
-    "code-index",
-    "repository-context",
     "mcp",
-    "static-analysis"
+    "mcp-server",
+    "ai-agent",
+    "coding-agent",
+    "code-context",
+    "code-index",
+    "call-graph",
+    "tree-sitter",
+    "static-analysis",
+    "claude-code",
+    "codex",
+    "opencode"
   ],
+  "homepage": "https://github.com/getdomovoi/osnova#readme",
   "engines": {
     "node": ">=22.13.0"
   },

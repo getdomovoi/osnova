@@ -117,7 +117,7 @@ describe("index health", () => {
     expect(await runCli(["check", workspace, "--cache-dir", cacheDir], io)).toBe(1);
     expect(output.join("\n")).toContain("partial");
     output.length = 0;
-    await runCli(["skeleton", "one.ts", "--workspace", workspace, "--cache-dir", cacheDir], io);
+    await runCli(["outline", "one.ts", "--workspace", workspace, "--cache-dir", cacheDir], io);
     expect(output.join("\n")).toContain("syntax-errors");
   });
 });

@@ -51,7 +51,7 @@ async function consumer() {
   const packageBefore = await snapshot(packageRoot);
   assert((await realpath(packageRoot)).startsWith(await realpath(root)), "Package must be extracted, not linked to checkout");
   const api = await import("@getdomovoi/osnova");
-  for (const name of ["buildIndex", "loadIndex", "refreshWorkspace", "indexGeneration", "evidenceFingerprint", "applyChanges", "freshness", "scanFiles", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "impact", "scopedAsk", "taskContext", "doctor", "previewSetup", "configureLspEnrichment", "loadLspEnrichment", "refreshLspEnrichment", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
+  for (const name of ["buildIndex", "loadIndex", "refreshWorkspace", "indexGeneration", "evidenceFingerprint", "applyChanges", "freshness", "scanFiles", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "impact", "scopedAsk", "taskContext", "doctor", "configureLspEnrichment", "loadLspEnrichment", "refreshLspEnrichment", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
   for (const entry of Object.keys(manifest.exports)) await import(entry === "." ? manifest.name : manifest.name + entry.slice(1));
   const workspace = path.join(root, "workspace");
   const cacheDir = path.join(root, "cache");
@@ -68,17 +68,15 @@ async function consumer() {
   const diagnostics = await import(pathToFileURL(path.join(packageRoot, "dist/diagnostics.js")).href);
   const report = await diagnostics.doctor(workspace, { cacheDir });
   assert(report.ok, "Packed doctor failed runtime/assets checks");
-  const preview = await diagnostics.previewSetup(workspace, { cliPath: path.join(packageRoot, manifest.bin.osnova) });
-  assert(preview.canApply);
-  assert.deepEqual(await snapshot(workspace), before, "Diagnostics/preview mutated workspace");
+  assert.deepEqual(await snapshot(workspace), before, "Diagnostics mutated workspace");
 
   const frames = await smokeStdio({ cliPath: path.join(packageRoot, manifest.bin.osnova), workspace, cacheDir, cwd: root });
   assert.deepEqual(await snapshot(packageRoot), packageBefore, "Core operations mutated installed package");
   assert.deepEqual((await readdir(root)).sort(), [...new Set([...rootBefore, "cache", "workspace"])].sort(), "Core operations wrote outside designated cache/workspace fixtures");
-  console.log(`packed consumer: exports, 20 WASM grammars, doctor, preview, build/ask, 5 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
+  console.log(`packed consumer: exports, 20 WASM grammars, doctor, build/ask, 7 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
 }
 
-export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [] }) {
+export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [], omitWorkspaceArg = false }) {
   const before = await snapshot(workspace);
   const errors = [];
   let stdout = "";
@@ -99,7 +97,7 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
   }
   const transport = new ObservedTransport({
     command: process.execPath,
-    args: [...nodeArgs, cliPath, "mcp", "--workspace", workspace],
+    args: [...nodeArgs, cliPath, "mcp", ...(omitWorkspaceArg ? [] : ["--workspace", workspace])],
     cwd,
     env: { OSNOVA_CACHE_DIR: cacheDir, HOME: path.join(cacheDir, "smoke-home"), USERPROFILE: path.join(cacheDir, "smoke-home"), TSX_DISABLE_CACHE: "1" },
     stderr: "pipe",
@@ -122,8 +120,7 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
       osnova_footing: { question: "probe" },
       osnova_settle: { diff: "--- a/probe.ts\n+++ b/probe.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" },
     };
-    const aliases = ["osnova_ask", "osnova_find_text", "osnova_skeleton", "osnova_callers", "osnova_map"];
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...Object.keys(calls), ...aliases].sort());
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), Object.keys(calls).sort());
     for (const [name, args] of Object.entries(calls)) {
       const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 10_000 });
       assert(!result.isError, `${name} returned an error`);
