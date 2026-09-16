@@ -41,13 +41,7 @@ usage:
   osnova setup --preview --cli-path <absolute path> [--executable <absolute path>] [--workspace <path>]
   osnova mcp [--workspace <path>] [--cache-dir <path>]   (default workspace: current directory)
 
-queries refresh the index first so answers describe current disk state.
-deprecated aliases (removed next release): ask, scoped-ask, grep, skeleton, callers, map, context, impact.`;
-
-const deprecatedCommandAliases: ReadonlyMap<string, string> = new Map([
-  ["ask", "ground"], ["scoped-ask", "ground"], ["grep", "thread"], ["skeleton", "outline"],
-  ["callers", "warp"], ["map", "groundwork"], ["context", "footing"], ["impact", "settle"],
-]);
+queries refresh the index first so answers describe current disk state.`;
 
 const EXIT_OK = 0;
 const EXIT_STALE = 1;
@@ -98,16 +92,10 @@ export async function runCli(
     stdout: (text) => rawIo.stdout(boundText(text)),
     stderr: (text) => rawIo.stderr(boundText(text)),
   };
-  const [requested = "", ...aliasRest] = argv;
-  if (requested.length === 0 || requested === "--help" || requested === "-h" || requested === "help") {
+  const [command = "", ...rest] = argv;
+  if (command.length === 0 || command === "--help" || command === "-h" || command === "help") {
     io.stdout(USAGE);
-    return requested.length === 0 ? EXIT_ERROR : EXIT_OK;
-  }
-  const canonical = deprecatedCommandAliases.get(requested);
-  const command = canonical ?? requested;
-  const rest = requested === "scoped-ask" ? ["--scoped", ...aliasRest] : aliasRest;
-  if (canonical !== undefined) {
-    io.stderr(`osnova: "${requested}" is a deprecated alias of "${command}${requested === "scoped-ask" ? " --scoped" : ""}" and is removed in the next release`);
+    return command.length === 0 ? EXIT_ERROR : EXIT_OK;
   }
 
   switch (command) {

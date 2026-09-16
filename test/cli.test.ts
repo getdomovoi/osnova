@@ -47,7 +47,7 @@ describe("cli", () => {
     expect(lines.join("\n")).toMatch(/2 files, \d+ symbols, \d+ edges in \d+ms/);
   });
 
-  it("check exits 0 when fresh, 1 after an edit, 0 after refresh via ask", async () => {
+  it("check exits 0 when fresh, 1 after an edit, 0 after refresh via ground", async () => {
     const fresh = capture();
     expect(await runCli(["check", workspace, ...cacheArgs], fresh.io)).toBe(0);
     expect(fresh.lines.join("\n")).toContain("fresh");
@@ -59,28 +59,28 @@ describe("cli", () => {
     expect(stale.lines.join("\n")).toContain("stale");
 
     const asked = capture();
-    expect(await runCli(["ask", "three", "--workspace", workspace, ...cacheArgs], asked.io)).toBe(0);
+    expect(await runCli(["ground", "three", "--workspace", workspace, ...cacheArgs], asked.io)).toBe(0);
     expect(asked.lines.join("\n")).toContain("src/three.ts");
 
     const freshAgain = capture();
     expect(await runCli(["check", workspace, ...cacheArgs], freshAgain.io)).toBe(0);
   }, 60_000);
 
-  it("skeleton, grep, callers, map round-trip", async () => {
+  it("outline, thread, warp, groundwork round-trip", async () => {
     const skeletonOut = capture();
-    expect(await runCli(["skeleton", "src/two.ts", "--workspace", workspace, ...cacheArgs], skeletonOut.io)).toBe(0);
+    expect(await runCli(["outline", "src/two.ts", "--workspace", workspace, ...cacheArgs], skeletonOut.io)).toBe(0);
     expect(skeletonOut.lines.join("\n")).toContain("function two");
 
     const grepOut = capture();
-    expect(await runCli(["grep", "one()", "--workspace", workspace, ...cacheArgs], grepOut.io)).toBe(0);
+    expect(await runCli(["thread", "one()", "--workspace", workspace, ...cacheArgs], grepOut.io)).toBe(0);
     expect(grepOut.lines.join("\n")).toContain("src/two.ts");
 
     const callersOut = capture();
-    expect(await runCli(["callers", "one", "--workspace", workspace, ...cacheArgs], callersOut.io)).toBe(0);
+    expect(await runCli(["warp", "one", "--workspace", workspace, ...cacheArgs], callersOut.io)).toBe(0);
     expect(callersOut.lines.join("\n")).toContain("src/two.ts#two");
 
     const mapOut = capture();
-    expect(await runCli(["map", "--workspace", workspace, ...cacheArgs], mapOut.io)).toBe(0);
+    expect(await runCli(["groundwork", "--workspace", workspace, ...cacheArgs], mapOut.io)).toBe(0);
     expect(mapOut.lines.join("\n")).toContain("files 3");
   }, 60_000);
 
