@@ -93,6 +93,24 @@ describe("footing formatting", () => {
     expect(formatTaskContext(clipped)).toContain("  const v6 = 6;\n  [+194 more lines]\n- big.ts#small");
   });
 
+  it("keeps relationships ahead of related definitions when the budget is tight", () => {
+    const names = Array.from({ length: 12 }, (_, i) => `fn${i}`);
+    const one = index([card("many.ts", names)], names.slice(1).map((name) => edge(`many.ts#${name}`, "many.ts#fn0")));
+    const tight = taskContext(one, { task: "change", question: "", symbols: ["many.ts#fn0"], maxCodeUnits: 1_500,
+      measure: (partial) => formatTaskContext(partial).length });
+    expect(tight.definitions[0]?.symbol.name).toBe("fn0");
+    expect(tight.relationships.length).toBeGreaterThan(0);
+    expect(tight.definitions.length).toBeLessThan(1 + tight.relationships.length);
+    expect(tight.omitted.relationships + tight.relationships.length).toBe(11);
+    expect(tight.omitted.definitions + tight.definitions.length).toBe(12);
+  });
+
+  it("reports the short hunk line when a diff is summarized", () => {
+    const one = index([card("a.ts", ["keep"])]);
+    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,7 +1,7 @@\n-function keep() { return 0; }\n+function keep() { return 1; }\n@@ -20,7 +20,7 @@\n";
+    expect(() => impact(one, one, { diff })).toThrow(/hunk line 6: the hunk header promised 6 more old and 6 more new lines/);
+  });
+
   it("fits by the caller's measure instead of JSON size", () => {
     const names = Array.from({ length: 12 }, (_, i) => `fn${i}`);
     const one = index([card("many.ts", names)], names.slice(1).map((name) => edge(`many.ts#${name}`, "many.ts#fn0")));

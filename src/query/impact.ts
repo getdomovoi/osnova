@@ -152,13 +152,13 @@ function parseDiff(diff: string): DiffFile[] {
   };
   const lines = diff.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
-  for (const line of lines) {
+  for (const [number, line] of lines.entries()) {
     if (oldLeft > 0 || newLeft > 0) {
       if (line.startsWith("\\ No newline")) continue;
       if (line.startsWith("-")) { file?.oldLines.add(oldLine++); oldLeft--; }
       else if (line.startsWith("+")) { file?.newLines.add(newLine++); newLeft--; }
       else if (line.startsWith(" ") || line === "") { oldLine++; newLine++; oldLeft--; newLeft--; }
-      else throw new Error("osnova: invalid unified diff hunk line");
+      else throw new Error(`osnova: invalid unified diff hunk line ${number + 1}: the hunk header promised ${oldLeft} more old and ${newLeft} more new lines; pass the exact diff output, not a summary`);
       if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts");
       continue;
     }

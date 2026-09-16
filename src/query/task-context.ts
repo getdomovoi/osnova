@@ -146,9 +146,13 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
       if (size() > maxCodeUnits) { target.pop(); result.omitted[field]++; }
     }
   };
-  append(definitions.values(), result.definitions, "definitions");
+  const seedNames = new Set(seeds.map((seed) => seed.qualifiedName));
+  const seedDefinitions = [...definitions.values()].filter((definition) => seedNames.has(definition.symbol.qualifiedName));
+  const relatedDefinitions = [...definitions.values()].filter((definition) => !seedNames.has(definition.symbol.qualifiedName));
+  append(seedDefinitions, result.definitions, "definitions");
   if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
+  append(relatedDefinitions, result.definitions, "definitions");
   return result;
 }
