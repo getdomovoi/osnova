@@ -296,11 +296,15 @@ function textIdentityFromParsed(parsed: unknown): { hash: string; bytes: number 
 }
 
 function legacyFormatVersion(raw: Buffer): number | undefined {
-  const head = raw.subarray(0, 512).toString("utf8");
-  const match = /"formatVersion"\s*:\s*(\d{1,4})/.exec(head);
-  if (match === null) return undefined;
-  const version = Number(match[1]);
-  return Number.isInteger(version) && version > 0 && version < indexFormatVersion ? version : undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+  const version = (parsed as { formatVersion?: unknown }).formatVersion;
+  return integerIn(version, 1, indexFormatVersion - 1) ? version : undefined;
 }
 
 function nonnegativeInteger(value: unknown): value is number {
