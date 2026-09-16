@@ -7,6 +7,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 ### Added
 
 - `osnova --version`.
+- `osnova setup --preview --client <name>`: a unified diff against the client's real global config (Claude Code, Codex, OpenCode, Kilo, Cursor, Pi) that adds the one `osnova` entry and nothing else. Read-only. Reports unchanged or conflict when an entry exists.
 - `SECURITY.md`, issue templates and a private security report link.
 
 ### Changed
