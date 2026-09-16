@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-dark.png">
+  <img alt="osnova. A deterministic code map for AI coding agents. Seven tools: ground, thread, outline, warp, groundwork, footing, settle." src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-light.png" width="1200">
+</picture>
+
 # Osnova
 
 **A deterministic code map for AI coding agents.** Osnova indexes a repository into a symbol and call graph with tree-sitter, then serves it to any MCP client or from the command line. Same input, same output, byte for byte. No embeddings, no network, no telemetry.
