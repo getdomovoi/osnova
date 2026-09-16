@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { EdgeBinding, MemberKind, ReExport, ReceiverMode, SymbolBinding } from "../types.js";
 import { childrenOf, childOfType } from "./util.js";
+import { canonical } from "../index/edgeStore.js";
 
 interface Scope {
   kind: "module" | "function" | "block" | "class";
@@ -66,7 +67,7 @@ export function collectBindings(root: Node, python: boolean): {
   const bind = (scope: Scope, name: string, binding: EdgeBinding, line?: number): void => {
     if (line !== undefined) importLines.set(binding, line);
     const values = scope.names.get(name) ?? [];
-    if (!values.some((value) => JSON.stringify(value) === JSON.stringify(binding))) values.push(binding);
+    if (!values.some((value) => canonical(value) === canonical(binding))) values.push(binding);
     scope.names.set(name, values);
   };
   const bindPattern = (scope: Scope, node: Node | null, binding: EdgeBinding = localValue): void => {

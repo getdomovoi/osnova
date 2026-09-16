@@ -72,7 +72,11 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+const receipts = new WeakMap<OsnovaIndex, IndexReceipt>();
+
 export function indexReceipt(index: OsnovaIndex): IndexReceipt {
+  const memoized = receipts.get(index);
+  if (memoized !== undefined) return memoized;
   const hash = createHash("sha256");
   hash.update(canonical({ root: index.root, schema: "query-receipt-v1" }));
   for (const [path, file] of [...index.files].sort(([a], [b]) => compareText(a, b))) {
@@ -82,7 +86,9 @@ export function indexReceipt(index: OsnovaIndex): IndexReceipt {
   for (const edge of index.edges.map(canonical).sort(compareText)) hash.update(edge);
   const diagnostics = [...(index.diagnostics ?? [])].map(canonical).sort(compareText);
   hash.update(canonical(diagnostics));
-  return { generation: hash.digest("hex"), basis: "indexed-content-sha256", files: index.files.size, diagnostics: diagnostics.length };
+  const receipt: IndexReceipt = { generation: hash.digest("hex"), basis: "indexed-content-sha256", files: index.files.size, diagnostics: diagnostics.length };
+  receipts.set(index, receipt);
+  return receipt;
 }
 
 export function sourceReceipt(index: OsnovaIndex, file: string, receipt: IndexReceipt): SourceReceipt {

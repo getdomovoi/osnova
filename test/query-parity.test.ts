@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { loadIndex } from "../src/api.js";
-import { ask, findTextDetailed, skeleton, scopedAsk, taskContext } from "../src/index.js";
+import { ask, findTextDetailed, skeleton, scopedAsk, taskContext, callers, callersDetailed, map } from "../src/index.js";
 import { impact } from "../src/query/impact.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
@@ -24,5 +24,8 @@ describe("loaded index answers like a built index", () => {
     expect(scopedAsk(loaded, "retry")).toEqual(scopedAsk(built, "retry"));
     expect(taskContext(loaded, { question: "retry", task: "understand" })).toEqual(taskContext(built, { question: "retry", task: "understand" }));
     expect(impact(loaded, loaded)).toEqual(impact(built, built));
+    expect(callers(loaded, "compute", { direction: "in" })).toEqual(callers(built, "compute", { direction: "in" }));
+    expect(callersDetailed(loaded, "compute", { direction: "in" })).toEqual(callersDetailed(built, "compute", { direction: "in" }));
+    expect(map(loaded)).toEqual(map(built));
   });
 });

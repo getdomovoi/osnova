@@ -4,40 +4,37 @@ import { randomUUID } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import type {
   CardLanguage,
-  EdgeKind,
   FileCard,
   OsnovaEdge,
   OsnovaIndex,
   SourceSpan,
   SymbolKind,
   IndexDiagnostic,
-  EdgeEvidence,
-  EdgeResolution,
-  EdgeBinding,
   ReExport,
   MemberKind,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
+import type { EdgeSource } from "./indexImpl.js";
+import { serializeEdges, deserializeEdges } from "./edgeStore.js";
+import type { EdgeLayout } from "./edgeStore.js";
 import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits } from "../cache/cache.js";
 import type { CachePolicy } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
-import { IndexingError } from "./diagnostics.js";
+import { IndexingError, SectionError } from "./diagnostics.js";
 import { rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
-import { lazyTextCard, serializeText } from "./textStore.js";
-import type { TextLayout } from "./textStore.js";
+import { lazyTextCard, previousTextFrom, rebindPublishedText, serializeText } from "./textStore.js";
+import type { PreviousText, TextLayout } from "./textStore.js";
 import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-8.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.1.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 class ExtractionVersionError extends Error {}
-
-class TextSidecarError extends Error {}
 
 class ArtifactVersionError extends Error {
   constructor(readonly version: unknown) {
@@ -53,7 +50,7 @@ interface SerializedSpan {
 }
 
 interface SerializedSymbol {
-  readonly name: string;
+  readonly n: number;
   readonly q: string;
   readonly kind: SymbolKind;
   readonly span: SerializedSpan;
@@ -63,7 +60,7 @@ interface SerializedSymbol {
 }
 
 interface SerializedFile {
-  readonly path: string;
+  readonly p: number;
   readonly language: CardLanguage;
   readonly hash: string;
   readonly size: number;
@@ -75,44 +72,50 @@ interface SerializedFile {
   readonly reExports: readonly ReExport[];
 }
 
-interface SerializedEdge {
-  readonly k: EdgeKind;
-  readonly f: string;
-  readonly fs: string;
-  readonly t: string;
-  readonly l: number;
-  readonly ts?: string | undefined;
-  readonly tf?: string | undefined;
-  readonly e: EdgeEvidence;
-  readonly b?: EdgeBinding | undefined;
-}
-
 interface SerializedArtifact {
   readonly formatVersion: number;
   readonly extractionVersion: string;
-  readonly checksum: string;
   readonly root: string;
+  readonly paths: readonly string[];
+  readonly names: readonly string[];
   readonly textHash: string;
   readonly textBytes: number;
+  readonly edgesHash: string;
+  readonly edgesBytes: number;
   readonly files: readonly SerializedFile[];
-  readonly edges: readonly SerializedEdge[];
 }
 
-function serializeArtifactWithText(index: OsnovaIndex): { core: Buffer; text: TextLayout } {
-  const layout = serializeText(index);
-  const files: SerializedFile[] = [];
-  for (const card of [...index.files.values()].sort((a, b) => (a.path < b.path ? -1 : 1))) {
-    files.push({
-      path: card.path,
+function compareStr(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+export function serializeSections(
+  index: OsnovaIndex,
+  previousText?: PreviousText | undefined,
+): { core: Buffer; edges: EdgeLayout; text: TextLayout; paths: string[] } {
+  const paths = [...index.files.keys()].sort(compareStr);
+  const nameSet = new Set<string>();
+  for (const card of index.files.values()) {
+    for (const symbol of card.symbols) nameSet.add(symbol.name);
+  }
+  const names = [...nameSet].sort(compareStr);
+  const nameIndex = new Map(names.map((n, i) => [n, i]));
+  const text = serializeText(index, previousText);
+  const edges = serializeEdges(index.edges, paths);
+  const files: SerializedFile[] = paths.map((p, i) => {
+    const card = index.files.get(p)!;
+    const [to, tl] = text.offsets.get(p)!;
+    return {
+      p: i,
       language: card.language,
       hash: card.hash,
       size: card.size,
       lineCount: card.lineCount,
-      to: layout.offsets.get(card.path)![0],
-      tl: layout.offsets.get(card.path)![1],
+      to,
+      tl,
       symbols: card.symbols.map((symbol) => ({
-        name: symbol.name,
-        q: symbol.qualifiedName,
+        n: nameIndex.get(symbol.name)!,
+        q: symbol.qualifiedName.slice(p.length + 1),
         kind: symbol.kind,
         span: {
           s: symbol.span.startLine,
@@ -126,48 +129,44 @@ function serializeArtifactWithText(index: OsnovaIndex): { core: Buffer; text: Te
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
-    });
-  }
-  const edges: SerializedEdge[] = index.edges.map((edge) => {
-    const base = {
-      k: edge.kind,
-      f: edge.fromFile,
-      fs: edge.fromSymbol,
-      t: edge.toName,
-      l: edge.line,
-      e: edge.evidence ?? { source: "unknown" as const },
-      ...(edge.binding === undefined ? {} : { b: edge.binding }),
     };
-    if (edge.toFile !== undefined) {
-      return { ...base, ts: edge.toSymbol, tf: edge.toFile };
-    }
-    if (edge.toSymbol !== undefined) {
-      return { ...base, ts: edge.toSymbol };
-    }
-    return base;
   });
   const artifact: SerializedArtifact = {
     formatVersion: indexFormatVersion,
     extractionVersion,
-    checksum: sha256Hex(JSON.stringify({ root: index.root, textHash: layout.hash, textBytes: layout.bytes.length, files, edges })),
     root: index.root,
-    textHash: layout.hash,
-    textBytes: layout.bytes.length,
+    paths,
+    names,
+    textHash: text.hash,
+    textBytes: text.bytes.length,
+    edgesHash: edges.hash,
+    edgesBytes: edges.bytes.length,
     files,
-    edges,
   };
-  return { core: Buffer.from(JSON.stringify(artifact), "utf8"), text: layout };
+  return { core: Buffer.from(JSON.stringify(artifact), "utf8"), edges, text, paths };
 }
 
 export function serializeArtifact(index: OsnovaIndex): Buffer {
-  return serializeArtifactWithText(index).core;
+  return serializeSections(index).core;
 }
 
-export function deserializeArtifact(data: string, textPath: string | undefined, textBytes?: Buffer): OsnovaIndexImpl {
-  return deserializeParsedArtifact(JSON.parse(data), data, textPath, textBytes);
+export function deserializeArtifact(
+  data: string,
+  textPath: string | undefined,
+  textBytes?: Buffer,
+  edgeBytes?: Buffer,
+): OsnovaIndexImpl {
+  return deserializeParsedArtifact(JSON.parse(data), data, textPath, undefined, textBytes, edgeBytes);
 }
 
-function deserializeParsedArtifact(parsed: unknown, data: string, textPath: string | undefined, textBytes?: Buffer): OsnovaIndexImpl {
+function deserializeParsedArtifact(
+  parsed: unknown,
+  data: string,
+  textPath: string | undefined,
+  edgeSource: { path: string; raw: Buffer } | undefined,
+  textBytes?: Buffer,
+  edgeBytes?: Buffer,
+): OsnovaIndexImpl {
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error("osnova: corrupt index artifact");
   }
@@ -179,17 +178,39 @@ function deserializeParsedArtifact(parsed: unknown, data: string, textPath: stri
     throw new ExtractionVersionError("osnova: extraction inputs changed; rebuild the index");
   }
   if (typeof artifact.root !== "string" || !path.isAbsolute(artifact.root) || path.normalize(artifact.root) !== artifact.root ||
-    !Array.isArray(artifact.files) || !Array.isArray(artifact.edges)) throw new Error("osnova: corrupt index envelope");
+    !Array.isArray(artifact.files) || !Array.isArray(artifact.paths) || !Array.isArray(artifact.names)) {
+    throw new Error("osnova: corrupt index envelope");
+  }
   if (typeof artifact.textHash !== "string" || !/^[a-f0-9]{64}$/.test(artifact.textHash) || !nonnegativeInteger(artifact.textBytes)) {
     throw new Error("osnova: corrupt text identity");
+  }
+  if (typeof artifact.edgesHash !== "string" || !/^[a-f0-9]{64}$/.test(artifact.edgesHash) || !nonnegativeInteger(artifact.edgesBytes)) {
+    throw new Error("osnova: corrupt edge identity");
   }
   if (textBytes !== undefined && (textBytes.length !== artifact.textBytes || sha256Hex(textBytes) !== artifact.textHash)) {
     throw new Error("osnova: corrupt cached source content");
   }
+  if (edgeBytes !== undefined && (edgeBytes.length !== artifact.edgesBytes || sha256Hex(edgeBytes) !== artifact.edgesHash)) {
+    throw new Error("osnova: corrupt cached edge content");
+  }
+  const paths = artifact.paths;
+  for (let i = 0; i < paths.length; i += 1) {
+    if (typeof paths[i] !== "string" || !validRelativePath(paths[i])) throw new Error("osnova: corrupt path table");
+    if (i > 0 && compareStr(paths[i - 1]!, paths[i]!) >= 0) throw new Error("osnova: corrupt path table");
+  }
+  const names = artifact.names;
+  for (let i = 0; i < names.length; i += 1) {
+    if (typeof names[i] !== "string") throw new Error("osnova: corrupt name table");
+    if (i > 0 && compareStr(names[i - 1]!, names[i]!) >= 0) throw new Error("osnova: corrupt name table");
+  }
   const files = new Map<string, FileCard>();
-  for (const file of artifact.files) {
-    if (typeof file !== "object" || file === null || !validRelativePath(file.path) || files.has(file.path) ||
-      !(Object.keys(grammarFile).includes(file.language) || file.language === "fallback") ||
+  for (let index = 0; index < artifact.files.length; index += 1) {
+    const file = artifact.files[index];
+    if (typeof file !== "object" || file === null || !integerIn(file.p, 0, paths.length - 1) || file.p !== index) {
+      throw new Error("osnova: corrupt file metadata");
+    }
+    const filePath = paths[file.p]!;
+    if (files.has(filePath) || !(Object.keys(grammarFile).includes(file.language) || file.language === "fallback") ||
       typeof file.hash !== "string" || !/^[a-f0-9]{64}$/.test(file.hash) ||
       !nonnegativeInteger(file.size) || !nonnegativeInteger(file.lineCount) ||
       !nonnegativeInteger(file.to) || !nonnegativeInteger(file.tl) || file.to + file.tl > artifact.textBytes ||
@@ -208,8 +229,8 @@ function deserializeParsedArtifact(parsed: unknown, data: string, textPath: stri
       throw new Error("osnova: corrupt index diagnostic metadata");
     }
     const symbols = file.symbols.map((symbol: SerializedSymbol) => {
-      if (typeof symbol !== "object" || symbol === null || typeof symbol.name !== "string" ||
-        typeof symbol.q !== "string" || !symbol.q.startsWith(`${file.path}#`) || typeof symbol.signature !== "string" ||
+      if (typeof symbol !== "object" || symbol === null || !integerIn(symbol.n, 0, names.length - 1) ||
+        typeof symbol.q !== "string" || typeof symbol.signature !== "string" ||
         !["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant", "module"].includes(symbol.kind) ||
         typeof symbol.span !== "object" || symbol.span === null || !positiveInteger(symbol.span.s) ||
         !positiveInteger(symbol.span.e) || symbol.span.e < symbol.span.s || symbol.span.e > file.lineCount ||
@@ -226,10 +247,10 @@ function deserializeParsedArtifact(parsed: unknown, data: string, textPath: stri
         endCol: symbol.span.ec,
       };
       return {
-        name: symbol.name,
-        qualifiedName: symbol.q,
+        name: names[symbol.n]!,
+        qualifiedName: `${filePath}#${symbol.q}`,
         kind: symbol.kind,
-        file: file.path,
+        file: filePath,
         span,
         signature: symbol.signature,
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
@@ -237,33 +258,27 @@ function deserializeParsedArtifact(parsed: unknown, data: string, textPath: stri
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
       };
     });
-    const base = { path: file.path, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports };
+    const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports };
     if (textBytes !== undefined) {
       const text = textBytes.subarray(file.to, file.to + file.tl).toString("utf8");
       if (!binaryCard && (sha256Hex(text) !== file.hash || (text.length === 0 ? 0 : text.split("\n").length) !== file.lineCount)) throw new Error("osnova: corrupt file content");
-      files.set(file.path, { ...base, text });
+      files.set(filePath, { ...base, text });
     } else if (textPath !== undefined) {
-      files.set(file.path, lazyTextCard(base, textPath, file.to, file.tl, file.hash));
+      files.set(filePath, lazyTextCard(base, textPath, file.to, file.tl, file.hash, artifact.textHash, artifact.textBytes));
     } else {
       throw new Error("osnova: text source required");
     }
   }
-  const edges: OsnovaEdge[] = artifact.edges.map((edge) => {
-    if (typeof edge !== "object" || edge === null || !["calls", "references", "imports"].includes(edge.k) ||
-      !files.has(edge.f) || typeof edge.fs !== "string" || (edge.fs !== "" && edge.fs !== edge.f && !edge.fs.startsWith(`${edge.f}#`)) ||
-      typeof edge.t !== "string" || !positiveInteger(edge.l) || edge.l > (files.get(edge.f)?.lineCount ?? 0) ||
-      (edge.tf !== undefined && (!validRelativePath(edge.tf) || !files.has(edge.tf))) ||
-      (edge.ts !== undefined && typeof edge.ts !== "string")) throw new Error("osnova: corrupt edge metadata");
-    const evidence = readEvidence(edge.e);
-    return {
-      kind: edge.k, fromFile: edge.f, fromSymbol: edge.fs, toName: edge.t, line: edge.l, evidence,
-      ...(edge.ts !== undefined ? { toSymbol: edge.ts } : {}),
-      ...(edge.tf !== undefined ? { toFile: edge.tf } : {}),
-      ...(edge.b === undefined ? {} : { binding: readBinding(edge.b) }),
-    };
-  });
-  if (artifact.checksum !== sha256Hex(JSON.stringify({ root: artifact.root, textHash: artifact.textHash, textBytes: artifact.textBytes, files: artifact.files, edges: artifact.edges }))) {
-    throw new Error("osnova: corrupt artifact checksum");
+  let edges: readonly OsnovaEdge[] | EdgeSource;
+  if (edgeBytes !== undefined) {
+    edges = deserializeEdges(edgeBytes, paths, files);
+  } else if (edgeSource !== undefined) {
+    if (edgeSource.raw.length !== artifact.edgesBytes || sha256Hex(edgeSource.raw) !== artifact.edgesHash) {
+      throw new Error("osnova: corrupt cached edge content");
+    }
+    edges = { path: edgeSource.path, raw: edgeSource.raw, paths };
+  } else {
+    throw new Error("osnova: edge source required");
   }
   const index = new OsnovaIndexImpl(artifact.root, files, edges);
   rememberIndexGeneration(index, data);
@@ -280,6 +295,18 @@ function textIdentityFromParsed(parsed: unknown): { hash: string; bytes: number 
   return { hash: value.textHash, bytes: value.textBytes };
 }
 
+function legacyFormatVersion(raw: Buffer): number | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+  const version = (parsed as { formatVersion?: unknown }).formatVersion;
+  return integerIn(version, 1, indexFormatVersion - 1) ? version : undefined;
+}
+
 function nonnegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -288,47 +315,8 @@ function positiveInteger(value: unknown): value is number {
   return nonnegativeInteger(value) && value > 0;
 }
 
-function readEvidence(value: unknown): EdgeEvidence {
-  if (typeof value === "object" && value !== null) {
-    const evidence = value as { source?: unknown; resolution?: unknown };
-    if (evidence.source === "unknown") return { source: "unknown" };
-    if (evidence.source === "syntax" && typeof evidence.resolution === "object" && evidence.resolution !== null) {
-      const resolution = evidence.resolution as Partial<EdgeResolution>;
-      if (resolution.status === "resolved" && ["import-path", "same-file-name", "imported-file-name", "unique-name", "import-binding", "lexical-definition"].includes(resolution.method ?? "")) {
-        return value as EdgeEvidence;
-      }
-      if (resolution.status === "resolved" && resolution.method === "re-export-binding" && validHops(resolution.via)) return value as EdgeEvidence;
-      if (resolution.status === "resolved" && resolution.method === "receiver-hint" &&
-        typeof resolution.receiver === "object" && resolution.receiver !== null &&
-        typeof resolution.receiver.classSymbol === "string" && ["class", "instance"].includes(resolution.receiver.mode) &&
-        ["constructor", "lexical", "class-reference"].includes(resolution.receiver.basis) &&
-        (resolution.via === undefined || validHops(resolution.via))) return value as EdgeEvidence;
-      if (resolution.status === "ambiguous" && Array.isArray(resolution.candidates) &&
-        resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
-        return value as EdgeEvidence;
-      }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved"].includes(resolution.reason ?? "")) {
-        return value as EdgeEvidence;
-      }
-    }
-  }
-  throw new Error("osnova: corrupt edge evidence metadata");
-}
-
-function validHops(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0 && value.length <= 128 && value.every((hop: unknown) => {
-    if (typeof hop !== "object" || hop === null) return false;
-    const item = hop as Record<string, unknown>;
-    return ["file", "source", "exportedName", "importedName", "targetFile"].every((key) => typeof item[key] === "string") &&
-      (item.kind === "named" || item.kind === "star") && Number.isSafeInteger(item.line) && (item.line as number) > 0;
-  });
-}
-
-function validSymbolBinding(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const binding = value as Record<string, unknown>;
-  return (binding.kind === "local" && typeof binding.name === "string") ||
-    (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string");
+function integerIn(value: unknown, min: number, max: number): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max;
 }
 
 function readReExport(value: unknown): ReExport {
@@ -343,43 +331,53 @@ function readReExport(value: unknown): ReExport {
   throw new Error("osnova: corrupt re-export metadata");
 }
 
-function readBinding(value: unknown): EdgeBinding {
-  if (typeof value === "object" && value !== null) {
-    const binding = value as Partial<EdgeBinding>;
-    if (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string") return value as EdgeBinding;
-    if (binding.kind === "local" && typeof binding.name === "string") return value as EdgeBinding;
-    if (binding.kind === "blocked" && ["local-value", "unsupported", "ambiguous", "unknown-receiver"].includes(binding.reason ?? "")) return value as EdgeBinding;
-    if (binding.kind === "instance" && validSymbolBinding(binding.owner) && ["constructor", "lexical"].includes(binding.basis ?? "")) return value as EdgeBinding;
-    if (binding.kind === "member" && validSymbolBinding(binding.owner) && typeof binding.member === "string" &&
-      ["instance", "class"].includes(binding.mode ?? "") && ["constructor", "lexical", "class-reference"].includes(binding.basis ?? "")) return value as EdgeBinding;
-  }
-  throw new Error("osnova: corrupt binding metadata");
-}
-
 export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy: CachePolicy = {}): Promise<string> {
   return withCacheLock(workspaceLockPath(cacheDir, index.root), async () => {
     const dir = workspaceDirFor(cacheDir, index.root);
     let tmpPath: string | undefined;
     let textTmp: string | undefined;
+    let edgesTmp: string | undefined;
+    let shaTmp: string | undefined;
     try {
       await fs.mkdir(dir, { recursive: true });
       if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error("cache workspace must not be a symlink");
-      const { core: raw, text: layout } = serializeArtifactWithText(index);
-      rememberIndexGeneration(index, raw);
       const textFinal = path.join(dir, "text.bin");
+      const previous = previousTextFrom(index);
+      const { core: raw, edges, text: layout } = serializeSections(
+        index,
+        previous !== undefined && previous.path === textFinal ? previous : undefined,
+      );
+      rememberIndexGeneration(index, raw);
       textTmp = `${textFinal}.tmp-${process.pid}-${randomUUID()}`;
+      const edgesFinal = path.join(dir, "edges.json");
+      edgesTmp = `${edgesFinal}.tmp-${process.pid}-${randomUUID()}`;
+      const edgesGzipped = edges.bytes.length > GZIP_THRESHOLD_BYTES;
+      const edgesPayload = edgesGzipped ? gzipSync(edges.bytes, { level: 1 }) : edges.bytes;
       const gzipped = raw.length > GZIP_THRESHOLD_BYTES;
       const finalPath = path.join(dir, "index.json");
       tmpPath = `${finalPath}.tmp-${process.pid}-${randomUUID()}`;
       const payload = gzipped ? gzipSync(raw, { level: 1 }) : raw;
+      const shaFinal = path.join(dir, "index.sha");
+      shaTmp = `${shaFinal}.tmp-${process.pid}-${randomUUID()}`;
+      const shaPayload = Buffer.from(`${sha256Hex(raw)}\n`, "utf8");
       const limits = cacheLimits(policy);
-      if (payload.length + layout.bytes.length > limits.maxBytes || limits.maxWorkspaces === 0 || raw.length > MAX_ARTIFACT_BYTES) {
+      if (payload.length + layout.bytes.length + edgesPayload.length + shaPayload.length > limits.maxBytes ||
+        limits.maxWorkspaces === 0 || raw.length > MAX_ARTIFACT_BYTES) {
         throw new Error("osnova: artifact exceeds configured cache limits");
       }
       await fs.writeFile(textTmp, layout.bytes, { flag: "wx" });
       await fs.rename(textTmp, textFinal);
+      textTmp = undefined;
+      rebindPublishedText(index, textFinal, layout.offsets, layout.hash, layout.bytes.length);
+      await fs.writeFile(edgesTmp, edgesPayload, { flag: "wx" });
+      await fs.rename(edgesTmp, edgesFinal);
+      edgesTmp = undefined;
       await fs.writeFile(tmpPath, payload, { flag: "wx" });
       await fs.rename(tmpPath, finalPath);
+      tmpPath = undefined;
+      await fs.writeFile(shaTmp, shaPayload, { flag: "wx" });
+      await fs.rename(shaTmp, shaFinal);
+      shaTmp = undefined;
       await fs.rm(path.join(dir, "index.json.gz"), { force: true });
       await touchWorkspace(dir);
       await evictLru(cacheDir, policy);
@@ -389,6 +387,8 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
     } finally {
       if (tmpPath !== undefined) await fs.rm(tmpPath, { force: true }).catch(() => {});
       if (textTmp !== undefined) await fs.rm(textTmp, { force: true }).catch(() => {});
+      if (edgesTmp !== undefined) await fs.rm(edgesTmp, { force: true }).catch(() => {});
+      if (shaTmp !== undefined) await fs.rm(shaTmp, { force: true }).catch(() => {});
     }
   });
 }
@@ -397,47 +397,80 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
   root = workspaceIdentity(root);
   return withCacheLock(workspaceLockPath(cacheDir, root), async () => {
     const dir = workspaceDirFor(cacheDir, root);
-    for (const name of ["index.json", "index.json.gz"]) {
+    try {
+      if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error("cache workspace must not be a symlink");
+      const corePath = path.join(dir, "index.json");
+      const coreStat = await fs.lstat(corePath);
+      if (!coreStat.isFile() || coreStat.size > MAX_ARTIFACT_BYTES) throw new Error("invalid cache artifact file");
+      const data = await fs.readFile(corePath);
+      const raw = data[0] === 0x1f && data[1] === 0x8b
+        ? gunzipSync(data, { maxOutputLength: MAX_ARTIFACT_BYTES }) : data;
+      const shaPath = path.join(dir, "index.sha");
+      const shaText = await fs.readFile(shaPath, "utf8").catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        const legacy = legacyFormatVersion(raw);
+        if (legacy !== undefined) throw new ArtifactVersionError(legacy);
+        throw new SectionError("osnova: cache core checksum missing");
+      });
+      const sha = shaText.trim();
+      if (!/^[a-f0-9]{64}$/.test(sha)) throw new SectionError("osnova: cache core checksum corrupt");
+      if (sha256Hex(raw) !== sha) throw new SectionError("osnova: cache core checksum mismatch");
+      const content = raw.toString("utf8");
+      const parsed: unknown = JSON.parse(content);
+      const parsedVersion = (parsed as { formatVersion?: unknown }).formatVersion;
+      if (parsedVersion !== indexFormatVersion) throw new ArtifactVersionError(parsedVersion);
+      const identity = parsed as { textHash?: unknown; textBytes?: unknown; edgesHash?: unknown; edgesBytes?: unknown };
+      if (typeof identity.textHash !== "string" || !nonnegativeInteger(identity.textBytes)) throw new Error("osnova: corrupt text identity");
+      if (typeof identity.edgesHash !== "string" || !nonnegativeInteger(identity.edgesBytes)) throw new Error("osnova: corrupt edge identity");
+      const textPath = path.join(dir, "text.bin");
+      const textStat = await fs.lstat(textPath).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SectionError("osnova: cache text sidecar missing");
+        throw error;
+      });
+      if (!textStat.isFile() || textStat.size !== identity.textBytes) throw new SectionError("osnova: cache text sidecar mismatch");
+      const edgesPath = path.join(dir, "edges.json");
+      const edgesStat = await fs.lstat(edgesPath).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SectionError("osnova: cache edge sidecar missing");
+        throw error;
+      });
+      if (!edgesStat.isFile() || edgesStat.size > MAX_ARTIFACT_BYTES) throw new SectionError("osnova: cache edge sidecar mismatch");
+      const edgesData = await fs.readFile(edgesPath);
+      let edgesRaw: Buffer;
       try {
-        if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error("cache workspace must not be a symlink");
-        const artifactPath = path.join(dir, name);
-        const stat = await fs.lstat(artifactPath);
-        if (!stat.isFile() || stat.size > MAX_ARTIFACT_BYTES) throw new Error("invalid cache artifact file");
-        const data = await fs.readFile(artifactPath);
-        const content = data[0] === 0x1f && data[1] === 0x8b
-          ? gunzipSync(data, { maxOutputLength: MAX_ARTIFACT_BYTES }).toString("utf8") : data.toString("utf8");
-        const parsed: unknown = JSON.parse(content);
-        const parsedVersion = (parsed as { formatVersion?: unknown }).formatVersion;
-        if (parsedVersion !== indexFormatVersion) throw new ArtifactVersionError(parsedVersion);
-        const identity = textIdentityFromParsed(parsed);
-        const textPath = path.join(dir, "text.bin");
-        const textStat = await fs.lstat(textPath).catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new TextSidecarError("osnova: cache text sidecar missing");
-          throw error;
-        });
-        if (!textStat.isFile() || textStat.size !== identity.bytes) throw new TextSidecarError("osnova: cache text sidecar mismatch");
-        const index = deserializeParsedArtifact(parsed, content, textPath);
-        if (index.root !== root) throw new Error("osnova: cache artifact belongs to a different workspace");
-        if (identity.bytes <= 4 * 1024 * 1024 && sha256Hex(await fs.readFile(textPath)) !== identity.hash) throw new TextSidecarError("osnova: cache text sidecar mismatch");
-        await touchWorkspace(dir).catch((error: unknown) => {
-          throw new IndexingError({ phase: "cache", path: dir, code: "cache-access-write-failed" }, error);
-        });
-        return bindIndexCache(index, cacheDir);
+        edgesRaw = edgesData[0] === 0x1f && edgesData[1] === 0x8b
+          ? gunzipSync(edgesData, { maxOutputLength: MAX_ARTIFACT_BYTES }) : edgesData;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        if (error instanceof ArtifactVersionError && typeof error.version === "number" &&
-          Number.isInteger(error.version) && error.version > 0 && error.version < indexFormatVersion) return undefined;
-        if (error instanceof ExtractionVersionError) return undefined;
-        throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
+        throw new SectionError(`osnova: cache edge sidecar unreadable: ${String(error)}`);
       }
+      if (edgesRaw.length !== identity.edgesBytes || sha256Hex(edgesRaw) !== identity.edgesHash) {
+        throw new SectionError("osnova: cache edge sidecar mismatch");
+      }
+      const index = deserializeParsedArtifact(parsed, content, textPath, { path: edgesPath, raw: edgesRaw });
+      if (index.root !== root) throw new Error("osnova: cache artifact belongs to a different workspace");
+      await touchWorkspace(dir).catch((error: unknown) => {
+        throw new IndexingError({ phase: "cache", path: dir, code: "cache-access-write-failed" }, error);
+      });
+      return bindIndexCache(index, cacheDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      if (error instanceof ArtifactVersionError && typeof error.version === "number" &&
+        Number.isInteger(error.version) && error.version > 0 && error.version < indexFormatVersion) return undefined;
+      if (error instanceof ExtractionVersionError) return undefined;
+      throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
     }
-    return undefined;
   });
 }
 
-export function isTextSidecarInconsistency(error: unknown): boolean {
-  return error instanceof IndexingError && error.cause instanceof TextSidecarError;
+export function isSectionInconsistency(error: unknown): boolean {
+  let cause: unknown = error;
+  for (let depth = 0; depth < 8 && cause !== null && cause !== undefined; depth += 1) {
+    if (cause instanceof SectionError) return true;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return false;
 }
+
+export const isTextSidecarInconsistency = isSectionInconsistency;
 
 export async function artifactPathFor(root: string, cacheDir: string): Promise<string | undefined> {
   const dir = workspaceDirFor(cacheDir, root);
@@ -454,6 +487,14 @@ export async function artifactPathFor(root: string, cacheDir: string): Promise<s
 
 export async function artifactTextPathFor(root: string, cacheDir: string): Promise<string | undefined> {
   const file = path.join(workspaceDirFor(cacheDir, root), "text.bin");
+  try { await fs.access(file); return file; } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return undefined;
+  }
+}
+
+export async function artifactEdgesPathFor(root: string, cacheDir: string): Promise<string | undefined> {
+  const file = path.join(workspaceDirFor(cacheDir, root), "edges.json");
   try { await fs.access(file); return file; } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return undefined;

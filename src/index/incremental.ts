@@ -4,7 +4,7 @@ import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
 import { scanFiles, sameFileMetadata, sha256Hex } from "./scan.js";
-import type { FileMetadata } from "./scan.js";
+import type { FileMetadata, ScanResult } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, indexCacheDirectory, workspaceFilePath, workspaceRelativePath } from "./workspace.js";
 
@@ -22,6 +22,7 @@ export async function inspectFreshness(
   index: OsnovaIndex,
   root: string,
   verified?: ReadonlyMap<string, FileMetadata>,
+  scan?: ScanResult | undefined,
 ): Promise<FreshnessInspection> {
   const absRoot = await canonicalWorkspaceRoot(root);
   if (index.root !== absRoot) {
@@ -29,7 +30,7 @@ export async function inspectFreshness(
       `osnova: index belongs to ${index.root}, not ${absRoot}; rebuild with buildIndex(${JSON.stringify(absRoot)})`,
     );
   }
-  const scan = await scanFiles(absRoot, indexCacheDirectory(index));
+  scan ??= await scanFiles(absRoot, indexCacheDirectory(index));
   const current = new Set(scan.paths);
   const added: string[] = [];
   const changed: string[] = [];
