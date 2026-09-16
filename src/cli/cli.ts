@@ -19,6 +19,7 @@ import { impact } from "../query/impact.js";
 import { taskContext } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
 import { doctor } from "../diagnostics/index.js";
+import { OSNOVA_VERSION } from "../version.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -28,6 +29,7 @@ export interface CliIo {
 const USAGE = `osnova: deterministic repository context engine
 
 usage:
+  osnova --version
   osnova build <root> [--cache-dir <path>]
   osnova check <root> [--cache-dir <path>]
   osnova ground "<question>" [--in <path>] [-n <n>] [--full] [--scoped] [--workspace <path>] [--cache-dir <path>]
@@ -92,6 +94,10 @@ export async function runCli(
     stderr: (text) => rawIo.stderr(boundText(text)),
   };
   const [command = "", ...rest] = argv;
+  if (command === "--version" || command === "-v" || command === "version") {
+    io.stdout(OSNOVA_VERSION);
+    return EXIT_OK;
+  }
   if (command.length === 0 || command === "--help" || command === "-h" || command === "help") {
     io.stdout(USAGE);
     return command.length === 0 ? EXIT_ERROR : EXIT_OK;

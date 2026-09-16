@@ -76,3 +76,4 @@ export { doctor } from "./diagnostics/index.js";
 export type { DoctorOptions, DoctorReport, DiagnosticCheck, LanguageCapability } from "./diagnostics/index.js";
 export { configureLspEnrichment, loadLspEnrichment, refreshLspEnrichment, lspEnrichmentLimits } from "./enrichment/index.js";
 export type { LspLaunchSpec, LspLimits, LspPolicy, LspPosition, LspRange, LspQuery, LspLocation, LspEvidence, LspQueryResult, LspDiagnostic, LspEnrichmentResult, LspCacheOptions, LspRefreshOptions } from "./enrichment/index.js";
+export { OSNOVA_VERSION } from "./version.js";
