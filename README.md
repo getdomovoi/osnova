@@ -48,6 +48,18 @@ command = "osnova"
 args = ["mcp"]
 ```
 
+OpenCode, in `~/.config/opencode/opencode.json`:
+
+```json
+{ "mcp": { "osnova": { "type": "local", "command": ["osnova", "mcp"], "enabled": true } } }
+```
+
+Pi, through the `pi-mcp-adapter` extension, in `~/.pi/agent/mcp.json`:
+
+```json
+{ "mcpServers": { "osnova": { "command": "osnova", "args": ["mcp"] } } }
+```
+
 Kilo, in `~/.config/kilo/kilo.jsonc`:
 
 ```json
