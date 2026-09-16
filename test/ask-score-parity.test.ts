@@ -6,8 +6,8 @@ import { scopedAsk } from "../src/query/scoped.js";
 
 const EXPECTED_ASK: Record<string, Array<[string, number]>> = {
   "retry timer": [
-    ["src/app.ts#run.timer", 1.983204276559982],
     ["src/util.ts#RetryTimer", 0.987721934840439],
+    ["src/app.ts#run.timer", 0.983204276559982],
     ["src/util.ts#RetryTimer.tick", 0.9802560027150304],
     ["src/app.ts#describeRetry", 0.9746271018822708],
     ["src/util.ts#formatRetry", 0.9742055207610051],
@@ -16,11 +16,11 @@ const EXPECTED_ASK: Record<string, Array<[string, number]>> = {
     ["src/app.ts", 0.8574024407730798],
   ],
   "compute helper": [
-    ["src/breadth/util.c#compute", 1.9790490952318653],
-    ["src/util.ts#compute", 1.9786578093864584],
-    ["src/breadth/greeter.rb#Util.helper", 1.968961522097514],
-    ["src/breadth/util.c#helper", 1.9683480378574267],
-    ["src/server.py#helper", 1.9681946925890048],
+    ["src/breadth/util.c#compute", 0.9790490952318653],
+    ["src/util.ts#compute", 0.9786578093864584],
+    ["src/breadth/greeter.rb#Util.helper", 0.9689615220975141],
+    ["src/breadth/util.c#helper", 0.9683480378574268],
+    ["src/server.py#helper", 0.9681946925890047],
     ["src/util.ts#internalHelper", 0.9678315475690024],
     ["src/app.ts#run.computed", 0.9457173540823378],
     ["src/pyhelpers/__init__.py", 0.7433406770341315],
@@ -33,14 +33,14 @@ const EXPECTED_ASK: Record<string, Array<[string, number]>> = {
     ["src/server.py#main", 0.6514246214509662],
   ],
   "server start listen": [
-    ["src/main.go#Server.Start", 1.986276407430495],
-    ["src/server.py#Server.start", 1.984856146877827],
-    ["src/App.java#App.start", 1.9756500115052433],
-    ["src/Program.cs#Program.Start", 1.9755311484344258],
-    ["src/server.py#Server", 1.9722027846032173],
-    ["src/main.go#Server", 1.9694869667565305],
     ["src/server.py#Server._listen", 0.986689121503138],
+    ["src/main.go#Server.Start", 0.986276407430495],
+    ["src/server.py#Server.start", 0.984856146877827],
+    ["src/App.java#App.start", 0.9756500115052434],
+    ["src/Program.cs#Program.Start", 0.9755311484344257],
+    ["src/server.py#Server", 0.9722027846032172],
     ["src/main.go#buildServer", 0.9701489832882134],
+    ["src/main.go#Server", 0.9694869667565305],
     ["src/server.py#Server.__init__", 0.9563966997921086],
     ["src/server.py#main", 0.8919017770471671],
     ["src/main.go#main", 0.8140334537744582],
@@ -49,27 +49,27 @@ const EXPECTED_ASK: Record<string, Array<[string, number]>> = {
     ["src/server.py#helper", 0.7090584070810386],
   ],
   "greet format": [
-    ["src/breadth/greeter.sh#greet", 1.971190065900319],
-    ["src/breadth/greeter.ex#Greeter.greet", 1.9702388625874012],
-    ["src/breadth/greeter.ml#Greeter.greet", 1.9702388625874012],
-    ["src/breadth/Greeter.kt#Greeter.greet", 1.9697969417611023],
-    ["src/breadth/Greeter.scala#Greeter.greet", 1.9697969417611023],
-    ["src/breadth/Greeter.swift#Greeter.greet", 1.9696138700202122],
-    ["src/breadth/greeter.php#Greeter.greet", 1.9694505946349437],
-    ["src/breadth/greeter.zig#Greeter.greet", 1.9691718422759839],
-    ["src/breadth/greeter.dart#Greeter.greet", 1.962398355446501],
-    ["src/breadth/greeter.rb#Greeting.Greeter.greet", 1.962072984972004],
-    ["src/breadth/greeter.sh#format", 1.9574569892593932],
-    ["src/breadth/greeter.ex#Greeter.format", 1.9562381684110055],
-    ["src/breadth/greeter.dart#Greeter.format", 1.956028818144071],
-    ["src/breadth/greeter.ml#Greeter.format", 1.956028818144071],
-    ["src/breadth/Greeter.kt#Greeter.format", 1.9558441300767098],
-    ["src/breadth/Greeter.swift#Greeter.format", 1.9558441300767098],
-    ["src/breadth/Greeter.scala#Greeter.format", 1.9556799886797496],
-    ["src/breadth/greeter.php#Greeter.format", 1.9556799886797496],
-    ["src/breadth/greeter.zig#Greeter.format", 1.9556799886797496],
+    ["src/breadth/greeter.sh#greet", 0.9711900659003191],
+    ["src/breadth/greeter.ex#Greeter.greet", 0.9702388625874011],
+    ["src/breadth/greeter.ml#Greeter.greet", 0.9702388625874011],
+    ["src/breadth/Greeter.kt#Greeter.greet", 0.9697969417611023],
+    ["src/breadth/Greeter.scala#Greeter.greet", 0.9697969417611023],
+    ["src/breadth/Greeter.swift#Greeter.greet", 0.9696138700202122],
     ["src/breadth/greeter.ex#Greeter.greet_safe", 0.9694505946349437],
+    ["src/breadth/greeter.php#Greeter.greet", 0.9694505946349437],
+    ["src/breadth/greeter.zig#Greeter.greet", 0.969171842275984],
+    ["src/breadth/greeter.dart#Greeter.greet", 0.9623983554465009],
+    ["src/breadth/greeter.rb#Greeting.Greeter.greet", 0.962072984972004],
+    ["src/breadth/greeter.sh#format", 0.9574569892593932],
+    ["src/breadth/greeter.ex#Greeter.format", 0.9562381684110056],
+    ["src/breadth/greeter.dart#Greeter.format", 0.956028818144071],
+    ["src/breadth/greeter.ml#Greeter.format", 0.956028818144071],
     ["src/breadth/greeter.rb#Greeting.Greeter.format_name", 0.956028818144071],
+    ["src/breadth/Greeter.kt#Greeter.format", 0.9558441300767098],
+    ["src/breadth/Greeter.swift#Greeter.format", 0.9558441300767098],
+    ["src/breadth/Greeter.scala#Greeter.format", 0.9556799886797495],
+    ["src/breadth/greeter.php#Greeter.format", 0.9556799886797495],
+    ["src/breadth/greeter.zig#Greeter.format", 0.9556799886797495],
     ["src/util.ts#formatRetry", 0.954683936337844],
     ["src/breadth/greeter.ml#run", 0.9045455726963959],
     ["src/breadth/Greeter.kt#run", 0.9030559036636835],
@@ -90,8 +90,8 @@ const EXPECTED_ASK: Record<string, Array<[string, number]>> = {
 };
 
 const EXPECTED_SCOPED: Array<[string, string, number]> = [
-  ["", "src/app.ts#run.timer", 1.983204276559982],
   ["", "src/util.ts#RetryTimer", 0.987721934840439],
+  ["", "src/app.ts#run.timer", 0.983204276559982],
   ["", "src/util.ts#RetryTimer.tick", 0.9802560027150304],
   ["", "src/app.ts#describeRetry", 0.9746271018822708],
   ["", "src/util.ts#formatRetry", 0.9742055207610051],
@@ -100,7 +100,7 @@ const EXPECTED_SCOPED: Array<[string, string, number]> = [
   ["", "src/app.ts", 0.8574024407730798],
 ];
 
-describe("ask score parity with pre-task-5 baseline (52a568b)", () => {
+describe("ask score parity with the identifier-tier baseline", () => {
   it("reproduces askDetailed scores on the sample repo for pinned queries", async () => {
     const dir = path.join(import.meta.dirname, "fixtures", "sample-repo");
     const index = await buildIndex(dir);

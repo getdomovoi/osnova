@@ -1,7 +1,8 @@
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { compareText, indexReceipt, isReliableEdge, relationshipEvidence, sourceReceipt } from "./impact.js";
 import type { DefinitionEvidence, IndexReceipt, RelationshipEvidence, SourceReceipt } from "./impact.js";
-import { inScope, normalizeScope, scopedAsk } from "./scoped.js";
+import { inScope, normalizeScope } from "./scoped.js";
+import { askDetailed } from "./ask.js";
 
 export interface TaskContextOptions {
   readonly task: "understand" | "change" | "review";
@@ -48,6 +49,8 @@ export interface TaskContextResult {
   readonly limitations: readonly string[];
 }
 
+const seedOverfetch = 4;
+
 export function taskContext(index: OsnovaIndex, options: TaskContextOptions): TaskContextResult {
   const maxCodeUnits = options.maxCodeUnits ?? 16_384;
   const maxDepth = options.maxDepth ?? 3;
@@ -67,12 +70,13 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
       else seeds.push(symbol);
     }
   } else {
-    const retrieved = scopedAsk(index, options.question, { in: scope, limit: options.limit ?? 8 });
-    retrievalHits = retrieved.omittedHits;
+    const limit = options.limit ?? 8;
+    if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError("osnova: task context limit must be a nonnegative safe integer");
+    const retrieved = askDetailed(index, options.question, { in: scope, limit: limit * seedOverfetch });
     for (const hit of retrieved.hits) {
-      if (hit.symbol !== null) seeds.push(hit.symbol);
-      else retrievalHits++;
+      if (hit.symbol !== null && seeds.length < limit) seeds.push(hit.symbol);
     }
+    retrievalHits = retrieved.totalCandidates - seeds.length;
   }
   const sources = [...new Set(seeds.map((symbol) => symbol.file))].sort(compareText).map((file) => sourceReceipt(index, file, receipt));
   const definitions = new Map<string, ContextDefinition>();
