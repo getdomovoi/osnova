@@ -275,7 +275,7 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
       if (item !== null) seeds.add(item.file);
     }
     const inbound = new Map<string, RelationshipEvidence[]>();
-    for (const edge of [...index.edges].sort((a, b) => compareText(canonical(a), canonical(b)))) {
+    for (const edge of index.edges) {
       const evidence = relationshipEvidence(index, edge, receipt);
       const target = edge.toSymbol ?? edge.toFile;
       if (evidence === null || target === undefined) continue;

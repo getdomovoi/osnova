@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-16",
+  "change": "identifier tier restricted to identifier-like query words; footing seeds from definition hits",
+  "rule": "no corpus may lose recall or reciprocal rank at 5",
+  "outcome": "accepted",
+  "corpora": {
+    "core": {
+      "manifestFingerprint": "7c6086fee2e8ab2384185d640924b7630c599b3b951607db382d5f2acd737cc1",
+      "sourceRevision": null,
+      "before": {
+        "caseCount": 5,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 1,
+        "callerPrecision": 1,
+        "callerRecall": 1,
+        "searchPrecision": 1,
+        "searchRecall": 1
+      },
+      "after": {
+        "caseCount": 5,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 1,
+        "callerPrecision": 1,
+        "callerRecall": 1,
+        "searchPrecision": 1,
+        "searchRecall": 1
+      }
+    },
+    "pyright": {
+      "manifestFingerprint": "e6e5ddfe7d25d3581e50de9cd4de4b0b657d8b9687292f09e14c79ee49ba3f47",
+      "sourceRevision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+      "before": {
+        "caseCount": 2,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 1,
+        "callerPrecision": 1,
+        "callerRecall": 1,
+        "searchPrecision": null,
+        "searchRecall": null
+      },
+      "after": {
+        "caseCount": 2,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 1,
+        "callerPrecision": 1,
+        "callerRecall": 1,
+        "searchPrecision": null,
+        "searchRecall": null
+      }
+    },
+    "zod": {
+      "manifestFingerprint": "addc1093f83ec61d6a4d59b99e8ccd1aae764b4ef29dd8d2fa535c296e673d44",
+      "sourceRevision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "before": {
+        "caseCount": 2,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 0.75,
+        "callerPrecision": null,
+        "callerRecall": null,
+        "searchPrecision": null,
+        "searchRecall": null
+      },
+      "after": {
+        "caseCount": 2,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 0.75,
+        "callerPrecision": null,
+        "callerRecall": null,
+        "searchPrecision": null,
+        "searchRecall": null
+      }
+    },
+    "click": {
+      "manifestFingerprint": "30f4f726722d40b7e22a070157ca847d5d520f3d5e39d3b967cd495f9c595a1d",
+      "sourceRevision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+      "before": {
+        "caseCount": 2,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 1,
+        "callerPrecision": null,
+        "callerRecall": null,
+        "searchPrecision": null,
+        "searchRecall": null
+      },
+      "after": {
+        "caseCount": 2,
+        "errorCount": 0,
+        "meanRecallAt5": 1,
+        "meanReciprocalRankAt5": 1,
+        "callerPrecision": null,
+        "callerRecall": null,
+        "searchPrecision": null,
+        "searchRecall": null
+      }
+    }
+  },
+  "parity": {
+    "query": "retry timer",
+    "note": "src/util.ts#RetryTimer now ranks ahead of src/app.ts#run.timer; every other pinned order unchanged"
+  },
+  "prose": {
+    "question": "How does Pyright resolve a relative import statement like `from . import foo` to a file on disk",
+    "before": {
+      "seeds": 2,
+      "topDefinitionHits": [
+        "fileSystemMapping.ts#...relative",
+        "deferred.ts#resolve",
+        "parser.ts#statement"
+      ]
+    },
+    "after": {
+      "seeds": 8,
+      "topDefinitionHits": [
+        "importResolver.ts#ImportResolver._resolveImportStrict.relativeImport",
+        "importResolver.ts#ImportResolver._resolveRelativeImport",
+        "typeServerProtocol.ts#ResolveImportParams"
+      ]
+    }
+  }
+}
