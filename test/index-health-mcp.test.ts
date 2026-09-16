@@ -34,16 +34,16 @@ afterEach(async () => {
   await fs.rm(temporary, { recursive: true, force: true });
 });
 
-it("all five tools disclose partial analysis", async () => {
+it("all five tools disclose partial foundation", async () => {
   await fs.writeFile(path.join(workspace, "broken.ts"), "export function broken( {");
   const tools: Array<[string, Record<string, unknown>]> = [
-    ["osnova_ask", { question: "one" }], ["osnova_find_text", { pattern: "one" }],
-    ["osnova_skeleton", { file: "one.ts" }], ["osnova_callers", { symbol: "one" }], ["osnova_map", {}],
+    ["osnova_ground", { question: "one" }], ["osnova_thread", { pattern: "one" }],
+    ["osnova_outline", { file: "one.ts" }], ["osnova_warp", { symbol: "one" }], ["osnova_groundwork", {}],
   ];
   for (const [name, args] of tools) {
     const result = await client.callTool({ name, arguments: args });
     expect(result.isError, name).toBeFalsy();
-    expect(JSON.stringify(result), name).toContain("partial analysis");
+    expect(JSON.stringify(result), name).toContain("osnova foundation: partial");
   }
 });
 
@@ -52,13 +52,13 @@ it("ordinary query tools aggregate diagnostics instead of repeating file paths",
     await fs.writeFile(path.join(workspace, `broken-${number}.ts`), "export function broken( {");
   }
   const tools: Array<[string, Record<string, unknown>]> = [
-    ["osnova_ask", { question: "one" }], ["osnova_find_text", { pattern: "one" }],
-    ["osnova_skeleton", { file: "one.ts" }], ["osnova_callers", { symbol: "one" }],
+    ["osnova_ground", { question: "one" }], ["osnova_thread", { pattern: "one" }],
+    ["osnova_outline", { file: "one.ts" }], ["osnova_warp", { symbol: "one" }],
   ];
   for (const [name, args] of tools) {
     const result = await client.callTool({ name, arguments: args });
     const text = JSON.stringify(result);
-    expect(text, name).toContain("partial analysis: 15 diagnostics (parse/syntax-errors=15)");
+    expect(text, name).toContain("osnova foundation: partial, 15 diagnostics (parse/syntax-errors=15)");
     expect(text, name).toContain("details via doctor or indexHealth");
     expect(text, name).not.toContain("broken-0.ts");
   }
@@ -66,7 +66,7 @@ it("ordinary query tools aggregate diagnostics instead of repeating file paths",
 
 it("retries initialization after a grammar failure", async () => {
   vi.spyOn(loader, "getParser").mockRejectedValueOnce(new Error("unavailable"));
-  const request = { name: "osnova_skeleton", arguments: { file: "one.ts" } };
+  const request = { name: "osnova_outline", arguments: { file: "one.ts" } };
   const first = await client.callTool(request);
   expect(first.isError).toBe(true);
   expect(JSON.stringify(first)).toContain("grammar-unavailable");
@@ -76,7 +76,7 @@ it("retries initialization after a grammar failure", async () => {
 });
 
 it("does not conceal a failed refresh write and can retry safely", async () => {
-  const request = { name: "osnova_skeleton", arguments: { file: "one.ts" } };
+  const request = { name: "osnova_outline", arguments: { file: "one.ts" } };
   await client.callTool(request);
   await fs.appendFile(path.join(workspace, "one.ts"), "export function added() {}\n");
   const rename = fs.rename.bind(fs);
@@ -99,9 +99,9 @@ it("does not conceal a failed refresh write and can retry safely", async () => {
 });
 
 it("returns a tool error rather than an empty map after a workspace disappears", async () => {
-  await client.callTool({ name: "osnova_map", arguments: {} });
+  await client.callTool({ name: "osnova_groundwork", arguments: {} });
   await fs.rename(workspace, path.join(temporary, "moved"));
-  const result = await client.callTool({ name: "osnova_map", arguments: {} });
+  const result = await client.callTool({ name: "osnova_groundwork", arguments: {} });
   expect(result.isError).toBe(true);
   expect(JSON.stringify(result)).toContain("directory-unreadable");
 });

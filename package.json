@@ -1,6 +1,6 @@
 {
   "name": "@getdomovoi/osnova",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deterministic repository context engine: tree-sitter symbol/edge graph with CLI and MCP stdio server.",
   "type": "module",
   "license": "Apache-2.0",

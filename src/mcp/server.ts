@@ -16,16 +16,16 @@ import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatIn
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 
-const OSNOVA_VERSION = "0.1.0";
+const OSNOVA_VERSION = "0.2.0";
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 
-const toolDefinitions = [
+const canonicalToolDefinitions = [
   {
-    name: "osnova_ask",
+    name: "osnova_ground",
     description:
-      "Keyword search over an indexed workspace. Returns ranked hits with exact file:line and a short excerpt of the enclosing definition; full=true inlines the whole definition span. askDetailed provides complete candidate counts through the API.",
+      "Search: keyword search over an indexed workspace. Returns ranked hits with exact file:line and a short excerpt of the enclosing definition; full=true inlines the whole definition span. askDetailed provides complete candidate counts through the API.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -38,9 +38,9 @@ const toolDefinitions = [
     },
   },
   {
-    name: "osnova_find_text",
+    name: "osnova_thread",
     description:
-      "Regex or literal search over indexed text, grouped by enclosing symbol and ranked by incoming-edge count. Shows at most 10 matches per group and 50 groups by default, with totals and explicit omission counts.",
+      "Text search: regex or literal search over indexed text, grouped by enclosing symbol and ranked by incoming-edge count. Shows at most 10 matches per group and 50 groups by default, with totals and explicit omission counts.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -54,8 +54,8 @@ const toolDefinitions = [
     },
   },
   {
-    name: "osnova_skeleton",
-    description: "Task-focused signatures and line spans for one indexed file. MCP output is degree-selected under 4096 code units with an exact omission count; the skeleton API returns every signature.",
+    name: "osnova_outline",
+    description: "Outline: task-focused signatures and line spans for one indexed file. MCP output is degree-selected under 4096 code units with an exact omission count; the skeleton API returns every signature.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -65,9 +65,9 @@ const toolDefinitions = [
     },
   },
   {
-    name: "osnova_callers",
+    name: "osnova_warp",
     description:
-      "Direct or transitive indexed callers/callees (direction=in default). MCP output prioritizes confirmed evidence under 2048 code units with exact omission counts; callersDetailed returns the complete structured result. Absence does not prove deletion is safe.",
+      "Call graph: direct or transitive indexed callers/callees (direction=in default). MCP output prioritizes confirmed evidence under 2048 code units with exact omission counts; callersDetailed returns the complete structured result. Absence does not prove deletion is safe.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -79,9 +79,9 @@ const toolDefinitions = [
     },
   },
   {
-    name: "osnova_map",
+    name: "osnova_groundwork",
     description:
-      "Compact deterministic workspace map. MCP defaults to eight directory clusters and 2048 code units with explicit dropped-detail counts; the map API supports larger structured results.",
+      "Repository map: compact deterministic workspace map. MCP defaults to eight directory clusters and 2048 code units with explicit dropped-detail counts; the map API supports larger structured results.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -90,6 +90,25 @@ const toolDefinitions = [
     },
   },
 ] as const;
+
+type CanonicalToolName = (typeof canonicalToolDefinitions)[number]["name"];
+
+const deprecatedToolAliases: ReadonlyMap<string, CanonicalToolName> = new Map([
+  ["osnova_ask", "osnova_ground"],
+  ["osnova_find_text", "osnova_thread"],
+  ["osnova_skeleton", "osnova_outline"],
+  ["osnova_callers", "osnova_warp"],
+  ["osnova_map", "osnova_groundwork"],
+]);
+
+const toolDefinitions = [
+  ...canonicalToolDefinitions,
+  ...[...deprecatedToolAliases].map(([alias, canonical]) => {
+    const definition = canonicalToolDefinitions.find((tool) => tool.name === canonical);
+    if (definition === undefined) throw new Error(`osnova: alias ${alias} names an unknown tool ${canonical}`);
+    return { name: alias, description: `Deprecated alias of ${canonical}; removed in the next release.`, inputSchema: definition.inputSchema };
+  }),
+];
 
 export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
@@ -113,14 +132,14 @@ export function createOsnovaMcpServer(
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const name = request.params.name;
+    const name = deprecatedToolAliases.get(request.params.name) ?? request.params.name;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
       const index = await refresh();
-      const generation = `generation ${indexGeneration(index)}`;
+      const generation = `osnova generation ${indexGeneration(index)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
       switch (name) {
-        case "osnova_ask": {
+        case "osnova_ground": {
           const question = requireString(args, "question");
           const result = ask(index, question, {
             in: optionalString(args, "in"),
@@ -129,7 +148,7 @@ export function createOsnovaMcpServer(
           });
           return textResult(`${prefix}\n${formatAsk(result)}`);
         }
-        case "osnova_find_text": {
+        case "osnova_thread": {
           const pattern = requireString(args, "pattern");
           if (args.limit !== undefined && typeof args.limit !== "number") {
             throw new RangeError("osnova: search limits must be nonnegative safe integers");
@@ -143,12 +162,12 @@ export function createOsnovaMcpServer(
           });
           return textResult(`${prefix}\n${formatFindTextResult(result)}`);
         }
-        case "osnova_skeleton": {
+        case "osnova_outline": {
           const file = requireString(args, "file");
           const available = maximumMcpSkeletonCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${formatSkeletonBounded(index, skeleton(index, file), available)}`);
         }
-        case "osnova_callers": {
+        case "osnova_warp": {
           const symbol = requireString(args, "symbol");
           const direction = optionalString(args, "direction");
           if (direction !== undefined && direction !== "in" && direction !== "out") {
@@ -165,7 +184,7 @@ export function createOsnovaMcpServer(
           const available = maximumMcpCallersCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}`);
         }
-        case "osnova_map": {
+        case "osnova_groundwork": {
           const card = await renderMapCard(index, {
             maxDirs: optionalNumber(args, "maxDirs") ?? 8,
             staleCount: 0,
