@@ -18,7 +18,7 @@ import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { taskContext } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
-import { doctor, previewSetup } from "../diagnostics/index.js";
+import { doctor } from "../diagnostics/index.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -38,7 +38,6 @@ usage:
   osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
   osnova settle --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
-  osnova setup --preview --cli-path <absolute path> [--executable <absolute path>] [--workspace <path>]
   osnova mcp [--workspace <path>] [--cache-dir <path>]   (default workspace: current directory)
 
 queries refresh the index first so answers describe current disk state.`;
@@ -308,15 +307,6 @@ export async function runCli(
       const report = await doctor(parsed.values.workspace ?? process.cwd(), { cacheDir: parsed.values["cache-dir"] });
       io.stdout(jsonOutput(report, "doctor"));
       return report.ok ? EXIT_OK : EXIT_STALE;
-    }
-    case "setup": {
-      const parsed = parseArgs({ args: rest, options: { preview: { type: "boolean" }, "cli-path": { type: "string" }, executable: { type: "string" }, workspace: { type: "string" } } });
-      if (parsed.values.preview !== true || parsed.values["cli-path"] === undefined) throw new Error("osnova setup requires --preview and --cli-path; no apply operation is provided");
-      const preview = await previewSetup(parsed.values.workspace ?? process.cwd(), { cliPath: parsed.values["cli-path"], executable: parsed.values.executable });
-      const text = JSON.stringify(preview);
-      if (text.length > maximumTextResponseCodeUnits) throw new RangeError("osnova: setup preview exceeds CLI budget; use previewSetup for complete content");
-      io.stdout(text);
-      return preview.canApply ? EXIT_OK : EXIT_STALE;
     }
     case "mcp": {
       const parsed = parseArgs({
