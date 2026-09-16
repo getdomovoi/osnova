@@ -152,13 +152,13 @@ function parseDiff(diff: string): DiffFile[] {
   };
   const lines = diff.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
-  for (const line of lines) {
+  for (const [number, line] of lines.entries()) {
     if (oldLeft > 0 || newLeft > 0) {
       if (line.startsWith("\\ No newline")) continue;
       if (line.startsWith("-")) { file?.oldLines.add(oldLine++); oldLeft--; }
       else if (line.startsWith("+")) { file?.newLines.add(newLine++); newLeft--; }
       else if (line.startsWith(" ") || line === "") { oldLine++; newLine++; oldLeft--; newLeft--; }
-      else throw new Error("osnova: invalid unified diff hunk line");
+      else throw new Error(`osnova: invalid unified diff hunk line ${number + 1}: the hunk header promised ${oldLeft} more old and ${newLeft} more new lines; pass the exact diff output, not a summary`);
       if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts");
       continue;
     }
@@ -199,6 +199,7 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   if (!Number.isSafeInteger(maxDepth) || maxDepth < 0) throw new RangeError("osnova: impact depth must be a nonnegative safe integer");
   const beforeReceipt = indexReceipt(base), afterReceipt = indexReceipt(current);
   const diffs = options.diff === undefined ? null : parseDiff(options.diff);
+  const sameIndex = base === current;
   const renames = new Map<string, { path: string; basis: "diff-rename" | "identical-file-hash" }>();
   for (const diff of diffs ?? []) {
     if (diff.before !== null && diff.after !== null && diff.before !== diff.after && base.files.has(diff.before) && current.files.has(diff.after)) {
@@ -217,9 +218,9 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   const consumed = new Set<string>();
   const definition = (index: OsnovaIndex, symbol: OsnovaSymbol, receipt: IndexReceipt): DefinitionEvidence =>
     ({ symbol, receipt: sourceReceipt(index, symbol.file, receipt) });
-  const overlaps = (symbol: OsnovaSymbol, snapshot: "base" | "current"): boolean => diffs?.some((diff) =>
-    (snapshot === "base" ? diff.before : diff.after) === symbol.file &&
-    [...(snapshot === "base" ? diff.oldLines : diff.newLines)].some((line) => line >= symbol.span.startLine && line <= symbol.span.endLine)) ?? false;
+  const overlaps = (symbol: OsnovaSymbol, requested: "base" | "current"): boolean => diffs?.some((diff) =>
+    (requested === "base" && !sameIndex ? diff.before : diff.after) === symbol.file &&
+    [...(requested === "base" && !sameIndex ? diff.oldLines : diff.newLines)].some((line) => line >= symbol.span.startLine && line <= symbol.span.endLine)) ?? false;
   for (const symbol of [...base.symbols.values()].sort((a, b) => compareText(a.qualifiedName, b.qualifiedName))) {
     const rename = renames.get(symbol.file);
     const local = symbol.qualifiedName.slice(symbol.file.length);
@@ -261,7 +262,9 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   }
   const dependents: ImpactDependent[] = [];
   let dependentFrontier = 0;
-  for (const [snapshot, index, receipt] of [["base", base, beforeReceipt], ["current", current, afterReceipt]] as const) {
+  const snapshots = sameIndex ? [["current", current, afterReceipt]] as const
+    : [["base", base, beforeReceipt], ["current", current, afterReceipt]] as const;
+  for (const [snapshot, index, receipt] of snapshots) {
     const seeds = new Set<string>();
     for (const change of changes) {
       const item = snapshot === "base" ? change.before : change.after;
@@ -295,9 +298,9 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
     }
   }
   return { base: beforeReceipt, current: afterReceipt, changes, files, dependents, omitted: { dependentFrontier },
-    uncertainty: { unresolvedEdges: [base, current].reduce((sum, index) => sum + index.edges.filter((edge) =>
+    uncertainty: { unresolvedEdges: (sameIndex ? [current] : [base, current]).reduce((sum, index) => sum + index.edges.filter((edge) =>
       relationshipEvidence(index, edge, index === base ? beforeReceipt : afterReceipt) === null).length, 0),
-    notes: ["indexed-graph-only", "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",
+    notes: ["indexed-graph-only", ...(sameIndex ? ["base-snapshot-is-current-index", "deleted-symbols-not-visible"] : []), "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",
       ...(diffs === null ? [] : ["provided-diff-ranges-not-verified-against-source"]),
       ...(beforeReceipt.diagnostics + afterReceipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])] } };
 }

@@ -11,6 +11,8 @@ export interface TaskContextOptions {
   readonly limit?: number | undefined;
   readonly maxDepth?: number | undefined;
   readonly maxCodeUnits?: number | undefined;
+  readonly excerptLines?: number | undefined;
+  readonly measure?: ((result: TaskContextResult) => number) | undefined;
 }
 
 export interface ContextDefinition extends DefinitionEvidence {
@@ -51,6 +53,8 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const maxDepth = options.maxDepth ?? 3;
   if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits < 0) throw new RangeError("osnova: task context budget must be a nonnegative safe integer");
   if (!Number.isSafeInteger(maxDepth) || maxDepth < 0) throw new RangeError("osnova: task context depth must be a nonnegative safe integer");
+  const excerptLines = options.excerptLines;
+  if (excerptLines !== undefined && (!Number.isSafeInteger(excerptLines) || excerptLines < 1)) throw new RangeError("osnova: task context excerpt lines must be a positive safe integer");
   if (!["understand", "change", "review"].includes(options.task)) throw new Error("osnova: invalid context task");
   const scope = normalizeScope(options.in);
   const receipt = indexReceipt(index);
@@ -74,8 +78,11 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const definitions = new Map<string, ContextDefinition>();
   const addDefinition = (symbol: OsnovaSymbol): void => {
     if (definitions.has(symbol.qualifiedName)) return;
-    definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt),
-      excerpt: index.files.get(symbol.file)!.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine).join("\n") });
+    const lines = index.files.get(symbol.file)!.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine);
+    const excerpt = excerptLines !== undefined && lines.length > excerptLines
+      ? `${lines.slice(0, excerptLines).join("\n")}\n[+${lines.length - excerptLines} more lines]`
+      : lines.join("\n");
+    definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt });
   };
   for (const seed of seeds) addDefinition(seed);
   const relationships = new Map<string, RelationshipEvidence>();
@@ -130,7 +137,8 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     limitations: ["indexed-structural-evidence-only", "test-candidates-not-coverage", "receipts-not-disk-freshness", "uncertainty-counts-cover-entire-index",
       ...(receipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])],
   };
-  const size = (): number => JSON.stringify(result).length;
+  const measure = options.measure ?? ((value: TaskContextResult): number => JSON.stringify(value).length);
+  const size = (): number => measure(result);
   if (size() > maxCodeUnits) throw new RangeError(`osnova: task context budget cannot retain receipts and omissions; minimum ${size()} UTF-16 code units`);
   const append = <T>(items: Iterable<T>, target: T[], field: "definitions" | "relationships" | "candidateTests"): void => {
     for (const item of items) {
@@ -138,9 +146,13 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
       if (size() > maxCodeUnits) { target.pop(); result.omitted[field]++; }
     }
   };
-  append(definitions.values(), result.definitions, "definitions");
+  const seedNames = new Set(seeds.map((seed) => seed.qualifiedName));
+  const seedDefinitions = [...definitions.values()].filter((definition) => seedNames.has(definition.symbol.qualifiedName));
+  const relatedDefinitions = [...definitions.values()].filter((definition) => !seedNames.has(definition.symbol.qualifiedName));
+  append(seedDefinitions, result.definitions, "definitions");
   if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
+  append(relatedDefinitions, result.definitions, "definitions");
   return result;
 }
