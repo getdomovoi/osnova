@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
-import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor, artifactTextPathFor, isTextSidecarInconsistency } from "./index/serialize.js";
-import { resolveCacheDir, workspaceLockPath, workspaceKey, cacheLimits, evictLru } from "./cache/cache.js";
+import path from "node:path";
+import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor, artifactTextPathFor, artifactEdgesPathFor, isSectionInconsistency } from "./index/serialize.js";
+import { resolveCacheDir, workspaceDirFor, workspaceLockPath, workspaceKey, cacheLimits, evictLru } from "./cache/cache.js";
 import type { LoadIndexOptions, OsnovaIndex } from "./types.js";
 import { canonicalWorkspaceRoot, workspaceIdentity, validRelativePath } from "./index/workspace.js";
 import type { WorkspaceOptions } from "./index/workspace.js";
@@ -8,6 +9,7 @@ import { withCacheLock } from "./cache/lock.js";
 import { buildIndexSnapshot } from "./index/build.js";
 import { applyFreshnessReport, inspectFreshness, isStale } from "./index/incremental.js";
 import { loadVerification, saveVerification } from "./index/verification.js";
+import { scanFiles, sameFileMetadata } from "./index/scan.js";
 import { IndexingError } from "./index/diagnostics.js";
 import { knownIndexGeneration, rememberIndexGeneration } from "./index/generation.js";
 
@@ -40,10 +42,11 @@ const loadedIndexes = new Map<string, { index: OsnovaIndex; artifact: string }>(
 
 async function artifactSignature(root: string, cacheDir: string): Promise<string | undefined> {
   const artifact = await artifactPathFor(root, cacheDir);
+  const edges = await artifactEdgesPathFor(root, cacheDir);
   const text = await artifactTextPathFor(root, cacheDir);
-  if (artifact === undefined || text === undefined) return undefined;
+  if (artifact === undefined || edges === undefined || text === undefined) return undefined;
   const parts: string[] = [];
-  for (const file of [artifact, text]) {
+  for (const file of [artifact, edges, text]) {
     const stat = await fs.stat(file, { bigint: true });
     parts.push([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":"));
   }
@@ -55,6 +58,16 @@ function rememberLoaded(key: string, index: OsnovaIndex, artifact: string | unde
   if (artifact === undefined || limit === 0) return;
   loadedIndexes.set(key, { index, artifact });
   while (loadedIndexes.size > limit) loadedIndexes.delete(loadedIndexes.keys().next().value as string);
+}
+
+async function readGeneration(root: string, cacheDir: string): Promise<string | undefined> {
+  const file = path.join(workspaceDirFor(cacheDir, root), "index.sha");
+  try {
+    return (await fs.readFile(file, "utf8")).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 export async function refreshWorkspace(root: string, options: WorkspaceOptions = {}): Promise<OsnovaIndex> {
@@ -74,45 +87,62 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
   const task = withCacheLock(workspaceLockPath(canonicalCache, canonicalRoot), async () => {
     const published = await artifactSignature(canonicalRoot, canonicalCache);
     const cached = loadedIndexes.get(indexKey);
+    const generation = await readGeneration(canonicalRoot, canonicalCache);
+    const verified = generation === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, generation))?.files;
+    const scan = await scanFiles(canonicalRoot, canonicalCache);
+    const clean = verified !== undefined && scan.paths.length === verified.size &&
+      scan.paths.every((p) => sameFileMetadata(verified.get(p), scan.metadata.get(p)));
     let index: OsnovaIndex | undefined;
-    if (options.reuseMemory === true && cached !== undefined && cached.artifact === published) {
+    if (options.reuseMemory === true && cached !== undefined && cached.artifact === published &&
+      generation !== undefined && /^[a-f0-9]{64}$/.test(generation) && indexGeneration(cached.index) === generation) {
       index = cached.index;
-    } else {
+    } else if (clean || generation !== undefined) {
       try {
         index = await loadArtifact(canonicalRoot, canonicalCache);
       } catch (error) {
-        if (!isTextSidecarInconsistency(error)) throw error;
+        if (!isSectionInconsistency(error)) throw error;
         index = undefined;
       }
     }
     let dirty = index === undefined;
-    let verified = index === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, indexGeneration(index)))?.files;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
-      const inspection = await inspectFreshness(index, canonicalRoot, verified);
-      const report = inspection.report;
-      if (!isStale(report)) {
-        if (dirty) await saveArtifact(index, canonicalCache, options);
-        else {
-          const artifact = await artifactPathFor(canonicalRoot, canonicalCache);
-          if (limits.maxWorkspaces === 0 || artifact === undefined || (await fs.stat(artifact)).size > limits.maxBytes) {
-            throw new IndexingError({ phase: "cache", path: canonicalCache, code: "cache-limit-exceeded" });
+    let known = index === undefined || indexGeneration(index) !== generation ? undefined : verified;
+    let rebuiltAfterSectionFailure = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
+        const inspection = clean && known !== undefined && attempt === 0 && !dirty
+          ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
+          : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
+        const report = inspection.report;
+        if (!isStale(report)) {
+          if (dirty) await saveArtifact(index, canonicalCache, options);
+          else {
+            const artifact = await artifactPathFor(canonicalRoot, canonicalCache);
+            if (limits.maxWorkspaces === 0 || artifact === undefined || (await fs.stat(artifact)).size > limits.maxBytes) {
+              throw new IndexingError({ phase: "cache", path: canonicalCache, code: "cache-limit-exceeded" });
+            }
+            await evictLru(canonicalCache, options);
           }
-          await evictLru(canonicalCache, options);
+          try {
+            await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
+          } catch (error) {
+            throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
+          }
+          if (options.reuseMemory === true) {
+            rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
+          }
+          return index;
         }
-        try {
-          await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
-        } catch (error) {
-          throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
-        }
-        if (options.reuseMemory === true) {
-          rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
-        }
-        return index;
+        index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
+        known = inspection.metadata;
+        dirty = true;
+      } catch (error) {
+        if (rebuiltAfterSectionFailure || !isSectionInconsistency(error)) throw error;
+        rebuiltAfterSectionFailure = true;
+        index = undefined;
+        known = undefined;
+        dirty = true;
       }
-      index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
-      verified = inspection.metadata;
-      dirty = true;
     }
     throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
   }, options);

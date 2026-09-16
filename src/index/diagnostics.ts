@@ -5,3 +5,5 @@ export class IndexingError extends Error {
     super(`osnova: ${diagnostic.phase} failed for ${diagnostic.path}: ${diagnostic.code}`, { cause });
   }
 }
+
+export class SectionError extends Error {}

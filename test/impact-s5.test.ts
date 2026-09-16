@@ -95,6 +95,11 @@ describe("diff impact evidence", () => {
     expect(indexReceipt(index([a, b])).generation).not.toBe(indexReceipt(index([a, b], [edge("b.ts#run", "a.ts#work")])).generation);
   });
 
+  it("memoizes the receipt per index", () => {
+    const repo = index([card("a.ts", ["work"]), card("b.ts", ["run"])]);
+    expect(indexReceipt(repo)).toBe(indexReceipt(repo));
+  });
+
   it("rejects malformed diffs rather than silently reporting no impact", () => {
     expect(() => impact(index([]), index([]), { diff: "not a diff" })).toThrow(/diff/);
     expect(() => impact(index([]), index([]), { diff: "--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n" })).toThrow(/diff/);
@@ -151,7 +156,7 @@ describe("package scopes", () => {
     card("packages/ab/package.json", [], '{"name":"large"}'), ...Array.from({ length: 12 }, (_, i) => card(`packages/ab/${i}.ts`, ["work"])),
     card("rust/Cargo.toml", [], '[package]\nname = "worker"'), card("py/pyproject.toml", [], '[project]\nname = "python-worker"')];
 
-  it("detects indexed manifests and balances package rounds", () => {
+  it("detects indexed manifests and spreads hits across scopes", () => {
     const repo = index(files);
     expect(detectScopes(repo).map((scope) => scope.path)).toEqual(["", "packages/a", "packages/ab", "py", "rust"]);
     const result = scopedAsk(repo, "work", { limit: 2 });

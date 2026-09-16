@@ -1,6 +1,5 @@
-import { OsnovaIndexImpl } from "../index/indexImpl.js";
 import type { AskHit, AskOptions, OsnovaIndex } from "../types.js";
-import { ask } from "./ask.js";
+import { askDetailed } from "./ask.js";
 import { compareText, indexReceipt, sourceReceipt } from "./impact.js";
 import type { IndexReceipt, SourceReceipt } from "./impact.js";
 
@@ -22,6 +21,7 @@ export interface ScopedAskResult {
   readonly receipt: IndexReceipt;
   readonly omittedHits: number;
   readonly limitations: readonly string[];
+  readonly alsoMatched?: readonly PackageScope[] | undefined;
 }
 
 export function normalizeScope(scope = ""): string {
@@ -37,6 +37,86 @@ export function normalizeScope(scope = ""): string {
 
 export function inScope(file: string, scope: string): boolean {
   return scope === "" || file === scope || file.startsWith(`${scope}/`);
+}
+
+function normalizeGlobBase(raw: string): string {
+  let value = raw.trim();
+  if (value.startsWith("./")) value = value.slice(2);
+  value = value.replace(/\/+$/, "");
+  return value;
+}
+
+function firstLevelChildDirectories(index: OsnovaIndex, base: string): Set<string> {
+  const prefix = base === "" ? "" : `${base}/`;
+  const children = new Set<string>();
+  for (const path of index.files.keys()) {
+    if (!path.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0) continue;
+    children.add(`${prefix}${rest.slice(0, slash)}`);
+  }
+  return children;
+}
+
+function directoryHasIndexedFile(index: OsnovaIndex, dir: string): boolean {
+  const prefix = `${dir}/`;
+  for (const path of index.files.keys()) if (path.startsWith(prefix)) return true;
+  return false;
+}
+
+function workspaceGlobPatterns(index: OsnovaIndex): string[] {
+  const patterns: string[] = [];
+  const manifest = index.files.get("package.json");
+  if (manifest !== undefined) {
+    let json: unknown = null;
+    try { json = JSON.parse(manifest.text); } catch { json = null; }
+    const workspaces = json !== null && typeof json === "object" && "workspaces" in json ? json.workspaces : undefined;
+    if (Array.isArray(workspaces)) {
+      for (const entry of workspaces) if (typeof entry === "string") patterns.push(entry);
+    } else if (workspaces !== null && typeof workspaces === "object" && workspaces !== undefined && "packages" in workspaces) {
+      const packages = (workspaces as { packages: unknown }).packages;
+      if (Array.isArray(packages)) for (const entry of packages) if (typeof entry === "string") patterns.push(entry);
+    }
+  }
+  const yaml = index.files.get("pnpm-workspace.yaml");
+  if (yaml !== undefined) {
+    let inPackages = false;
+    for (const line of yaml.text.split("\n")) {
+      if (/^packages\s*:/.test(line)) { inPackages = true; continue; }
+      if (!inPackages) continue;
+      const item = line.match(/^\s*-\s*['"]?([^'"#]+)/);
+      if (item?.[1] !== undefined) { patterns.push(item[1].trim()); continue; }
+      if (/^\S/.test(line)) inPackages = false;
+    }
+  }
+  return patterns;
+}
+
+function workspaceGlobScopeDirectories(index: OsnovaIndex): Set<string> {
+  const directories = new Set<string>();
+  for (const pattern of workspaceGlobPatterns(index)) {
+    const trimmed = pattern.trim();
+    if (trimmed === "" || trimmed.startsWith("!") || trimmed.includes("**")) continue;
+    if (trimmed.endsWith("/*")) {
+      const base = normalizeGlobBase(trimmed.slice(0, -2));
+      for (const child of firstLevelChildDirectories(index, base)) directories.add(child);
+    } else if (!trimmed.includes("*")) {
+      const dir = normalizeGlobBase(trimmed);
+      if (dir !== "" && directoryHasIndexedFile(index, dir)) directories.add(dir);
+    }
+  }
+  return directories;
+}
+
+function scopeNameForDirectory(index: OsnovaIndex, dir: string): string {
+  const manifest = index.files.get(`${dir}/package.json`);
+  if (manifest !== undefined) {
+    let json: unknown = null;
+    try { json = JSON.parse(manifest.text); } catch { json = null; }
+    if (json !== null && typeof json === "object" && "name" in json && typeof json.name === "string") return json.name;
+  }
+  return dir;
 }
 
 export function detectScopes(index: OsnovaIndex): PackageScope[] {
@@ -59,25 +139,11 @@ export function detectScopes(index: OsnovaIndex): PackageScope[] {
     }
     scopes.set(path, scope);
   }
+  for (const dir of workspaceGlobScopeDirectories(index)) {
+    if (scopes.has(dir)) continue;
+    scopes.set(dir, { path: dir, name: scopeNameForDirectory(index, dir), manifests: [] });
+  }
   return [...scopes.values()].sort((a, b) => compareText(a.path, b.path));
-}
-
-export function isolatedIndex(index: OsnovaIndex, paths: ReadonlySet<string>): OsnovaIndex {
-  const files = new Map([...index.files].filter(([path]) => paths.has(path)));
-  const edges = index.edges.filter((edge) => {
-    const target = edge.toSymbol === undefined ? edge.toFile : index.symbols.get(edge.toSymbol)?.file ?? edge.toFile;
-    if (!paths.has(edge.fromFile) || target !== undefined && !paths.has(target)) return false;
-    if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "resolved") {
-      const resolution = edge.evidence.resolution;
-      if (resolution.via?.some((hop) => !paths.has(hop.file) || !paths.has(hop.targetFile))) return false;
-      if (resolution.method === "receiver-hint") {
-        const owner = index.symbols.get(resolution.receiver.classSymbol);
-        if (owner === undefined || !paths.has(owner.file)) return false;
-      }
-    }
-    return true;
-  });
-  return new OsnovaIndexImpl(index.root, files, edges);
 }
 
 export function scopedAsk(index: OsnovaIndex, question: string, options: AskOptions = {}): ScopedAskResult {
@@ -96,12 +162,20 @@ export function scopedAsk(index: OsnovaIndex, question: string, options: AskOpti
   }
   const selected = scopes.filter((scope) => partitions.has(scope.path));
   let filesSearched = 0;
-  const queues = selected.map((scope) => {
+  const ownerOf = new Map<string, string>();
+  for (const scope of selected) {
     const paths = partitions.get(scope.path)!;
     filesSearched += paths.size;
-    const result = ask(isolatedIndex(index, paths), question, { limit: Number.MAX_SAFE_INTEGER, full: options.full });
-    return result.hits.map((hit) => ({ ...hit, scope: scope.path, receipt: sourceReceipt(index, hit.file, receipt) }));
-  });
+    for (const file of paths) ownerOf.set(file, scope.path);
+  }
+  const detailed = askDetailed(index, question, { limit: Number.MAX_SAFE_INTEGER, full: options.full });
+  const grouped = new Map<string, ScopedAskHit[]>(selected.map((scope) => [scope.path, []]));
+  for (const hit of detailed.hits) {
+    const scopePath = ownerOf.get(hit.file);
+    if (scopePath === undefined) continue;
+    grouped.get(scopePath)!.push({ ...hit, scope: scopePath, receipt: sourceReceipt(index, hit.file, receipt) });
+  }
+  const queues = selected.map((scope) => grouped.get(scope.path)!);
   const hits: ScopedAskHit[] = [];
   const total = queues.reduce((sum, queue) => sum + queue.length, 0);
   for (let round = 0; hits.length < Math.min(limit, total); round++) {
@@ -110,6 +184,6 @@ export function scopedAsk(index: OsnovaIndex, question: string, options: AskOpti
       if (hit !== undefined && hits.length < limit) hits.push(hit);
     }
   }
-  return { hits, filesSearched, scopes: selected, receipt, omittedHits: total - hits.length,
-    limitations: ["indexed-manifest-boundaries-only", "package-scores-are-local", "scope-round-robin-path-order", "indexed-content-not-disk-freshness"] };
+  return { hits, filesSearched, scopes: selected, receipt, omittedHits: total - hits.length, alsoMatched: [],
+    limitations: ["indexed-manifest-boundaries-only", "repository-wide-idf", "scope-round-robin-path-order", "indexed-content-not-disk-freshness"] };
 }

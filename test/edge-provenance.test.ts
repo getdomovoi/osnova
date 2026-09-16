@@ -1,9 +1,10 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveEdges } from "../src/index/resolve.js";
 import { OsnovaIndexImpl } from "../src/index/indexImpl.js";
 import type { RawEdgeItem } from "../src/index/indexImpl.js";
-import { deserializeArtifact, serializeArtifact } from "../src/index/serialize.js";
-import { serializeText } from "../src/index/textStore.js";
+import { deserializeArtifact, serializeArtifact, serializeSections } from "../src/index/serialize.js";
+import { sha256Hex } from "../src/index/scan.js";
 import { callers, callersDetailed } from "../src/query/callers.js";
 import { formatCallersDetailed } from "../src/query/format.js";
 import type { CardLanguage, FileCard } from "../src/types.js";
@@ -20,9 +21,11 @@ function card(file: string, names: string[], language: CardLanguage = "typescrip
   };
 }
 
+const fixtureRoot = path.resolve("/fixture");
+
 function index(cards: FileCard[], from: string, edges: RawEdgeItem[]): OsnovaIndexImpl {
   const files = new Map(cards.map((file) => [file.path, file]));
-  return new OsnovaIndexImpl("/fixture", files, resolveEdges({ root: "/fixture", files, rawEdges: new Map([[from, edges]]) }));
+  return new OsnovaIndexImpl(fixtureRoot, files, resolveEdges({ root: fixtureRoot, files, rawEdges: new Map([[from, edges]]) }));
 }
 
 const call: RawEdgeItem = { kind: "calls", toName: "work", line: 3, enclosing: "entry" };
@@ -79,11 +82,11 @@ describe("edge provenance", () => {
 
   it("persists evidence through artifact round trips", () => {
     const original = index([card("a.ts", ["A.work", "B.work", "entry"])], "a.ts", [call]);
-    const bytes = serializeArtifact(original);
-    const loaded = deserializeArtifact(bytes.toString(), undefined, serializeText(original).bytes);
+    const sections = serializeSections(original);
+    const loaded = deserializeArtifact(sections.core.toString(), undefined, sections.text.bytes, sections.edges.bytes);
     expect(loaded.edges[0]?.evidence?.source).toBe("syntax");
     expect(loaded.edges).toEqual(original.edges);
-    expect(serializeArtifact(loaded)).toEqual(bytes);
+    expect(serializeArtifact(loaded)).toEqual(sections.core);
   });
 
   it("keeps ambiguous evidence deterministic regardless of input order", () => {
@@ -95,11 +98,16 @@ describe("edge provenance", () => {
 
   it("rejects corrupted provenance instead of claiming it is verified", () => {
     const graph = index([card("entry.ts", ["entry"])], "entry.ts", [call]);
-    const artifact = JSON.parse(serializeArtifact(graph).toString()) as { edges: Array<{ e?: unknown }> };
-    const edge = artifact.edges[0];
-    if (edge === undefined) throw new Error("expected edge");
-    edge.e = { source: "syntax", resolution: { status: "resolved", method: "invented" } };
-    expect(() => deserializeArtifact(JSON.stringify(artifact), undefined, serializeText(graph).bytes)).toThrow(/corrupt edge evidence/);
+    const sections = serializeSections(graph);
+    const lines = sections.edges.bytes.toString("utf8").slice(0, -1).split("\n");
+    const header = JSON.parse(lines[0]!) as { evidence: unknown[] };
+    header.evidence.push({ source: "syntax", resolution: { status: "resolved", method: "invented" } });
+    lines[0] = JSON.stringify(header);
+    const edgeBytes = Buffer.from(`${lines.join("\n")}\n`, "utf8");
+    const data = JSON.parse(sections.core.toString()) as { edgesHash: string; edgesBytes: number };
+    data.edgesHash = sha256Hex(edgeBytes);
+    data.edgesBytes = edgeBytes.length;
+    expect(() => deserializeArtifact(JSON.stringify(data), undefined, sections.text.bytes, edgeBytes)).toThrow(/corrupt edge evidence/);
   });
 
   it("exposes source call sites separately from callee definition locations", () => {

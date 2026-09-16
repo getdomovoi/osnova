@@ -5,7 +5,7 @@ import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { serializeText, lazyTextCard, readTextSlice } from "../src/index/textStore.js";
 import { sha256Hex } from "../src/index/scan.js";
-import { serializeArtifact, deserializeArtifact, serializedTextIdentity } from "../src/index/serialize.js";
+import { serializeArtifact, serializeSections, deserializeArtifact, serializedTextIdentity } from "../src/index/serialize.js";
 import { loadIndex, refreshWorkspace } from "../src/api.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
 import { indexGeneration } from "../src/api.js";
@@ -47,7 +47,7 @@ describe("text sidecar", () => {
     const source = index.files.get("src/util.ts")!;
     const [offset, length] = layout.offsets.get("src/util.ts")!;
     const { text: _drop, ...rest } = source;
-    const card = lazyTextCard(rest, textPath, offset, length, source.hash);
+    const card = lazyTextCard(rest, textPath, offset, length, source.hash, layout.hash, layout.bytes.length);
     expect(card.text).toBe(source.text);
     await fs.rm(textPath);
     expect(card.text).toBe(source.text);
@@ -62,53 +62,52 @@ describe("text sidecar", () => {
     const source = index.files.get("src/util.ts")!;
     const [offset, length] = layout.offsets.get("src/util.ts")!;
     const { text: _drop, ...rest } = source;
-    const card = lazyTextCard(rest, textPath, offset, length, source.hash);
+    const card = lazyTextCard(rest, textPath, offset, length, source.hash, layout.hash, layout.bytes.length);
     expect(() => card.text).toThrow(/cache-read-failed/);
     await fs.writeFile(textPath, layout.bytes);
-    const wrongHash = lazyTextCard(rest, textPath, offset, length, "0".repeat(64));
+    const wrongHash = lazyTextCard(rest, textPath, offset, length, "0".repeat(64), layout.hash, layout.bytes.length);
     expect(() => wrongHash.text).toThrow(/cache-read-failed/);
     expect(readTextSlice(textPath, offset, length)).toBe(source.text);
   });
 });
 
-describe("format 8 core envelope", () => {
+describe("format 9 core envelope", () => {
   it("carries text identity and offsets instead of text", async () => {
     const index = await buildIndex(FIXTURE);
     const core = serializeArtifact(index);
-    const parsed = JSON.parse(core.toString("utf8")) as { formatVersion: number; textHash: string; textBytes: number; files: Array<{ path: string; text?: unknown; to: number; tl: number }> };
+    const parsed = JSON.parse(core.toString("utf8")) as { formatVersion: number; textHash: string; textBytes: number; paths: string[]; files: Array<{ p: number; text?: unknown; to: number; tl: number }> };
     const layout = serializeText(index);
-    expect(parsed.formatVersion).toBe(8);
+    expect(parsed.formatVersion).toBe(9);
     expect(parsed.textHash).toBe(layout.hash);
     expect(parsed.textBytes).toBe(layout.bytes.length);
     for (const file of parsed.files) {
       expect(file.text).toBeUndefined();
-      expect([file.to, file.tl]).toEqual(layout.offsets.get(file.path));
+      expect([file.to, file.tl]).toEqual(layout.offsets.get(parsed.paths[file.p]!));
     }
     expect(serializedTextIdentity(core.toString("utf8"))).toEqual({ hash: layout.hash, bytes: layout.bytes.length });
   });
 
   it("round-trips through a text file and re-serializes to identical core bytes", async () => {
     const index = await buildIndex(FIXTURE);
-    const core = serializeArtifact(index);
-    const layout = serializeText(index);
+    const sections = serializeSections(index);
     const dir = await scratch();
     const textPath = path.join(dir, "text.bin");
-    await fs.writeFile(textPath, layout.bytes);
-    const loaded = deserializeArtifact(core.toString("utf8"), textPath);
+    await fs.writeFile(textPath, sections.text.bytes);
+    const loaded = deserializeArtifact(sections.core.toString("utf8"), textPath, undefined, sections.edges.bytes);
     expect(loaded.files.get("src/util.ts")!.text).toBe(index.files.get("src/util.ts")!.text);
-    expect(serializeArtifact(loaded).equals(core)).toBe(true);
-    expect(serializeText(loaded).bytes.equals(layout.bytes)).toBe(true);
+    expect(serializeArtifact(loaded).equals(sections.core)).toBe(true);
+    expect(serializeText(loaded).bytes.equals(sections.text.bytes)).toBe(true);
   });
 
   it("rejects offsets that run past the declared text length", async () => {
     const index = await buildIndex(FIXTURE);
-    const core = JSON.parse(serializeArtifact(index).toString("utf8")) as { textBytes: number; files: Array<{ to: number; tl: number }>; checksum: string; root: string; edges: unknown[] };
+    const core = JSON.parse(serializeArtifact(index).toString("utf8")) as { textBytes: number; files: Array<{ to: number; tl: number }>; root: string };
     core.files[0]!.tl = core.textBytes + 1;
     expect(() => deserializeArtifact(JSON.stringify(core), undefined, serializeText(index).bytes)).toThrow(/corrupt/);
   });
 });
 
-describe("format 8 publication", () => {
+describe("format 9 publication", () => {
   it("writes text.bin and index.json and loads them lazily", async () => {
     const dir = await scratch();
     const cacheDir = path.join(dir, "cache");
@@ -160,12 +159,14 @@ describe("format 8 publication", () => {
     const corePath = path.join(workspaceDirFor(cacheDir, index.root), "index.json");
     const core = JSON.parse((await fs.readFile(corePath)).toString("utf8")) as { formatVersion: number };
     core.formatVersion = 7;
-    await fs.writeFile(corePath, JSON.stringify(core));
+    const raw = Buffer.from(JSON.stringify(core));
+    await fs.writeFile(corePath, raw);
+    await fs.writeFile(path.join(workspaceDirFor(cacheDir, index.root), "index.sha"), `${sha256Hex(raw)}\n`);
     await expect(loadIndex(FIXTURE, { cacheDir })).resolves.toBeUndefined();
   });
 });
 
-describe("format 8 self-heal", () => {
+describe("format 9 self-heal", () => {
   it("lets refreshWorkspace rebuild past a mismatched or missing text.bin that loadIndex still rejects", async () => {
     const dir = await scratch();
     const cacheDir = path.join(dir, "cache");

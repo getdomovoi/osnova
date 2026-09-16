@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildIndex, applyChanges, callersDetailed, loadIndex, serializeArtifact } from "../src/index.js";
-import { deserializeArtifact } from "../src/index/serialize.js";
-import { serializeText } from "../src/index/textStore.js";
+import { deserializeArtifact, serializeSections } from "../src/index/serialize.js";
+import { sha256Hex } from "../src/index/scan.js";
 
 let temporary: string;
 let workspace: string;
@@ -207,11 +207,16 @@ describe("import bindings", () => {
 
   it("rejects malformed persisted binding hints", async () => {
     const index = await build({ "a.ts": "export function repeat() { repeat(); }\n" });
-    const data = JSON.parse(serializeArtifact(index).toString()) as { edges: Array<{ b: unknown }> };
-    const edge = data.edges[0];
-    if (edge === undefined) throw new Error("expected recursive call");
-    edge.b = { kind: "import", source: 42, importedName: "repeat" };
-    expect(() => deserializeArtifact(JSON.stringify(data), undefined, serializeText(index).bytes)).toThrow(/corrupt binding/);
+    const sections = serializeSections(index);
+    const lines = sections.edges.bytes.toString("utf8").slice(0, -1).split("\n");
+    const header = JSON.parse(lines[0]!) as { bindings: unknown[] };
+    header.bindings.push({ kind: "import", source: 42, importedName: "repeat" });
+    lines[0] = JSON.stringify(header);
+    const edgeBytes = Buffer.from(`${lines.join("\n")}\n`, "utf8");
+    const data = JSON.parse(sections.core.toString()) as { edgesHash: string; edgesBytes: number };
+    data.edgesHash = sha256Hex(edgeBytes);
+    data.edgesBytes = edgeBytes.length;
+    expect(() => deserializeArtifact(JSON.stringify(data), undefined, sections.text.bytes, edgeBytes)).toThrow(/corrupt binding/);
   });
 
   it("does not expose a type-only class export as a runtime value", async () => {
