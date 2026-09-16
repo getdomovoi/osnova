@@ -74,7 +74,7 @@ interface FileDocuments {
 const fileCache = new Map<string, FileDocuments>();
 const contextCache = new WeakMap<OsnovaIndex, QueryContext>();
 
-const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}`;
+const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}`;
 
 function buildFileDocuments(file: string, card: FileCard): FileDocuments {
   const lines = card.text.length > 0 ? card.text.split("\n") : [];
