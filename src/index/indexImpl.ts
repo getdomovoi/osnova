@@ -1,9 +1,6 @@
-import { readFileSync } from "node:fs";
-import { gunzipSync } from "node:zlib";
 import type { EdgeBinding, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { deserializeEdges } from "./edgeStore.js";
 import { IndexingError } from "./diagnostics.js";
-import { sha256Hex } from "./scan.js";
 
 export interface RawEdgesByFile {
   readonly [file: string]: readonly RawEdgeItem[];
@@ -38,8 +35,7 @@ export function buildSymbolTable(files: ReadonlyMap<string, FileCard>): Map<stri
 
 export interface EdgeSource {
   readonly path: string;
-  readonly hash: string;
-  readonly bytes: number;
+  readonly raw: Buffer;
   readonly paths: readonly string[];
 }
 
@@ -90,10 +86,7 @@ export class OsnovaIndexImpl implements OsnovaIndex {
     if (this.loaded !== undefined) return this.loaded;
     const source = this.source!;
     try {
-      const data = readFileSync(source.path);
-      const raw = data[0] === 0x1f && data[1] === 0x8b ? gunzipSync(data, { maxOutputLength: 512 * 1024 * 1024 }) : data;
-      if (raw.length !== source.bytes || sha256Hex(raw) !== source.hash) throw new Error("osnova: cache edge section mismatch");
-      this.loaded = OsnovaIndexImpl.build(deserializeEdges(raw, source.paths, this.files));
+      this.loaded = OsnovaIndexImpl.build(deserializeEdges(source.raw, source.paths, this.files));
     } catch (error) {
       throw new IndexingError({ phase: "cache", path: source.path, code: "cache-read-failed" }, error);
     }

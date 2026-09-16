@@ -33,7 +33,7 @@ describe("format 9", () => {
     expect(JSON.stringify(core)).not.toContain('"checksum"');
   });
 
-  it("loads lazily and does not open edges.json until an edge query", async () => {
+  it("verifies the edge section at load, decodes it on the first edge query, and never opens text.bin eagerly", async () => {
     const dir = await scratch(); const cacheDir = path.join(dir, "cache");
     const built = await buildIndex(FIXTURE, { cacheDir });
     const opened: string[] = [];
@@ -42,11 +42,13 @@ describe("format 9", () => {
     const readFile = fs.readFile;
     vi.spyOn(fs, "readFile").mockImplementation(async (p, ...rest) => { opened.push(String(p)); return readFile(p, ...rest as [never]); });
     const loaded = (await loadIndex(FIXTURE, { cacheDir }))!;
-    expect(opened.some((p) => p.endsWith("edges.json"))).toBe(false);
+    expect(opened.some((p) => p.endsWith("edges.json"))).toBe(true);
+    expect(opened.some((p) => p.endsWith("text.bin"))).toBe(false);
+    expect((loaded as unknown as { edgesLoaded: () => boolean }).edgesLoaded()).toBe(false);
     expect(loaded.files.size).toBe(built.files.size);
     expect(loaded.symbols.size).toBe(built.symbols.size);
     expect(loaded.outgoing("src/util.ts#compute").map((e) => e.toSymbol)).toEqual(built.outgoing("src/util.ts#compute").map((e) => e.toSymbol));
-    expect(opened.some((p) => p.endsWith("edges.json"))).toBe(true);
+    expect((loaded as unknown as { edgesLoaded: () => boolean }).edgesLoaded()).toBe(true);
     expect(loaded.edges).toEqual(built.edges);
     expect(indexGeneration(loaded)).toBe(indexGeneration(built));
   });
@@ -80,6 +82,42 @@ describe("format 9", () => {
     await expect(loadIndex(FIXTURE, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
     const refreshedAfterMismatch = await refreshWorkspace(FIXTURE, { cacheDir });
     expect(indexGeneration(refreshedAfterMismatch)).toBe(indexGeneration(index));
+  });
+
+  it("rejects a same-size edge corruption at load and rebuilds through refreshWorkspace", async () => {
+    const { refreshWorkspace } = await import("../src/api.js");
+    const { gzipSync } = await import("node:zlib");
+    for (const wrap of [(b: Buffer): Buffer => b, (b: Buffer): Buffer => gzipSync(b, { level: 1 })]) {
+      const dir = await scratch(); const cacheDir = path.join(dir, "cache");
+      const repo = path.join(dir, "repo");
+      await fs.cp(FIXTURE, repo, { recursive: true });
+      const index = await buildIndex(repo, { cacheDir });
+      const edgesFile = path.join(workspaceDirFor(cacheDir, index.root), "edges.json");
+      const original = await fs.readFile(edgesFile);
+      const tampered = Buffer.from(original.toString("utf8").replace("compute", "comput3"), "utf8");
+      expect(tampered.length).toBe(original.length);
+      expect(tampered.equals(original)).toBe(false);
+      await fs.writeFile(edgesFile, wrap(tampered));
+      await expect(loadIndex(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
+      const refreshed = await refreshWorkspace(repo, { cacheDir });
+      expect(indexGeneration(refreshed)).toBe(indexGeneration(index));
+      expect((await fs.readFile(edgesFile)).equals(original)).toBe(true);
+      expect(refreshed.edges.length).toBe(index.edges.length);
+    }
+  });
+
+  it("keeps an already loaded index readable after a later publish replaces edges.json", async () => {
+    const { refreshWorkspace } = await import("../src/api.js");
+    const dir = await scratch(); const cacheDir = path.join(dir, "cache");
+    const repo = path.join(dir, "repo");
+    await fs.cp(FIXTURE, repo, { recursive: true });
+    const built = await buildIndex(repo, { cacheDir });
+    const loaded = (await loadIndex(repo, { cacheDir }))!;
+    expect((loaded as unknown as { edgesLoaded: () => boolean }).edgesLoaded()).toBe(false);
+    await fs.appendFile(path.join(repo, "src", "util.ts"), "\nexport function laterEdge(): number { return compute(1); }\n");
+    const refreshed = await refreshWorkspace(repo, { cacheDir });
+    expect(refreshed.edges.length).toBeGreaterThan(built.edges.length);
+    expect(loaded.edges).toEqual(built.edges);
   });
 
   it("returns undefined for a format 8 core", async () => {

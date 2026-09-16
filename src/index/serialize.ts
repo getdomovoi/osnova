@@ -165,7 +165,7 @@ function deserializeParsedArtifact(
   parsed: unknown,
   data: string,
   textPath: string | undefined,
-  edgesPath: string | undefined,
+  edgeSource: { path: string; raw: Buffer } | undefined,
   textBytes?: Buffer,
   edgeBytes?: Buffer,
 ): OsnovaIndexImpl {
@@ -274,8 +274,11 @@ function deserializeParsedArtifact(
   let edges: readonly OsnovaEdge[] | EdgeSource;
   if (edgeBytes !== undefined) {
     edges = deserializeEdges(edgeBytes, paths, files);
-  } else if (edgesPath !== undefined) {
-    edges = { path: edgesPath, hash: artifact.edgesHash, bytes: artifact.edgesBytes, paths };
+  } else if (edgeSource !== undefined) {
+    if (edgeSource.raw.length !== artifact.edgesBytes || sha256Hex(edgeSource.raw) !== artifact.edgesHash) {
+      throw new Error("osnova: corrupt cached edge content");
+    }
+    edges = { path: edgeSource.path, raw: edgeSource.raw, paths };
   } else {
     throw new Error("osnova: edge source required");
   }
@@ -418,11 +421,19 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SectionError("osnova: cache edge sidecar missing");
         throw error;
       });
-      if (!edgesStat.isFile()) throw new SectionError("osnova: cache edge sidecar mismatch");
-      if (identity.edgesBytes <= GZIP_THRESHOLD_BYTES && edgesStat.size !== identity.edgesBytes) {
+      if (!edgesStat.isFile() || edgesStat.size > MAX_ARTIFACT_BYTES) throw new SectionError("osnova: cache edge sidecar mismatch");
+      const edgesData = await fs.readFile(edgesPath);
+      let edgesRaw: Buffer;
+      try {
+        edgesRaw = edgesData[0] === 0x1f && edgesData[1] === 0x8b
+          ? gunzipSync(edgesData, { maxOutputLength: MAX_ARTIFACT_BYTES }) : edgesData;
+      } catch (error) {
+        throw new SectionError(`osnova: cache edge sidecar unreadable: ${String(error)}`);
+      }
+      if (edgesRaw.length !== identity.edgesBytes || sha256Hex(edgesRaw) !== identity.edgesHash) {
         throw new SectionError("osnova: cache edge sidecar mismatch");
       }
-      const index = deserializeParsedArtifact(parsed, content, textPath, edgesPath);
+      const index = deserializeParsedArtifact(parsed, content, textPath, { path: edgesPath, raw: edgesRaw });
       if (index.root !== root) throw new Error("osnova: cache artifact belongs to a different workspace");
       await touchWorkspace(dir).catch((error: unknown) => {
         throw new IndexingError({ phase: "cache", path: dir, code: "cache-access-write-failed" }, error);
