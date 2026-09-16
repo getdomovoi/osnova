@@ -1,5 +1,5 @@
 import type { EdgeBinding, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
-import { deserializeEdges } from "./edgeStore.js";
+import { canonical, deserializeEdges } from "./edgeStore.js";
 import { IndexingError } from "./diagnostics.js";
 
 export interface RawEdgesByFile {
@@ -132,7 +132,7 @@ function compareEdges(a: OsnovaEdge, b: OsnovaEdge): number {
     compareStr(a.toSymbol ?? "", b.toSymbol ?? "") ||
     compareStr(a.toFile ?? "", b.toFile ?? "") ||
     compareStr(a.fromSymbol, b.fromSymbol) ||
-    compareStr(JSON.stringify(a.binding ?? null), JSON.stringify(b.binding ?? null))
+    compareStr(canonical(a.binding ?? null), canonical(b.binding ?? null))
   );
 }
 

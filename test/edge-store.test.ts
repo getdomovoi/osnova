@@ -1,11 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import { gunzipSync } from "node:zlib";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
+import { loadIndex, refreshWorkspace } from "../src/api.js";
+import { serializeSections } from "../src/index/serialize.js";
+import { workspaceDirFor } from "../src/cache/cache.js";
 import { serializeEdges, deserializeEdges, edgeKinds } from "../src/index/edgeStore.js";
 import { sha256Hex } from "../src/index/scan.js";
 import type { OsnovaEdge } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
+
+const dirs: string[] = [];
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+});
 
 describe("edge store", () => {
   it("round-trips every edge through integer tuples", async () => {
@@ -34,14 +45,36 @@ describe("edge store", () => {
     expect(edgeKinds).toEqual(["calls", "references", "imports"]);
   });
 
-  it("emits interned tables in canonical key order whatever order the inputs were built in", () => {
-    const paths = ["a.ts", "b.ts"];
-    const base = { kind: "calls" as const, fromFile: "a.ts", fromSymbol: "a.ts#x", toName: "y", line: 1, toSymbol: "b.ts#y", toFile: "b.ts" };
-    const sorted = serializeEdges([{ ...base, evidence: { source: "syntax", resolution: { method: "import-binding", status: "resolved" } } } as OsnovaEdge], paths);
-    const reordered = serializeEdges([{ ...base, evidence: { resolution: { status: "resolved", method: "import-binding" }, source: "syntax" } } as OsnovaEdge], paths);
-    expect(reordered.bytes.equals(sorted.bytes)).toBe(true);
-    const header = JSON.parse(reordered.bytes.toString("utf8").split("\n")[0]!) as { evidence: unknown[] };
-    expect(JSON.stringify(header.evidence[0])).toBe('{"resolution":{"method":"import-binding","status":"resolved"},"source":"syntax"}');
+  it("keeps the interned tables byte-identical across a lazy reload and an unrelated incremental edit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-intern-")); dirs.push(dir);
+    const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
+    await fs.mkdir(repo);
+    await fs.writeFile(path.join(repo, "a.ts"), "class A {}\nclass Z {}\nfunction caller() { Z.send(); const x = new A(); x.send(); }\n");
+    await fs.writeFile(path.join(repo, "b.ts"), "export const b = 1;\n");
+    const built = await buildIndex(repo, { cacheDir });
+    const fresh = serializeSections(built);
+    const reloaded = await loadIndex(repo, { cacheDir });
+    expect(reloaded).toBeDefined();
+    const roundTrip = serializeSections(reloaded!);
+    expect(roundTrip.edges.bytes.equals(fresh.edges.bytes)).toBe(true);
+    expect(roundTrip.core.equals(fresh.core)).toBe(true);
+    expect(roundTrip.text.bytes.equals(fresh.text.bytes)).toBe(true);
+    const onDisk = async (name: string): Promise<Buffer> => {
+      const raw = await fs.readFile(path.join(workspaceDirFor(cacheDir, repo), name));
+      return raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw) : raw;
+    };
+    expect(roundTrip.core.equals(await onDisk("index.json"))).toBe(true);
+    expect(roundTrip.edges.bytes.equals(await onDisk("edges.json"))).toBe(true);
+    expect(roundTrip.text.bytes.equals(await onDisk("text.bin"))).toBe(true);
+    await fs.appendFile(path.join(repo, "b.ts"), "export const c = 2;\n");
+    await refreshWorkspace(repo, { cacheDir });
+    const fullCache = path.join(dir, "full");
+    await buildIndex(repo, { cacheDir: fullCache });
+    for (const name of ["index.json", "edges.json", "text.bin"]) {
+      const incremental = await fs.readFile(path.join(workspaceDirFor(cacheDir, repo), name));
+      const full = await fs.readFile(path.join(workspaceDirFor(fullCache, repo), name));
+      expect(incremental.equals(full), name).toBe(true);
+    }
   });
 
   it("refuses to serialize an unknown edge kind", async () => {

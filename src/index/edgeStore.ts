@@ -18,7 +18,7 @@ interface EdgeHeader {
 
 type Tuple = [kind: number, fromFile: number, fromSymbol: string, toName: string, line: number, toSymbol: string | null, toFile: number, evidence: number, binding: number];
 
-function canonical(value: unknown): string {
+export function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) =>
     typeof item === "object" && item !== null && !Array.isArray(item)
       ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
@@ -26,11 +26,11 @@ function canonical(value: unknown): string {
 }
 
 function intern<T>(values: Iterable<T | undefined>): { table: T[]; indexOf: (value: T | undefined) => number } {
-  const byKey = new Set<string>();
-  for (const value of values) if (value !== undefined) byKey.add(canonical(value));
-  const keys = [...byKey].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const byKey = new Map<string, T>();
+  for (const value of values) if (value !== undefined) byKey.set(canonical(value), value);
+  const keys = [...byKey.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const position = new Map(keys.map((key, i) => [key, i]));
-  return { table: keys.map((key) => JSON.parse(key) as T), indexOf: (value) => value === undefined ? -1 : position.get(canonical(value))! };
+  return { table: keys.map((key) => byKey.get(key)!), indexOf: (value) => value === undefined ? -1 : position.get(canonical(value))! };
 }
 
 export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly string[]): EdgeLayout {
