@@ -122,8 +122,7 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
       osnova_footing: { question: "probe" },
       osnova_settle: { diff: "--- a/probe.ts\n+++ b/probe.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" },
     };
-    const aliases = ["osnova_ask", "osnova_find_text", "osnova_skeleton", "osnova_callers", "osnova_map"];
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...Object.keys(calls), ...aliases].sort());
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), Object.keys(calls).sort());
     for (const [name, args] of Object.entries(calls)) {
       const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 10_000 });
       assert(!result.isError, `${name} returned an error`);

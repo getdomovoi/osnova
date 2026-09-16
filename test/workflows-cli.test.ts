@@ -23,26 +23,12 @@ async function command(args: string[]) {
   return { code, text: output.join("\n") };
 }
 
-it("accepts every deprecated command alias with a stderr notice", async () => {
-  const aliases: Array<[string, string[], string]> = [
-    ["ask", ["work"], "ground"], ["scoped-ask", ["work"], "ground --scoped"], ["grep", ["work"], "thread"],
-    ["skeleton", ["api.ts"], "outline"], ["callers", ["api.ts#work"], "warp"], ["map", [], "groundwork"],
-    ["context", ["work"], "footing"],
-  ];
-  for (const [alias, args, canonical] of aliases) {
+it("rejects the retired command names", async () => {
+  for (const retired of ["ask", "scoped-ask", "grep", "skeleton", "callers", "map", "context", "impact", "nonsense"]) {
     const errors: string[] = [];
-    const outputs: string[] = [];
-    const code = await runCli([alias, ...args, "--workspace", workspace, "--cache-dir", cache], { stdout: (text) => outputs.push(text), stderr: (text) => errors.push(text) });
-    expect(code, alias).toBe(0);
-    expect(errors.join("\n"), alias).toContain(`"${alias}" is a deprecated alias of "${canonical}"`);
-    const fresh: string[] = [];
-    const [first, ...restArgs] = canonical.split(" ");
-    await runCli([first!, ...args, ...restArgs, "--workspace", workspace, "--cache-dir", cache], { stdout: (text) => fresh.push(text), stderr: () => {} });
-    expect(outputs.join("\n"), alias).toBe(fresh.join("\n"));
+    expect(await runCli([retired, "work"], { stdout: () => {}, stderr: (text) => errors.push(text) }), retired).toBe(2);
+    expect(errors.join("\n"), retired).toContain(`unknown command "${retired}"`);
   }
-  const unknown: string[] = [];
-  expect(await runCli(["nonsense"], { stdout: () => {}, stderr: (text) => unknown.push(text) })).toBe(2);
-  expect(unknown.join("\n")).toContain('unknown command "nonsense"');
 });
 
 it("exposes scoped retrieval and bounded task context through the CLI", async () => {

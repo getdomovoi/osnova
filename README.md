@@ -92,8 +92,6 @@ The tool names play on the foundation image. The CLI uses the same seven names w
 
 Every response opens with `osnova generation <id>`. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code. Outputs stay under fixed budgets (16,384 code units for search, 8,192 for task context, 4,096 for outlines and change impact, 2,048 for call graphs and maps) and always print exact omission counts, so the agent knows when to ask for more.
 
-The MCP names `osnova_ask`, `osnova_find_text`, `osnova_skeleton`, `osnova_callers` and `osnova_map`, and the CLI commands `ask`, `scoped-ask`, `grep`, `skeleton`, `callers`, `map`, `context` and `impact`, remain as deprecated aliases in this release. They accept the same arguments and return the same output. The next release removes them.
-
 A typical agent turn with Osnova:
 
 1. `osnova_footing` with `task: "change"` and the question. The agent gets the seed definitions, who calls them, and which tests touch them.
