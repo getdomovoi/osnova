@@ -34,7 +34,7 @@ An experimental graph adjustment was measured and rejected after improving autho
 
 Optional `limit` and `matchesPerGroup` bound the detailed result; both must be nonnegative safe integers. Counts include matches excluded by either limit. Zero limits can hide existing matches and are reported as truncation, not absence.
 
-The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `grep` and MCP `osnova_thread` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These count limits are separate from the presentation budget below.
+The existing `findText` API retains its array result, default 50-group limit, and 10-match-per-group cap. CLI `thread` and MCP `osnova_thread` keep those default caps but now display totals and omission notices. Their `limit` controls groups, not matches per group. Use the detailed API without limits when every indexed occurrence is required. These count limits are separate from the presentation budget below.
 
 ### Presentation budget
 
@@ -66,7 +66,7 @@ Python's bare, unshadowed `staticmethod`, `classmethod` and `property` decorator
 
 This is declaration-aware analysis of static export syntax, not execution or compiler validation. Rebinding conflicts, type-only runtime calls, Python wildcard imports, `global`/`nonlocal` and match scopes are conservative; CommonJS export assignments, exported namespace objects, anonymous defaults and arbitrary receiver/value flow remain unsupported. Missing local definitions and blocked bindings remain explicit unresolved evidence.
 
-CLI `callers` and MCP `osnova_warp` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
+CLI `warp` and MCP `osnova_warp` use this detailed behavior with their existing arguments. The legacy `callers` API retains its deterministic selection and result shape. Detailed queries require a positive safe-integer depth. Neither a graph hit nor an empty result proves runtime behavior: current resolution is heuristic, not type inference, and missing callers do not establish that deletion is safe.
 
 ### Index health
 

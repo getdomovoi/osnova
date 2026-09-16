@@ -27,7 +27,7 @@ afterAll(async () => {
 
 it("CLI lists ambiguous targets rather than picking one", async () => {
   const output: string[] = [];
-  await runCli(["callers", "work", "--workspace", workspace, "--cache-dir", cacheDir], {
+  await runCli(["warp", "work", "--workspace", workspace, "--cache-dir", cacheDir], {
     stdout: (text) => output.push(text), stderr: (text) => output.push(text),
   });
   expect(output.join("\n")).toContain("ambiguous symbol");

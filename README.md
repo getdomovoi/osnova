@@ -25,9 +25,9 @@ Node.js 22.13 or newer.
 npm install -g @getdomovoi/osnova
 
 osnova build .                      # index the repository (cached, incremental after this)
-osnova ask "where do we validate tokens"
-osnova callers src/auth.ts#verify   # who calls it
-osnova map                          # directory clusters, hubs, hotspots
+osnova ground "where do we validate tokens"
+osnova warp src/auth.ts#verify      # who calls it
+osnova groundwork                   # directory clusters, hubs, hotspots
 ```
 
 ## Install once, use everywhere
@@ -78,7 +78,7 @@ No global install? Replace `osnova` with `npx -y @getdomovoi/osnova` in any of t
 
 ## The seven tools
 
-The tool names play on the foundation image.
+The tool names play on the foundation image. The CLI uses the same seven names without the prefix, so `osnova ground` on the command line and `osnova_ground` over MCP are the same query.
 
 | Tool | Meaning | Does |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ The tool names play on the foundation image.
 
 Every response opens with `osnova generation <id>`. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code. Outputs stay under fixed budgets (16,384 code units for search, 8,192 for task context, 4,096 for outlines and change impact, 2,048 for call graphs and maps) and always print exact omission counts, so the agent knows when to ask for more.
 
-The names `osnova_ask`, `osnova_find_text`, `osnova_skeleton`, `osnova_callers` and `osnova_map` remain as deprecated aliases in this release. They accept the same arguments and return the same text. The next release removes them.
+The MCP names `osnova_ask`, `osnova_find_text`, `osnova_skeleton`, `osnova_callers` and `osnova_map`, and the CLI commands `ask`, `scoped-ask`, `grep`, `skeleton`, `callers`, `map`, `context` and `impact`, remain as deprecated aliases in this release. They accept the same arguments and return the same output. The next release removes them.
 
 A typical agent turn with Osnova:
 
@@ -104,13 +104,13 @@ A typical agent turn with Osnova:
 
 ```sh
 osnova build <root>            # build and cache the index
-osnova ask "<question>"        # keyword search with exact file:line hits
-osnova grep "<pattern>"        # regex or literal search grouped by symbol
-osnova skeleton <file>         # every definition's signature and span
-osnova callers <symbol>        # direct or transitive callers or callees
-osnova map                     # directory clusters, hubs, hotspots
-osnova context "<question>"    # task context as JSON
-osnova impact --base-cache ... # compare two preserved indexes
+osnova ground "<question>"     # keyword search with exact file:line hits (--scoped ranks per package)
+osnova thread "<pattern>"      # regex or literal search grouped by symbol
+osnova outline <file>          # every definition's signature and span
+osnova warp <symbol>           # direct or transitive callers or callees
+osnova groundwork              # directory clusters, hubs, hotspots
+osnova footing "<question>"    # task context as JSON
+osnova settle --base-cache ... # compare two preserved indexes
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
 osnova doctor                  # read-only runtime and asset checks
 osnova setup --preview ...     # print client configuration; never applies
