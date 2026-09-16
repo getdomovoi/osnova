@@ -2,6 +2,19 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova --version`.
+- `SECURITY.md`, issue templates and a private security report link.
+
+### Changed
+
+- `osnova_settle` on a large repository dropped from about 2 s to under 50 ms; `osnova_footing` on a warm index from about 0.4 s to 0.37 s. Both walk edges in artifact order instead of sorting by a canonical JSON key.
+- Search keeps plain sentence words out of the exact-identifier tier, so a prose question no longer promotes tiny symbols named after common words. Words still enter that tier when they look like identifiers, are quoted, or are the whole query. Recall and reciprocal rank are unchanged on every benchmark corpus.
+- `osnova_footing` seeds from definition hits only and overfetches so prose files never crowd out code.
+
 ## 0.2.0
 
 First public release.
