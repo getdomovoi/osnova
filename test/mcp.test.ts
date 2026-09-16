@@ -39,7 +39,7 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 describe("mcp stdio server", () => {
-  it("exposes the seven foundation tools plus one deprecated alias for the first five", async () => {
+  it("exposes exactly the seven foundation tools", async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
@@ -51,20 +51,8 @@ describe("mcp stdio server", () => {
         "osnova_groundwork",
         "osnova_footing",
         "osnova_settle",
-        "osnova_ask",
-        "osnova_find_text",
-        "osnova_skeleton",
-        "osnova_callers",
-        "osnova_map",
       ]);
       const byName = new Map(tools.map((t) => [t.name, t]));
-      for (const [alias, canonical] of [
-        ["osnova_ask", "osnova_ground"], ["osnova_find_text", "osnova_thread"], ["osnova_skeleton", "osnova_outline"],
-        ["osnova_callers", "osnova_warp"], ["osnova_map", "osnova_groundwork"],
-      ] as const) {
-        expect(byName.get(alias)?.description).toBe(`Deprecated alias of ${canonical}; removed in the next release.`);
-        expect(byName.get(alias)?.inputSchema).toEqual(byName.get(canonical)?.inputSchema);
-      }
       for (const [name, verb] of [
         ["osnova_ground", "Search:"], ["osnova_thread", "Text search:"], ["osnova_outline", "Outline:"],
         ["osnova_warp", "Call graph:"], ["osnova_groundwork", "Repository map:"],
@@ -126,20 +114,14 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
-  it("answers deprecated aliases with the same text as the new names", async () => {
-    write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
-    write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
+  it("rejects the retired tool names", async () => {
     const client = await connect();
     try {
-      const pairs: Array<[string, string, Record<string, unknown>]> = [
-        ["osnova_ask", "osnova_ground", { question: "greet" }],
-        ["osnova_find_text", "osnova_thread", { pattern: "shout", fixed: true }],
-        ["osnova_skeleton", "osnova_outline", { file: "src/greet.ts" }],
-        ["osnova_callers", "osnova_warp", { symbol: "src/loud.ts#shout" }],
-        ["osnova_map", "osnova_groundwork", {}],
-      ];
-      for (const [alias, canonical, args] of pairs) {
-        expect(await callTool(client, alias, args), alias).toBe(await callTool(client, canonical, args));
+      for (const retired of ["osnova_ask", "osnova_find_text", "osnova_skeleton", "osnova_callers", "osnova_map"]) {
+        const result = await client.callTool({ name: retired, arguments: { question: "x", pattern: "x", file: "x", symbol: "x" } });
+        expect(result.isError, retired).toBe(true);
+        const content = (result as { content?: readonly ContentBlock[] }).content ?? [];
+        expect(content.map((c) => (c.type === "text" ? c.text : "")).join(""), retired).toBe(`osnova error: unknown tool ${JSON.stringify(retired)}`);
       }
     } finally {
       await client.close();
@@ -197,7 +179,7 @@ describe("mcp stdio server", () => {
       const text = content.map((c) => (c.type === "text" ? c.text : "")).join("");
       expect(text).toContain("osnova error");
       const still = await client.listTools();
-      expect(still.tools).toHaveLength(12);
+      expect(still.tools).toHaveLength(7);
     } finally {
       await client.close();
     }

@@ -296,7 +296,7 @@ export function formatTaskContext(result: TaskContextResult): string {
   if (result.candidateTests.length > 0) lines.push("candidate tests:");
   for (const test of result.candidateTests) lines.push(`- ${test.file}${test.symbol === null ? "" : ` via ${test.symbol.qualifiedName}`}`);
   const omitted = result.omitted;
-  lines.push(`omitted: ${omitted.definitions} definitions, ${omitted.relationships} relationships, ${omitted.candidateTests} candidate tests, ${omitted.retrievalHits} retrieval hits, ${omitted.uncertainEdges} uncertain edges, ${omitted.outOfScopeEdges} out-of-scope edges, ${omitted.depthFrontier} depth frontier, ${omitted.unknownSymbols} unknown symbols`);
+  lines.push(`omitted: ${omitted.definitions} definitions, ${omitted.relationships} relationships, ${omitted.candidateTests} candidate tests, ${omitted.retrievalHits} lower-ranked candidates, ${omitted.uncertainEdges} uncertain edges, ${omitted.outOfScopeEdges} out-of-scope edges, ${omitted.depthFrontier} depth frontier, ${omitted.unknownSymbols} unknown symbols`);
   lines.push(`limitations: ${result.limitations.join(", ")}`);
   return lines.join("\n");
 }
