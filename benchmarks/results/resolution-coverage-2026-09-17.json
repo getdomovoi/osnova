@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call-site resolution coverage on pinned checkouts",
   "osnova": {
-    "commit": "a8c6339d540455cef69d74698713921c1205efc3",
+    "commit": "6d2507a15dc9903d6414237d3eeb050d23a443f4",
     "version": "0.3.0"
   },
   "corpora": [
@@ -99,11 +99,11 @@
       "corpus": "pyright-v1",
       "repository": "https://github.com/microsoft/pyright",
       "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
-      "generation": "56f923fbf48fbe847bc0c209a208dac02bb8b4e9fe03ef7b0fd490b4c3751f27",
+      "generation": "03814ebf8b691a96097770b7306bf469d72e03a3ff003391c64fda36a9223144",
       "total": {
         "language": "all",
         "files": 7653,
-        "symbols": 31170,
+        "symbols": 31161,
         "calls": 58405,
         "resolved": 28575,
         "ambiguous": 0,
@@ -117,18 +117,18 @@
           "receiver-hint": 12102
         },
         "byReason": {
-          "binding-blocked": 1927,
+          "binding-blocked": 1942,
           "bound-symbol-missing": 1,
           "import-target-unresolved": 6100,
           "re-export-incomplete": 20,
           "receiver-unresolved": 14065,
-          "unbound-global": 7717
+          "unbound-global": 7702
         },
         "resolvedShare": 0.4893,
         "unresolvedImportCalls": 6100,
-        "unboundGlobalCalls": 7717,
+        "unboundGlobalCalls": 7702,
         "resolvedShareExcludingUnresolvedImports": 0.5463,
-        "resolvedShareExcludingExternal": 0.6409
+        "resolvedShareExcludingExternal": 0.6407
       },
       "languages": [
         {
@@ -201,7 +201,7 @@
         {
           "language": "typescript",
           "files": 603,
-          "symbols": 20776,
+          "symbols": 20767,
           "calls": 46759,
           "resolved": 25382,
           "ambiguous": 0,
@@ -215,17 +215,17 @@
             "receiver-hint": 11831
           },
           "byReason": {
-            "binding-blocked": 1105,
+            "binding-blocked": 1120,
             "import-target-unresolved": 3934,
             "re-export-incomplete": 20,
             "receiver-unresolved": 12835,
-            "unbound-global": 3483
+            "unbound-global": 3468
           },
           "resolvedShare": 0.5428,
           "unresolvedImportCalls": 3934,
-          "unboundGlobalCalls": 3483,
+          "unboundGlobalCalls": 3468,
           "resolvedShareExcludingUnresolvedImports": 0.5927,
-          "resolvedShareExcludingExternal": 0.6452
+          "resolvedShareExcludingExternal": 0.6449
         }
       ],
       "limitations": [
@@ -240,11 +240,11 @@
       "corpus": "zod-v1",
       "repository": "https://github.com/colinhacks/zod",
       "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
-      "generation": "83177ee4078b075ae6dbc08c955683c505adbb5ab84a9c329a32d1630d72ab91",
+      "generation": "865a30254258f8e0a2699741a48147d3b1e9326033f07c966fb6ccc7c4f43016",
       "total": {
         "language": "all",
         "files": 701,
-        "symbols": 12791,
+        "symbols": 12784,
         "calls": 53387,
         "resolved": 6527,
         "ambiguous": 0,
@@ -335,7 +335,7 @@
         {
           "language": "tsx",
           "files": 34,
-          "symbols": 165,
+          "symbols": 164,
           "calls": 150,
           "resolved": 7,
           "ambiguous": 0,
@@ -360,7 +360,7 @@
         {
           "language": "typescript",
           "files": 481,
-          "symbols": 12615,
+          "symbols": 12609,
           "calls": 53208,
           "resolved": 6510,
           "ambiguous": 0,

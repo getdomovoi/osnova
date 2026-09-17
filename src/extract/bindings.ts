@@ -197,8 +197,8 @@ export function collectBindings(root: Node, python: boolean): {
   function visit(node: Node, outer: Scope): void {
     if (!python && node.type === "ambient_declaration") {
       for (const child of childrenOf(node)) {
-        const name = child.type === "function_signature" ? child.childForFieldName("name")?.text : undefined;
-        if (name !== undefined) ambient.add(name);
+        const signatures = child.type === "function_signature" ? [child] : child.type === "statement_block" ? childrenOf(child).filter((item) => item.type === "function_signature") : [];
+        for (const signature of signatures) { const name = signature.childForFieldName("name")?.text; if (name !== undefined) ambient.add(name); }
       }
     }
     let scope = outer;

@@ -36,8 +36,8 @@ describe("TypeScript namespaces", () => {
   });
 
   it("skips string-named and dotted module declarations", async () => {
-    const index = await build({ "a.ts": "declare module 'foo' { export function g(): void; }\nnamespace A.B { export function h() {} }\nfunction use() { A.B.h(); }\n" });
-    expect([...index.symbols.keys()].filter((name) => name.includes("foo") || name.includes("A.B"))).toEqual([]);
+    const index = await build({ "a.ts": "declare module 'foo' { export function g(): void; export class C { g(): void } }\nexport {};\ndeclare global { interface X { g(): void } }\nnamespace A.B { export function h() {} }\nfunction use() { A.B.h(); }\n" });
+    expect([...index.symbols.keys()].filter((name) => /foo|A\.B|#C|#X/.test(name))).toEqual([]);
     expect(targets(index, "a.ts#use")).toEqual([["h", undefined]]);
   });
 });
