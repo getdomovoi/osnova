@@ -69,9 +69,9 @@ describe("plumb", () => {
     const fs = await import("node:fs/promises"); const os = await import("node:os");
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-plumb-depth-"));
     await fs.writeFile(path.join(dir, "a.py"), "def hit():\n    return 1\n");
-    await fs.writeFile(path.join(dir, "b.py"), "from a import hit\n\ndef outer():\n    return 2\n\ndef top():\n    return outer()\n");
+    await fs.writeFile(path.join(dir, "b.py"), "def outer():\n    from a import hit\n    return 2\n\ndef top():\n    return outer()\n");
     const local = await buildIndex(dir);
-    const result = plumb(local, "a.py#hit", [{ file: "b.py", line: 7 }], { depth: 2 });
+    const result = plumb(local, "a.py#hit", [{ file: "b.py", line: 6 }], { depth: 2 });
     expect(result.claims[0]?.verdict).toBe("no-call");
     expect(result.missing).toEqual([]);
   });
