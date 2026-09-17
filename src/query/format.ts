@@ -11,6 +11,7 @@ import type {
   OsnovaEdge,
 } from "../types.js";
 import type { ImpactResult } from "./impact.js";
+import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { TaskContextResult } from "./task-context.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
@@ -302,4 +303,19 @@ export function formatImpact(result: ImpactResult): string {
     ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
     `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
   ].join("\n");
+}
+
+const percent = (share: number): string => `${(share * 100).toFixed(1)}%`;
+
+export function formatCoverage(report: CoverageReport): string {
+  const row = (item: LanguageCoverage): string =>
+    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}`;
+  const reasons = Object.entries(report.total.byReason).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1));
+  const lines = [
+    `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)})`,
+    ...report.languages.map(row),
+  ];
+  if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}`));
+  lines.push(`limitations: ${report.limitations.join(", ")}`);
+  return lines.join("\n");
 }
