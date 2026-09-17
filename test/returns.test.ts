@@ -77,9 +77,9 @@ describe("return-type receivers", () => {
   it("refuses overloads that disagree, getters, static or decorated callees, coroutines and a shadowed Self", async () => {
     const index = await build({
       "a.ts": "class A { hit() {} }\nclass B { hit() {} }\ninterface Source { make(x: string): A; make(x: number): B; same(x: string): A; same(x: number): A; }\nclass G { get make(): A { return new A(); } static build(): A { return new A(); } inst(): A { return new A(); } }\nfunction use(s: Source, g: G) {\n  s.make(1).hit();\n  s.same(1).hit();\n  g.make().hit();\n  g.build().hit();\n  G.inst().hit();\n  G.build().hit();\n  A().hit();\n}\n",
-      "p.py": "def wrap(f):\n    return f\n\nclass A:\n    def hit(self):\n        pass\n\nclass Self:\n    def hit(self):\n        pass\n\nclass M:\n    @wrap\n    def make(self) -> A:\n        return A()\n\n    def own(self) -> Self:\n        return Self()\n\nasync def later() -> A:\n    return A()\n\ndef gen() -> A:\n    yield A()\n\ndef use(m: M):\n    m.make().hit()\n    m.own().hit()\n    later().hit()\n    gen().hit()\n",
+      "p.py": "import typing as t\n\ndef wrap(f):\n    return f\n\nclass A:\n    def hit(self):\n        pass\n\nclass Self:\n    def hit(self):\n        pass\n\nclass M:\n    @wrap\n    def make(self) -> A:\n        return A()\n\n    def own(self) -> Self:\n        return Self()\n\n    def odd(self) -> t.Self.other:\n        return None\n\n    def hit(self):\n        pass\n\nasync def later() -> A:\n    return A()\n\ndef gen() -> A:\n    yield A()\n\ndef outer() -> A:\n    def items():\n        yield 1\n    return A()\n\ndef use(m: M):\n    m.make().hit()\n    m.own().hit()\n    later().hit()\n    gen().hit()\n    outer().hit()\n    m.odd().hit()\n",
     });
     expect(hits(index, "a.ts#use")).toEqual([undefined, "a.ts#A.hit", undefined, undefined, undefined, "a.ts#A.hit", undefined]);
-    expect(hits(index, "p.py#use")).toEqual([undefined, "p.py#Self.hit", undefined, undefined]);
+    expect(hits(index, "p.py#use")).toEqual([undefined, "p.py#Self.hit", undefined, undefined, "p.py#A.hit", undefined]);
   });
 });

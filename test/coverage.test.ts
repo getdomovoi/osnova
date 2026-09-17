@@ -22,15 +22,15 @@ describe("resolution coverage", () => {
     expect(report.generation).toBe(indexGeneration(index));
     expect(report.total).toMatchObject({ language: "all", files: 3, calls: 3, resolved: 1, ambiguous: 0, unresolved: 2, imports: 1, importsResolved: 1, resolvedShare: 0.3333 });
     expect(report.total.byMethod).toEqual({ "import-binding": 1 });
-    expect(report.total.byReason).toEqual({ "binding-blocked": 2 });
+    expect(report.total.byReason).toEqual({ "unbound-global": 2 });
     expect(report.languages.map((row) => row.language)).toEqual(["python", "typescript"]);
     expect(report.languages.find((row) => row.language === "python")).toMatchObject({ files: 1, calls: 1, resolved: 0, unresolved: 1, resolvedShare: 0 });
-    expect(report.limitations).toEqual(["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges"]);
-    expect(report.total).toMatchObject({ unresolvedImportCalls: 0, resolvedShareExcludingUnresolvedImports: 0.3333 });
+    expect(report.limitations).toEqual(["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges", "unbound-global-calls-are-names-with-no-binding-in-the-file"]);
+    expect(report.total).toMatchObject({ unresolvedImportCalls: 0, resolvedShareExcludingUnresolvedImports: 0.3333, unboundGlobalCalls: 2, resolvedShareExcludingExternal: 1 });
     const text = formatCoverage(report);
-    expect(text.split("\n")[0]).toBe("osnova coverage: 1/3 call sites resolved (33.3%); 0 call sites go through an import the index cannot resolve");
-    expect(text).toContain("typescript: files 2, symbols 2, calls 2, resolved 1 (50.0%; 50.0% of the 2 not blocked by an unresolved import), ambiguous 0, unresolved 1");
-    expect(text).toContain("unresolved by reason:\n- binding-blocked: 2");
+    expect(text.split("\n")[0]).toBe("osnova coverage: 1/3 call sites resolved (33.3%); 0 call sites go through an import the index cannot resolve, 2 call a name with no binding in the file");
+    expect(text).toContain("typescript: files 2, symbols 2, calls 2, resolved 1 (50.0%; 100.0% of the 1 not going through an unresolved import or an unbound global), ambiguous 0, unresolved 1");
+    expect(text).toContain("unresolved by reason:\n- unbound-global: 2");
     expect(text).toContain("limitations: indexed-call-sites-only");
   });
 

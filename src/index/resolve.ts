@@ -195,7 +195,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const binding = raw.binding;
         const reference = binding.kind === "member" ? binding.owner : binding;
         let candidates: readonly OsnovaSymbol[] = [];
-        let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved" : "binding-blocked" };
+        let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved"
+          : binding.kind === "blocked" && binding.reason === "unbound" ? "unbound-global" : "binding-blocked" };
         let exportResult: ExportResult | undefined;
         if (reference.kind === "import") {
           const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles);

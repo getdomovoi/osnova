@@ -69,7 +69,7 @@ export type EdgeResolution =
   | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
   | { readonly status: "resolved"; readonly method: "receiver-hint"; readonly receiver: { readonly classSymbol: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }; readonly via?: readonly ExportHop[] | undefined }
   | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
-  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" };
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" | "unbound-global" };
 
 export type ReExport =
   | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }
@@ -99,7 +99,7 @@ export type ReturnBinding = SymbolBinding | { readonly kind: "this" };
 export type EdgeBinding = SymbolBinding
   | { readonly kind: "instance"; readonly owner: ReceiverOwner; readonly basis: "constructor" | "lexical" | "annotation" | "return" }
   | { readonly kind: "member"; readonly owner: ReceiverOwner; readonly member: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }
-  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" };
+  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" | "unbound" };
 
 export type EdgeEvidence =
   | { readonly source: "syntax"; readonly resolution: EdgeResolution }

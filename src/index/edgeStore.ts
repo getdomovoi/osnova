@@ -76,7 +76,7 @@ export function validateEvidence(value: unknown): EdgeEvidence {
         resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
         return value as EdgeEvidence;
       }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved"].includes(resolution.reason ?? "")) {
+      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved", "unbound-global"].includes(resolution.reason ?? "")) {
         return value as EdgeEvidence;
       }
     }
@@ -115,7 +115,7 @@ export function validateBinding(value: unknown): EdgeBinding {
     const binding = value as Partial<EdgeBinding>;
     if (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string") return value as EdgeBinding;
     if (binding.kind === "local" && typeof binding.name === "string") return value as EdgeBinding;
-    if (binding.kind === "blocked" && ["local-value", "unsupported", "ambiguous", "unknown-receiver"].includes(binding.reason ?? "")) return value as EdgeBinding;
+    if (binding.kind === "blocked" && ["local-value", "unsupported", "ambiguous", "unknown-receiver", "unbound"].includes(binding.reason ?? "")) return value as EdgeBinding;
     if (binding.kind === "instance" && validOwner(binding.owner) && ["constructor", "lexical", "annotation", "return"].includes(binding.basis ?? "")) return value as EdgeBinding;
     if (binding.kind === "member" && validOwner(binding.owner) && typeof binding.member === "string" &&
       ["instance", "class"].includes(binding.mode ?? "") && ["constructor", "lexical", "class-reference", "annotation", "return"].includes(binding.basis ?? "")) return value as EdgeBinding;
