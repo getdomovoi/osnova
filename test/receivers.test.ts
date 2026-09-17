@@ -75,6 +75,16 @@ describe("receiver identity", () => {
     expect(hit("a.ts#typed")).toBe("lib.ts#Reader.hit");
   });
 
+  it("keeps type-only imports out of constructor fields and lets same-name fields shadow methods", async () => {
+    const index = await build({
+      "lib.ts": "export class Foo { hit() {} }\n",
+      "a.ts": "import type { Foo } from './lib.js';\nclass H { constructor() { this.x = new Foo(); } use() { this.x.hit(); } }\nclass Shadowed { hit() {} hit = 0; }\nclass Nested { inner() {} hit = () => { function inner() {} inner(); }; }\nfunction use(s: Shadowed) { s.hit(); }\n",
+    });
+    expect(index.outgoing("a.ts#H.use").find((edge) => edge.toName === "hit")?.toSymbol).toBeUndefined();
+    expect(index.outgoing("a.ts#use").find((edge) => edge.toName === "hit")?.toSymbol).toBeUndefined();
+    expect(index.outgoing("a.ts#Nested.hit").find((edge) => edge.toName === "inner")?.toSymbol).toBe("a.ts#Nested.hit.inner");
+  });
+
   it("finds inherited members in Python and through constructor-assigned fields", async () => {
     const index = await build({
       "base.py": "class Base:\n    def send(self):\n        return 1\n",

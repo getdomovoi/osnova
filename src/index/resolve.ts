@@ -270,10 +270,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             return holders.length === 0 || new Set(holders.map((symbol) => symbol.qualifiedName)).size !== 1 ? null : [holders[0]!];
           };
           const inherited = (holder: OsnovaSymbol, depth: number, visited: ReadonlySet<string>): OsnovaSymbol[] | null => {
-            const own = membersOf(holder);
-            if (own.length > 0) return own;
             const declarations = declarationsOf(holder);
             if (declarations.some((declaration) => declaration.fields?.includes(binding.member))) return null;
+            const own = membersOf(holder);
+            if (own.length > 0) return own;
             const heritage = declarations.flatMap((declaration) => declaration.heritage ?? []);
             if (heritage.length === 0) return [];
             if (depth >= 8) return null;
