@@ -180,6 +180,8 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         }
         case "ambient_declaration": {
           for (const child of childrenOf(node)) {
+            if (child.type === "statement_block") continue;
+            if (child.type === "module" && child.childForFieldName("name")?.type !== "identifier") continue;
             const signatureName = child.type === "function_signature" ? declarationName(child) : null;
             if (signatureName !== null) ex.def(signatureName, "function", child, child); else visit(child);
           }

@@ -53,4 +53,15 @@ describe("resolution coverage", () => {
     expect(reasons).toEqual([["here", "binding-blocked"], ["shared", "binding-blocked"], ["local", "a.ts#local"], ["missing", "unbound-global"]]);
     expect(resolutionCoverage(index).total).toMatchObject({ calls: 4, resolved: 1, unboundGlobalCalls: 1, resolvedShareExcludingExternal: 0.3333 });
   });
+
+  it("reads ambient declarations with comment, string, module and global scopes in mind", async () => {
+    const workspace = path.join(temporary, "ambient2"); await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "globals.d.ts"), '// declare function commented(): void;\n/*\nfunction blockCommented(): void;\n*/\nconst quoted = "declare function inString(): void";\ndeclare module "x" {\n  function moduleLocal(): void;\n}\ndeclare global {\n  function fromGlobal(): void;\n}\ndeclare function plain(): void;\n');
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function use() {\n  commented();\n  blockCommented();\n  inString();\n  moduleLocal();\n  fromGlobal();\n  plain();\n}\n");
+    await fs.writeFile(path.join(workspace, "b.py"), "def use():\n    plain()\n");
+    const index = await buildIndex(workspace, { cacheDir: path.join(temporary, "cache-ambient2") });
+    const reason = (symbol: string) => index.outgoing(symbol).map((edge) => { const r = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined; return [edge.toName, r?.status === "unresolved" ? r.reason : edge.toSymbol]; });
+    expect(reason("a.ts#use")).toEqual([["commented", "unbound-global"], ["blockCommented", "unbound-global"], ["inString", "unbound-global"], ["moduleLocal", "unbound-global"], ["fromGlobal", "binding-blocked"], ["plain", "binding-blocked"]]);
+    expect(reason("b.py#use")).toEqual([["plain", "unbound-global"]]);
+  });
 });

@@ -158,12 +158,30 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     exportCache.set(key, result);
     return result;
   };
-  // Declaration files are not parsed, but a name they declare is not a missing global either.
+  // Declaration files are not parsed, but a name they declare at the top level or inside
+  // `declare global` is not a missing global either. Comments and strings are blanked first;
+  // a `declare module "x"` body is skipped because its names are not global.
   const ambientGlobals = new Set<string>();
+  const ambientNamesOf = (text: string): string[] => {
+    const blank = (match: string): string => match.replace(/[^\n]/g, " ");
+    const stripped = text.replace(/\/\*[\s\S]*?\*\//g, blank).replace(/\/\/[^\n]*/g, blank)
+      .replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, (match) => `"${blank(match.slice(1, -1))}"`);
+    const names: string[] = [];
+    const pattern = /\bdeclare\s+global\s*\{|\bdeclare\s+module\s+"[^"]*"\s*\{|\bdeclare\s+(?:function|const|let|var|class|enum|namespace|module)\s+([A-Za-z_$][\w$]*)|\b(?:function|const|let|var|class|enum|interface|type)\s+([A-Za-z_$][\w$]*)|[{}]/g;
+    let depth = 0; let globalDepth = -1; let moduleDepth = -1;
+    for (const match of stripped.matchAll(pattern)) {
+      const token = match[0];
+      if (token === "{") { depth += 1; continue; }
+      if (token === "}") { depth -= 1; if (depth <= globalDepth) globalDepth = -1; if (depth <= moduleDepth) moduleDepth = -1; continue; }
+      if (token.startsWith("declare") && token.endsWith("{")) { if (depth === 0) { if (/global/.test(token)) globalDepth = depth; else moduleDepth = depth; } depth += 1; continue; }
+      const name = match[1] ?? match[2];
+      if (name === undefined || moduleDepth >= 0) continue;
+      if ((depth === 0 && match[1] !== undefined) || (globalDepth >= 0 && depth === globalDepth + 1)) names.push(name);
+    }
+    return names;
+  };
   for (const [file, card] of files) {
-    if (!file.endsWith(".d.ts")) continue;
-    for (const match of card.text.matchAll(/\bdeclare\s+(?:function|const|let|var|class|enum|namespace|module)\s+([A-Za-z_$][\w$]*)/g)) ambientGlobals.add(match[1]!);
-    for (const match of card.text.matchAll(/^\s*(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)) ambientGlobals.add(match[1]!);
+    if (file.endsWith(".d.ts")) for (const name of ambientNamesOf(card.text)) ambientGlobals.add(name);
   }
   const importTargetsByFile = new Map<string, string[]>();
   for (const fromFile of [...rawEdges.keys()].sort()) {
@@ -203,7 +221,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const reference = binding.kind === "member" ? binding.owner : binding;
         let candidates: readonly OsnovaSymbol[] = [];
         let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved"
-          : binding.kind === "blocked" && binding.reason === "unbound" && !ambientGlobals.has(raw.toName) ? "unbound-global" : "binding-blocked" };
+          : binding.kind === "blocked" && binding.reason === "unbound" && !(languageFamily(card.language) === languageFamily("typescript") && ambientGlobals.has(raw.toName)) ? "unbound-global" : "binding-blocked" };
         let exportResult: ExportResult | undefined;
         if (reference.kind === "import") {
           const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles);
