@@ -157,7 +157,16 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         }
         case "interface_declaration": {
           const name = declarationName(node);
-          if (name !== null) ex.def(name, "interface", node);
+          if (name !== null) {
+            ex.def(name, "interface", node);
+            ex.pushFrame(name);
+            for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
+              if (member.type !== "method_signature") continue;
+              const methodName = member.childForFieldName("name")?.text;
+              if (methodName !== undefined && IDENTIFIER_RE.test(methodName)) ex.out.addDef(methodName, "method", member, undefined, "instance");
+            }
+            ex.popFrame();
+          }
           return;
         }
         case "type_alias_declaration": {
