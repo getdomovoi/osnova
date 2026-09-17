@@ -2,7 +2,7 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
-## Unreleased
+## 0.4.0 (2026-09-17)
 
 ### Added
 
@@ -19,6 +19,12 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 - TypeScript `namespace` and `module` blocks are indexed as `module` symbols with their members under them (`Uri.create` is a `function` under `Uri`), so `Uri.create()` and a call through a namespace merged with a class or interface resolve. A namespace function is reachable through the namespace name only, never through an instance. Nested namespaces resolve when the outer name is declared in the same file.
 - Declared return types act as receivers: `make().hit()`, `const x = make(); x.hit()`, `this.build().hit()` and chains such as `builder().trim().make().hit()` resolve when each callee's return annotation names an indexed class or interface (TypeScript `: Foo` and `: this`, Python `-> Foo` and `-> Self`). Symbols carry `returns`. Unions, generics such as `Promise<Foo>`, string annotations, unannotated callees and reassigned locals stay unbound. A call on a value produced by an import the index cannot resolve now counts as `import-target-unresolved` rather than `receiver-unresolved`, and a call to a name with no binding in the file (a builtin or ambient global) counts as `unbound-global`; `osnova coverage` reports both counts and a share that excludes both (`resolvedShareExcludingExternal`).
 - `osnova_ground` and `osnova_footing` inline whole definitions of 40 lines or fewer; the footing budget is 4096 code units; the response prefix is shorter.
+
+### Fixed
+
+- Cache lock recovery: a transient failure while removing the recovery marker could leave a dead lock unrecoverable until timeout, and Windows could refuse the rename while another waiter held a handle. Recovery now yields and retries, and the marker is always removed.
+- The clean-install smoke retries temporary directory cleanup on Windows.
+- Tool count, budgets and heritage wording in the README and reference match the shipped behavior; CLI `plumb` shares the 4,096 code-unit budget.
 
 ## 0.3.0 (2026-09-17)
 
