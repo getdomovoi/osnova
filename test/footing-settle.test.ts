@@ -152,14 +152,17 @@ describe("footing formatting", () => {
     expect(formatTaskContext(byText).length).toBeLessThanOrEqual(2_600);
   });
 
-  it("clips long excerpts to eight lines with a count", () => {
+  it("prints excerpts exactly as taskContext produced them", () => {
     const body = Array.from({ length: 12 }, (_, i) => `  const v${i} = ${i};`).join("\n");
     const text = `function big() {\n${body}\n}\n`;
     const symbol: OsnovaSymbol = { name: "big", qualifiedName: "big.ts#big", kind: "function", file: "big.ts",
       span: { startLine: 1, startCol: 0, endLine: 14, endCol: 1 }, signature: "function big()", lineCount: 14 };
     const file: FileCard = { ...card("big.ts", [], text), language: "typescript", symbols: [symbol] };
-    const out = formatTaskContext(taskContext(index([file]), { task: "understand", question: "", symbols: ["big.ts#big"] }));
-    expect(out).toContain("  const v6 = 6;\n  [+6 more lines]");
-    expect(out).not.toContain("const v7");
+    const clipped = formatTaskContext(taskContext(index([file]), { task: "understand", question: "", symbols: ["big.ts#big"], excerptLines: 8 }));
+    expect(clipped).toContain("  const v6 = 6;\n  [+6 more lines]");
+    expect(clipped).not.toContain("const v7");
+    const whole = formatTaskContext(taskContext(index([file]), { task: "understand", question: "", symbols: ["big.ts#big"], excerptLines: 8, inlineShortDefinitions: 40 }));
+    expect(whole).toContain("  const v11 = 11;\n  }");
+    expect(whole).not.toContain("more lines]");
   });
 });

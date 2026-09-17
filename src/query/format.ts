@@ -271,8 +271,6 @@ export function formatMap(result: MapResult): string {
   return lines.join("\n");
 }
 
-const contextExcerptLines = 8;
-
 export function formatTaskContext(result: TaskContextResult): string {
   const lines = [
     `osnova footing: ${result.task}, scope ${result.scope === "" ? "." : result.scope}, ${result.definitions.length} definitions, ${result.relationships.length} relationships, ${result.candidateTests.length} candidate tests`,
@@ -281,11 +279,7 @@ export function formatTaskContext(result: TaskContextResult): string {
   for (const definition of result.definitions) {
     const { symbol } = definition;
     lines.push(`- ${symbol.qualifiedName} ${symbol.kind} lines ${symbol.span.startLine}-${symbol.span.endLine}`);
-    const excerpt = definition.excerpt.split("\n");
-    const marker = /^\[\+\d+ more lines\]$/.test(excerpt.at(-1) ?? "") ? excerpt.pop() : undefined;
-    for (const line of excerpt.slice(0, contextExcerptLines)) lines.push(`  ${line}`);
-    if (marker !== undefined) lines.push(`  ${marker}`);
-    else if (excerpt.length > contextExcerptLines) lines.push(`  [+${excerpt.length - contextExcerptLines} more lines]`);
+    for (const line of definition.excerpt.split("\n")) lines.push(`  ${line}`);
   }
   if (result.relationships.length > 0) lines.push("relationships:");
   for (const relationship of result.relationships) {
