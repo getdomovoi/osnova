@@ -36,6 +36,7 @@ function resolvePythonSpecifier(
   fromFile: string,
   spec: string,
   knownFiles: ReadonlySet<string>,
+  roots: readonly string[],
 ): string | undefined {
   let up = 0;
   let rest = spec;
@@ -51,10 +52,94 @@ function resolvePythonSpecifier(
   }
   const parts = rest.length > 0 ? rest.split(".") : [];
   if (up === 0 && parts.length === 0) return undefined;
-  const modulePath = up > 0 ? path.posix.join(baseDir, ...parts) : parts.join("/");
-  const init = path.posix.join(modulePath, "__init__.py");
-  if (knownFiles.has(init)) return init;
-  if (knownFiles.has(`${modulePath}.py`)) return `${modulePath}.py`;
+  const modulePaths = up > 0 ? [path.posix.join(baseDir, ...parts)] : roots.map((root) => path.posix.join(root, ...parts));
+  for (const modulePath of modulePaths) {
+    const init = path.posix.join(modulePath, "__init__.py");
+    if (knownFiles.has(init)) return init;
+    if (knownFiles.has(`${modulePath}.py`)) return `${modulePath}.py`;
+  }
+  return undefined;
+}
+
+interface PackageEntry { readonly dir: string; readonly exports: unknown; readonly main: readonly string[] }
+
+// Workspace packages let a bare specifier such as "zod/v4" or "click" resolve to indexed source:
+// package.json name and exports (any condition, source files preferred) for the JavaScript family,
+// and manifest directories plus their src layout for Python.
+export interface WorkspaceContext { readonly packages: ReadonlyMap<string, PackageEntry | null>; readonly pythonRoots: readonly string[] }
+
+export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
+  const packages = new Map<string, PackageEntry | null>();
+  const pythonRoots = new Set<string>([""]);
+  for (const [file, card] of files) {
+    const base = path.posix.basename(file);
+    const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
+    if (base === "package.json") {
+      let json: unknown;
+      try { json = JSON.parse(card.text); } catch { continue; }
+      if (typeof json !== "object" || json === null) continue;
+      const record = json as Record<string, unknown>;
+      if (typeof record.name !== "string" || record.name.length === 0) continue;
+      const main = ["module", "main", "types"].map((key) => record[key]).filter((value): value is string => typeof value === "string");
+      packages.set(record.name, packages.has(record.name) ? null : { dir, exports: record.exports, main });
+    } else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
+      pythonRoots.add(dir);
+      const src = dir === "" ? "src" : `${dir}/src`;
+      for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.add(src); break; }
+    }
+  }
+  return { packages, pythonRoots: [...pythonRoots].sort() };
+}
+
+function exportTargets(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value)) for (const item of value) exportTargets(item, out);
+  else if (typeof value !== "object" || value === null) return out;
+  else for (const item of Object.values(value)) exportTargets(item, out);
+  return out;
+}
+
+function resolvePackageFile(dir: string, target: string, knownFiles: ReadonlySet<string>): string | undefined {
+  const joined = path.posix.normalize(path.posix.join(dir, target));
+  if (joined.startsWith("..")) return undefined;
+  const candidates = [joined];
+  const stripped = joined.replace(/\.d\.(c|m)?ts$/, "").replace(/\.(m|c)?jsx?$/, "");
+  if (stripped !== joined) for (const ext of [".ts", ".tsx", ".mts", ".cts"]) candidates.push(stripped + ext);
+  return candidates.find((candidate) => knownFiles.has(candidate)) ?? resolveNodeSpecifier("package.json", `./${joined}`, knownFiles);
+}
+
+function resolveBareSpecifier(spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): string | undefined {
+  let name: string | undefined;
+  for (const candidate of context.packages.keys()) {
+    if ((spec === candidate || spec.startsWith(`${candidate}/`)) && (name === undefined || candidate.length > name.length)) name = candidate;
+  }
+  if (name === undefined) return undefined;
+  const entry = context.packages.get(name);
+  if (entry === null || entry === undefined) return undefined;
+  const subpath = spec === name ? "." : `./${spec.slice(name.length + 1)}`;
+  const exportsField = entry.exports;
+  if (exportsField !== undefined) {
+    const table: Record<string, unknown> = typeof exportsField === "string" || Array.isArray(exportsField) || (typeof exportsField === "object" && exportsField !== null && !Object.keys(exportsField).some((key) => key.startsWith(".")))
+      ? { ".": exportsField } : exportsField as Record<string, unknown>;
+    const targets: string[] = [];
+    if (table[subpath] !== undefined) exportTargets(table[subpath], targets);
+    else {
+      for (const [key, value] of Object.entries(table)) {
+        const star = key.indexOf("*");
+        if (star < 0) continue;
+        const prefix = key.slice(0, star), suffix = key.slice(star + 1);
+        if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix) || subpath.length < prefix.length + suffix.length) continue;
+        const filler = subpath.slice(prefix.length, subpath.length - suffix.length);
+        for (const target of exportTargets(value)) targets.push(target.split("*").join(filler));
+      }
+    }
+    const ordered = [...targets.filter((target) => /\.(ts|tsx|mts|cts)$/.test(target) && !/\.d\.(c|m)?ts$/.test(target)), ...targets.filter((target) => !/\.(ts|tsx|mts|cts)$/.test(target) || /\.d\.(c|m)?ts$/.test(target))];
+    for (const target of ordered) { const found = resolvePackageFile(entry.dir, target, knownFiles); if (found !== undefined) return found; }
+    return undefined;
+  }
+  const rest = subpath === "." ? "" : subpath.slice(2);
+  const bases = rest === "" ? [...entry.main, "./index", "./src/index"] : [`./${rest}`, `./src/${rest}`];
+  for (const target of bases) { const found = resolvePackageFile(entry.dir, target, knownFiles); if (found !== undefined) return found; }
   return undefined;
 }
 
@@ -63,13 +148,15 @@ function resolveImportTarget(
   fromFile: string,
   spec: string,
   knownFiles: ReadonlySet<string>,
+  context: WorkspaceContext,
 ): string | undefined {
   if (language === "typescript" || language === "tsx" || language === "javascript") {
-    if (!spec.startsWith("./") && !spec.startsWith("../")) return undefined;
-    return resolveNodeSpecifier(fromFile, spec, knownFiles);
+    if (spec.startsWith("./") || spec.startsWith("../")) return resolveNodeSpecifier(fromFile, spec, knownFiles);
+    if (spec.startsWith("node:") || spec.startsWith("/") || spec.startsWith("#")) return undefined;
+    return resolveBareSpecifier(spec, knownFiles, context);
   }
   if (language === "python") {
-    return resolvePythonSpecifier(fromFile, spec, knownFiles);
+    return resolvePythonSpecifier(fromFile, spec, knownFiles, context.pythonRoots);
   }
   return undefined;
 }
@@ -95,6 +182,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   }
 
   const knownFiles = new Set(files.keys());
+  const context = workspaceContext(files);
   interface ExportResult {
     symbols: Map<string, OsnovaSymbol>;
     routes: Map<string, readonly ExportHop[]>;
@@ -128,7 +216,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const spaces = links.filter((link) => link.kind === "namespace" && link.exportedName === currentName);
       for (const link of spaces) {
         if (link.kind !== "namespace") continue;
-        const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles);
+        const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles, context);
         if (target === undefined) { result.incomplete = true; continue; }
         result.namespaces.push({ file: target, via: [...via, { file: currentFile, line: link.line, kind: "namespace", exportedName: currentName, importedName: "*", source: link.source, targetFile: target }] });
       }
@@ -144,7 +232,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       active.add(state);
       for (const link of next) {
         if (link.kind === "blocked" || link.kind === "namespace") continue;
-        const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles);
+        const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles, context);
         if (target === undefined) { result.incomplete = true; continue; }
         const importedName = link.kind === "named" ? link.importedName : currentName;
         walk(target, importedName, [...via, {
@@ -192,7 +280,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const targets: string[] = [];
     for (const raw of raws) {
       if (raw.kind !== "imports") continue;
-      const target = resolveImportTarget(card.language, fromFile, raw.toName, knownFiles);
+      const target = resolveImportTarget(card.language, fromFile, raw.toName, knownFiles, context);
       if (target !== undefined) targets.push(target);
     }
     if (targets.length > 0) importTargetsByFile.set(fromFile, targets);
@@ -207,7 +295,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     for (const raw of raws) {
       const fromSymbol = raw.enclosing.length > 0 ? qualifiedNameOf(fromFile, raw.enclosing) : "";
       if (raw.kind === "imports") {
-        const toFile = resolveImportTarget(card.language, fromFile, raw.toName, knownFiles);
+        const toFile = resolveImportTarget(card.language, fromFile, raw.toName, knownFiles, context);
         edges.push(
           toFile === undefined
             ? { kind: "imports", fromFile, fromSymbol, toName: raw.toName, line: raw.line,
@@ -225,7 +313,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           : binding.kind === "blocked" && binding.reason === "unbound" && !(languageFamily(card.language) === languageFamily("typescript") && ambientGlobals.has(raw.toName)) ? "unbound-global" : "binding-blocked" };
         let exportResult: ExportResult | undefined;
         if (reference.kind === "import") {
-          const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles);
+          const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles, context);
           if (target === undefined) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           else {
             exportResult = exported(target, reference.importedName);
@@ -288,7 +376,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             let bases: OsnovaSymbol[] = [];
             if (base.kind === "local") bases = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(holder.file, base.name));
             else {
-              const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles);
+              const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles, context);
               if (target === undefined) return null;
               const found = exported(target, base.importedName);
               if (found.incomplete) return null;
@@ -322,7 +410,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             const holderCard = files.get(file);
             if (holderCard === undefined) return null;
             if (ref.kind === "local") return holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(file, ref.name));
-            const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles);
+            const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles, context);
             if (target === undefined) return null;
             const found = exported(target, ref.importedName);
             return found.incomplete ? null : [...found.symbols.values()];
@@ -357,7 +445,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           const rootImportUnresolved = (ref: ReceiverOwner | Callee, depth = 0): boolean => {
             if (depth > 8) return false;
-            if (ref.kind === "import") return resolveImportTarget(card.language, fromFile, ref.source, knownFiles) === undefined;
+            if (ref.kind === "import") return resolveImportTarget(card.language, fromFile, ref.source, knownFiles, context) === undefined;
             if (ref.kind === "return") return rootImportUnresolved(ref.of, depth + 1);
             if (ref.kind === "method") return rootImportUnresolved(ref.owner, depth + 1);
             return false;
