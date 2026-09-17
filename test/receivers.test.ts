@@ -25,6 +25,41 @@ async function build(files: Record<string, string>) {
 }
 
 describe("receiver identity", () => {
+  it("uses TypeScript parameter annotations as instance receivers", async () => {
+    const index = await build({
+      "program.ts": "export class Program { analyze() { return 1; } }\n",
+      "use.ts": "import { Program } from './program.js';\nimport * as ns from './program.js';\nexport function run(program: Program) { return program.analyze(); }\nexport function optional(p?: Program) { return p?.analyze(); }\nexport function nullable(p: Program | undefined) { return p!.analyze(); }\nexport function dotted(p: ns.Program) { return p.analyze(); }\nexport const arrow = (p: Program) => p.analyze();\nexport function generic(p: Set<Program>) { return p.analyze(); }\nexport function reassigned(p: Program) { p = other(); return p.analyze(); }\nexport function untyped(p) { return p.analyze(); }\nfunction other(): any { return null; }\n",
+    });
+    const hit = (name: string) => index.outgoing(`use.ts#${name}`).find((edge) => edge.toName === "analyze");
+    for (const name of ["run", "optional", "nullable", "dotted", "arrow"]) {
+      expect(hit(name)?.toSymbol, name).toBe("program.ts#Program.analyze");
+      expect(hit(name)?.evidence, name).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "program.ts#Program", mode: "instance", basis: "annotation" } } });
+    }
+    for (const name of ["generic", "reassigned", "untyped"]) expect(hit(name)?.toSymbol, name).toBeUndefined();
+  });
+
+  it("uses TypeScript field and local annotations as instance receivers", async () => {
+    const index = await build({
+      "program.ts": "export class Program { analyze() { return 1; } }\n",
+      "a.ts": "import { Program } from './program.js';\nexport class A {\n  private _p: Program;\n  readonly maybe: Program | undefined;\n  constructor(private q: Program, public r?: Program) { this._p = new Program(); }\n  m() { return this._p.analyze(); }\n  n() { return this.q.analyze(); }\n  o() { return this.r?.analyze(); }\n  u() { return this.maybe!.analyze(); }\n}\nexport function locals() {\n  const l: Program = make();\n  let v: Program | null = null;\n  v = make();\n  const first = l.analyze();\n  const second = v!.analyze();\n  return first + second;\n}\nexport function relet() { let w: Program = make(); w = other(); return w.analyze(); }\nfunction make(): any { return null; }\nfunction other(): any { return null; }\n",
+    });
+    for (const name of ["A.m", "A.n", "A.o", "A.u"]) expect(index.outgoing(`a.ts#${name}`).find((edge) => edge.toName === "analyze")?.toSymbol, name).toBe("program.ts#Program.analyze");
+    const local = index.outgoing("a.ts#locals").filter((edge) => edge.toName === "analyze").sort((a, b) => a.line - b.line);
+    expect(local.map((edge) => edge.toSymbol)).toEqual(["program.ts#Program.analyze", undefined]);
+    expect(index.outgoing("a.ts#relet").find((edge) => edge.toName === "analyze")?.toSymbol).toBeUndefined();
+  });
+
+  it("indexes interface members and resolves calls on interface-typed receivers", async () => {
+    const index = await build({
+      "runner.ts": "export interface Runner { run(): void; count: number; }\nexport function go(r: Runner) { r.run(); }\n",
+    });
+    expect(index.symbols.get("runner.ts#Runner.run")).toMatchObject({ kind: "method", memberKind: "instance" });
+    expect(index.symbols.has("runner.ts#Runner.count")).toBe(false);
+    const edge = index.outgoing("runner.ts#go")[0];
+    expect(edge?.toSymbol).toBe("runner.ts#Runner.run");
+    expect(edge?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "runner.ts#Runner", basis: "annotation" } } });
+  });
+
   it("resolves a Python method whose overload declarations are decorated", async () => {
     const index = await build({
       "core.py": "import typing as t\n\nclass Context:\n    @t.overload\n    def invoke(self, callback: int) -> int: ...\n    @t.overload\n    def invoke(self, callback: str) -> str: ...\n    def invoke(self, callback):\n        return callback\n\n    def forward(self, cmd):\n        return self.invoke(cmd)\n\nclass Command:\n    def invoke(self, ctx: Context):\n        return ctx.invoke(self.callback)\n",
@@ -114,9 +149,10 @@ describe("receiver identity", () => {
     expect(edges.filter((edge) => edge.toName === "run").map((edge) => edge.toSymbol)).toEqual(expect.arrayContaining(["a.js#A.run", undefined]));
   });
 
-  it("does not infer a class from a factory call, annotation or reassigned instance", async () => {
-    const index = await build({ "a.ts": "export class A { send() {} }\nfunction factory() { return new A(); }\nexport function caller(value: A) { value.send(); const x = factory(); x.send(); let y = new A(); y = value; y.send(); }\n" });
-    expect(index.outgoing("a.ts#caller").filter((edge) => edge.toName === "send").every((edge) => edge.toSymbol === undefined)).toBe(true);
+  it("does not infer a class from a factory call or a reassigned instance, but does from an annotation", async () => {
+    const index = await build({ "a.ts": "export class A { send() {} }\nfunction factory() { return new A(); }\nexport function caller(value: A) {\n  value.send();\n  const x = factory();\n  x.send();\n  let y = new A();\n  y = value;\n  y.send();\n}\n" });
+    const sends = index.outgoing("a.ts#caller").filter((edge) => edge.toName === "send").sort((a, b) => a.line - b.line);
+    expect(sends.map((edge) => edge.toSymbol)).toEqual(["a.ts#A.send", undefined, undefined]);
   });
 
   it("resolves an immediate constructor receiver", async () => {

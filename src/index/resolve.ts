@@ -245,7 +245,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           const first = candidates[0];
           namespaceVia = first === undefined ? undefined : routes.get(first.qualifiedName);
         } else if (binding.kind === "member") {
-          const owners = candidates.filter((symbol) => symbol.kind === "class");
+          const owners = candidates.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface");
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
           const ownerName = owner?.qualifiedName;
           const members = owner === undefined ? [] : (files.get(owner.file)?.symbols ?? []).filter((symbol) =>
