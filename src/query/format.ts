@@ -25,7 +25,7 @@ export function formatIndexDiagnostics(index: OsnovaIndex): string {
 }
 
 export function formatIndexHealthSummary(index: OsnovaIndex): string {
-  if (index.diagnostics === undefined) return "osnova foundation: unverified; details via doctor or indexHealth";
+  if (index.diagnostics === undefined) return "osnova foundation: unverified";
   if (index.diagnostics.length === 0) return "";
   const counts = new Map<string, number>();
   for (const diagnostic of index.diagnostics) {
@@ -36,7 +36,7 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
   const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   const shown = categories.slice(0, 4).map(([category, count]) => `${category}=${count}`);
   if (categories.length > 4) shown.push(`+${categories.length - 4} categories`);
-  return `osnova foundation: partial, ${index.diagnostics.length} diagnostics (${shown.join(", ")}); results may be incomplete; details via doctor or indexHealth`;
+  return `osnova foundation: partial (${shown.join(", ")}); some files did not parse fully`;
 }
 
 export function formatAsk(result: AskResult): string {
@@ -271,8 +271,6 @@ export function formatMap(result: MapResult): string {
   return lines.join("\n");
 }
 
-const contextExcerptLines = 8;
-
 export function formatTaskContext(result: TaskContextResult): string {
   const lines = [
     `osnova footing: ${result.task}, scope ${result.scope === "" ? "." : result.scope}, ${result.definitions.length} definitions, ${result.relationships.length} relationships, ${result.candidateTests.length} candidate tests`,
@@ -281,11 +279,7 @@ export function formatTaskContext(result: TaskContextResult): string {
   for (const definition of result.definitions) {
     const { symbol } = definition;
     lines.push(`- ${symbol.qualifiedName} ${symbol.kind} lines ${symbol.span.startLine}-${symbol.span.endLine}`);
-    const excerpt = definition.excerpt.split("\n");
-    const marker = /^\[\+\d+ more lines\]$/.test(excerpt.at(-1) ?? "") ? excerpt.pop() : undefined;
-    for (const line of excerpt.slice(0, contextExcerptLines)) lines.push(`  ${line}`);
-    if (marker !== undefined) lines.push(`  ${marker}`);
-    else if (excerpt.length > contextExcerptLines) lines.push(`  [+${excerpt.length - contextExcerptLines} more lines]`);
+    for (const line of definition.excerpt.split("\n")) lines.push(`  ${line}`);
   }
   if (result.relationships.length > 0) lines.push("relationships:");
   for (const relationship of result.relationships) {
