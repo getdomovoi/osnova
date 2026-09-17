@@ -114,20 +114,20 @@ A typical agent turn with Osnova:
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, or a field assigned once in the constructor), including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, or the declared return type of the function or method that produced the value), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
 
-| Corpus | Language | Call sites | Resolved | Share | Excluding unresolved imports |
+| Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5018 | 692 | 13.8% | 22.1% |
-| click | all | 5018 | 692 | 13.8% | 22.1% |
-| pyright | python | 11608 | 3193 | 27.5% | 33.8% |
-| pyright | typescript | 46742 | 21200 | 45.4% | 49.5% |
-| pyright | all | 58382 | 24393 | 41.8% | 46.6% |
-| zod | tsx | 150 | 7 | 4.7% | 6.7% |
-| zod | typescript | 53068 | 6236 | 11.8% | 20.0% |
-| zod | all | 53247 | 6253 | 11.7% | 19.9% |
+| click | python | 5018 | 699 | 13.9% | 29.0% |
+| click | all | 5018 | 699 | 13.9% | 29.0% |
+| pyright | python | 11614 | 3193 | 27.5% | 61.2% |
+| pyright | typescript | 46759 | 25382 | 54.3% | 64.5% |
+| pyright | all | 58405 | 28575 | 48.9% | 64.1% |
+| zod | tsx | 150 | 7 | 4.7% | 8.3% |
+| zod | typescript | 53208 | 6510 | 12.2% | 43.4% |
+| zod | all | 53387 | 6527 | 12.2% | 43.2% |
 
-A call through an import the index cannot resolve, which is mostly a package outside the repository, can never resolve locally, so the last column leaves those call sites out of the denominator. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
+A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
 ## CLI
 

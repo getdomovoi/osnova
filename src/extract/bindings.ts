@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import type { EdgeBinding, MemberKind, ReExport, ReceiverMode, SymbolBinding } from "../types.js";
+import type { Callee, EdgeBinding, MemberKind, ReExport, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
 import { childrenOf, childOfType } from "./util.js";
 import { canonical } from "../index/edgeStore.js";
 
@@ -114,6 +114,7 @@ function reassigns(body: Node, name: string): boolean {
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
   heritage: (node: Node) => SymbolBinding[];
+  returns: (node: Node) => ReturnBinding | undefined;
   ownFields: (node: Node) => string[];
   exportedNames: (name: string, parent: string) => readonly string[];
   reExports: readonly ReExport[];
@@ -124,7 +125,8 @@ export function collectBindings(root: Node, python: boolean): {
   const exports = new Map<string, Map<string, number>>();
   const reExports: ReExport[] = [];
   const importLines = new Map<EdgeBinding, number>();
-  const constructions = new Map<EdgeBinding, { expression: Node; site: Node }>();
+  const constructions = new Map<EdgeBinding, { expression: Node; site: Node; call?: boolean }>();
+  const ambient = new Set<string>();
   const implicitReceivers: Array<{ node: Node; scope: Scope; parameter: string }> = [];
   const annotated: Array<{ scope: Scope; parameter: string; typeName: string; site: Node }> = [];
   const memberWrites: Array<{ object: Node; member: string; scope: Scope }> = [];
@@ -152,11 +154,12 @@ export function collectBindings(root: Node, python: boolean): {
   };
   const construction = (value: Node | null, site: Node): EdgeBinding | undefined => {
     value = unwrap(value);
-    if (value?.type !== (python ? "call" : "new_expression")) return undefined;
-    const expression = value.childForFieldName(python ? "function" : "constructor");
+    if (value === null || !(value.type === (python ? "call" : "new_expression") || (!python && value.type === "call_expression"))) return undefined;
+    const expression = value.childForFieldName(value.type === "new_expression" ? "constructor" : "function");
     if (expression === null) return undefined;
-    const binding: EdgeBinding = { kind: "instance", owner: { kind: "local", name: expression.text }, basis: "constructor" };
-    constructions.set(binding, { expression, site });
+    const call = value.type !== "new_expression";
+    const binding: EdgeBinding = { kind: "instance", owner: { kind: "local", name: expression.text }, basis: call && !python ? "return" : "constructor" };
+    constructions.set(binding, { expression, site, call });
     return binding;
   };
   const classOf = (scope: Scope): Scope | null => {
@@ -192,6 +195,12 @@ export function collectBindings(root: Node, python: boolean): {
   };
 
   function visit(node: Node, outer: Scope): void {
+    if (!python && node.type === "ambient_declaration") {
+      for (const child of childrenOf(node)) {
+        const signatures = child.type === "function_signature" ? [child] : child.type === "statement_block" ? childrenOf(child).filter((item) => item.type === "function_signature") : [];
+        for (const signature of signatures) { const name = signature.childForFieldName("name")?.text; if (name !== undefined) ambient.add(name); }
+      }
+    }
     let scope = outer;
     if (functions.has(node.type)) {
       const nameNode = node.childForFieldName("name");
@@ -252,6 +261,13 @@ export function collectBindings(root: Node, python: boolean): {
     if (!python && node.type === "interface_declaration") {
       const name = node.childForFieldName("name")?.text ?? "";
       if (name) bind(outer, name, { kind: "local", name: join(outer.owner, name) });
+    }
+    if (!python && (node.type === "internal_module" || node.type === "module")) {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode?.type === "identifier") {
+        bind(outer, nameNode.text, { kind: "local", name: join(outer.owner, nameNode.text) });
+        scope = { kind: "block", owner: join(outer.owner, nameNode.text), parent: outer, names: new Map() };
+      }
     }
     if (classes.has(node.type)) {
       const name = node.childForFieldName("name")?.text ?? "";
@@ -382,7 +398,7 @@ export function collectBindings(root: Node, python: boolean): {
         : target?.type === "identifier" ? construction(value, node) ?? localValue : localValue;
       bindPattern(destination, target, binding);
       if (binding.kind === "local" || binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(destination) });
-      const typeName = binding === localValue && target?.type === "identifier" ? annotationTypeName(node.childForFieldName("type")) : undefined;
+      const typeName = (binding === localValue || constructions.get(binding)?.call === true) && target?.type === "identifier" ? annotationTypeName(node.childForFieldName("type")) : undefined;
       if (typeName !== undefined && target?.type === "identifier") annotated.push({ scope: destination, parameter: target.text, typeName, site: node });
     }
     if (python && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression"].includes(node.type)) {
@@ -494,7 +510,7 @@ export function collectBindings(root: Node, python: boolean): {
   };
   for (const entry of annotated) {
     const current = entry.scope.names.get(entry.parameter);
-    if (current === undefined || current.length !== 1 || current[0] !== localValue) continue;
+    if (current === undefined || current.length !== 1 || (current[0] !== localValue && constructions.get(current[0]!)?.call !== true)) continue;
     const owner = ownerFor(entry.typeName, entry.site);
     if (owner === undefined) continue;
     if (reassigns(enclosingBody(entry.site, root), entry.parameter)) continue;
@@ -530,16 +546,33 @@ export function collectBindings(root: Node, python: boolean): {
     }
     return undefined;
   };
+  const calleeOf = (expression: Node | null, site: Node): Callee | undefined => {
+    const owner = symbolBinding(expression, site);
+    if (owner !== undefined) return owner;
+    expression = unwrap(expression);
+    if (expression === null || !["member_expression", "attribute"].includes(expression.type)) return undefined;
+    const target = at(expression, site);
+    return target?.kind === "member" ? { kind: "method", owner: target.owner, member: target.member, mode: target.mode } : undefined;
+  };
+  const ownerDepth = (owner: ReceiverOwner | Callee): number =>
+    owner.kind === "return" ? 1 + ownerDepth(owner.of) : owner.kind === "method" ? 1 + ownerDepth(owner.owner) : 0;
+  const returnOwner = (callee: Callee | undefined): ReceiverOwner | undefined => {
+    if (callee === undefined) return undefined;
+    const owner: ReceiverOwner = { kind: "return", of: callee };
+    return ownerDepth(owner) > 12 ? undefined : owner;
+  };
   const normalize = (binding: EdgeBinding | undefined): EdgeBinding | undefined => {
     const created = binding === undefined ? undefined : constructions.get(binding);
     if (created === undefined) return binding;
     const owner = symbolBinding(created.expression, created.site);
-    return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "instance", owner, basis: "constructor" };
+    if (owner !== undefined && (!created.call || python)) return { kind: "instance", owner, basis: "constructor" };
+    if (!created.call) return { kind: "blocked", reason: "unknown-receiver" };
+    const produced = returnOwner(calleeOf(created.expression, created.site));
+    return produced === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "instance", owner: produced, basis: "return" };
   };
-  return {
-    at(expression, site) {
+  const at = (expression: Node | null, site: Node): EdgeBinding | undefined => {
       expression = unwrap(expression);
-      if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: "unsupported" };
+      if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: ambient.has(expression.text) ? "unsupported" : "unbound" };
       if (expression !== null && ["member_expression", "attribute"].includes(expression.type)) {
         const object = unwrap(expression.childForFieldName("object"));
         const property = expression.childForFieldName(python ? "attribute" : "property");
@@ -553,6 +586,10 @@ export function collectBindings(root: Node, python: boolean): {
           const inner = unwrap(object.childForFieldName("object"));
           const field = object.childForFieldName(python ? "attribute" : "property")?.text;
           const siteScope = scopes.get(site.id) ?? module;
+          if (!python && inner?.type === "identifier" && field !== undefined) {
+            const head = lookup(inner.text, site);
+            if (head?.kind === "local" && !mutated(head, field)) return { kind: "member", owner: { kind: "local", name: `${head.name}.${field}` }, member: property.text, mode: "class", basis: "class-reference" };
+          }
           let cls: Scope | null = null;
           if (!python && inner?.type === "this") { const self = thisFor(siteScope); cls = self?.mode === "instance" ? self.classScope ?? null : null; }
           else if (python && inner?.type === "identifier") {
@@ -574,6 +611,10 @@ export function collectBindings(root: Node, python: boolean): {
             }
           }
         }
+        if (object !== null && object.type === (python ? "call" : "call_expression") && (python ? symbolBinding(object.childForFieldName("function"), site) === undefined : true)) {
+          const owner = returnOwner(calleeOf(object.childForFieldName("function"), site));
+          return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: property.text, mode: "instance", basis: "return" };
+        }
         const rawBinding = object?.type === "identifier" ? lookup(object.text, site) : construction(object, site);
         if (mutated(rawBinding, property.text)) return { kind: "blocked", reason: "unknown-receiver" };
         const binding = normalize(rawBinding);
@@ -585,7 +626,47 @@ export function collectBindings(root: Node, python: boolean): {
         return { kind: "blocked", reason: "unknown-receiver" };
       }
       return { kind: "blocked", reason: "unsupported" };
-    },
+  };
+  const ownYield = (node: Node): boolean => childrenOf(node).some((child) =>
+    child.type === "yield" || (!["function_definition", "class_definition", "lambda"].includes(child.type) && ownYield(child)));
+  const isTypingSelf = (inner: Node): boolean => {
+    const parts = inner.text.split(".");
+    if (parts.length > 2) return false;
+    const [head, member] = parts;
+    if (head === undefined) return false;
+    const binding = lookup(head, inner);
+    if (binding?.kind !== "import" || !["typing", "typing_extensions"].includes(binding.source)) return false;
+    return member === undefined ? binding.importedName === "Self" : member === "Self" && binding.importedName === "*";
+  };
+  const returns = (node: Node): ReturnBinding | undefined => {
+    if (python) {
+      const type = node.childForFieldName("return_type");
+      if (type === null) return undefined;
+      if (node.children.some((child) => child?.type === "async")) return undefined;
+      const body = node.childForFieldName("body");
+      if (body !== null && ownYield(body)) return undefined;
+      const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
+      if (inner === null || !(inner.type === "identifier" || inner.type === "attribute")) return undefined;
+      if (isTypingSelf(inner)) return classOf(scopes.get(node.id) ?? module) === null ? undefined : { kind: "this" };
+      return ownerFor(inner.text, node);
+    }
+    if (node.children.some((child) => child?.type === "async") || node.type === "generator_function_declaration" || node.type === "generator_function" || node.children.some((child) => child?.type === "*")) return undefined;
+    let holder: Node = node;
+    if (node.type === "property_signature") {
+      const fn = childrenOf(node.childForFieldName("type") ?? node).find((child) => child.type === "function_type");
+      if (fn === undefined) return undefined;
+      holder = fn;
+    }
+    const type = holder.childForFieldName("return_type");
+    if (type === null) return undefined;
+    const inner = type.type === "type_annotation" ? childrenOf(type).find((child) => child.type !== ":") ?? null : type;
+    if (inner?.type === "this_type") return { kind: "this" };
+    const name = annotationTypeName(inner);
+    return name === undefined ? undefined : ownerFor(name, node);
+  };
+  return {
+    at,
+    returns,
     heritage: (node) => {
       const out: SymbolBinding[] = [];
       const push = (text: string | undefined) => { if (text === undefined) return; const owner = ownerFor(text, node); if (owner !== undefined && !out.some((item) => canonical(item) === canonical(owner))) out.push(owner); };
