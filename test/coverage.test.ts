@@ -25,10 +25,11 @@ describe("resolution coverage", () => {
     expect(report.total.byReason).toEqual({ "binding-blocked": 2 });
     expect(report.languages.map((row) => row.language)).toEqual(["python", "typescript"]);
     expect(report.languages.find((row) => row.language === "python")).toMatchObject({ files: 1, calls: 1, resolved: 0, unresolved: 1, resolvedShare: 0 });
-    expect(report.limitations).toEqual(["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted"]);
+    expect(report.limitations).toEqual(["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "external-calls-are-import-target-unresolved-edges"]);
+    expect(report.total).toMatchObject({ externalCalls: 0, resolvedShareOfInternal: 0.3333 });
     const text = formatCoverage(report);
-    expect(text.split("\n")[0]).toBe("osnova coverage: 1/3 call sites resolved (33.3%)");
-    expect(text).toContain("typescript: files 2, symbols 2, calls 2, resolved 1 (50.0%), ambiguous 0, unresolved 1");
+    expect(text.split("\n")[0]).toBe("osnova coverage: 1/3 call sites resolved (33.3%); 0 call sites target imports outside the index");
+    expect(text).toContain("typescript: files 2, symbols 2, calls 2, resolved 1 (50.0%; 50.0% of the 2 with an in-repository target), ambiguous 0, unresolved 1");
     expect(text).toContain("unresolved by reason:\n- binding-blocked: 2");
     expect(text).toContain("limitations: indexed-call-sites-only");
   });

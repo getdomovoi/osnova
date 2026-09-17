@@ -102,6 +102,7 @@ The tool names play on the foundation image. The CLI uses the same seven names w
 | `osnova_groundwork` | the groundwork under everything | Repository map: directory clusters, hubs and hotspots |
 | `osnova_footing` | the footing you build on | Task context: the definitions, relationships and candidate tests around a question or named symbols |
 | `osnova_settle` | how the ground settles after a change | Change impact: the symbols a unified diff touches and their indexed dependents |
+| `osnova_plumb` | the plumb line that tests true vertical | Check claims: which of a listed set of call sites the index confirms, which are name matches only, and which dependents were left out |
 
 Every response opens with `osnova generation <id>`. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code. Outputs stay under fixed budgets (16,384 code units for search, 8,192 for task context, 4,096 for outlines and change impact, 2,048 for call graphs and maps) and always print exact omission counts, so the agent knows when to ask for more.
 
@@ -110,6 +111,23 @@ A typical agent turn with Osnova:
 1. `osnova_footing` with `task: "change"` and the question. The agent gets the seed definitions, who calls them, and which tests touch them.
 2. Edit.
 3. `git diff` into `osnova_settle`. The agent gets every indexed dependent of the changed spans and checks them before it finishes.
+
+## How much of the graph is exact
+
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, or an annotated parameter). Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+
+| Corpus | Language | Call sites | Resolved | Share | Of in-repository targets |
+|---|---|---:|---:|---:|---:|
+| click | python | 5018 | 687 | 13.7% | 21.9% |
+| click | all | 5018 | 687 | 13.7% | 21.9% |
+| pyright | python | 11608 | 3172 | 27.3% | 33.6% |
+| pyright | typescript | 46733 | 18488 | 39.6% | 43.1% |
+| pyright | all | 58373 | 21660 | 37.1% | 41.3% |
+| zod | tsx | 150 | 7 | 4.7% | 6.7% |
+| zod | typescript | 53067 | 5871 | 11.1% | 18.8% |
+| zod | all | 53246 | 5888 | 11.1% | 18.8% |
+
+Calls into packages outside the repository can never resolve locally, so the last column counts only call sites whose import stays inside the index. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
 ## CLI
 
@@ -122,6 +140,8 @@ osnova warp <symbol>           # direct or transitive callers or callees
 osnova groundwork              # directory clusters, hubs, hotspots
 osnova footing "<question>"    # task context as JSON
 osnova settle --base-cache ... # compare two preserved indexes
+osnova plumb <symbol> --site <path:line> ...  # check claimed call sites against the index
+osnova coverage [--json]       # call-site resolution coverage per language and reason
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
 osnova doctor                  # read-only runtime and asset checks
 osnova setup --preview --client <name>  # diff for one client's config; never applies

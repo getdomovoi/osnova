@@ -15,6 +15,8 @@ export interface LanguageCoverage {
   readonly byMethod: Readonly<Record<string, number>>;
   readonly byReason: Readonly<Record<string, number>>;
   readonly resolvedShare: number;
+  readonly externalCalls: number;
+  readonly resolvedShareOfInternal: number;
 }
 
 export interface CoverageReport {
@@ -34,10 +36,14 @@ const bump = (map: Map<string, number>, key: string): void => { map.set(key, (ma
 const sortedRecord = (map: Map<string, number>): Record<string, number> =>
   Object.fromEntries([...map].sort(([a], [b]) => compareText(a, b)));
 const share = (resolved: number, calls: number): number => calls === 0 ? 0 : Math.round((resolved / calls) * 10000) / 10000;
-const finish = (language: string, t: Tally): LanguageCoverage => ({
-  language, files: t.files, symbols: t.symbols, calls: t.calls, resolved: t.resolved, ambiguous: t.ambiguous, unresolved: t.unresolved,
-  imports: t.imports, importsResolved: t.importsResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
-});
+const finish = (language: string, t: Tally): LanguageCoverage => {
+  const externalCalls = t.byReason.get("import-target-unresolved") ?? 0;
+  return {
+    language, files: t.files, symbols: t.symbols, calls: t.calls, resolved: t.resolved, ambiguous: t.ambiguous, unresolved: t.unresolved,
+    imports: t.imports, importsResolved: t.importsResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
+    externalCalls, resolvedShareOfInternal: share(t.resolved, t.calls - externalCalls),
+  };
+};
 
 export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
   const perLanguage = new Map<string, Tally>();
@@ -68,6 +74,6 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
   const languages = [...perLanguage].sort(([a], [b]) => compareText(a, b)).map(([language, row]) => finish(language, row));
   return {
     generation: indexGeneration(index), languages, total: finish("all", total),
-    limitations: ["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted"],
+    limitations: ["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "external-calls-are-import-target-unresolved-edges"],
   };
 }
