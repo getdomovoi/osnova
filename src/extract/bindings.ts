@@ -57,7 +57,12 @@ function reassigns(body: Node, name: string): boolean {
     }
     if (node.type === "delete_statement") {
       const inner: Node[] = [...childrenOf(node)];
-      while (inner.length > 0) { const item = inner.pop()!; if (item.type === "identifier" && item.text === name) return true; inner.push(...childrenOf(item)); }
+      while (inner.length > 0) {
+        const item = inner.pop()!;
+        if (item.type === "identifier" && item.text === name) return true;
+        if (item.type === "attribute" || item.type === "subscript") continue;
+        inner.push(...childrenOf(item));
+      }
     }
     if (node.type === "function_definition" && node.id !== body.parent?.id) {
       const params = patternNames(node.childForFieldName("parameters"));
@@ -345,6 +350,7 @@ export function collectBindings(root: Node, python: boolean): {
   };
   const isTypingOverload = (decorator: Node): boolean => {
     const text = decorator.text.trim().slice(1);
+    if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$/.test(text)) return false;
     const [head, member] = text.split(".");
     if (head === undefined) return false;
     const binding = lookup(head, decorator);
