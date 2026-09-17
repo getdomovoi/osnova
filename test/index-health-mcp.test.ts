@@ -34,12 +34,13 @@ afterEach(async () => {
   await fs.rm(temporary, { recursive: true, force: true });
 });
 
-it("all seven tools disclose partial foundation", async () => {
+it("all eight tools disclose partial foundation", async () => {
   await fs.writeFile(path.join(workspace, "broken.ts"), "export function broken( {");
   const tools: Array<[string, Record<string, unknown>]> = [
     ["osnova_ground", { question: "one" }], ["osnova_thread", { pattern: "one" }],
     ["osnova_outline", { file: "one.ts" }], ["osnova_warp", { symbol: "one" }], ["osnova_groundwork", {}],
     ["osnova_footing", { question: "one" }], ["osnova_settle", { diff: "--- a/one.ts\n+++ b/one.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" }],
+    ["osnova_plumb", { symbol: "one", sites: ["one.ts:1"] }],
   ];
   for (const [name, args] of tools) {
     const result = await client.callTool({ name, arguments: args });

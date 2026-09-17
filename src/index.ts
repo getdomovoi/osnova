@@ -64,6 +64,8 @@ export { map } from "./query/map.js";
 export { renderMapCard } from "./query/mapCard.js";
 export { impact, indexReceipt } from "./query/impact.js";
 export { resolutionCoverage } from "./query/coverage.js";
+export { plumb, parseClaims } from "./query/plumb.js";
+export type { PlumbClaim, PlumbClaimResult, PlumbOptions, PlumbResult, PlumbVerdict } from "./query/plumb.js";
 export type { CoverageReport, LanguageCoverage } from "./query/coverage.js";
 export type { ImpactOptions, ImpactResult, IndexReceipt, SourceReceipt, DefinitionEvidence, RelationshipEvidence, SymbolChange, ImpactDependent } from "./query/impact.js";
 export { detectScopes, scopedAsk } from "./query/scoped.js";
