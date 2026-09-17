@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { makeSpan, makeSignature } from "./adapter.js";
 import type { RawDefinition, RawEdge } from "./adapter.js";
-import type { EdgeBinding, EdgeKind, MemberKind, SourceSpan, SymbolBinding, SymbolKind } from "../types.js";
+import type { EdgeBinding, EdgeKind, MemberKind, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
 
 export type VisitResult = boolean | void;
 
@@ -60,7 +60,7 @@ export class Extractor {
     this.stack.pop();
   }
 
-  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node, memberKind?: MemberKind, heritage?: readonly SymbolBinding[], fields?: readonly string[], returns?: SymbolBinding): void {
+  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node, memberKind?: MemberKind, heritage?: readonly SymbolBinding[], fields?: readonly string[], returns?: ReturnBinding): void {
     const def: RawDefinition = {
       name,
       kind,
