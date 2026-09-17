@@ -120,20 +120,20 @@ A call site counts as resolved when the index ties it to one definition through 
 |---|---|---:|---:|---:|---:|
 | click | python | 5018 | 1870 | 37.3% | 52.0% |
 | click | all | 5018 | 1870 | 37.3% | 52.0% |
-| cobra | go | 4373 | 1846 | 42.2% | 61.8% |
-| cobra | all | 4373 | 1846 | 42.2% | 61.8% |
+| cobra | go | 4373 | 1843 | 42.1% | 61.7% |
+| cobra | all | 4373 | 1843 | 42.1% | 61.7% |
 | gson | java | 23340 | 7218 | 30.9% | 34.0% |
 | gson | all | 23340 | 7218 | 30.9% | 34.0% |
-| humanizer | c_sharp | 28771 | 7608 | 26.4% | 38.6% |
+| humanizer | c_sharp | 28771 | 7597 | 26.4% | 38.5% |
 | humanizer | javascript | 922 | 132 | 14.3% | 33.9% |
 | humanizer | tsx | 120 | 14 | 11.7% | 15.7% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30497 | 7758 | 25.4% | 37.8% |
+| humanizer | all | 30497 | 7747 | 25.4% | 37.7% |
 | pyright | python | 11614 | 3193 | 27.5% | 61.2% |
 | pyright | typescript | 46759 | 25388 | 54.3% | 64.5% |
 | pyright | all | 58405 | 28581 | 48.9% | 64.1% |
-| ripgrep | rust | 13329 | 3591 | 26.9% | 31.4% |
-| ripgrep | all | 13343 | 3595 | 26.9% | 31.4% |
+| ripgrep | rust | 13329 | 3569 | 26.8% | 31.2% |
+| ripgrep | all | 13343 | 3573 | 26.8% | 31.2% |
 | zod | tsx | 150 | 7 | 4.7% | 8.3% |
 | zod | typescript | 53208 | 16107 | 30.3% | 49.7% |
 | zod | all | 53387 | 16124 | 30.2% | 49.6% |
