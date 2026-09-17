@@ -83,6 +83,9 @@ describe("receiver identity", () => {
     expect(index.outgoing("a.ts#H.use").find((edge) => edge.toName === "hit")?.toSymbol).toBeUndefined();
     expect(index.outgoing("a.ts#use").find((edge) => edge.toName === "hit")?.toSymbol).toBeUndefined();
     expect(index.outgoing("a.ts#Nested.hit").find((edge) => edge.toName === "inner")?.toSymbol).toBe("a.ts#Nested.hit.inner");
+    const js = await build({ "a.js": "class H { hit() {} hit = 0; }\nclass G { hit = function* () { yield 1; }; }\nfunction use() {\n  const x = new H();\n  x.hit();\n  const g = new G();\n  g.hit();\n}\n" });
+    expect([...index.symbols.keys()].length).toBeGreaterThan(0);
+    expect(js.outgoing("a.js#use").filter((edge) => edge.toName === "hit").map((edge) => edge.toSymbol)).toEqual([undefined, "a.js#G.hit"]);
   });
 
   it("finds inherited members in Python and through constructor-assigned fields", async () => {

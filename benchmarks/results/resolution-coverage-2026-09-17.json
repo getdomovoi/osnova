@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call-site resolution coverage on pinned checkouts",
   "osnova": {
-    "commit": "447230d3f269411b9c1f0b651bef7a38a04e81df",
+    "commit": "cc39e46f844a25035a0450c3be55b79f8cf9d08c",
     "version": "0.3.0"
   },
   "corpora": [
