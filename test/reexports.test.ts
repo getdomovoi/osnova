@@ -30,6 +30,22 @@ async function build(files: Record<string, string>) {
 }
 
 describe("re-export resolution", () => {
+  it("follows a namespace re-export to the member definition", async () => {
+    const index = await build({
+      "core/util.ts": "export function partial() {}\nexport function other() {}\n",
+      "core/index.ts": "export * as util from './util.js';\nexport const marker = 1;\n",
+      "classic/schemas.ts": "import { util } from '../core/index.js';\nexport function caller() { util.partial(); }\n",
+      "mini/schemas.ts": "import * as util from '../core/util.js';\nexport function caller() { util.partial(); }\n",
+    });
+    const classic = index.outgoing("classic/schemas.ts#caller")[0];
+    expect(classic?.toSymbol).toBe("core/util.ts#partial");
+    expect(classic?.evidence).toMatchObject({ resolution: { status: "resolved", method: "re-export-binding" } });
+    expect((classic?.evidence as { resolution: { via?: unknown[] } }).resolution.via?.length).toBe(1);
+    expect(index.outgoing("mini/schemas.ts#caller")[0]?.toSymbol).toBe("core/util.ts#partial");
+    expect(index.incoming("core/util.ts#partial").map((edge) => edge.fromSymbol).sort()).toEqual(["classic/schemas.ts#caller", "mini/schemas.ts#caller"]);
+    expect(index.files.get("core/index.ts")?.reExports).toEqual([{ kind: "namespace", exportedName: "util", source: "./util.js", line: 1 }]);
+  });
+
   it("follows renamed barrels and records each source hop", async () => {
     const index = await build({
       "impl.ts": "export function work() {}\n",

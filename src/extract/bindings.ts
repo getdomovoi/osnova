@@ -46,6 +46,24 @@ function patternNames(node: Node | null): string[] {
   return containers.has(node.type) ? childrenOf(node).flatMap(patternNames) : [];
 }
 
+function reassigns(body: Node, name: string): boolean {
+  const stack: Node[] = [body];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression", "as_pattern", "global_statement", "nonlocal_statement"].includes(node.type)) {
+      const target = node.childForFieldName("left") ?? node.childForFieldName("name") ?? node.childForFieldName("alias");
+      if (target !== null && patternNames(target).includes(name)) return true;
+      if (node.type === "global_statement" || node.type === "nonlocal_statement") return true;
+    }
+    if (node.type === "function_definition" && node.id !== body.parent?.id) {
+      const params = patternNames(node.childForFieldName("parameters"));
+      if (params.includes(name)) continue;
+    }
+    for (const child of childrenOf(node)) stack.push(child);
+  }
+  return false;
+}
+
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
   exportedNames: (name: string, parent: string) => readonly string[];
@@ -59,6 +77,7 @@ export function collectBindings(root: Node, python: boolean): {
   const importLines = new Map<EdgeBinding, number>();
   const constructions = new Map<EdgeBinding, { expression: Node; site: Node }>();
   const implicitReceivers: Array<{ node: Node; scope: Scope; parameter: string }> = [];
+  const annotated: Array<{ scope: Scope; parameter: string; typeName: string; site: Node }> = [];
   const memberWrites: Array<{ object: Node; member: string; scope: Scope }> = [];
   const mutations = new Map<object, Set<string>>();
   const initializers = new Map<EdgeBinding, { end: number; scope: Scope }>();
@@ -117,6 +136,16 @@ export function collectBindings(root: Node, python: boolean): {
         inner.thisBinding = node.type === "method_definition" && outer.kind === "class"
           ? { owner: { kind: "local", name: outer.owner }, mode: node.children.some((child) => child?.type === "static") ? "class" : "instance" }
           : null;
+      }
+      if (python && node.type === "function_definition") {
+        for (const parameter of childrenOf(node.childForFieldName("parameters") ?? node)) {
+          if (parameter.type !== "typed_parameter" && parameter.type !== "typed_default_parameter") continue;
+          const name = patternNames(parameter)[0];
+          const type = parameter.childForFieldName("type");
+          const typeText = type === null ? undefined : type.type === "type" ? (childrenOf(type)[0]?.type === "identifier" || childrenOf(type)[0]?.type === "attribute" ? childrenOf(type)[0]?.text : undefined) : type.type === "identifier" || type.type === "attribute" ? type.text : undefined;
+          if (name === undefined || typeText === undefined) continue;
+          annotated.push({ scope: inner, parameter: name, typeName: typeText, site: parameter });
+        }
       }
       if (python && outer.kind === "class" && node.type === "function_definition") {
         const kind = memberKindOf(node, true);
@@ -216,7 +245,7 @@ export function collectBindings(root: Node, python: boolean): {
         if (namespace === null) reExports.push({ kind: "star", source, line });
         else {
           const name = childrenOf(namespace).find((child) => child.type === "identifier")?.text;
-          if (name !== undefined) reExports.push({ kind: "blocked", exportedName: name, line });
+          if (name !== undefined) reExports.push({ kind: "namespace", exportedName: name, source, line });
         }
       }
       const declaration = node.childForFieldName("declaration");
@@ -320,6 +349,21 @@ export function collectBindings(root: Node, python: boolean): {
   };
   for (const receiver of implicitReceivers) {
     if (memberKind(receiver.node) === "unknown") receiver.scope.names.set(receiver.parameter, [{ kind: "blocked", reason: "unknown-receiver" }]);
+  }
+  for (const entry of annotated) {
+    const current = entry.scope.names.get(entry.parameter);
+    if (current === undefined || current.length !== 1 || current[0] !== localValue) continue;
+    const dotted = entry.typeName.split(".");
+    const head = lookup(dotted[0]!, entry.site);
+    const owner: SymbolBinding | undefined = head === undefined ? undefined
+      : dotted.length === 1 ? (head.kind === "local" || head.kind === "import" ? head : undefined)
+      : dotted.length === 2 && head.kind === "import" && head.importedName === "*" ? { ...head, importedName: dotted[1]! }
+      : dotted.length === 2 && head.kind === "import" && head.importedName === "default" ? undefined
+      : undefined;
+    if (owner === undefined) continue;
+    const body = entry.site.parent?.parent?.childForFieldName("body") ?? null;
+    if (body !== null && reassigns(body, entry.parameter)) continue;
+    entry.scope.names.set(entry.parameter, [{ kind: "instance", owner, basis: "annotation" }]);
   }
   const thisFor = (scope: Scope): Scope["thisBinding"] => {
     for (let current: Scope | null = scope; current !== null; current = current.parent) {
