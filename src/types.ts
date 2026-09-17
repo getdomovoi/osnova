@@ -91,7 +91,7 @@ export type SymbolBinding =
   | { readonly kind: "import"; readonly source: string; readonly importedName: string }
   | { readonly kind: "local"; readonly name: string };
 
-export type Callee = SymbolBinding | { readonly kind: "method"; readonly owner: ReceiverOwner; readonly member: string; readonly mode: ReceiverMode };
+export type Callee = SymbolBinding | { readonly kind: "method"; readonly owner: ReceiverOwner; readonly member: string; readonly mode?: ReceiverMode | undefined };
 export type ReceiverOwner = SymbolBinding | { readonly kind: "return"; readonly of: Callee };
 
 export type ReturnBinding = SymbolBinding | { readonly kind: "this" };

@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectTypedBindings, rustSpec } from "./typed-bindings.js";
 
 function lastSegment(text: string): string {
   const parts = text.split("::");
@@ -22,6 +23,7 @@ export const rustAdapter: LanguageAdapter = {
   language: "rust",
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
+    const bindings = collectTypedBindings(tree.rootNode, rustSpec);
 
     const visit = (node: Node): void => {
       switch (node.type) {
@@ -29,7 +31,7 @@ export const rustAdapter: LanguageAdapter = {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
             const inTrait = node.parent?.type === "declaration_list" && node.parent?.parent?.type === "trait_item";
-            out.addDef(nameNode.text, hasImplAncestor(node) || inTrait ? "method" : "function", node);
+            out.addDef(nameNode.text, hasImplAncestor(node) || inTrait ? "method" : "function", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -89,14 +91,16 @@ export const rustAdapter: LanguageAdapter = {
             if (fn.type === "identifier") {
               out.addEdge("calls", fn.text, node);
             } else if (fn.type === "scoped_identifier" || fn.type === "scoped_type_identifier") {
-              out.addEdge("calls", lastSegment(fn.text), node);
+              const name = fn.childForFieldName("name")?.text ?? lastSegment(fn.text);
+              if (/^[A-Za-z_]\w*$/.test(name)) out.addEdge("calls", name, node, bindings.at(fn, node));
             } else if (fn.type === "field_expression") {
               const field = fn.childForFieldName("field");
-              if (field !== null) out.addEdge("calls", field.text, node);
+              if (field !== null) out.addEdge("calls", field.text, node, bindings.at(fn, node));
             } else if (fn.type === "generic_function") {
               const inner = fn.childForFieldName("function");
               if (inner !== null) {
-                out.addEdge("calls", inner.type === "identifier" ? inner.text : lastSegment(inner.text), node);
+                const name = inner.type === "identifier" ? inner.text : inner.childForFieldName("name")?.text ?? lastSegment(inner.text);
+                if (/^[A-Za-z_]\w*$/.test(name)) out.addEdge("calls", name, node, bindings.at(inner, node));
               }
             }
           }

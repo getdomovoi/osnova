@@ -114,15 +114,26 @@ A typical agent turn with Osnova:
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, or the declared return type of the function or method that produced the value), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, or the declared return type of the function or method that produced the value), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/coverage/`), measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
 | click | python | 5018 | 1870 | 37.3% | 52.0% |
 | click | all | 5018 | 1870 | 37.3% | 52.0% |
+| cobra | go | 4373 | 1846 | 42.2% | 61.8% |
+| cobra | all | 4373 | 1846 | 42.2% | 61.8% |
+| gson | java | 23340 | 7218 | 30.9% | 34.0% |
+| gson | all | 23340 | 7218 | 30.9% | 34.0% |
+| humanizer | c_sharp | 28771 | 7608 | 26.4% | 38.6% |
+| humanizer | javascript | 922 | 132 | 14.3% | 33.9% |
+| humanizer | tsx | 120 | 14 | 11.7% | 15.7% |
+| humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
+| humanizer | all | 30497 | 7758 | 25.4% | 37.8% |
 | pyright | python | 11614 | 3193 | 27.5% | 61.2% |
 | pyright | typescript | 46759 | 25388 | 54.3% | 64.5% |
 | pyright | all | 58405 | 28581 | 48.9% | 64.1% |
+| ripgrep | rust | 13329 | 3591 | 26.9% | 31.4% |
+| ripgrep | all | 13343 | 3595 | 26.9% | 31.4% |
 | zod | tsx | 150 | 7 | 4.7% | 8.3% |
 | zod | typescript | 53208 | 16107 | 30.3% | 49.7% |
 | zod | all | 53387 | 16124 | 30.2% | 49.6% |

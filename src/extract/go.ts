@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectTypedBindings, goSpec } from "./typed-bindings.js";
 
 const GO_TYPE_NAMES = new Set([
   "bool", "byte", "complex64", "complex128", "error", "float32", "float64",
@@ -27,13 +28,14 @@ export const goAdapter: LanguageAdapter = {
   language: "go",
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
+    const bindings = collectTypedBindings(tree.rootNode, goSpec);
 
     const visit = (node: Node): void => {
       switch (node.type) {
         case "function_declaration": {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
-            out.addDef(nameNode.text, "function", node);
+            out.addDef(nameNode.text, "function", node, undefined, undefined, undefined, undefined, bindings.returns(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -45,8 +47,10 @@ export const goAdapter: LanguageAdapter = {
           const recv = receiverTypeName(node);
           if (nameNode !== null && recv !== null) {
             out.push(recv);
-            out.addDef(nameNode.text, "method", node);
+            out.addDef(nameNode.text, "method", node, undefined, "instance", undefined, undefined, bindings.returns(node));
+            out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
+            out.pop();
             out.pop();
           } else {
             for (const child of childrenOf(node)) visit(child);
@@ -87,7 +91,7 @@ export const goAdapter: LanguageAdapter = {
             } else if (fn.type === "selector_expression") {
               const field = fn.childForFieldName("field");
               if (field !== null && !GO_TYPE_NAMES.has(field.text)) {
-                out.addEdge("calls", field.text, node);
+                out.addEdge("calls", field.text, node, bindings.at(fn, node));
               }
             } else if (fn.type === "parenthesized_expression") {
               const inner = childrenOf(fn)[0];
