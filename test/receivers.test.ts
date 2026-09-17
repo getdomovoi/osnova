@@ -25,6 +25,30 @@ async function build(files: Record<string, string>) {
 }
 
 describe("receiver identity", () => {
+  it("resolves a Python method whose overload declarations are decorated", async () => {
+    const index = await build({
+      "core.py": "import typing as t\n\nclass Context:\n    @t.overload\n    def invoke(self, callback: int) -> int: ...\n    @t.overload\n    def invoke(self, callback: str) -> str: ...\n    def invoke(self, callback):\n        return callback\n\n    def forward(self, cmd):\n        return self.invoke(cmd)\n\nclass Command:\n    def invoke(self, ctx: Context):\n        return ctx.invoke(self.callback)\n",
+    });
+    expect(index.outgoing("core.py#Context.forward")[0]?.toSymbol).toBe("core.py#Context.invoke");
+    expect(index.outgoing("core.py#Command.invoke")[0]?.toSymbol).toBe("core.py#Context.invoke");
+    expect(index.incoming("core.py#Context.invoke").map((edge) => edge.fromSymbol).sort()).toEqual(["core.py#Command.invoke", "core.py#Context.forward"]);
+  });
+
+  it("uses a Python parameter annotation as an instance receiver", async () => {
+    const index = await build({
+      "core.py": "class Context:\n    def invoke(self, callback):\n        return callback()\n\nclass Command:\n    def invoke(self, ctx):\n        return ctx.invoke(self.callback)\n",
+      "decorators.py": "from .core import Context\nimport core as mod\n\ndef new_func(ctx: Context, *args):\n    return ctx.invoke(args)\n\ndef dotted(ctx: mod.Context):\n    return ctx.invoke(None)\n\ndef untyped(ctx):\n    return ctx.invoke(None)\n\ndef optional(ctx: 'Context | None'):\n    return ctx.invoke(None)\n\ndef shadowed(ctx: Context):\n    ctx = object()\n    return ctx.invoke(None)\n",
+    });
+    const typed = index.outgoing("decorators.py#new_func")[0];
+    expect(typed?.toSymbol).toBe("core.py#Context.invoke");
+    expect(typed?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "core.py#Context", mode: "instance", basis: "annotation" } } });
+    expect(index.outgoing("decorators.py#dotted")[0]?.toSymbol).toBe("core.py#Context.invoke");
+    expect(index.outgoing("decorators.py#untyped")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("decorators.py#optional")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("decorators.py#shadowed")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("core.py#Command.invoke")[0]?.toSymbol).toBeUndefined();
+  });
+
   it("does not attach an unknown object to an unrelated same-name method", async () => {
     const index = await build({ "a.ts": "export class Known { send() {} }\nexport function caller(value: any) { value.send(); }\n" });
     expect(index.outgoing("a.ts#caller")[0]?.toSymbol).toBeUndefined();

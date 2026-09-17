@@ -57,7 +57,7 @@ export interface OsnovaSymbol {
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
 export type ReceiverMode = "instance" | "class";
-export type ReceiverBasis = "constructor" | "lexical" | "class-reference";
+export type ReceiverBasis = "constructor" | "lexical" | "class-reference" | "annotation";
 
 export type EdgeKind = "calls" | "references" | "imports";
 
@@ -71,12 +71,13 @@ export type EdgeResolution =
 export type ReExport =
   | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }
   | { readonly kind: "star"; readonly source: string; readonly line: number }
+  | { readonly kind: "namespace"; readonly exportedName: string; readonly source: string; readonly line: number }
   | { readonly kind: "blocked"; readonly exportedName: string; readonly line: number };
 
 export interface ExportHop {
   readonly file: string;
   readonly line: number;
-  readonly kind: "named" | "star";
+  readonly kind: "named" | "star" | "namespace";
   readonly exportedName: string;
   readonly importedName: string;
   readonly source: string;
@@ -88,7 +89,7 @@ export type SymbolBinding =
   | { readonly kind: "local"; readonly name: string };
 
 export type EdgeBinding = SymbolBinding
-  | { readonly kind: "instance"; readonly owner: SymbolBinding; readonly basis: "constructor" | "lexical" }
+  | { readonly kind: "instance"; readonly owner: SymbolBinding; readonly basis: "constructor" | "lexical" | "annotation" }
   | { readonly kind: "member"; readonly owner: SymbolBinding; readonly member: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }
   | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" };
 
