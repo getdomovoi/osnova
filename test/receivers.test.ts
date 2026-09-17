@@ -335,4 +335,13 @@ describe("receiver identity", () => {
     data.edgesBytes = edgeBytes.length;
     expect(() => deserializeArtifact(JSON.stringify(data), undefined, sections.text.bytes, edgeBytes)).toThrow(/corrupt binding/);
   });
+
+  it("uses Python class-body annotations and property return types as field receivers", async () => {
+    const index = await build({
+      "conn.py": "class Conn:\n    def send(self):\n        pass\n",
+      "app.py": "from conn import Conn\nimport conn as mod\n\nclass Holder:\n    conn: Conn\n    other: mod.Conn = make()\n    count = 0\n    twice: Conn\n\n    def __init__(self):\n        self.conn = Conn()\n\n    @property\n    def link(self) -> Conn:\n        return self.conn\n\n    @property\n    def quoted(self) -> 'Conn':\n        return self.conn\n\n    def run(self):\n        self.conn.send()\n        self.other.send()\n        self.link.send()\n        self.count.send()\n        self.quoted.send()\n        self.twice.send()\n\n    def reset(self):\n        self.twice = None\n\ndef make():\n    return None\n",
+    });
+    const sends = [...index.outgoing("app.py#Holder.run").filter((edge) => edge.toName === "send")].sort((a, b) => a.line - b.line).map((edge) => edge.toSymbol);
+    expect(sends).toEqual(["conn.py#Conn.send", "conn.py#Conn.send", "conn.py#Conn.send", undefined, undefined, "conn.py#Conn.send"]);
+  });
 });

@@ -293,6 +293,27 @@ export function collectBindings(root: Node, python: boolean): {
           }
         }
         scope.fields = fields;
+      } else {
+        // Class-body annotations (`conn: Conn`) and property return types (`def conn(self) -> Conn`) type Python fields.
+        const fields = new Map<string, { typeName: string; site: Node }>();
+        for (const statement of childrenOf(node.childForFieldName("body") ?? node)) {
+          const assignment = statement.type === "expression_statement" ? childrenOf(statement)[0] : null;
+          if (assignment?.type === "assignment") {
+            const left = assignment.childForFieldName("left");
+            const type = assignment.childForFieldName("type");
+            const inner = type === null ? null : childrenOf(type)[0] ?? null;
+            if (left?.type === "identifier" && inner !== null && (inner.type === "identifier" || inner.type === "attribute")) fields.set(left.text, { typeName: inner.text, site: node });
+          }
+          const definition = statement.type === "decorated_definition" ? statement.childForFieldName("definition") : null;
+          const decorators = statement.type === "decorated_definition" ? childrenOf(statement).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : [];
+          if (definition?.type === "function_definition" && decorators.length === 1 && decorators[0] === "@property") {
+            const name = definition.childForFieldName("name")?.text;
+            const type = definition.childForFieldName("return_type");
+            const inner = type === null ? null : type.type === "type" ? childrenOf(type)[0] ?? null : type;
+            if (name !== undefined && inner !== null && (inner.type === "identifier" || inner.type === "attribute")) fields.set(name, { typeName: inner.text, site: node });
+          }
+        }
+        scope.fields = fields;
       }
       scope.constructorFields = new Map();
       scope.fieldWrites = new Map();
