@@ -344,4 +344,15 @@ describe("receiver identity", () => {
     const sends = [...index.outgoing("app.py#Holder.run").filter((edge) => edge.toName === "send")].sort((a, b) => a.line - b.line).map((edge) => edge.toSymbol);
     expect(sends).toEqual(["conn.py#Conn.send", "conn.py#Conn.send", "conn.py#Conn.send", undefined, undefined, "conn.py#Conn.send"]);
   });
+
+  it("refuses annotation fields that a plain method owns, a rebound property, and maps a Self property to the class", async () => {
+    const index = await build({
+      "conn.py": "class Conn:\n    def send(self):\n        pass\n",
+      "app.py": "from conn import Conn\nfrom typing import Self\n\ndef fake_property(fn):\n    return fn\n\nclass Clash:\n    conn: Conn\n    def conn(self):\n        return Conn()\n    def run(self):\n        self.conn.send()\n\nclass Node:\n    @property\n    def peer(self) -> Self:\n        return self\n    def send(self):\n        pass\n    def run(self):\n        self.peer.send()\n",
+      "shadow.py": "from conn import Conn\n\ndef fake_property(fn):\n    return fn\n\nproperty = fake_property\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n",
+    });
+    expect(index.outgoing("app.py#Clash.run").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
+    expect(index.outgoing("app.py#Node.run").find((edge) => edge.toName === "send")?.toSymbol).toBe("app.py#Node.send");
+    expect(index.outgoing("shadow.py#Holder.run").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
+  });
 });
