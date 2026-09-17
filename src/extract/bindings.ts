@@ -185,8 +185,8 @@ export function collectBindings(root: Node, python: boolean): {
     let scope = outer;
     if (functions.has(node.type)) {
       const nameNode = node.childForFieldName("name");
-      const variableName = node.parent?.type === "variable_declarator" ? node.parent.childForFieldName("name") : null;
-      const name = variableName?.type === "identifier" ? variableName.text : nameNode?.text ?? "";
+      const variableName = node.parent?.type === "variable_declarator" || node.parent?.type === "public_field_definition" ? node.parent.childForFieldName("name") : null;
+      const name = variableName?.type === "identifier" || variableName?.type === "property_identifier" ? variableName.text : nameNode?.text ?? "";
       const owner = name ? join(outer.owner, name) : outer.owner;
       if (["function_definition", "function_declaration", "generator_function_declaration"].includes(node.type) && nameNode !== null) {
         bind(outer, nameNode.text, { kind: "local", name: join(outer.owner, nameNode.text) });
@@ -473,11 +473,11 @@ export function collectBindings(root: Node, python: boolean): {
     }
     return undefined;
   };
-  const ownerFor = (typeName: string, site: Node): SymbolBinding | undefined => {
+  const ownerFor = (typeName: string, site: Node, valueOnly = false): SymbolBinding | undefined => {
     const dotted = typeName.split(".");
-    const head = lookup(dotted[0]!, site) ?? typeLookup(dotted[0]!, site);
+    const head = lookup(dotted[0]!, site) ?? (valueOnly ? undefined : typeLookup(dotted[0]!, site));
     if (head === undefined) return undefined;
-    if (head.kind === "blocked" && head.reason === "unsupported") { const typed = typeLookup(dotted[0]!, site); if (typed !== undefined) return dotted.length === 1 ? typed : undefined; }
+    if (!valueOnly && head.kind === "blocked" && head.reason === "unsupported") { const typed = typeLookup(dotted[0]!, site); if (typed !== undefined) return dotted.length === 1 ? typed : undefined; }
     if (dotted.length === 1) return head.kind === "local" || head.kind === "import" ? head : undefined;
     if (dotted.length === 2 && head.kind === "import" && head.importedName === "*") return { ...head, importedName: dotted[1]! };
     return undefined;
@@ -559,7 +559,7 @@ export function collectBindings(root: Node, python: boolean): {
             }
             const constructed = cls.constructorFields?.get(field);
             if (constructed !== undefined && writes === 1) {
-              const owner = ownerFor(constructed.typeName, constructed.site);
+              const owner = ownerFor(constructed.typeName, constructed.site, true);
               if (owner !== undefined) return { kind: "member", owner, member: property.text, mode: "instance", basis: "constructor" };
             }
           }
