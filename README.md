@@ -118,20 +118,20 @@ A call site counts as resolved when the index ties it to one definition through 
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5018 | 1873 | 37.3% | 52.2% |
-| click | all | 5018 | 1873 | 37.3% | 52.2% |
+| click | python | 5018 | 1913 | 38.1% | 53.3% |
+| click | all | 5018 | 1913 | 38.1% | 53.3% |
 | cobra | go | 4373 | 1843 | 42.1% | 61.7% |
 | cobra | all | 4373 | 1843 | 42.1% | 61.7% |
-| gson | java | 23340 | 7218 | 30.9% | 34.0% |
-| gson | all | 23340 | 7218 | 30.9% | 34.0% |
+| gson | java | 23340 | 7230 | 31.0% | 34.1% |
+| gson | all | 23340 | 7230 | 31.0% | 34.1% |
 | humanizer | c_sharp | 28771 | 7597 | 26.4% | 38.5% |
 | humanizer | javascript | 922 | 132 | 14.3% | 33.9% |
 | humanizer | tsx | 120 | 14 | 11.7% | 15.7% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
 | humanizer | all | 30497 | 7747 | 25.4% | 37.7% |
-| pyright | python | 11614 | 3193 | 27.5% | 61.3% |
-| pyright | typescript | 46759 | 25388 | 54.3% | 64.5% |
-| pyright | all | 58405 | 28581 | 48.9% | 64.1% |
+| pyright | python | 11614 | 3272 | 28.2% | 62.8% |
+| pyright | typescript | 46759 | 25414 | 54.4% | 64.6% |
+| pyright | all | 58405 | 28686 | 49.1% | 64.3% |
 | ripgrep | rust | 13329 | 3569 | 26.8% | 31.2% |
 | ripgrep | all | 13343 | 3573 | 26.8% | 31.2% |
 | zod | tsx | 150 | 7 | 4.7% | 8.3% |
@@ -139,6 +139,20 @@ A call site counts as resolved when the index ties it to one definition through 
 | zod | all | 53387 | 16124 | 30.2% | 49.6% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
+
+## Grep versus the graph
+
+The reason to keep a call graph instead of running a text search is not speed. It is that the first regex a person types is wrong more often than it looks, and nobody notices. Five call-site sets on public checkouts were verified line by line after two independent agent runs and a manual review; the manifest is [`benchmarks/exactness/exactness-v1.json`](benchmarks/exactness/exactness-v1.json) and `scripts/exactness.mjs` reproduces the table from the pinned checkouts. Each cell shows sites found (precision / recall against the verified set).
+
+| Corpus | Target | Verified sites | Text search | Resolved graph |
+|---|---|---:|---:|---:|
+| click | `Context.invoke` depth 2 | 13 | 12 (0.92 / 0.85) | 12 (1.00 / 0.92) |
+| pyright | `getChildNodes` depth 2 | 28 | 5 (0.80 / 0.14) | 28 (1.00 / 1.00) |
+| cobra | `Command.Root` depth 1 | 30 | 30 (1.00 / 1.00) | 28 (1.00 / 0.93) |
+| cobra | `Command.PersistentFlags` depth 1 | 12 | 13 (0.92 / 1.00) | 12 (1.00 / 1.00) |
+| humanizer | `Configurator.GetFormatter` depth 1 | 18 | 19 (0.74 / 0.78) | 18 (1.00 / 1.00) |
+
+What the text search got wrong: a comment that mentioned the method, a Javadoc example, a definition line, and four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next). What the graph missed: a receiver that is reassigned later in the same function, and a receiver that comes out of a multi-value return, both left unresolved on purpose rather than guessed. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-17.json`](benchmarks/results/grep-vs-graph-2026-09-17.json).
 
 ## CLI
 
