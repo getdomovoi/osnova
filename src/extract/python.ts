@@ -61,7 +61,7 @@ export const pythonAdapter: LanguageAdapter = {
           const name = nameField(node);
           const isMethod = inClassDepth > 0;
           if (name !== null && IDENTIFIER_RE.test(name)) {
-            out.addDef(name, isMethod ? "method" : "function", node, undefined, isMethod ? bindings.memberKind(node) : undefined);
+            out.addDef(name, isMethod ? "method" : "function", node, undefined, isMethod ? bindings.memberKind(node) : undefined, undefined, undefined, bindings.returns(node));
             out.push(name);
             const pushDepth = inClassDepth;
             if (isMethod) inClassDepth = 0;
