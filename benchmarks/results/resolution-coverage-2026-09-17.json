@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call-site resolution coverage on pinned checkouts",
   "osnova": {
-    "commit": "2e9eec06d70325e1d45a8b5e2975549e39702148",
+    "commit": "b931049f9f34a2e1f8571b3b1cf6af0844996c67",
     "version": "0.4.0"
   },
   "corpora": [
@@ -279,7 +279,7 @@
       "corpus": "humanizer-v1",
       "repository": "https://github.com/Humanizr/Humanizer",
       "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b",
-      "generation": "2fbe29d63e3ba9328ce2b702e5b9ed0c085706e628188340deddba774418284d",
+      "generation": "ef49bb0b8bcf27c019b33d800fcca6104eb2ef87ea0fe827999ba28d3eea76ab",
       "total": {
         "language": "all",
         "files": 2728,
@@ -301,12 +301,12 @@
           "binding-blocked": 12,
           "import-target-unresolved": 824,
           "no-matching-symbol": 3464,
-          "receiver-unresolved": 9083,
-          "unbound-global": 9119
+          "receiver-unresolved": 9081,
+          "unbound-global": 9121
         },
         "resolvedShare": 0.254,
         "unresolvedImportCalls": 824,
-        "unboundGlobalCalls": 9119,
+        "unboundGlobalCalls": 9121,
         "resolvedShareExcludingUnresolvedImports": 0.2611,
         "resolvedShareExcludingExternal": 0.3769
       },
@@ -328,12 +328,12 @@
           },
           "byReason": {
             "no-matching-symbol": 3464,
-            "receiver-unresolved": 8424,
-            "unbound-global": 9038
+            "receiver-unresolved": 8422,
+            "unbound-global": 9040
           },
           "resolvedShare": 0.2641,
           "unresolvedImportCalls": 0,
-          "unboundGlobalCalls": 9038,
+          "unboundGlobalCalls": 9040,
           "resolvedShareExcludingUnresolvedImports": 0.2641,
           "resolvedShareExcludingExternal": 0.385
         },
