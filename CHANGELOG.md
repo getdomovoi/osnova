@@ -12,7 +12,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 ### Changed
 
 - Call resolution follows `export * as name` namespace re-exports, so `name.member(...)` through a barrel resolves to the declaring symbol.
-- Python parameters annotated with a class name (`ctx: Context`, `ctx: mod.Context`) act as instance receivers, so `ctx.method()` resolves to that class's method. Unions, `Optional`, string annotations and reassigned parameters stay unbound. Artifact extraction version moves to `structural-9.2`; older caches rebuild.
+- Python parameters annotated with a class name (`ctx: Context`, `ctx: mod.Context`) act as instance receivers, so `ctx.method()` resolves to that class's method. Unions, `Optional`, string annotations and reassigned parameters stay unbound. Artifact extraction version moves to `structural-9.4`; older caches rebuild.
+- TypeScript type annotations on parameters, class fields, constructor parameter properties and `const` or `let` locals act as instance receivers, and interface method signatures and function-typed property signatures are indexed as members, so `reader.read()` resolves when `reader: Reader`.
+- Members are found through declared inheritance: `extends` clauses on classes and interfaces (TypeScript) and base classes (Python) are followed for up to eight hops when the receiver's own class lacks the member. `implements` clauses are not followed. The walk stays unresolved when a base cannot be identified, when two base chains supply different members, when the chain cycles, or when the class declares a non-method field of that name. Symbols carry `heritage` and `fields` lists. Type-only imports and `readonly` constructor parameter properties supply receivers; static fields, fields written more than once, and fields assigned only inside a nested function do not.
+- A field assigned exactly once in the constructor from a constructor call (`this.client = new Client()`, `self.client = Client()`) acts as a receiver for `this.client.method()` and `self.client.method()`.
 - `osnova_ground` and `osnova_footing` inline whole definitions of 40 lines or fewer; the footing budget is 4096 code units; the response prefix is shorter.
 
 ## 0.3.0 (2026-09-17)

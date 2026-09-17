@@ -8,6 +8,7 @@ import type {
   OsnovaEdge,
   OsnovaIndex,
   SourceSpan,
+  SymbolBinding,
   SymbolKind,
   IndexDiagnostic,
   ReExport,
@@ -31,7 +32,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.2.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.4.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 class ExtractionVersionError extends Error {}
@@ -57,6 +58,8 @@ interface SerializedSymbol {
   readonly signature: string;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
+  readonly heritage?: readonly SymbolBinding[] | undefined;
+  readonly fields?: readonly string[] | undefined;
 }
 
 interface SerializedFile {
@@ -126,6 +129,8 @@ export function serializeSections(
         signature: symbol.signature,
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
+        ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
+        ...(symbol.fields === undefined ? {} : { fields: symbol.fields }),
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
@@ -240,6 +245,12 @@ function deserializeParsedArtifact(
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.memberKind !== undefined && !["instance", "static", "class", "property", "unknown"].includes(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
+      if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
+        (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||
+          ((item as { kind?: unknown }).kind === "import" && typeof (item as { source?: unknown }).source === "string" && typeof (item as { importedName?: unknown }).importedName === "string"))))) {
+        throw new Error("osnova: corrupt heritage metadata");
+      }
+      if (symbol.fields !== undefined && (!Array.isArray(symbol.fields) || !symbol.fields.every((item: unknown) => typeof item === "string"))) throw new Error("osnova: corrupt field metadata");
       const span: SourceSpan = {
         startLine: symbol.span.s,
         endLine: symbol.span.e,
@@ -256,6 +267,8 @@ function deserializeParsedArtifact(
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
+        ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
+        ...(symbol.fields === undefined ? {} : { fields: symbol.fields }),
       };
     });
     const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports };
