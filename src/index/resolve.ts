@@ -5,7 +5,7 @@ import type { RawEdgeItem } from "./indexImpl.js";
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 
-function languageFamily(language: CardLanguage | undefined): string | undefined {
+export function languageFamily(language: CardLanguage | undefined): string | undefined {
   if (language === "typescript" || language === "tsx" || language === "javascript") return "javascript";
   if (language === "c" || language === "cpp") return "c";
   if (language === "java" || language === "kotlin" || language === "scala") return "java";

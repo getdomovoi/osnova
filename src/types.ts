@@ -252,9 +252,12 @@ export interface CallersOptions {
   readonly depth?: number | undefined;
 }
 
+export interface NameMatches { readonly candidates: readonly string[]; readonly total: number }
+
 export interface UnresolvedCallerEdge {
   readonly edge: OsnovaEdge;
   readonly depth: number;
+  readonly nameMatches: NameMatches;
 }
 
 export type CallersDetailedResult =
