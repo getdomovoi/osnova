@@ -142,13 +142,16 @@ function diffPath(value: string, prefix: boolean): string | null {
   return normalized;
 }
 
-function parseDiff(diff: string): DiffFile[] {
+function parseDiff(diff: string): DiffFile[] & { tolerated?: number } {
   if (!diff.trim()) return [];
   const files: DiffFile[] = [];
   let file: DiffFile | undefined;
   let oldLine = 0, newLine = 0, oldLeft = 0, newLeft = 0;
+  let hunkLine = 0, tolerated = 0;
   const finish = (): void => {
-    if (oldLeft !== 0 || newLeft !== 0) throw new Error("osnova: incomplete unified diff hunk");
+    if (oldLeft === 0 && newLeft === 0) return;
+    if (oldLeft === newLeft) { tolerated += oldLeft; oldLeft = 0; newLeft = 0; return; }
+    throw new Error(`osnova: incomplete unified diff hunk starting at line ${hunkLine}: the header promised ${oldLeft} more old and ${newLeft} more new lines; pass the exact diff output, not a summary`);
   };
   const lines = diff.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
@@ -158,9 +161,10 @@ function parseDiff(diff: string): DiffFile[] {
       if (line.startsWith("-")) { file?.oldLines.add(oldLine++); oldLeft--; }
       else if (line.startsWith("+")) { file?.newLines.add(newLine++); newLeft--; }
       else if (line.startsWith(" ") || line === "") { oldLine++; newLine++; oldLeft--; newLeft--; }
+      else if (line.startsWith("@@") && oldLeft === newLeft) { finish(); }
       else throw new Error(`osnova: invalid unified diff hunk line ${number + 1}: the hunk header promised ${oldLeft} more old and ${newLeft} more new lines; pass the exact diff output, not a summary`);
       if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts");
-      continue;
+      if (!line.startsWith("@@")) continue;
     }
     if (line.startsWith("diff --git ")) { finish(); file = undefined; }
     else if (line.startsWith("--- ") || line.startsWith("rename from ")) {
@@ -174,6 +178,7 @@ function parseDiff(diff: string): DiffFile[] {
     } else if (line.startsWith("@@")) {
       const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
       if (file === undefined || match === null) throw new Error("osnova: invalid unified diff header");
+      hunkLine = number + 1;
       oldLine = Number(match[1]); oldLeft = Number(match[2] ?? 1);
       newLine = Number(match[3]); newLeft = Number(match[4] ?? 1);
       if (![oldLine, newLine, oldLeft, newLeft].every(Number.isSafeInteger)) throw new Error("osnova: invalid diff range");
@@ -181,7 +186,7 @@ function parseDiff(diff: string): DiffFile[] {
   }
   finish();
   if (files.length === 0) throw new Error("osnova: no supported unified diff paths");
-  return files;
+  return Object.assign(files, { tolerated });
 }
 
 function symbolText(file: FileCard, symbol: OsnovaSymbol): string {
@@ -302,5 +307,6 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
       relationshipEvidence(index, edge, index === base ? beforeReceipt : afterReceipt) === null).length, 0),
     notes: ["indexed-graph-only", ...(sameIndex ? ["base-snapshot-is-current-index", "deleted-symbols-not-visible"] : []), "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",
       ...(diffs === null ? [] : ["provided-diff-ranges-not-verified-against-source"]),
+      ...((diffs?.tolerated ?? 0) > 0 ? [`diff-short-by-${diffs!.tolerated}-context-lines-treated-as-unchanged`] : []),
       ...(beforeReceipt.diagnostics + afterReceipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])] } };
 }
