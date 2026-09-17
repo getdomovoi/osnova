@@ -1,15 +1,7 @@
 import type { Node, Tree } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
-import { collectBindings, memberKindOf } from "./bindings.js";
-
-const FUNCTION_VALUE_NODES = new Set([
-  "function_expression",
-  "arrow_function",
-  "function",
-  "generator_function",
-  "function_signature",
-]);
+import { FIELD_NODES, FUNCTION_VALUE_NODES, collectBindings, memberKindOf } from "./bindings.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
@@ -32,7 +24,7 @@ class TsExtractor {
 }
 
 function declarationName(node: Node): string | null {
-  const nameNode = node.childForFieldName("name");
+  const nameNode = node.childForFieldName("name") ?? (FIELD_NODES.has(node.type) ? node.childForFieldName("property") : null);
   return nameNode !== null ? nameNode.text : null;
 }
 
@@ -91,7 +83,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
   for (const child of childrenOf(node)) {
     if (child.type === "class_body" || child.type === "declaration_list") {
       for (const member of childrenOf(child)) {
-        const fieldValue = member.type === "public_field_definition" ? member.childForFieldName("value") : null;
+        const fieldValue = FIELD_NODES.has(member.type) ? member.childForFieldName("value") : null;
         if (member.type === "method_definition" || (fieldValue !== null && FUNCTION_VALUE_NODES.has(fieldValue.type))) {
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {

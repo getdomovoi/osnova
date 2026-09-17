@@ -43,6 +43,16 @@ const classes = new Set(["class_declaration", "abstract_class_declaration", "cla
 const containers = new Set(["formal_parameters", "parameters", "lambda_parameters", "array_pattern", "object_pattern", "tuple_pattern", "list_pattern", "pattern_list", "rest_pattern", "list_splat_pattern", "dictionary_splat_pattern", "as_pattern_target", "expression_list"]);
 const localValue: EdgeBinding = { kind: "blocked", reason: "local-value" };
 
+export const FUNCTION_VALUE_NODES = new Set([
+  "function_expression",
+  "arrow_function",
+  "function",
+  "generator_function",
+  "function_signature",
+]);
+export const FIELD_NODES = new Set(["public_field_definition", "field_definition"]);
+const fieldNameOf = (member: Node): Node | null => member.childForFieldName("name") ?? member.childForFieldName("property");
+
 export function memberKindOf(node: Node, python: boolean, decoratorTexts?: readonly string[]): MemberKind {
   if (!python) {
     if (node.children.some((child) => child?.type === "get" || child?.type === "set") || node.childForFieldName("name")?.text === "constructor") return "property";
@@ -185,7 +195,7 @@ export function collectBindings(root: Node, python: boolean): {
     let scope = outer;
     if (functions.has(node.type)) {
       const nameNode = node.childForFieldName("name");
-      const variableName = node.parent?.type === "variable_declarator" || node.parent?.type === "public_field_definition" ? node.parent.childForFieldName("name") : null;
+      const variableName = node.parent?.type === "variable_declarator" || (node.parent !== null && FIELD_NODES.has(node.parent.type)) ? fieldNameOf(node.parent) : null;
       const name = variableName?.type === "identifier" || variableName?.type === "property_identifier" ? variableName.text : nameNode?.text ?? "";
       const owner = name ? join(outer.owner, name) : outer.owner;
       if (["function_definition", "function_declaration", "generator_function_declaration"].includes(node.type) && nameNode !== null) {
@@ -252,8 +262,8 @@ export function collectBindings(root: Node, python: boolean): {
       if (!python) {
         const fields = new Map<string, { typeName: string; site: Node }>();
         for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
-          if (member.type === "public_field_definition" && !member.children.some((child) => child?.type === "static")) {
-            const fieldName = member.childForFieldName("name");
+          if (FIELD_NODES.has(member.type) && !member.children.some((child) => child?.type === "static")) {
+            const fieldName = fieldNameOf(member);
             const typeName = annotationTypeName(member.childForFieldName("type"));
             if (fieldName?.type === "property_identifier" && typeName !== undefined) fields.set(fieldName.text, { typeName, site: node });
           }
@@ -602,10 +612,10 @@ export function collectBindings(root: Node, python: boolean): {
           const assignment = member.type === "expression_statement" ? childrenOf(member)[0] : null;
           const left = assignment?.type === "assignment" ? assignment.childForFieldName("left") : null;
           if (left?.type === "identifier") out.add(left.text);
-        } else if (member.type === "public_field_definition") {
+        } else if (FIELD_NODES.has(member.type)) {
           const value = member.childForFieldName("value");
-          const name = member.childForFieldName("name");
-          if (name?.type === "property_identifier" && (value === null || !["arrow_function", "function_expression", "function"].includes(value.type))) out.add(name.text);
+          const name = fieldNameOf(member);
+          if (name?.type === "property_identifier" && (value === null || !FUNCTION_VALUE_NODES.has(value.type))) out.add(name.text);
         }
       }
       return [...out].sort();
