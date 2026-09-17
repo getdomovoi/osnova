@@ -84,3 +84,12 @@ it("rejects invalid impact depth", async () => {
 it("reports a missing impact baseline as a usage error", async () => {
   await expect(command(["settle", "--base-cache", path.join(temporary, "missing")])).rejects.toThrow(/does not exist/);
 });
+
+it("caps plumb output at the shared 4096 code-unit budget", async () => {
+  const callers = Array.from({ length: 300 }, (_, i) => `import { work } from './api.js';\nexport function caller${i}() { return work(); }\n`);
+  await Promise.all(callers.map((text, i) => fs.writeFile(path.join(workspace, `caller${i}.ts`), text)));
+  const result = await command(["plumb", "work", "--site", "entry.ts:2"]);
+  expect(result.code).toBe(0);
+  expect(result.text.length).toBeLessThanOrEqual(4096);
+  expect(result.text).toMatch(/omitted/);
+});

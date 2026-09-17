@@ -70,23 +70,36 @@ async function recoverExitedOwner(lockPath: string): Promise<void> {
     if (["EEXIST", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
     throw error;
   }
-  const current = await readOwner(lockPath);
-  const entries = await fs.readdir(lockPath).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  });
-  if (current?.token !== owner.token || !lockOwnerExited(current) ||
-    entries.some((name) => name !== "owner.json" && name !== "recovery")) {
-    await fs.rmdir(recovery).catch(() => {});
-    return;
-  }
+  const releaseMarker = async (): Promise<void> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fs.rmdir(recovery);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? "";
+        if (code === "ENOENT") return;
+        if (!TRANSIENT_CODES.has(code) || attempt >= 40) throw error;
+        await delay(25);
+      }
+    }
+  };
+  let renamed = false;
   const abandoned = `${lockPath}.abandoned-${randomUUID()}`;
   try {
+    const current = await readOwner(lockPath);
+    const entries = await fs.readdir(lockPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
+    if (current?.token !== owner.token || !lockOwnerExited(current) ||
+      entries.some((name) => name !== "owner.json" && name !== "recovery")) return;
     await fs.rename(lockPath, abandoned);
+    renamed = true;
   } catch (error) {
     if (!TRANSIENT_CODES.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
-    await fs.rmdir(recovery).catch(() => {});
     return;
+  } finally {
+    if (!renamed) await releaseMarker();
   }
   await fs.unlink(path.join(abandoned, "owner.json")).catch(() => {});
   await fs.rmdir(path.join(abandoned, "recovery")).catch(() => {});
