@@ -65,6 +65,17 @@ describe("plumb", () => {
     if (duplicates !== undefined) expect(() => plumb(index, duplicates, [])).toThrow(/matches \d+ symbols; choose one of/);
   });
 
+  it("never carries a claim across a non-call edge at depth two", async () => {
+    const fs = await import("node:fs/promises"); const os = await import("node:os");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-plumb-depth-"));
+    await fs.writeFile(path.join(dir, "a.py"), "def hit():\n    return 1\n");
+    await fs.writeFile(path.join(dir, "b.py"), "from a import hit\n\ndef outer():\n    return 2\n\ndef top():\n    return outer()\n");
+    const local = await buildIndex(dir);
+    const result = plumb(local, "a.py#hit", [{ file: "b.py", line: 7 }], { depth: 2 });
+    expect(result.claims[0]?.verdict).toBe("no-call");
+    expect(result.missing).toEqual([]);
+  });
+
   it("confirms only call edges, not references or imports", async () => {
     const workspace = await import("node:fs/promises").then(async (fs) => { const os = await import("node:os"); const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-plumb-")); await fs.writeFile(path.join(dir, "a.py"), "def hit():\n    return 1\n"); await fs.writeFile(path.join(dir, "b.py"), "from a import hit\n\ndef use():\n    return hit()\n"); return dir; });
     const local = await buildIndex(workspace);
