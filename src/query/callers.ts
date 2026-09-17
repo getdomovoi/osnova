@@ -13,10 +13,12 @@ import type {
 function resolveTargets(index: OsnovaIndex, symbol: string): OsnovaSymbol[] {
   const exact = index.symbols.get(symbol);
   if (exact !== undefined) return [exact];
-  const candidates = [...index.symbols.values()].filter((s) => s.name === symbol);
+  const local = symbol.includes("#") ? symbol.slice(symbol.indexOf("#") + 1) : symbol;
+  const candidates = [...index.symbols.values()].filter((s) => s.name === symbol ||
+    (local.includes(".") && s.qualifiedName.endsWith(`#${local}`)));
   if (candidates.length === 0) {
     throw new Error(
-      `osnova: no indexed symbol named ${JSON.stringify(symbol)}; use findText to locate names first`,
+      `osnova: no indexed symbol named ${JSON.stringify(symbol)}; search with thread or ground to locate the qualified name first`,
     );
   }
   candidates.sort((a, b) => {
