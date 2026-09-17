@@ -118,8 +118,8 @@ A call site counts as resolved when the index ties it to one definition through 
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5018 | 1870 | 37.3% | 52.0% |
-| click | all | 5018 | 1870 | 37.3% | 52.0% |
+| click | python | 5018 | 1873 | 37.3% | 52.2% |
+| click | all | 5018 | 1873 | 37.3% | 52.2% |
 | cobra | go | 4373 | 1843 | 42.1% | 61.7% |
 | cobra | all | 4373 | 1843 | 42.1% | 61.7% |
 | gson | java | 23340 | 7218 | 30.9% | 34.0% |
@@ -129,7 +129,7 @@ A call site counts as resolved when the index ties it to one definition through 
 | humanizer | tsx | 120 | 14 | 11.7% | 15.7% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
 | humanizer | all | 30497 | 7747 | 25.4% | 37.7% |
-| pyright | python | 11614 | 3193 | 27.5% | 61.2% |
+| pyright | python | 11614 | 3193 | 27.5% | 61.3% |
 | pyright | typescript | 46759 | 25388 | 54.3% | 64.5% |
 | pyright | all | 58405 | 28581 | 48.9% | 64.1% |
 | ripgrep | rust | 13329 | 3569 | 26.8% | 31.2% |
