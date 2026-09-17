@@ -22,15 +22,15 @@ describe("resolution coverage", () => {
     expect(report.generation).toBe(indexGeneration(index));
     expect(report.total).toMatchObject({ language: "all", files: 3, calls: 3, resolved: 1, ambiguous: 0, unresolved: 2, imports: 1, importsResolved: 1, resolvedShare: 0.3333 });
     expect(report.total.byMethod).toEqual({ "import-binding": 1 });
-    expect(report.total.byReason).toEqual({ "binding-blocked": 2 });
+    expect(report.total.byReason).toEqual({ "unbound-global": 2 });
     expect(report.languages.map((row) => row.language)).toEqual(["python", "typescript"]);
     expect(report.languages.find((row) => row.language === "python")).toMatchObject({ files: 1, calls: 1, resolved: 0, unresolved: 1, resolvedShare: 0 });
-    expect(report.limitations).toEqual(["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges"]);
-    expect(report.total).toMatchObject({ unresolvedImportCalls: 0, resolvedShareExcludingUnresolvedImports: 0.3333 });
+    expect(report.limitations).toEqual(["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges", "unbound-global-calls-are-names-with-no-binding-in-the-file"]);
+    expect(report.total).toMatchObject({ unresolvedImportCalls: 0, resolvedShareExcludingUnresolvedImports: 0.3333, unboundGlobalCalls: 2, resolvedShareExcludingExternal: 1 });
     const text = formatCoverage(report);
-    expect(text.split("\n")[0]).toBe("osnova coverage: 1/3 call sites resolved (33.3%); 0 call sites go through an import the index cannot resolve");
-    expect(text).toContain("typescript: files 2, symbols 2, calls 2, resolved 1 (50.0%; 50.0% of the 2 not blocked by an unresolved import), ambiguous 0, unresolved 1");
-    expect(text).toContain("unresolved by reason:\n- binding-blocked: 2");
+    expect(text.split("\n")[0]).toBe("osnova coverage: 1/3 call sites resolved (33.3%); 0 call sites go through an import the index cannot resolve, 2 call a name with no binding in the file");
+    expect(text).toContain("typescript: files 2, symbols 2, calls 2, resolved 1 (50.0%; 100.0% of the 1 not going through an unresolved import or an unbound global), ambiguous 0, unresolved 1");
+    expect(text).toContain("unresolved by reason:\n- unbound-global: 2");
     expect(text).toContain("limitations: indexed-call-sites-only");
   });
 
@@ -42,5 +42,27 @@ describe("resolution coverage", () => {
     const report = resolutionCoverage(index);
     expect(report.total).toMatchObject({ calls: 0, resolved: 0, resolvedShare: 0 });
     expect(report.languages).toHaveLength(1);
+  });
+
+  it("keeps ambient declarations out of the unbound-global bucket", async () => {
+    const workspace = path.join(temporary, "ambient"); await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "globals.d.ts"), "declare function shared(): void;\n");
+    await fs.writeFile(path.join(workspace, "a.ts"), "declare function here(): void;\nfunction local() {}\nexport function use() {\n  here();\n  shared();\n  local();\n  missing();\n}\n");
+    const index = await buildIndex(workspace, { cacheDir: path.join(temporary, "cache-ambient") });
+    const reasons = index.outgoing("a.ts#use").map((edge) => { const r = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined; return [edge.toName, r?.status === "unresolved" ? r.reason : edge.toSymbol]; });
+    expect(reasons).toEqual([["here", "binding-blocked"], ["shared", "binding-blocked"], ["local", "a.ts#local"], ["missing", "unbound-global"]]);
+    expect(resolutionCoverage(index).total).toMatchObject({ calls: 4, resolved: 1, unboundGlobalCalls: 1, resolvedShareExcludingExternal: 0.3333 });
+  });
+
+  it("reads ambient declarations with comment, string, module and global scopes in mind", async () => {
+    const workspace = path.join(temporary, "ambient2"); await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "globals.d.ts"), '// declare function commented(): void;\n/*\nfunction blockCommented(): void;\n*/\nconst quoted = "declare function inString(): void";\ntype T = "https://example"; declare function afterSlashes(): void;\ntype Q = import("x").T; declare function afterImportType(): void;\ndeclare module "x" {\n  function moduleLocal(): void;\n}\ndeclare global {\n  function fromGlobal(): void;\n}\ndeclare function plain(): void;\n');
+    await fs.writeFile(path.join(workspace, "module.d.ts"), "export {};\nexport declare function exported(): void;\ndeclare global {\n  function augmented(): void;\n}\n");
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function use() {\n  commented();\n  blockCommented();\n  inString();\n  moduleLocal();\n  fromGlobal();\n  plain();\n  afterSlashes();\n  exported();\n  augmented();\n  afterImportType();\n}\n");
+    await fs.writeFile(path.join(workspace, "b.py"), "def use():\n    plain()\n");
+    const index = await buildIndex(workspace, { cacheDir: path.join(temporary, "cache-ambient2") });
+    const reason = (symbol: string) => index.outgoing(symbol).map((edge) => { const r = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined; return [edge.toName, r?.status === "unresolved" ? r.reason : edge.toSymbol]; });
+    expect(reason("a.ts#use")).toEqual([["commented", "unbound-global"], ["blockCommented", "unbound-global"], ["inString", "unbound-global"], ["moduleLocal", "unbound-global"], ["fromGlobal", "binding-blocked"], ["plain", "binding-blocked"], ["afterSlashes", "binding-blocked"], ["exported", "unbound-global"], ["augmented", "binding-blocked"], ["afterImportType", "binding-blocked"]]);
+    expect(reason("b.py#use")).toEqual([["plain", "unbound-global"]]);
   });
 });
