@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "gson-v1",
+  "source": { "kind": "checkout", "revision": "854c8255b625cf1e13c701a83ea9ccb4caaa576a", "repository": "https://github.com/google/gson" },
+  "purpose": "resolution coverage only; no retrieval cases"
+}

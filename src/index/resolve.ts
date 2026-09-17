@@ -9,6 +9,15 @@ const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind
 // Languages whose receiver hints name a type without an import binding; a type not declared in the
 // file may still be the single declaration of that name in the same language family.
 const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
+const goPackages = new WeakMap<FileCard, string>();
+// The package clause separates an external _test package from the production package in one directory.
+function goPackageOf(card: FileCard): string {
+  const cached = goPackages.get(card);
+  if (cached !== undefined) return cached;
+  const name = card.text.match(/^\s*package\s+(\w+)/m)?.[1] ?? "";
+  goPackages.set(card, name);
+  return name;
+}
 
 export function languageFamily(language: CardLanguage | undefined): string | undefined {
   if (language === "typescript" || language === "tsx" || language === "javascript") return "javascript";
@@ -299,8 +308,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (card === undefined || languageFamily(card.language) !== family) { result.incomplete = true; return; }
       if (card.language === "go") {
         const dir = path.posix.dirname(currentFile);
+        const pkg = goPackageOf(card);
         for (const [file, other] of files) {
-          if (other.language !== "go" || path.posix.dirname(file) !== dir) continue;
+          if (other.language !== "go" || path.posix.dirname(file) !== dir || goPackageOf(other) !== pkg) continue;
           for (const symbol of other.symbols) if (symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")) result.symbols.set(symbol.qualifiedName, symbol);
         }
         return;
@@ -478,7 +488,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             const holderDir = path.posix.dirname(holder.file);
             const local = `${holder.qualifiedName.slice(holder.qualifiedName.indexOf("#") + 1)}.${member}`;
             return (symbolsByName.get(member) ?? []).filter((symbol) => symbol.kind === "method" && languageFamily(files.get(symbol.file)?.language) === family &&
-              symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === local && (card.language !== "go" || path.posix.dirname(symbol.file) === holderDir));
+              symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === local && (card.language !== "go" || (path.posix.dirname(symbol.file) === holderDir && goPackageOf(files.get(symbol.file)!) === goPackageOf(files.get(holder.file)!))));
           };
           // Walk declared heritage when the owner itself lacks the member. Any base that cannot be
           // identified, a cycle, an own non-method field of that name, or two base chains that

@@ -26,7 +26,10 @@ export interface TypedSpec {
 }
 
 interface Import { readonly source: string; readonly name: string }
-interface Scope { readonly parent: Scope | null; readonly names: Map<string, { type: string | undefined; owner?: ReceiverOwner | undefined; importOf?: Import | undefined }>; readonly fn: boolean; receiver?: { name: string; type: string } | undefined; className?: string | undefined; fields?: Map<string, string | undefined> | undefined; staticFn?: boolean | undefined }
+interface Declaration { readonly at: number; readonly type: string | undefined; readonly owner?: ReceiverOwner | undefined; readonly importOf?: Import | undefined }
+// Declarations keep their source position so a call sees the binding in force where it occurs,
+// not the last one declared in the scope.
+interface Scope { readonly parent: Scope | null; readonly names: Map<string, Declaration[]>; readonly fn: boolean; receiver?: { name: string; type: string } | undefined; className?: string | undefined; fields?: Map<string, string | undefined> | undefined; staticFn?: boolean | undefined }
 
 export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
@@ -41,8 +44,19 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const fnScopes: Scope[] = [];
 
   const nearestFunction = (scope: Scope): Scope => { let current = scope; while (!current.fn && current.parent !== null) current = current.parent; return current; };
-  const bind = (scope: Scope, name: string, type: string | undefined, owner?: ReceiverOwner): void => { scope.names.set(name, { type, owner }); };
-  const importOf = (name: string): Import | undefined => module.names.get(name)?.importOf;
+  const bind = (scope: Scope, name: string, at: number, type: string | undefined, owner?: ReceiverOwner, importOf?: Import): void => {
+    const list = scope.names.get(name) ?? [];
+    list.push({ at, type, owner, importOf });
+    scope.names.set(name, list);
+  };
+  const declared = (scope: Scope, name: string, at: number): Declaration | undefined => {
+    const list = scope.names.get(name);
+    if (list === undefined) return undefined;
+    let best: Declaration | undefined;
+    for (const item of list) if (item.at <= at && (best === undefined || item.at >= best.at)) best = item;
+    return best;
+  };
+  const importOf = (name: string): Import | undefined => module.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
   // A type name becomes a local binding, or an import binding when the name (Rust) or its package
   // qualifier (Go) was imported.
   const ownerForType = (type: string): ReceiverOwner | undefined => {
@@ -64,6 +78,11 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const scopeBinds = (scope: Scope, name: string): boolean => {
     for (let current: Scope | null = scope; current !== null && current !== module; current = current.parent) if (current.names.has(name) || current.receiver?.name === name) return true;
     return false;
+  };
+  // A write anywhere, including inside a closure, invalidates the binding in the scope that declares the name.
+  const declaringScope = (scope: Scope, name: string): Scope => {
+    for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.names.has(name) || current.receiver?.name === name) return current;
+    return nearestFunction(scope);
   };
   const calleeOwner = (value: Node, scope: Scope): ReceiverOwner | undefined => {
     if (value.type !== "call_expression" && value.type !== "method_invocation" && value.type !== "invocation_expression") return undefined;
@@ -100,6 +119,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     return type === undefined ? undefined : ownerForType(type);
   };
   const receiverOf = (object: Node, scope: Scope): ReceiverOwner | undefined => {
+    const at = object.startIndex;
     if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression") return calleeOwner(object, scope);
     if (object.type === "parenthesized_expression") { const inner = childrenOf(object)[0]; return inner === undefined ? undefined : receiverOf(inner, scope); }
     if (spec.thisNodes?.includes(object.type)) {
@@ -119,9 +139,9 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       return ownerForType(fn.receiver.type);
     }
     for (let current: Scope | null = scope; current !== null; current = current.parent) {
-      const found = current.names.get(object.text);
+      const found = declared(current, object.text, at);
       if (found === undefined) continue;
-      if (reassigned.get(nearestFunction(current))?.has(object.text)) return undefined;
+      if (reassigned.get(current)?.has(object.text)) return undefined;
       if (found.owner !== undefined) return found.owner;
       if (found.importOf !== undefined) return undefined;
       return found.type === undefined ? undefined : ownerForType(found.type);
@@ -140,28 +160,28 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       fnScopes.push(scope);
       for (const child of childrenOf(node)) {
         const parameter = spec.parameter(child);
-        if (parameter !== undefined) bind(scope, parameter.name.text, spec.typeName(parameter.type));
+        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, spec.typeName(parameter.type));
         for (const nested of childrenOf(child)) {
           const inner = spec.parameter(nested);
-          if (inner !== undefined) bind(scope, inner.name.text, spec.typeName(inner.type));
+          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, spec.typeName(inner.type));
         }
       }
     } else if (spec.scopeNodes.includes(node.type)) {
       scope = { parent: outer, names: new Map(), fn: false };
     }
     scopes.set(node.id, scope);
-    for (const item of spec.imports(node)) module.names.set(item.local, { type: undefined, importOf: { source: item.source, name: item.name } });
+    for (const item of spec.imports(node)) bind(module, item.local, -1, undefined, undefined, { source: item.source, name: item.name });
     for (const local of spec.local(node)) {
-      const declared = spec.typeName(local.type);
-      const constructed = declared ?? spec.constructed(local.value);
+      const declaredType = spec.typeName(local.type);
+      const constructed = declaredType ?? spec.constructed(local.value);
       const produced = constructed === undefined && local.value !== null ? calleeOwner(local.value, scope) : undefined;
-      bind(scope, local.name.text, constructed, produced);
+      bind(scope, local.name.text, node.startIndex, constructed, produced);
     }
     for (const target of spec.assigned(node)) {
-      const fn = nearestFunction(scope);
-      const set = reassigned.get(fn) ?? new Set<string>();
+      const owner = declaringScope(scope, target.text);
+      const set = reassigned.get(owner) ?? new Set<string>();
       set.add(target.text);
-      reassigned.set(fn, set);
+      reassigned.set(owner, set);
     }
     for (const child of childrenOf(node)) visit(child, scope);
   };

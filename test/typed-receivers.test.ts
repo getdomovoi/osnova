@@ -115,3 +115,25 @@ describe("Java and C# receivers", () => {
     expect(calls(index, "App/Runner.cs#Runner.Run", "Create")).toEqual(["Lib/Server.cs#Server.Create"]);
   });
 });
+
+describe("typed receiver precision", () => {
+  it("sees the binding in force at the call site, invalidates captured writes, and keeps test packages apart", async () => {
+    const index = await build({
+      "Cargo.toml": "[package]\nname = 'x'\n",
+      "src/main.rs": "struct Other;\nimpl Other { fn start(&self) {} }\nstruct Server;\nimpl Server { fn start(&self) {} }\nfn unknown() -> Other { Other }\nfn shadow() {\n    let x = unknown();\n    x.start();\n    let x: Server = Server;\n    x.start();\n}\ntrait Trait { fn run(&self); fn make() -> Self; }\nimpl Trait for Server { fn run(&self) {} fn make() -> Self { Server } }\nimpl Server { fn own(&self) {} }\nfn use_it(s: &Server) {\n    s.run();\n    s.own();\n    Server::make();\n}\n",
+      "go.mod": "module example.com/app\n",
+      "pkg/prod.go": "package foo\n\ntype Server struct{}\n\nfunc (*Server) Start() {}\n\ntype Runner interface { Run() }\n\ntype Impl struct{}\n\nfunc (*Impl) Run() {}\n\nfunc closure(s *Server, r Runner) {\n  f := func() { s = nil; s.Start() }\n  f()\n  s.Start()\n  r.Run()\n}\n",
+      "pkg/prod_test.go": "package foo_test\n\ntype Server struct{}\n\nfunc (*Server) Start() {}\n",
+      "cmd/main.go": "package main\n\nimport \"example.com/app/pkg\"\n\nfunc f(s *pkg.Server) { s.Start() }\n",
+    });
+    expect(calls(index, "src/main.rs#shadow", "start")).toEqual(["src/main.rs#Other.start", "src/main.rs#Server.start"]);
+    expect(index.symbols.has("src/main.rs#Server.Trait.run")).toBe(true);
+    expect(calls(index, "src/main.rs#use_it", "run")).toEqual([undefined]);
+    expect(calls(index, "src/main.rs#use_it", "own")).toEqual(["src/main.rs#Server.own"]);
+    expect(calls(index, "src/main.rs#use_it", "make")).toEqual([undefined]);
+    expect(calls(index, "pkg/prod.go#closure", "Start")).toEqual([undefined, undefined]);
+    expect(calls(index, "pkg/prod.go#closure", "Run")).toEqual(["pkg/prod.go#Runner.Run"]);
+    expect(index.symbols.get("pkg/prod.go#Runner.Run")?.memberKind).toBe("instance");
+    expect(calls(index, "cmd/main.go#f", "Start")).toEqual(["pkg/prod.go#Server.Start"]);
+  });
+});
