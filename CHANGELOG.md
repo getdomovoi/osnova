@@ -2,6 +2,13 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- Bare import specifiers resolve to workspace packages: a `package.json` `name` plus its `exports` map (every condition is tried, source files first; `*` patterns are expanded) or its `module`, `main` and `types` fields, with `src/index` and `src/<subpath>` as fallbacks. Python absolute imports resolve through every directory that holds a `pyproject.toml`, `setup.py` or `setup.cfg` and through that directory's `src` layout. Two packages with the same name stay unresolved. `node:` builtins and packages outside the repository stay `import-target-unresolved`.
+- A file named `package.json` is scanned even when a repository ignore rule matches it, since a manifest is needed to map the package name; configured output and dependency directories such as `node_modules` and `dist` are still skipped.
+
 ## 0.4.0 (2026-09-17)
 
 ### Added

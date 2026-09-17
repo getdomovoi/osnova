@@ -2,42 +2,43 @@
   "schemaVersion": 1,
   "measured": "call-site resolution coverage on pinned checkouts",
   "osnova": {
-    "commit": "6d2507a15dc9903d6414237d3eeb050d23a443f4",
-    "version": "0.3.0"
+    "commit": "99fa727345eb93e15bdd51f47bb69acfb9eaf26a",
+    "version": "0.4.0"
   },
   "corpora": [
     {
       "corpus": "click-v1",
       "repository": "https://github.com/pallets/click",
       "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
-      "generation": "6b30b2bfc1f68dbd8820086a74b14af95af4f7d07263bf85a43b77f122a73589",
+      "generation": "7ab3d9a642f657d9d2af28d8669a35b67c7471bb63682b301965f8274056d428",
       "total": {
         "language": "all",
         "files": 160,
         "symbols": 2038,
         "calls": 5018,
-        "resolved": 699,
+        "resolved": 1870,
         "ambiguous": 0,
-        "unresolved": 4319,
+        "unresolved": 3148,
         "imports": 669,
-        "importsResolved": 197,
+        "importsResolved": 333,
         "byMethod": {
-          "import-binding": 136,
+          "import-binding": 375,
           "lexical-definition": 361,
-          "receiver-hint": 202
+          "re-export-binding": 738,
+          "receiver-hint": 396
         },
         "byReason": {
           "binding-blocked": 69,
-          "bound-symbol-missing": 2,
-          "import-target-unresolved": 1889,
-          "receiver-unresolved": 1639,
+          "bound-symbol-missing": 3,
+          "import-target-unresolved": 702,
+          "receiver-unresolved": 1654,
           "unbound-global": 720
         },
-        "resolvedShare": 0.1393,
-        "unresolvedImportCalls": 1889,
+        "resolvedShare": 0.3727,
+        "unresolvedImportCalls": 702,
         "unboundGlobalCalls": 720,
-        "resolvedShareExcludingUnresolvedImports": 0.2234,
-        "resolvedShareExcludingExternal": 0.2902
+        "resolvedShareExcludingUnresolvedImports": 0.4333,
+        "resolvedShareExcludingExternal": 0.52
       },
       "languages": [
         {
@@ -63,28 +64,29 @@
           "files": 90,
           "symbols": 2038,
           "calls": 5018,
-          "resolved": 699,
+          "resolved": 1870,
           "ambiguous": 0,
-          "unresolved": 4319,
+          "unresolved": 3148,
           "imports": 669,
-          "importsResolved": 197,
+          "importsResolved": 333,
           "byMethod": {
-            "import-binding": 136,
+            "import-binding": 375,
             "lexical-definition": 361,
-            "receiver-hint": 202
+            "re-export-binding": 738,
+            "receiver-hint": 396
           },
           "byReason": {
             "binding-blocked": 69,
-            "bound-symbol-missing": 2,
-            "import-target-unresolved": 1889,
-            "receiver-unresolved": 1639,
+            "bound-symbol-missing": 3,
+            "import-target-unresolved": 702,
+            "receiver-unresolved": 1654,
             "unbound-global": 720
           },
-          "resolvedShare": 0.1393,
-          "unresolvedImportCalls": 1889,
+          "resolvedShare": 0.3727,
+          "unresolvedImportCalls": 702,
           "unboundGlobalCalls": 720,
-          "resolvedShareExcludingUnresolvedImports": 0.2234,
-          "resolvedShareExcludingExternal": 0.2902
+          "resolvedShareExcludingUnresolvedImports": 0.4333,
+          "resolvedShareExcludingExternal": 0.52
         }
       ],
       "limitations": [
@@ -99,19 +101,19 @@
       "corpus": "pyright-v1",
       "repository": "https://github.com/microsoft/pyright",
       "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
-      "generation": "03814ebf8b691a96097770b7306bf469d72e03a3ff003391c64fda36a9223144",
+      "generation": "cd984df0f43c90547bd081bf9d769b2539f1a915fd48b195d046a9309ac58015",
       "total": {
         "language": "all",
         "files": 7653,
         "symbols": 31161,
         "calls": 58405,
-        "resolved": 28575,
+        "resolved": 28581,
         "ambiguous": 0,
-        "unresolved": 29830,
+        "unresolved": 29824,
         "imports": 4442,
-        "importsResolved": 2509,
+        "importsResolved": 2516,
         "byMethod": {
-          "import-binding": 9830,
+          "import-binding": 9836,
           "lexical-definition": 6640,
           "re-export-binding": 3,
           "receiver-hint": 12102
@@ -119,15 +121,15 @@
         "byReason": {
           "binding-blocked": 1942,
           "bound-symbol-missing": 1,
-          "import-target-unresolved": 6100,
+          "import-target-unresolved": 6094,
           "re-export-incomplete": 20,
           "receiver-unresolved": 14065,
           "unbound-global": 7702
         },
-        "resolvedShare": 0.4893,
-        "unresolvedImportCalls": 6100,
+        "resolvedShare": 0.4894,
+        "unresolvedImportCalls": 6094,
         "unboundGlobalCalls": 7702,
-        "resolvedShareExcludingUnresolvedImports": 0.5463,
+        "resolvedShareExcludingUnresolvedImports": 0.5464,
         "resolvedShareExcludingExternal": 0.6407
       },
       "languages": [
@@ -203,29 +205,29 @@
           "files": 603,
           "symbols": 20767,
           "calls": 46759,
-          "resolved": 25382,
+          "resolved": 25388,
           "ambiguous": 0,
-          "unresolved": 21377,
+          "unresolved": 21371,
           "imports": 2780,
-          "importsResolved": 2485,
+          "importsResolved": 2492,
           "byMethod": {
-            "import-binding": 9813,
+            "import-binding": 9819,
             "lexical-definition": 3735,
             "re-export-binding": 3,
             "receiver-hint": 11831
           },
           "byReason": {
             "binding-blocked": 1120,
-            "import-target-unresolved": 3934,
+            "import-target-unresolved": 3928,
             "re-export-incomplete": 20,
             "receiver-unresolved": 12835,
             "unbound-global": 3468
           },
-          "resolvedShare": 0.5428,
-          "unresolvedImportCalls": 3934,
+          "resolvedShare": 0.543,
+          "unresolvedImportCalls": 3928,
           "unboundGlobalCalls": 3468,
           "resolvedShareExcludingUnresolvedImports": 0.5927,
-          "resolvedShareExcludingExternal": 0.6449
+          "resolvedShareExcludingExternal": 0.645
         }
       ],
       "limitations": [
@@ -240,36 +242,36 @@
       "corpus": "zod-v1",
       "repository": "https://github.com/colinhacks/zod",
       "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
-      "generation": "865a30254258f8e0a2699741a48147d3b1e9326033f07c966fb6ccc7c4f43016",
+      "generation": "cf1f4b2dbb497fb65ff29053eb5bebec09a51efb6bfd5e4aeab24bf7ef8337ea",
       "total": {
         "language": "all",
-        "files": 701,
+        "files": 702,
         "symbols": 12784,
         "calls": 53387,
-        "resolved": 6527,
+        "resolved": 16124,
         "ambiguous": 0,
-        "unresolved": 46860,
+        "unresolved": 37263,
         "imports": 1446,
-        "importsResolved": 674,
+        "importsResolved": 972,
         "byMethod": {
           "import-binding": 1428,
           "lexical-definition": 3086,
-          "re-export-binding": 1249,
+          "re-export-binding": 10846,
           "receiver-hint": 764
         },
         "byReason": {
           "binding-blocked": 568,
-          "bound-symbol-missing": 297,
-          "import-target-unresolved": 37045,
-          "re-export-incomplete": 225,
-          "receiver-unresolved": 7479,
+          "bound-symbol-missing": 349,
+          "import-target-unresolved": 19628,
+          "re-export-incomplete": 949,
+          "receiver-unresolved": 14523,
           "unbound-global": 1246
         },
-        "resolvedShare": 0.1223,
-        "unresolvedImportCalls": 37045,
+        "resolvedShare": 0.302,
+        "unresolvedImportCalls": 19628,
         "unboundGlobalCalls": 1246,
-        "resolvedShareExcludingUnresolvedImports": 0.3994,
-        "resolvedShareExcludingExternal": 0.4324
+        "resolvedShareExcludingUnresolvedImports": 0.4776,
+        "resolvedShareExcludingExternal": 0.4959
       },
       "languages": [
         {
@@ -292,7 +294,7 @@
         },
         {
           "language": "fallback",
-          "files": 180,
+          "files": 181,
           "symbols": 0,
           "calls": 0,
           "resolved": 0,
@@ -362,30 +364,30 @@
           "files": 481,
           "symbols": 12609,
           "calls": 53208,
-          "resolved": 6510,
+          "resolved": 16107,
           "ambiguous": 0,
-          "unresolved": 46698,
+          "unresolved": 37101,
           "imports": 1342,
-          "importsResolved": 673,
+          "importsResolved": 971,
           "byMethod": {
             "import-binding": 1428,
             "lexical-definition": 3069,
-            "re-export-binding": 1249,
+            "re-export-binding": 10846,
             "receiver-hint": 764
           },
           "byReason": {
             "binding-blocked": 557,
-            "bound-symbol-missing": 297,
-            "import-target-unresolved": 36984,
-            "re-export-incomplete": 225,
-            "receiver-unresolved": 7407,
+            "bound-symbol-missing": 349,
+            "import-target-unresolved": 19567,
+            "re-export-incomplete": 949,
+            "receiver-unresolved": 14451,
             "unbound-global": 1228
           },
-          "resolvedShare": 0.1224,
-          "unresolvedImportCalls": 36984,
+          "resolvedShare": 0.3027,
+          "unresolvedImportCalls": 19567,
           "unboundGlobalCalls": 1228,
-          "resolvedShareExcludingUnresolvedImports": 0.4013,
-          "resolvedShareExcludingExternal": 0.4341
+          "resolvedShareExcludingUnresolvedImports": 0.4788,
+          "resolvedShareExcludingExternal": 0.4969
         }
       ],
       "limitations": [
