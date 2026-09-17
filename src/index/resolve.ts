@@ -82,8 +82,8 @@ export interface WorkspaceContext { readonly packages: ReadonlyMap<string, Packa
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
   const packages = new Map<string, PackageEntry | null>();
-  const pythonRoots = new Map<string, PythonRoot>([["", { dir: "", manifest: "" }]]);
-  for (const [file, card] of files) {
+  const pythonRoots = new Map<string, PythonRoot>([["\0", { dir: "", manifest: "" }]]);
+  for (const [file, card] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     const base = path.posix.basename(file);
     const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
     if (base === "package.json") {
@@ -95,12 +95,12 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       const main = ["module", "main", "types"].map((key) => record[key]).filter((value): value is string => typeof value === "string");
       packages.set(record.name, packages.has(record.name) ? null : { dir, exports: record.exports, main });
     } else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
-      pythonRoots.set(dir, { dir, manifest: dir });
+      pythonRoots.set(`${dir}\0${dir}`, { dir, manifest: dir });
       const src = dir === "" ? "src" : `${dir}/src`;
-      for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(src, { dir: src, manifest: dir }); break; }
+      for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0) };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0) };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
