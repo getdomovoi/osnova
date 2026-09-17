@@ -694,16 +694,20 @@ export function collectBindings(root: Node, python: boolean): {
   };
   // Python binds names in execution order: a module-level rebinding of `property` after the class
   // does not change a decorator evaluated before it.
-  const moduleBindsBefore = (name: string, position: number): boolean => childrenOf(root).some((statement) => {
-    if (statement.startIndex >= position) return false;
-    const assignment = statement.type === "expression_statement" ? childrenOf(statement)[0] : null;
-    if (assignment?.type === "assignment" || assignment?.type === "augmented_assignment") return patternNames(assignment.childForFieldName("left")).includes(name);
-    if (statement.type === "for_statement" || statement.type === "with_statement") return patternNames(statement.childForFieldName("left") ?? statement).includes(name) || new RegExp(`\\bas\\s+${name}\\b`).test(statement.text.split("\n")[0] ?? "");
-    if (statement.type === "function_definition" || statement.type === "class_definition") return statement.childForFieldName("name")?.text === name;
-    if (statement.type === "decorated_definition") return statement.childForFieldName("definition")?.childForFieldName("name")?.text === name;
-    if (statement.type === "import_statement" || statement.type === "import_from_statement") return new RegExp(`(^|[^\\w.])${name}(?![\\w])`).test(statement.text.replace(/^\s*(from\s+\S+\s+)?import\s+/, ""));
-    return false;
-  });
+  const moduleBindsBefore = (name: string, position: number): boolean => {
+    const binds = (node: Node): boolean => {
+      if (node.startIndex >= position) return false;
+      if (node.type === "function_definition" || node.type === "class_definition") return node.childForFieldName("name")?.text === name;
+      if (node.type === "decorated_definition") return node.childForFieldName("definition")?.childForFieldName("name")?.text === name;
+      if (node.type === "lambda") return false;
+      if (node.type === "assignment" || node.type === "augmented_assignment" || node.type === "named_expression") return patternNames(node.childForFieldName("left") ?? node.childForFieldName("name")).includes(name);
+      if (node.type === "for_statement") return patternNames(node.childForFieldName("left")).includes(name) || childrenOf(node).some(binds);
+      if (node.type === "as_pattern") return patternNames(node.childForFieldName("alias") ?? childrenOf(node)[1] ?? null).includes(name);
+      if (node.type === "import_statement" || node.type === "import_from_statement") return new RegExp(`(^|[^\\w.])${name}(?![\\w])`).test(node.text.replace(/^\\s*(from\\s+\\S+\\s+)?import\\s+/, ""));
+      return childrenOf(node).some(binds);
+    };
+    return childrenOf(root).some(binds);
+  };
   for (const pending of pendingProperties) {
     const bound = lookup("property", pending.decorator);
     if (bound !== undefined && (!module.names.has("property") || moduleBindsBefore("property", pending.decorator.startIndex))) continue;
