@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol } from "../types.js";
+import type { CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, SymbolBinding } from "../types.js";
 import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 
@@ -249,35 +249,48 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
           const membersOf = (holder: OsnovaSymbol): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
             symbol.kind === "method" && symbol.qualifiedName === `${holder.qualifiedName}.${binding.member}`);
-          // Walk declared heritage when the owner itself lacks the member; stop at the first level that declares it.
-          let members: OsnovaSymbol[] = owner === undefined ? [] : membersOf(owner);
-          if (owner !== undefined && members.length === 0) {
-            const visitedHolders = new Set<string>([owner.qualifiedName]);
-            let level: OsnovaSymbol[] = [owner];
-            for (let hop = 0; hop < 8 && members.length === 0 && level.length > 0; hop++) {
-              const next: OsnovaSymbol[] = [];
-              for (const holder of level) {
-                for (const base of holder.heritage ?? []) {
-                  const holderCard = files.get(holder.file);
-                  if (holderCard === undefined) continue;
-                  let bases: OsnovaSymbol[] = [];
-                  if (base.kind === "local") bases = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(holder.file, base.name));
-                  else {
-                    const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles);
-                    if (target !== undefined) { const found = exported(target, base.importedName); if (!found.incomplete) bases = [...found.symbols.values()]; }
-                  }
-                  for (const candidate of bases) {
-                    if ((candidate.kind !== "class" && candidate.kind !== "interface") || visitedHolders.has(candidate.qualifiedName)) continue;
-                    visitedHolders.add(candidate.qualifiedName);
-                    next.push(candidate);
-                  }
-                }
-              }
-              const found = next.flatMap(membersOf);
-              if (found.length > 0) members = found;
-              level = next;
+          // Walk declared heritage when the owner itself lacks the member. Any base that cannot be
+          // identified, a cycle, an own non-method field of that name, or two base chains that
+          // disagree leaves the member unresolved rather than guessed.
+          const declarationsOf = (holder: OsnovaSymbol): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
+            symbol.qualifiedName === holder.qualifiedName && (symbol.kind === "class" || symbol.kind === "interface"));
+          const basesOf = (holder: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol[] | null => {
+            const holderCard = files.get(holder.file);
+            if (holderCard === undefined) return null;
+            let bases: OsnovaSymbol[] = [];
+            if (base.kind === "local") bases = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(holder.file, base.name));
+            else {
+              const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles);
+              if (target === undefined) return null;
+              const found = exported(target, base.importedName);
+              if (found.incomplete) return null;
+              bases = [...found.symbols.values()];
             }
-          }
+            const holders = bases.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface");
+            return holders.length === 0 || new Set(holders.map((symbol) => symbol.qualifiedName)).size !== 1 ? null : [holders[0]!];
+          };
+          const inherited = (holder: OsnovaSymbol, depth: number, visited: ReadonlySet<string>): OsnovaSymbol[] | null => {
+            const own = membersOf(holder);
+            if (own.length > 0) return own;
+            const declarations = declarationsOf(holder);
+            if (declarations.some((declaration) => declaration.fields?.includes(binding.member))) return null;
+            const heritage = declarations.flatMap((declaration) => declaration.heritage ?? []);
+            if (heritage.length === 0) return [];
+            if (depth >= 8) return null;
+            let result: OsnovaSymbol[] = [];
+            for (const base of heritage) {
+              const targets = basesOf(holder, base);
+              const target = targets?.[0];
+              if (target === undefined || visited.has(target.qualifiedName)) return null;
+              const found = inherited(target, depth + 1, new Set([...visited, target.qualifiedName]));
+              if (found === null) return null;
+              if (found.length === 0) continue;
+              if (result.length > 0 && result[0]!.qualifiedName !== found[0]!.qualifiedName) return null;
+              result = found;
+            }
+            return result;
+          };
+          const members: OsnovaSymbol[] = owner === undefined ? [] : inherited(owner, 0, new Set([owner.qualifiedName])) ?? [];
           const kinds = new Set(members.map((symbol) => symbol.memberKind));
           candidates = kinds.size > 1 ? [] : members.filter((symbol) => {
             if (symbol.memberKind === undefined || symbol.memberKind === "unknown" || symbol.memberKind === "property") return false;
