@@ -262,6 +262,13 @@ export function collectBindings(root: Node, python: boolean): {
       const name = node.childForFieldName("name")?.text ?? "";
       if (name) bind(outer, name, { kind: "local", name: join(outer.owner, name) });
     }
+    if (!python && (node.type === "internal_module" || node.type === "module")) {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode?.type === "identifier") {
+        bind(outer, nameNode.text, { kind: "local", name: join(outer.owner, nameNode.text) });
+        scope = { kind: "block", owner: join(outer.owner, nameNode.text), parent: outer, names: new Map() };
+      }
+    }
     if (classes.has(node.type)) {
       const name = node.childForFieldName("name")?.text ?? "";
       if (name) bind(outer, name, { kind: "local", name: join(outer.owner, name) });
@@ -579,6 +586,10 @@ export function collectBindings(root: Node, python: boolean): {
           const inner = unwrap(object.childForFieldName("object"));
           const field = object.childForFieldName(python ? "attribute" : "property")?.text;
           const siteScope = scopes.get(site.id) ?? module;
+          if (!python && inner?.type === "identifier" && field !== undefined) {
+            const head = lookup(inner.text, site);
+            if (head?.kind === "local" && !mutated(head, field)) return { kind: "member", owner: { kind: "local", name: `${head.name}.${field}` }, member: property.text, mode: "class", basis: "class-reference" };
+          }
           let cls: Scope | null = null;
           if (!python && inner?.type === "this") { const self = thisFor(siteScope); cls = self?.mode === "instance" ? self.classScope ?? null : null; }
           else if (python && inner?.type === "identifier") {

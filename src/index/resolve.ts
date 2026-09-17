@@ -254,15 +254,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           namespaceVia = first === undefined ? undefined : routes.get(first.qualifiedName);
         } else if (binding.kind === "member") {
           let basis: ReceiverBasis = binding.basis;
-          const owners = candidates.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface");
+          const owners = candidates.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module");
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
           const membersOf = (holder: OsnovaSymbol, member: string = binding.member): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
-            symbol.kind === "method" && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
+            (symbol.kind === "method" || symbol.kind === "function") && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
           // Walk declared heritage when the owner itself lacks the member. Any base that cannot be
           // identified, a cycle, an own non-method field of that name, or two base chains that
           // disagree leaves the member unresolved rather than guessed.
           const declarationsOf = (holder: OsnovaSymbol): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
-            symbol.qualifiedName === holder.qualifiedName && (symbol.kind === "class" || symbol.kind === "interface"));
+            symbol.qualifiedName === holder.qualifiedName && (symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module"));
           const basesOf = (holder: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol[] | null => {
             const holderCard = files.get(holder.file);
             if (holderCard === undefined) return null;
@@ -329,7 +329,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           const holderOf = (ref: ReceiverOwner, depth: number): OsnovaSymbol | undefined => {
             if (depth > 6) return undefined;
-            if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface") ?? null);
+            if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module") ?? null);
             const of: Callee = ref.of;
             if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => ["class", "interface", "function", "method"].includes(symbol.kind)) ?? null, undefined, undefined);
             const holder = holderOf(of.owner, depth + 1);
@@ -352,11 +352,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (owner !== undefined) basis = "return";
           }
           const members: OsnovaSymbol[] = owner === undefined ? [] : inherited(owner, 0, new Set([owner.qualifiedName])) ?? [];
-          const kinds = new Set(members.map((symbol) => symbol.memberKind));
+          // A namespace function behaves like a static member: reachable through the namespace name, never through an instance.
+          const effectiveKind = (symbol: OsnovaSymbol) => symbol.kind === "function" ? "static" : symbol.memberKind;
+          const kinds = new Set(members.map(effectiveKind));
           candidates = kinds.size > 1 ? [] : members.filter((symbol) => {
-            if (symbol.memberKind === undefined || symbol.memberKind === "unknown" || symbol.memberKind === "property") return false;
+            const kind = effectiveKind(symbol);
+            if (kind === undefined || kind === "unknown" || kind === "property") return false;
             if (card.language === "python") return true;
-            return binding.mode === "class" ? symbol.memberKind === "static" : symbol.memberKind === "instance";
+            return binding.mode === "class" ? kind === "static" : kind === "instance";
           });
           if (owner !== undefined && candidates.length > 0) {
             resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis } };
