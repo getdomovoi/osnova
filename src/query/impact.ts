@@ -147,8 +147,11 @@ function parseDiff(diff: string): DiffFile[] {
   const files: DiffFile[] = [];
   let file: DiffFile | undefined;
   let oldLine = 0, newLine = 0, oldLeft = 0, newLeft = 0;
+  let hunkLine = 0;
   const finish = (): void => {
-    if (oldLeft !== 0 || newLeft !== 0) throw new Error("osnova: incomplete unified diff hunk");
+    if (oldLeft !== 0 || newLeft !== 0) {
+      throw new Error(`osnova: incomplete unified diff hunk starting at line ${hunkLine}: the header promised ${oldLeft} more old and ${newLeft} more new lines; pass the exact diff output, not a summary`);
+    }
   };
   const lines = diff.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
@@ -174,6 +177,7 @@ function parseDiff(diff: string): DiffFile[] {
     } else if (line.startsWith("@@")) {
       const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
       if (file === undefined || match === null) throw new Error("osnova: invalid unified diff header");
+      hunkLine = number + 1;
       oldLine = Number(match[1]); oldLeft = Number(match[2] ?? 1);
       newLine = Number(match[3]); newLeft = Number(match[4] ?? 1);
       if (![oldLine, newLine, oldLeft, newLeft].every(Number.isSafeInteger)) throw new Error("osnova: invalid diff range");

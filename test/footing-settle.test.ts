@@ -120,6 +120,12 @@ describe("footing formatting", () => {
     expect(tight.omitted.definitions + tight.definitions.length).toBe(12);
   });
 
+  it("names the hunk when a diff ends early", () => {
+    const one = index([card("a.ts", ["keep"])]);
+    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,7 +1,7 @@\n-function keep() { return 0; }\n+function keep() { return 1; }\n";
+    expect(() => impact(one, one, { diff })).toThrow(/incomplete unified diff hunk starting at line 3: the header promised 6 more old and 6 more new lines/);
+  });
+
   it("reports the short hunk line when a diff is summarized", () => {
     const one = index([card("a.ts", ["keep"])]);
     const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,7 +1,7 @@\n-function keep() { return 0; }\n+function keep() { return 1; }\n@@ -20,7 +20,7 @@\n";
