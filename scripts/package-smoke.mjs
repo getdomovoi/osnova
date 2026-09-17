@@ -73,7 +73,7 @@ async function consumer() {
   const frames = await smokeStdio({ cliPath: path.join(packageRoot, manifest.bin.osnova), workspace, cacheDir, cwd: root });
   assert.deepEqual(await snapshot(packageRoot), packageBefore, "Core operations mutated installed package");
   assert.deepEqual((await readdir(root)).sort(), [...new Set([...rootBefore, "cache", "workspace"])].sort(), "Core operations wrote outside designated cache/workspace fixtures");
-  console.log(`packed consumer: exports, 20 WASM grammars, doctor, build/ask, 7 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
+  console.log(`packed consumer: exports, 20 WASM grammars, doctor, build/ask, 8 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
 }
 
 export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [], omitWorkspaceArg = false }) {
@@ -119,13 +119,14 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
       osnova_groundwork: {},
       osnova_footing: { question: "probe" },
       osnova_settle: { diff: "--- a/probe.ts\n+++ b/probe.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" },
+      osnova_plumb: { symbol: "probe", sites: ["probe.ts:2"] },
     };
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), Object.keys(calls).sort());
     for (const [name, args] of Object.entries(calls)) {
       const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 10_000 });
       assert(!result.isError, `${name} returned an error`);
       assert(result.content.some((item) => item.type === "text" && item.text.length > 0), `${name} returned no text`);
-      if (name !== "osnova_groundwork") assert(JSON.stringify(result.content).includes(name === "osnova_warp" ? "caller" : name === "osnova_settle" ? "settle" : "probe"), `${name} omitted expected evidence`);
+      if (name !== "osnova_groundwork") assert(JSON.stringify(result.content).includes(name === "osnova_warp" ? "caller" : name === "osnova_settle" ? "settle" : name === "osnova_plumb" ? "plumb" : "probe"), `${name} omitted expected evidence`);
     }
     assert.deepEqual(await snapshot(workspace), before, "MCP tools mutated workspace");
     await writeFile(path.join(workspace, "probe.ts"), "export function refreshedProbe() { return 2; }\n");

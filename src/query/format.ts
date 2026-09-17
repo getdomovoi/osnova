@@ -11,6 +11,8 @@ import type {
   OsnovaEdge,
 } from "../types.js";
 import type { ImpactResult } from "./impact.js";
+import type { CoverageReport, LanguageCoverage } from "./coverage.js";
+import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
@@ -25,7 +27,7 @@ export function formatIndexDiagnostics(index: OsnovaIndex): string {
 }
 
 export function formatIndexHealthSummary(index: OsnovaIndex): string {
-  if (index.diagnostics === undefined) return "osnova foundation: unverified; details via doctor or indexHealth";
+  if (index.diagnostics === undefined) return "osnova foundation: unverified";
   if (index.diagnostics.length === 0) return "";
   const counts = new Map<string, number>();
   for (const diagnostic of index.diagnostics) {
@@ -36,7 +38,7 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
   const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   const shown = categories.slice(0, 4).map(([category, count]) => `${category}=${count}`);
   if (categories.length > 4) shown.push(`+${categories.length - 4} categories`);
-  return `osnova foundation: partial, ${index.diagnostics.length} diagnostics (${shown.join(", ")}); results may be incomplete; details via doctor or indexHealth`;
+  return `osnova foundation: partial (${shown.join(", ")}); some files did not parse fully`;
 }
 
 export function formatAsk(result: AskResult): string {
@@ -271,8 +273,6 @@ export function formatMap(result: MapResult): string {
   return lines.join("\n");
 }
 
-const contextExcerptLines = 8;
-
 export function formatTaskContext(result: TaskContextResult): string {
   const lines = [
     `osnova footing: ${result.task}, scope ${result.scope === "" ? "." : result.scope}, ${result.definitions.length} definitions, ${result.relationships.length} relationships, ${result.candidateTests.length} candidate tests`,
@@ -281,11 +281,7 @@ export function formatTaskContext(result: TaskContextResult): string {
   for (const definition of result.definitions) {
     const { symbol } = definition;
     lines.push(`- ${symbol.qualifiedName} ${symbol.kind} lines ${symbol.span.startLine}-${symbol.span.endLine}`);
-    const excerpt = definition.excerpt.split("\n");
-    const marker = /^\[\+\d+ more lines\]$/.test(excerpt.at(-1) ?? "") ? excerpt.pop() : undefined;
-    for (const line of excerpt.slice(0, contextExcerptLines)) lines.push(`  ${line}`);
-    if (marker !== undefined) lines.push(`  ${marker}`);
-    else if (excerpt.length > contextExcerptLines) lines.push(`  [+${excerpt.length - contextExcerptLines} more lines]`);
+    for (const line of definition.excerpt.split("\n")) lines.push(`  ${line}`);
   }
   if (result.relationships.length > 0) lines.push("relationships:");
   for (const relationship of result.relationships) {
@@ -308,4 +304,34 @@ export function formatImpact(result: ImpactResult): string {
     ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
     `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
   ].join("\n");
+}
+
+const percent = (share: number): string => `${(share * 100).toFixed(1)}%`;
+
+export function formatCoverage(report: CoverageReport): string {
+  const row = (item: LanguageCoverage): string =>
+    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingExternal)} of the ${item.calls - item.unresolvedImportCalls - item.unboundGlobalCalls} not going through an unresolved import or an unbound global), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}`;
+  const reasons = Object.entries(report.total.byReason).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1));
+  const lines = [
+    `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve, ${report.total.unboundGlobalCalls} call a name with no binding in the file`,
+    ...report.languages.map(row),
+  ];
+  if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}`));
+  lines.push(`limitations: ${report.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+export function formatPlumb(result: PlumbResult, symbol?: string): string {
+  const name = result.target.qualifiedName ?? symbol ?? "<unknown>";
+  const c = result.counts;
+  const lines = [`osnova plumb: ${name}, ${c.confirmed} confirmed, ${c.nameOnly} name-only, ${c.noCall} no-call, ${c.notIndexed} not-indexed, ${c.missing} missing`];
+  if (result.claims.length > 0) lines.push("claims:");
+  for (const item of result.claims) {
+    const other = item.edge === undefined ? "" : ` -> ${result.direction === "in" ? item.edge.fromSymbol || item.edge.fromFile : item.edge.toSymbol ?? item.edge.toName}`;
+    lines.push(`${item.verdict} ${item.claim.file}:${item.claim.line}${other}`);
+  }
+  if (result.missing.length > 0) lines.push("missing:");
+  for (const edge of result.missing) lines.push(`${edge.fromFile}:${edge.line} ${result.direction === "in" ? edge.fromSymbol || edge.fromFile : edge.toSymbol ?? edge.toName}`);
+  lines.push(`limitations: ${result.limitations.join(", ")}`);
+  return lines.join("\n");
 }

@@ -13,3 +13,5 @@ export function boundText(text: string, maxCodeUnits: number = maximumTextRespon
   if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end -= 1;
   return text.slice(0, end) + notice(text.length - end);
 }
+
+export const maximumPlumbCodeUnits = 4_096;

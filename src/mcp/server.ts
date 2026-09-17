@@ -14,23 +14,27 @@ import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
-import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
-import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
-import { boundText } from "../query/budget.js";
+import { plumb, parseClaims } from "../query/plumb.js";
+import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
+import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex } from "../types.js";
+import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
 
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
-const maximumMcpFootingCodeUnits = 8_192;
+const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
+const maximumMcpPlumbCodeUnits = maximumPlumbCodeUnits;
 const mcpFootingExcerptLines = 8;
+const mcpInlineShortDefinitions = 40;
+const mcpGenerationDigits = 16;
 
 const toolDefinitions = [
   {
     name: "osnova_ground",
     description:
-      "Search: keyword search over an indexed workspace. Returns ranked hits with exact file:line and a short excerpt of the enclosing definition; full=true inlines the whole definition span. askDetailed provides complete candidate counts through the API.",
+      "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Start here when you do not know where code lives.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -45,7 +49,7 @@ const toolDefinitions = [
   {
     name: "osnova_thread",
     description:
-      "Text search: regex or literal search over indexed text, grouped by enclosing symbol and ranked by incoming-edge count. Shows at most 10 matches per group and 50 groups by default, with totals and explicit omission counts.",
+      "Text search: regex or literal matches over indexed text, grouped by the enclosing definition and ranked by how much else depends on it. Shows up to 10 matches per group and 50 groups by default (limit raises the group cap); totals and omission counts are exact, so you know what was left out.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -60,7 +64,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_outline",
-    description: "Outline: task-focused signatures and line spans for one indexed file. MCP output is degree-selected under 4096 code units with an exact omission count; the skeleton API returns every signature.",
+    description: "Outline: the definitions of one file with signature and line span, selected by connectivity to fit 4096 code units, with an exact count of any omitted. Use instead of reading a whole file to learn its shape; read only the span you need afterwards.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -72,13 +76,13 @@ const toolDefinitions = [
   {
     name: "osnova_warp",
     description:
-      "Call graph: direct or transitive indexed callers/callees (direction=in default). MCP output prioritizes confirmed evidence under 2048 code units with exact omission counts; callersDetailed returns the complete structured result. Absence does not prove deletion is safe.",
+      "Call graph: who calls a symbol (direction=in, default) or what it calls (direction=out), with exact call-site file:line. Accepts file#Class.method, Class.method or a bare name. Use before changing a signature or deleting code. An empty list means no indexed caller, not proof that none exists.",
     inputSchema: {
       type: "object" as const,
       properties: {
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers (default), out = callees" },
-        depth: { type: "number", description: "Transitive depth (default 1)" },
+        depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
       },
       required: ["symbol"],
     },
@@ -86,18 +90,18 @@ const toolDefinitions = [
   {
     name: "osnova_groundwork",
     description:
-      "Repository map: compact deterministic workspace map. MCP defaults to eight directory clusters and 2048 code units with explicit dropped-detail counts; the map API supports larger structured results.",
+      "Repository map: directory clusters, hubs and hotspots in under 2048 code units. Use once when the repository is unfamiliar; do not follow it with an outline of every directory.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        maxDirs: { type: "number", description: "Maximum directory clusters (default 16)" },
+        maxDirs: { type: "number", description: "Maximum directory clusters (default 8)" },
       },
     },
   },
   {
     name: "osnova_footing",
     description:
-      "Task context: definitions, graph relationships and candidate tests around a question or named symbols, sized for one task (understand, change or review). MCP output stays under 8192 code units with exact omission counts; the taskContext API returns the complete structured result.",
+      "Task context: for one task, the seed definitions (inlined when 40 lines or shorter), the callers and callees that connect them, and the test files that touch them, under 4096 code units with exact omission counts. Use once at the start of a change or review that spans more than one file; for a single known symbol use ground or warp instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -113,7 +117,7 @@ const toolDefinitions = [
   {
     name: "osnova_settle",
     description:
-      "Change impact: symbols whose spans a unified diff touches, plus their indexed dependents, against the current index only. Deleted symbols are not visible and diff ranges are not verified against source. MCP output stays under 4096 code units; the impact API compares two indexes.",
+      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Compares against the current index only, so deleted symbols are not visible.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -121,6 +125,21 @@ const toolDefinitions = [
         depth: { type: "number", description: "Dependent walk depth (default 1)" },
       },
       required: ["diff"],
+    },
+  },
+  {
+    name: "osnova_plumb",
+    description:
+      "Check claims: given a symbol and a list of path:line call sites an agent believes depend on it, says which are confirmed by the index, which are name matches only, which have no call, and which indexed dependents were left out. Use before declaring a caller list complete. Confirmed means an indexed resolved edge, not runtime proof.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
+        sites: { type: "array", items: { type: "string" }, description: "Claimed call sites as repo-relative path:line" },
+        direction: { type: "string", enum: ["in", "out"], description: "in = callers of the symbol (default), out = callees" },
+        depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
+      },
+      required: ["symbol", "sites"],
     },
   },
 ] as const;
@@ -151,17 +170,15 @@ export function createOsnovaMcpServer(
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
       const index = await refresh();
-      const generation = `osnova generation ${indexGeneration(index)}`;
+      const generation = `osnova generation ${indexGeneration(index).slice(0, mcpGenerationDigits)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
       switch (name) {
         case "osnova_ground": {
           const question = requireString(args, "question");
-          const result = ask(index, question, {
-            in: optionalString(args, "in"),
-            limit: optionalNumber(args, "limit"),
-            full: optionalBoolean(args, "full"),
-          });
-          return textResult(`${prefix}\n${formatAsk(result)}`);
+          const askOptions = { in: optionalString(args, "in"), limit: optionalNumber(args, "limit"), full: optionalBoolean(args, "full") };
+          let text = `${prefix}\n${formatAsk(ask(index, question, { ...askOptions, inlineShortDefinitions: mcpInlineShortDefinitions }))}`;
+          if (text.length > maximumTextResponseCodeUnits) text = `${prefix}\n${formatAsk(ask(index, question, askOptions))}`;
+          return textResult(text);
         }
         case "osnova_thread": {
           const pattern = requireString(args, "pattern");
@@ -221,7 +238,7 @@ export function createOsnovaMcpServer(
           const available = maximumMcpFootingCodeUnits - prefix.length - 1;
           const result = taskContext(index, {
             task, question: question ?? "", symbols, in: optionalString(args, "in"),
-            limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines,
+            limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines, inlineShortDefinitions: mcpInlineShortDefinitions,
             measure: (partial) => formatTaskContext(partial).length,
           });
           return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);
@@ -234,6 +251,17 @@ export function createOsnovaMcpServer(
           const result = impact(index, index, { diff, maxDepth: optionalNumber(args, "depth") ?? 1 });
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
+        }
+        case "osnova_plumb": {
+          const symbol = requireString(args, "symbol");
+          const sites = optionalStringArray(args, "sites");
+          if (sites === undefined) throw new Error("osnova_plumb needs a non-empty sites array of path:line");
+          const direction = optionalString(args, "direction");
+          if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
+          if (args.depth !== undefined && typeof args.depth !== "number") throw new RangeError("osnova: plumb depth must be a positive safe integer");
+          const result = plumb(index, symbol, parseClaims(sites), { direction, depth: optionalNumber(args, "depth") });
+          const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
         }
         default:
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
@@ -257,6 +285,7 @@ function toolErrorBudget(name: string): number | undefined {
     case "osnova_groundwork": return maximumMcpMapCodeUnits;
     case "osnova_footing": return maximumMcpFootingCodeUnits;
     case "osnova_settle": return maximumMcpSettleCodeUnits;
+    case "osnova_plumb": return maximumMcpPlumbCodeUnits;
     default: return undefined;
   }
 }

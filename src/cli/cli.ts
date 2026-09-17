@@ -11,9 +11,11 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatFindTextResult, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCoverage, formatFindTextResult, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
+import { resolutionCoverage } from "../query/coverage.js";
+import { plumb, parseClaims } from "../query/plumb.js";
 import type { OsnovaIndex } from "../types.js";
-import { boundText } from "../query/budget.js";
+import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { taskContext } from "../query/task-context.js";
@@ -40,6 +42,8 @@ usage:
   osnova groundwork [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
   osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
   osnova settle --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
+  osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup --preview --client <claude-code|codex|opencode|kilo|cursor|pi> [--config <path>] [--command <exe>] [--home <path>]
   osnova mcp [--workspace <path>] [--cache-dir <path>]   (default workspace: current directory)
@@ -308,6 +312,30 @@ export async function runCli(
         ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
         `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
       ].join("\n"));
+      return EXIT_OK;
+    }
+    case "plumb": {
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: {
+        site: { type: "string", multiple: true }, "sites-file": { type: "string" }, direction: { type: "string" }, depth: { type: "string" },
+        workspace: { type: "string" }, "cache-dir": { type: "string" },
+      } });
+      const symbol = parsed.positionals.join(" ").trim();
+      if (symbol.length === 0) throw new Error("osnova plumb: missing <symbol> argument");
+      const direction = parsed.values.direction;
+      if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`osnova plumb: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
+      const fromFile = parsed.values["sites-file"] === undefined ? [] : (await fs.readFile(parsed.values["sites-file"], "utf8")).split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+      const claims = parseClaims([...(parsed.values.site ?? []), ...fromFile]);
+      if (claims.length === 0) throw new Error("osnova plumb: give at least one --site path:line or a --sites-file");
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
+      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", 1) });
+      io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
+      return EXIT_OK;
+    }
+    case "coverage": {
+      const parsed = parseArgs({ args: rest, options: { json: { type: "boolean" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
+      const report = resolutionCoverage(index);
+      io.stdout(parsed.values.json === true ? jsonOutput(report, "coverage") : formatCoverage(report));
       return EXIT_OK;
     }
     case "doctor": {
