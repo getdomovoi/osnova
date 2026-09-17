@@ -4,6 +4,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- Unresolved call edges in `osnova_warp` and `warp` carry `nameMatches`: the indexed functions, methods and classes in the same language family that share the call's name, capped at five with the total, printed as `same-name symbols (N, unverified): ...`. `plumb` prints the same count and list on `name-only` verdicts. A same-name list is a reading list, never a resolution.
+
 ### Changed
 
 - Bare import specifiers resolve to workspace packages: a `package.json` `name` plus its `exports` map (every condition is tried, source files first; `*` patterns are expanded) or its `module`, `main` and `types` fields, with `src/index` and `src/<subpath>` as fallbacks. Python absolute imports resolve through every directory that holds a `pyproject.toml`, `setup.py` or `setup.cfg` and through that directory's `src` layout. Two packages with the same name stay unresolved. `node:` builtins and packages outside the repository stay `import-target-unresolved`.
