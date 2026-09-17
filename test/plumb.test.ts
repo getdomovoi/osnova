@@ -25,12 +25,12 @@ describe("plumb", () => {
   it("confirms claimed sites that match resolved edges and lists the rest as missing", () => {
     const [first, ...others] = resolved;
     const result = plumb(index, name, [{ file: first!.fromFile, line: first!.line }]);
-    expect(result.status).toBe("found");
+    expect(result.target.qualifiedName).toBe(name);
     expect(result.claims).toHaveLength(1);
     expect(result.claims[0]).toMatchObject({ verdict: "confirmed", edge: { fromFile: first!.fromFile, line: first!.line } });
     expect(result.missing.map((edge) => `${edge.fromFile}:${edge.line}`)).toEqual(others.map((edge) => `${edge.fromFile}:${edge.line}`).sort());
     expect(result.counts).toEqual({ confirmed: 1, nameOnly: 0, noCall: 0, notIndexed: 0, missing: others.length });
-    expect(result.limitations).toEqual(["confirmed-means-indexed-resolved-edge-not-runtime-proof", "name-only-is-a-heuristic-match", "missing-covers-indexed-resolved-edges-only"]);
+    expect(result.limitations).toEqual(["confirmed-means-indexed-resolved-edge-not-runtime-proof", "name-only-is-a-heuristic-match", "missing-covers-indexed-resolved-edges-only", "call-edges-only"]);
   });
 
   it("marks lines without a call, unindexed files and duplicates", () => {
@@ -59,7 +59,17 @@ describe("plumb", () => {
     expect(() => plumb(index, "doesNotExist", [])).toThrow(/no indexed symbol/);
     expect(() => parseClaims(["src/util.ts"])).toThrow(/invalid claim "src\/util.ts"; use path:line/);
     expect(() => parseClaims(["src/util.ts:0"])).toThrow(/invalid claim/);
-    const ambiguous = plumb(index, "compute", []);
-    expect(["found", "ambiguous"]).toContain(ambiguous.status);
+    for (const bad of ["src\\a.ts:1", "C:\\src\\a.ts:2", "./:1", "/abs/a.ts:1", "../up.ts:1", "src/a.ts:1junk"]) expect(() => parseClaims([bad]), bad).toThrow(/invalid claim/);
+    expect(parseClaims(["./src/a.ts:1", "src/a.ts:1"])).toEqual([{ file: "src/a.ts", line: 1 }]);
+    const duplicates = index.symbols.size > 0 ? [...index.symbols.values()].map((s) => s.name).find((n, i, all) => all.indexOf(n) !== i) : undefined;
+    if (duplicates !== undefined) expect(() => plumb(index, duplicates, [])).toThrow(/matches \d+ symbols; choose one of/);
+  });
+
+  it("confirms only call edges, not references or imports", async () => {
+    const workspace = await import("node:fs/promises").then(async (fs) => { const os = await import("node:os"); const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-plumb-")); await fs.writeFile(path.join(dir, "a.py"), "def hit():\n    return 1\n"); await fs.writeFile(path.join(dir, "b.py"), "from a import hit\n\ndef use():\n    return hit()\n"); return dir; });
+    const local = await buildIndex(workspace);
+    const result = plumb(local, "a.py#hit", [{ file: "b.py", line: 1 }, { file: "b.py", line: 4 }]);
+    expect(result.claims.map((claim) => claim.verdict)).toEqual(["no-call", "confirmed"]);
+    expect(result.missing).toEqual([]);
   });
 });

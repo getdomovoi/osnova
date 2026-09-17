@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call-site resolution coverage on pinned checkouts",
   "osnova": {
-    "commit": "86b00d82bde77271a933b5dc3e8fa5b145fadbc6",
+    "commit": "6344f212a16d95cc2293a1d544a1bfb2d873bb3e",
     "version": "0.3.0"
   },
   "corpora": [
@@ -33,8 +33,8 @@
           "receiver-unresolved": 1656
         },
         "resolvedShare": 0.1369,
-        "externalCalls": 1884,
-        "resolvedShareOfInternal": 0.2192
+        "unresolvedImportCalls": 1884,
+        "resolvedShareExcludingUnresolvedImports": 0.2192
       },
       "languages": [
         {
@@ -50,8 +50,8 @@
           "byMethod": {},
           "byReason": {},
           "resolvedShare": 0,
-          "externalCalls": 0,
-          "resolvedShareOfInternal": 0
+          "unresolvedImportCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0
         },
         {
           "language": "python",
@@ -75,15 +75,15 @@
             "receiver-unresolved": 1656
           },
           "resolvedShare": 0.1369,
-          "externalCalls": 1884,
-          "resolvedShareOfInternal": 0.2192
+          "unresolvedImportCalls": 1884,
+          "resolvedShareExcludingUnresolvedImports": 0.2192
         }
       ],
       "limitations": [
         "indexed-call-sites-only",
         "resolution-is-heuristic-not-type-inference",
         "unindexed-files-not-counted",
-        "external-calls-are-import-target-unresolved-edges"
+        "unresolved-import-calls-are-import-target-unresolved-edges"
       ]
     },
     {
@@ -115,8 +115,8 @@
           "receiver-unresolved": 17774
         },
         "resolvedShare": 0.3711,
-        "externalCalls": 5966,
-        "resolvedShareOfInternal": 0.4133
+        "unresolvedImportCalls": 5966,
+        "resolvedShareExcludingUnresolvedImports": 0.4133
       },
       "languages": [
         {
@@ -132,8 +132,8 @@
           "byMethod": {},
           "byReason": {},
           "resolvedShare": 0,
-          "externalCalls": 0,
-          "resolvedShareOfInternal": 0
+          "unresolvedImportCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0
         },
         {
           "language": "javascript",
@@ -151,8 +151,8 @@
             "receiver-unresolved": 17
           },
           "resolvedShare": 0,
-          "externalCalls": 0,
-          "resolvedShareOfInternal": 0
+          "unresolvedImportCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0
         },
         {
           "language": "python",
@@ -176,8 +176,8 @@
             "receiver-unresolved": 1238
           },
           "resolvedShare": 0.2733,
-          "externalCalls": 2156,
-          "resolvedShareOfInternal": 0.3356
+          "unresolvedImportCalls": 2156,
+          "resolvedShareExcludingUnresolvedImports": 0.3356
         },
         {
           "language": "typescript",
@@ -202,15 +202,15 @@
             "receiver-unresolved": 16519
           },
           "resolvedShare": 0.3956,
-          "externalCalls": 3810,
-          "resolvedShareOfInternal": 0.4307
+          "unresolvedImportCalls": 3810,
+          "resolvedShareExcludingUnresolvedImports": 0.4307
         }
       ],
       "limitations": [
         "indexed-call-sites-only",
         "resolution-is-heuristic-not-type-inference",
         "unindexed-files-not-counted",
-        "external-calls-are-import-target-unresolved-edges"
+        "unresolved-import-calls-are-import-target-unresolved-edges"
       ]
     },
     {
@@ -242,8 +242,8 @@
           "receiver-unresolved": 22822
         },
         "resolvedShare": 0.1106,
-        "externalCalls": 21855,
-        "resolvedShareOfInternal": 0.1876
+        "unresolvedImportCalls": 21855,
+        "resolvedShareExcludingUnresolvedImports": 0.1876
       },
       "languages": [
         {
@@ -259,8 +259,8 @@
           "byMethod": {},
           "byReason": {},
           "resolvedShare": 0,
-          "externalCalls": 0,
-          "resolvedShareOfInternal": 0
+          "unresolvedImportCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0
         },
         {
           "language": "fallback",
@@ -275,8 +275,8 @@
           "byMethod": {},
           "byReason": {},
           "resolvedShare": 0,
-          "externalCalls": 0,
-          "resolvedShareOfInternal": 0
+          "unresolvedImportCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0
         },
         {
           "language": "javascript",
@@ -297,8 +297,8 @@
             "receiver-unresolved": 5
           },
           "resolvedShare": 0.3448,
-          "externalCalls": 12,
-          "resolvedShareOfInternal": 0.5882
+          "unresolvedImportCalls": 12,
+          "resolvedShareExcludingUnresolvedImports": 0.5882
         },
         {
           "language": "tsx",
@@ -319,8 +319,8 @@
             "receiver-unresolved": 69
           },
           "resolvedShare": 0.0467,
-          "externalCalls": 45,
-          "resolvedShareOfInternal": 0.0667
+          "unresolvedImportCalls": 45,
+          "resolvedShareExcludingUnresolvedImports": 0.0667
         },
         {
           "language": "typescript",
@@ -346,15 +346,15 @@
             "receiver-unresolved": 22748
           },
           "resolvedShare": 0.1106,
-          "externalCalls": 21798,
-          "resolvedShareOfInternal": 0.1878
+          "unresolvedImportCalls": 21798,
+          "resolvedShareExcludingUnresolvedImports": 0.1878
         }
       ],
       "limitations": [
         "indexed-call-sites-only",
         "resolution-is-heuristic-not-type-inference",
         "unindexed-files-not-counted",
-        "external-calls-are-import-target-unresolved-edges"
+        "unresolved-import-calls-are-import-target-unresolved-edges"
       ]
     }
   ]

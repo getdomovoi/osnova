@@ -1,15 +1,14 @@
 import type { OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { callersDetailed } from "./callers.js";
 import { compareText } from "./impact.js";
+import { validRelativePath } from "../index/workspace.js";
 
 export interface PlumbClaim { readonly file: string; readonly line: number; }
 export type PlumbVerdict = "confirmed" | "name-only" | "no-call" | "not-indexed";
 export interface PlumbClaimResult { readonly claim: PlumbClaim; readonly verdict: PlumbVerdict; readonly edge?: OsnovaEdge | undefined; }
 export interface PlumbOptions { readonly direction?: "in" | "out" | undefined; readonly depth?: number | undefined; }
 export interface PlumbResult {
-  readonly target: OsnovaSymbol | null;
-  readonly status: "found" | "ambiguous";
-  readonly candidates?: readonly string[] | undefined;
+  readonly target: OsnovaSymbol;
   readonly direction: "in" | "out";
   readonly depth: number;
   readonly claims: readonly PlumbClaimResult[];
@@ -18,7 +17,7 @@ export interface PlumbResult {
   readonly limitations: readonly string[];
 }
 
-const limitations = ["confirmed-means-indexed-resolved-edge-not-runtime-proof", "name-only-is-a-heuristic-match", "missing-covers-indexed-resolved-edges-only"] as const;
+const limitations = ["confirmed-means-indexed-resolved-edge-not-runtime-proof", "name-only-is-a-heuristic-match", "missing-covers-indexed-resolved-edges-only", "call-edges-only"] as const;
 
 export function parseClaims(texts: readonly string[]): PlumbClaim[] {
   const seen = new Set<string>();
@@ -28,6 +27,7 @@ export function parseClaims(texts: readonly string[]): PlumbClaim[] {
     const line = match === null ? NaN : Number(match[2]);
     if (match === null || !Number.isSafeInteger(line) || line < 1 || match[1]!.length === 0) throw new Error(`osnova plumb: invalid claim ${JSON.stringify(text)}; use path:line`);
     const file = match[1]!.replace(/^\.\//, "");
+    if (!validRelativePath(file)) throw new Error(`osnova plumb: invalid claim ${JSON.stringify(text)}; use a repository-relative path:line`);
     const key = `${file}:${line}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -45,11 +45,14 @@ export function plumb(index: OsnovaIndex, symbol: string, claims: readonly Plumb
   const detailed = callersDetailed(index, symbol, { direction, depth });
   const unique = parseClaims(claims.map((claim) => `${claim.file}:${claim.line}`));
   if (detailed.status === "ambiguous") {
-    return { target: null, status: "ambiguous", candidates: detailed.candidates.map((candidate) => candidate.qualifiedName), direction, depth, claims: [],
-      missing: [], counts: { confirmed: 0, nameOnly: 0, noCall: 0, notIndexed: 0, missing: 0 }, limitations };
+    throw new Error(`osnova plumb: ${JSON.stringify(symbol)} matches ${detailed.candidates.length} symbols; choose one of: ${detailed.candidates.map((candidate) => candidate.qualifiedName).join(", ")}`);
   }
   const resolvedBySite = new Map<string, OsnovaEdge>();
-  for (const hit of detailed.hits) { const site = siteOf(hit.edge, direction); resolvedBySite.set(`${site.file}:${site.line}`, hit.edge); }
+  for (const hit of detailed.hits) {
+    if (hit.edge.kind !== "calls") continue;
+    const site = siteOf(hit.edge, direction);
+    resolvedBySite.set(`${site.file}:${site.line}`, hit.edge);
+  }
   const target = detailed.target;
   const callsByFile = new Map<string, OsnovaEdge[]>();
   for (const edge of index.edges) {
@@ -70,6 +73,6 @@ export function plumb(index: OsnovaIndex, symbol: string, claims: readonly Plumb
   const missing = [...resolvedBySite.entries()].filter(([key]) => !claimed.has(key)).map(([, edge]) => edge)
     .sort((a, b) => compareText(a.fromFile, b.fromFile) || a.line - b.line);
   const count = (verdict: PlumbVerdict): number => results.filter((item) => item.verdict === verdict).length;
-  return { target, status: "found", direction, depth, claims: results, missing,
+  return { target, direction, depth, claims: results, missing,
     counts: { confirmed: count("confirmed"), nameOnly: count("name-only"), noCall: count("no-call"), notIndexed: count("not-indexed"), missing: missing.length }, limitations };
 }

@@ -310,10 +310,10 @@ const percent = (share: number): string => `${(share * 100).toFixed(1)}%`;
 
 export function formatCoverage(report: CoverageReport): string {
   const row = (item: LanguageCoverage): string =>
-    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareOfInternal)} of the ${item.calls - item.externalCalls} with an in-repository target), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}`;
+    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingUnresolvedImports)} of the ${item.calls - item.unresolvedImportCalls} not blocked by an unresolved import), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}`;
   const reasons = Object.entries(report.total.byReason).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1));
   const lines = [
-    `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.externalCalls} call sites target imports outside the index`,
+    `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve`,
     ...report.languages.map(row),
   ];
   if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}`));
@@ -322,10 +322,7 @@ export function formatCoverage(report: CoverageReport): string {
 }
 
 export function formatPlumb(result: PlumbResult, symbol?: string): string {
-  const name = result.target?.qualifiedName ?? symbol ?? "<unknown>";
-  if (result.status === "ambiguous") {
-    return [`osnova plumb: ${name} is ambiguous; choose one qualified name`, ...(result.candidates ?? []).map((candidate) => `- ${candidate}`), `limitations: ${result.limitations.join(", ")}`].join("\n");
-  }
+  const name = result.target.qualifiedName ?? symbol ?? "<unknown>";
   const c = result.counts;
   const lines = [`osnova plumb: ${name}, ${c.confirmed} confirmed, ${c.nameOnly} name-only, ${c.noCall} no-call, ${c.notIndexed} not-indexed, ${c.missing} missing`];
   if (result.claims.length > 0) lines.push("claims:");

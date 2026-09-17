@@ -116,7 +116,7 @@ A typical agent turn with Osnova:
 
 A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, or an annotated parameter). Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
 
-| Corpus | Language | Call sites | Resolved | Share | Of in-repository targets |
+| Corpus | Language | Call sites | Resolved | Share | Excluding unresolved imports |
 |---|---|---:|---:|---:|---:|
 | click | python | 5018 | 687 | 13.7% | 21.9% |
 | click | all | 5018 | 687 | 13.7% | 21.9% |
@@ -127,7 +127,7 @@ A call site counts as resolved when the index ties it to one definition through 
 | zod | typescript | 53067 | 5871 | 11.1% | 18.8% |
 | zod | all | 53246 | 5888 | 11.1% | 18.8% |
 
-Calls into packages outside the repository can never resolve locally, so the last column counts only call sites whose import stays inside the index. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
+A call through an import the index cannot resolve, which is mostly a package outside the repository, can never resolve locally, so the last column leaves those call sites out of the denominator. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
 ## CLI
 
