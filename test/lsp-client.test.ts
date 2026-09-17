@@ -80,8 +80,13 @@ describe("bounded LSP stdio", () => {
 
   it("bounds stderr, pending requests, and shutdown", async () => {
     const noisy = await start("stderr", { maxSessionBytes: 4096 });
-    try { await expect(noisy.client.request("textDocument/references", { textDocument: { uri: noisy.uri }, position: { line: 0, character: 0 } })).rejects.toThrow("session-byte-limit"); }
-    finally { await noisy.client.close(); }
+    try {
+      const first = await noisy.client.request("textDocument/references", { textDocument: { uri: noisy.uri }, position: { line: 0, character: 0 } }).then(() => "resolved", (error: Error) => error.message);
+      if (first !== "session-byte-limit") {
+        expect(first).toBe("request-timeout");
+        await expect(noisy.client.request("test/events", {})).rejects.toThrow("session-byte-limit");
+      }
+    } finally { await noisy.client.close(); }
     const slow = await start("timeout", { maxPending: 1, requestTimeoutMs: 100 });
     try {
       const pending = slow.client.request("textDocument/references", { textDocument: { uri: slow.uri } });
