@@ -22,7 +22,8 @@ if (existsSync(output)) throw new Error(`refusing to overwrite ${output}`);
 const git = (dir, ...rest) => execFileSync("git", ["-C", dir, ...rest], { encoding: "utf8" }).trim();
 const corpora = [];
 for (const [name, dir] of [...workspaces].sort(([a], [b]) => (a < b ? -1 : 1))) {
-  const manifest = JSON.parse(readFileSync(path.join(root, "benchmarks", `${name}-v1.json`), "utf8"));
+  const coverageOnly = path.join(root, "benchmarks", "corpora", `${name}.json`);
+  const manifest = JSON.parse(readFileSync(existsSync(coverageOnly) ? coverageOnly : path.join(root, "benchmarks", `${name}-v1.json`), "utf8"));
   if (manifest.source?.kind !== "checkout") throw new Error(`${name}: manifest is not a checkout corpus`);
   const head = git(dir, "rev-parse", "HEAD");
   if (head !== manifest.source.revision) throw new Error(`${name}: checkout at ${head}, manifest wants ${manifest.source.revision}`);
