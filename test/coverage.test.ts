@@ -56,13 +56,13 @@ describe("resolution coverage", () => {
 
   it("reads ambient declarations with comment, string, module and global scopes in mind", async () => {
     const workspace = path.join(temporary, "ambient2"); await fs.mkdir(workspace);
-    await fs.writeFile(path.join(workspace, "globals.d.ts"), '// declare function commented(): void;\n/*\nfunction blockCommented(): void;\n*/\nconst quoted = "declare function inString(): void";\ntype T = "https://example"; declare function afterSlashes(): void;\ndeclare module "x" {\n  function moduleLocal(): void;\n}\ndeclare global {\n  function fromGlobal(): void;\n}\ndeclare function plain(): void;\n');
+    await fs.writeFile(path.join(workspace, "globals.d.ts"), '// declare function commented(): void;\n/*\nfunction blockCommented(): void;\n*/\nconst quoted = "declare function inString(): void";\ntype T = "https://example"; declare function afterSlashes(): void;\ntype Q = import("x").T; declare function afterImportType(): void;\ndeclare module "x" {\n  function moduleLocal(): void;\n}\ndeclare global {\n  function fromGlobal(): void;\n}\ndeclare function plain(): void;\n');
     await fs.writeFile(path.join(workspace, "module.d.ts"), "export {};\nexport declare function exported(): void;\ndeclare global {\n  function augmented(): void;\n}\n");
-    await fs.writeFile(path.join(workspace, "a.ts"), "export function use() {\n  commented();\n  blockCommented();\n  inString();\n  moduleLocal();\n  fromGlobal();\n  plain();\n  afterSlashes();\n  exported();\n  augmented();\n}\n");
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function use() {\n  commented();\n  blockCommented();\n  inString();\n  moduleLocal();\n  fromGlobal();\n  plain();\n  afterSlashes();\n  exported();\n  augmented();\n  afterImportType();\n}\n");
     await fs.writeFile(path.join(workspace, "b.py"), "def use():\n    plain()\n");
     const index = await buildIndex(workspace, { cacheDir: path.join(temporary, "cache-ambient2") });
     const reason = (symbol: string) => index.outgoing(symbol).map((edge) => { const r = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined; return [edge.toName, r?.status === "unresolved" ? r.reason : edge.toSymbol]; });
-    expect(reason("a.ts#use")).toEqual([["commented", "unbound-global"], ["blockCommented", "unbound-global"], ["inString", "unbound-global"], ["moduleLocal", "unbound-global"], ["fromGlobal", "binding-blocked"], ["plain", "binding-blocked"], ["afterSlashes", "binding-blocked"], ["exported", "unbound-global"], ["augmented", "binding-blocked"]]);
+    expect(reason("a.ts#use")).toEqual([["commented", "unbound-global"], ["blockCommented", "unbound-global"], ["inString", "unbound-global"], ["moduleLocal", "unbound-global"], ["fromGlobal", "binding-blocked"], ["plain", "binding-blocked"], ["afterSlashes", "binding-blocked"], ["exported", "unbound-global"], ["augmented", "binding-blocked"], ["afterImportType", "binding-blocked"]]);
     expect(reason("b.py#use")).toEqual([["plain", "unbound-global"]]);
   });
 });

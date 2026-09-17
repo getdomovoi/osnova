@@ -166,7 +166,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const blank = (match: string): string => match.replace(/[^\n]/g, " ");
     const stripped = text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, blank);
     const top: string[] = []; const global: string[] = [];
-    const pattern = /\bdeclare\s+global\s*\{|\bdeclare\s+module\s+"[^"]*"\s*\{|\bdeclare\s+(?:function|const|let|var|class|enum|namespace|module)\s+([A-Za-z_$][\w$]*)|\b(?:function|const|let|var|class|enum|interface|type)\s+([A-Za-z_$][\w$]*)|\b(?:import|export)\b|[{}]/g;
+    const pattern = /\bdeclare\s+global\s*\{|\bdeclare\s+module\s+"[^"]*"\s*\{|\bdeclare\s+(?:function|const|let|var|class|enum|namespace|module)\s+([A-Za-z_$][\w$]*)|\b(?:function|const|let|var|class|enum|interface|type)\s+([A-Za-z_$][\w$]*)|\bimport\b(?!\s*\()|\bexport\b|[{}]/g;
     let depth = 0; let globalDepth = -1; let moduleDepth = -1; let isModule = false;
     for (const match of stripped.matchAll(pattern)) {
       const token = match[0];
