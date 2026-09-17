@@ -12,6 +12,7 @@ import type {
 } from "../types.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
+import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
@@ -317,5 +318,23 @@ export function formatCoverage(report: CoverageReport): string {
   ];
   if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}`));
   lines.push(`limitations: ${report.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+export function formatPlumb(result: PlumbResult, symbol?: string): string {
+  const name = result.target?.qualifiedName ?? symbol ?? "<unknown>";
+  if (result.status === "ambiguous") {
+    return [`osnova plumb: ${name} is ambiguous; choose one qualified name`, ...(result.candidates ?? []).map((candidate) => `- ${candidate}`), `limitations: ${result.limitations.join(", ")}`].join("\n");
+  }
+  const c = result.counts;
+  const lines = [`osnova plumb: ${name}, ${c.confirmed} confirmed, ${c.nameOnly} name-only, ${c.noCall} no-call, ${c.notIndexed} not-indexed, ${c.missing} missing`];
+  if (result.claims.length > 0) lines.push("claims:");
+  for (const item of result.claims) {
+    const other = item.edge === undefined ? "" : ` -> ${result.direction === "in" ? item.edge.fromSymbol || item.edge.fromFile : item.edge.toSymbol ?? item.edge.toName}`;
+    lines.push(`${item.verdict} ${item.claim.file}:${item.claim.line}${other}`);
+  }
+  if (result.missing.length > 0) lines.push("missing:");
+  for (const edge of result.missing) lines.push(`${edge.fromFile}:${edge.line} ${result.direction === "in" ? edge.fromSymbol || edge.fromFile : edge.toSymbol ?? edge.toName}`);
+  lines.push(`limitations: ${result.limitations.join(", ")}`);
   return lines.join("\n");
 }

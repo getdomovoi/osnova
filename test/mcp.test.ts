@@ -39,7 +39,7 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 describe("mcp stdio server", () => {
-  it("exposes exactly the seven foundation tools", async () => {
+  it("exposes exactly the eight foundation tools", async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
@@ -51,12 +51,13 @@ describe("mcp stdio server", () => {
         "osnova_groundwork",
         "osnova_footing",
         "osnova_settle",
+        "osnova_plumb",
       ]);
       const byName = new Map(tools.map((t) => [t.name, t]));
       for (const [name, verb] of [
         ["osnova_ground", "Search:"], ["osnova_thread", "Text search:"], ["osnova_outline", "Outline:"],
         ["osnova_warp", "Call graph:"], ["osnova_groundwork", "Repository map:"],
-        ["osnova_footing", "Task context:"], ["osnova_settle", "Change impact:"],
+        ["osnova_footing", "Task context:"], ["osnova_settle", "Change impact:"], ["osnova_plumb", "Check claims:"],
       ] as const) {
         expect(byName.get(name)?.description?.startsWith(verb) ?? false, name).toBe(true);
       }
@@ -198,6 +199,26 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("checks claimed call sites with plumb", async () => {
+    write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
+    write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_plumb", { symbol: "src/loud.ts#shout", sites: ["src/greet.ts:2", "src/greet.ts:1"] });
+      expect(text).toContain("osnova plumb: src/loud.ts#shout, 1 confirmed, 0 name-only, 1 no-call, 0 not-indexed, 0 missing");
+      expect(text).toContain("confirmed src/greet.ts:2 -> src/greet.ts#greet");
+      expect(text).toContain("no-call src/greet.ts:1");
+      const missing = await callTool(client, "osnova_plumb", { symbol: "src/loud.ts#shout", sites: ["src/greet.ts:1"] });
+      expect(missing).toContain("missing:\nsrc/greet.ts:2 src/greet.ts#greet");
+      for (const args of [{ symbol: "src/loud.ts#shout", sites: [] }, { symbol: "src/loud.ts#shout", sites: ["src/greet.ts"] }, { symbol: "src/loud.ts#shout" }]) {
+        const rejected = await client.callTool({ name: "osnova_plumb", arguments: args });
+        expect(rejected.isError, JSON.stringify(args)).toBe(true);
+      }
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
   it("returns isError for tool failures without crashing the server", async () => {
     const client = await connect();
     try {
@@ -214,7 +235,7 @@ describe("mcp stdio server", () => {
       const text = content.map((c) => (c.type === "text" ? c.text : "")).join("");
       expect(text).toContain("osnova error");
       const still = await client.listTools();
-      expect(still.tools).toHaveLength(7);
+      expect(still.tools).toHaveLength(8);
     } finally {
       await client.close();
     }
