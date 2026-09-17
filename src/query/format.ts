@@ -310,10 +310,10 @@ const percent = (share: number): string => `${(share * 100).toFixed(1)}%`;
 
 export function formatCoverage(report: CoverageReport): string {
   const row = (item: LanguageCoverage): string =>
-    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingUnresolvedImports)} of the ${item.calls - item.unresolvedImportCalls} not blocked by an unresolved import), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}`;
+    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingExternal)} of the ${item.calls - item.unresolvedImportCalls - item.unboundGlobalCalls} not going through an unresolved import or an unbound global), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}`;
   const reasons = Object.entries(report.total.byReason).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1));
   const lines = [
-    `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve`,
+    `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve, ${report.total.unboundGlobalCalls} call a name with no binding in the file`,
     ...report.languages.map(row),
   ];
   if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}`));

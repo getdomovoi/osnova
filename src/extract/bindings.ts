@@ -558,7 +558,7 @@ export function collectBindings(root: Node, python: boolean): {
   };
   const at = (expression: Node | null, site: Node): EdgeBinding | undefined => {
       expression = unwrap(expression);
-      if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: "unsupported" };
+      if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: "unbound" };
       if (expression !== null && ["member_expression", "attribute"].includes(expression.type)) {
         const object = unwrap(expression.childForFieldName("object"));
         const property = expression.childForFieldName(python ? "attribute" : "property");
@@ -609,8 +609,12 @@ export function collectBindings(root: Node, python: boolean): {
       }
       return { kind: "blocked", reason: "unsupported" };
   };
+  const ownYield = (node: Node): boolean => childrenOf(node).some((child) =>
+    child.type === "yield" || (!["function_definition", "class_definition", "lambda"].includes(child.type) && ownYield(child)));
   const isTypingSelf = (inner: Node): boolean => {
-    const [head, member] = inner.text.split(".");
+    const parts = inner.text.split(".");
+    if (parts.length > 2) return false;
+    const [head, member] = parts;
     if (head === undefined) return false;
     const binding = lookup(head, inner);
     if (binding?.kind !== "import" || !["typing", "typing_extensions"].includes(binding.source)) return false;
@@ -622,7 +626,7 @@ export function collectBindings(root: Node, python: boolean): {
       if (type === null) return undefined;
       if (node.children.some((child) => child?.type === "async")) return undefined;
       const body = node.childForFieldName("body");
-      if (body !== null && body.descendantsOfType(["yield"]).length > 0) return undefined;
+      if (body !== null && ownYield(body)) return undefined;
       const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
       if (inner === null || !(inner.type === "identifier" || inner.type === "attribute")) return undefined;
       if (isTypingSelf(inner)) return classOf(scopes.get(node.id) ?? module) === null ? undefined : { kind: "this" };

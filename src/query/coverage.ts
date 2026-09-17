@@ -16,7 +16,9 @@ export interface LanguageCoverage {
   readonly byReason: Readonly<Record<string, number>>;
   readonly resolvedShare: number;
   readonly unresolvedImportCalls: number;
+  readonly unboundGlobalCalls: number;
   readonly resolvedShareExcludingUnresolvedImports: number;
+  readonly resolvedShareExcludingExternal: number;
 }
 
 export interface CoverageReport {
@@ -38,10 +40,12 @@ const sortedRecord = (map: Map<string, number>): Record<string, number> =>
 const share = (resolved: number, calls: number): number => calls === 0 ? 0 : Math.round((resolved / calls) * 10000) / 10000;
 const finish = (language: string, t: Tally): LanguageCoverage => {
   const unresolvedImportCalls = t.byReason.get("import-target-unresolved") ?? 0;
+  const unboundGlobalCalls = t.byReason.get("unbound-global") ?? 0;
   return {
     language, files: t.files, symbols: t.symbols, calls: t.calls, resolved: t.resolved, ambiguous: t.ambiguous, unresolved: t.unresolved,
     imports: t.imports, importsResolved: t.importsResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
-    unresolvedImportCalls, resolvedShareExcludingUnresolvedImports: share(t.resolved, t.calls - unresolvedImportCalls),
+    unresolvedImportCalls, unboundGlobalCalls, resolvedShareExcludingUnresolvedImports: share(t.resolved, t.calls - unresolvedImportCalls),
+    resolvedShareExcludingExternal: share(t.resolved, t.calls - unresolvedImportCalls - unboundGlobalCalls),
   };
 };
 
@@ -74,6 +78,6 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
   const languages = [...perLanguage].sort(([a], [b]) => compareText(a, b)).map(([language, row]) => finish(language, row));
   return {
     generation: indexGeneration(index), languages, total: finish("all", total),
-    limitations: ["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges"],
+    limitations: ["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges", "unbound-global-calls-are-names-with-no-binding-in-the-file"],
   };
 }
