@@ -34,5 +34,5 @@ try {
   process.stdout.write(output);
   process.stdout.write("clean registry-backed install: passed; dependency install scripts disabled\n");
 } finally {
-  await rm(scratch, { recursive: true, force: true });
+  await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 }).catch((error) => { console.warn(`osnova: scratch cleanup skipped: ${error.code ?? error}`); });
 }
