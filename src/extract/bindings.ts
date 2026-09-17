@@ -692,8 +692,20 @@ export function collectBindings(root: Node, python: boolean): {
     const name = annotationTypeName(inner);
     return name === undefined ? undefined : ownerFor(name, node);
   };
+  // Python binds names in execution order: a module-level rebinding of `property` after the class
+  // does not change a decorator evaluated before it.
+  const moduleBindsBefore = (name: string, position: number): boolean => childrenOf(root).some((statement) => {
+    if (statement.startIndex >= position) return false;
+    const assignment = statement.type === "expression_statement" ? childrenOf(statement)[0] : null;
+    if (assignment?.type === "assignment") return assignment.childForFieldName("left")?.text === name;
+    if (statement.type === "function_definition" || statement.type === "class_definition") return statement.childForFieldName("name")?.text === name;
+    if (statement.type === "decorated_definition") return statement.childForFieldName("definition")?.childForFieldName("name")?.text === name;
+    if (statement.type === "import_statement" || statement.type === "import_from_statement") return new RegExp(`(^|[^\\w.])${name}(?![\\w])`).test(statement.text.replace(/^\s*(from\s+\S+\s+)?import\s+/, ""));
+    return false;
+  });
   for (const pending of pendingProperties) {
-    if (lookup("property", pending.decorator) !== undefined) continue;
+    const bound = lookup("property", pending.decorator);
+    if (bound !== undefined && (!module.names.has("property") || moduleBindsBefore("property", pending.decorator.startIndex))) continue;
     pending.fields.set(pending.name, { typeName: isTypingSelf(pending.inner) ? THIS_TYPE : pending.inner.text, site: pending.decorator });
   }
   return {
