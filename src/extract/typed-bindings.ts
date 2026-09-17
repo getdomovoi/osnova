@@ -74,9 +74,10 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     return item.name === "*" ? undefined : { kind: "import", source: item.source, importedName: item.name };
   };
   // An unbound capitalised identifier used as a receiver names a type (static access) in Java and C#.
-  const classLike = (name: string, scope: Scope): boolean => spec.classNodes !== undefined && /^[A-Z]/.test(name) && !scopeBinds(scope, name) && fieldOwner(scope, name) === undefined;
-  const scopeBinds = (scope: Scope, name: string): boolean => {
-    for (let current: Scope | null = scope; current !== null && current !== module; current = current.parent) if (current.names.has(name) || current.receiver?.name === name) return true;
+  const classLike = (name: string, scope: Scope, at: number): boolean => spec.classNodes !== undefined && /^[A-Z]/.test(name) && !scopeBinds(scope, name, at) && fieldOwner(scope, name) === undefined;
+  // A local shadows a package or type name only from its declaration onward.
+  const scopeBinds = (scope: Scope, name: string, at: number): boolean => {
+    for (let current: Scope | null = scope; current !== null && current !== module; current = current.parent) if (declared(current, name, at) !== undefined || current.receiver?.name === name) return true;
     return false;
   };
   // A write anywhere, including inside a closure, invalidates the binding in the scope that declares the name.
@@ -91,17 +92,18 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     const callee = spec.callee(fn);
     if (callee === undefined) return undefined;
     let of: Callee | undefined;
-    const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text) ? importOf(callee.object.text) : callee.path !== undefined ? importOf(callee.path) : undefined;
+    const at = value.startIndex;
+    const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text) : callee.path !== undefined ? importOf(callee.path) : undefined;
     if (pkg?.name === "*") of = { kind: "import", source: pkg.source, importedName: callee.name };
     else if (pkg !== undefined && callee.path !== undefined && /^[a-z_]/.test(callee.path)) of = { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
     else if (callee.object === null && callee.path === undefined) {
       // An unqualified call inside a class body is a call on this (or the class) in Java and C#.
       const cls = classOf(scope);
-      of = cls?.className !== undefined && spec.classNodes !== undefined && !scopeBinds(scope, callee.name)
+      of = cls?.className !== undefined && spec.classNodes !== undefined && !scopeBinds(scope, callee.name, at)
         ? { kind: "method", owner: { kind: "local", name: cls.className }, member: callee.name }
         : { kind: "local", name: callee.name };
     }
-    else if (callee.object?.type === "identifier" && classLike(callee.object.text, scope)) { const owner = ownerForType(callee.object.text); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
+    else if (callee.object?.type === "identifier" && classLike(callee.object.text, scope, at)) { const owner = ownerForType(callee.object.text); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
     else if (callee.path !== undefined) { const owner = pathOwner(callee.path); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
     else {
       if (callee.object === null) return undefined;
@@ -203,8 +205,8 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const scope = scopes.get(site.id) ?? module;
       if (callee.object.type === "identifier") {
         const pkg = importOf(callee.object.text);
-        if (pkg?.name === "*" && receiverOf(callee.object, scope) === undefined && !scopeBinds(scope, callee.object.text)) return { kind: "import", source: pkg.source, importedName: callee.name };
-        if (classLike(callee.object.text, scope)) { const owner = ownerForType(callee.object.text); return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" }; }
+        if (pkg?.name === "*" && receiverOf(callee.object, scope) === undefined && !scopeBinds(scope, callee.object.text, callee.object.startIndex)) return { kind: "import", source: pkg.source, importedName: callee.name };
+        if (classLike(callee.object.text, scope, callee.object.startIndex)) { const owner = ownerForType(callee.object.text); return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" }; }
       }
       const owner = receiverOf(callee.object, scope);
       if (owner === undefined) return { kind: "blocked", reason: "unknown-receiver" };

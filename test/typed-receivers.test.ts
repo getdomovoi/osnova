@@ -136,4 +136,15 @@ describe("typed receiver precision", () => {
     expect(index.symbols.get("pkg/prod.go#Runner.Run")?.memberKind).toBe("instance");
     expect(calls(index, "cmd/main.go#f", "Start")).toEqual(["pkg/prod.go#Server.Start"]);
   });
+
+  it("lets a later local shadow a package or type name only from its declaration onward", async () => {
+    const index = await build({
+      "go.mod": "module example.com/app\n",
+      "pkg/server.go": "package pkg\n\nfunc Start() {}\n",
+      "main.go": "package main\n\nimport pkg \"example.com/app/pkg\"\n\nfunc f() {\n  pkg.Start()\n  pkg := 1\n  _ = pkg\n}\n",
+      "App.java": "class Server { static void start() {} }\nclass App {\n  void f() {\n    Server.start();\n    Server Server = new Server();\n    Server.start();\n  }\n}\n",
+    });
+    expect(calls(index, "main.go#f", "Start")).toEqual(["pkg/server.go#Start"]);
+    expect(calls(index, "App.java#App.f", "start")).toEqual(["App.java#Server.start", undefined]);
+  });
 });
