@@ -100,4 +100,17 @@ describe("workspace package imports", () => {
     expect(imports(named, "app.py")).toEqual({ mod: undefined });
     expect(imports(named, "src/inner.py")).toEqual({ mod: "src/mod.py" });
   });
+
+  it("keeps both owners when a directory is a manifest root and another manifest's src layout", async () => {
+    const { applyChanges } = await import("../src/index.js");
+    const index = await build({ "src/setup.py": "", "src/mod.py": "def f():\n    pass\n", "app.py": "from mod import f\n\ndef use():\n    f()\n" });
+    expect(imports(index, "app.py")).toEqual({ mod: undefined });
+    await fs.writeFile(path.join(index.root, "pyproject.toml"), "[project]\nname='x'\n");
+    const incremental = await applyChanges(index, index.root, ["pyproject.toml"]);
+    const full = await buildIndex(index.root, { cacheDir: path.join(temporary, "cache-full") });
+    expect(imports(incremental, "app.py")).toEqual({ mod: "src/mod.py" });
+    expect(imports(full, "app.py")).toEqual({ mod: "src/mod.py" });
+    const { serializeSections } = await import("../src/index/serialize.js");
+    expect(serializeSections(incremental).core.equals(serializeSections(full).core)).toBe(true);
+  });
 });
