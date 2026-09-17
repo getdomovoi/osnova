@@ -156,6 +156,7 @@ export interface AskOptions {
   readonly in?: string | undefined;
   readonly limit?: number | undefined;
   readonly full?: boolean | undefined;
+  readonly inlineShortDefinitions?: number | undefined;
 }
 
 export interface AskResult {

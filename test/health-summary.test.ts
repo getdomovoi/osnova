@@ -19,7 +19,7 @@ it("compresses repeated diagnostics without exposing per-file paths", () => {
     phase: "parse" as const, path: `private/file-${number}.py`, code: "syntax-errors",
   })));
   const summary = formatIndexHealthSummary(target);
-  expect(summary).toBe("osnova foundation: partial, 43 diagnostics (parse/syntax-errors=43); results may be incomplete; details via doctor or indexHealth");
+  expect(summary).toBe("osnova foundation: partial (parse/syntax-errors=43); some files did not parse fully");
   expect(summary).not.toContain("private/file-");
   expect(formatIndexDiagnostics(target)).toContain("private/file-0.py");
 });
@@ -45,5 +45,5 @@ it("keeps fresh output empty and unverified health explicit", () => {
     root: target.root, files: target.files, symbols: target.symbols, edges: target.edges, diagnostics: undefined,
     incoming: target.incoming.bind(target), outgoing: target.outgoing.bind(target), edgesForFile: target.edgesForFile.bind(target),
   };
-  expect(formatIndexHealthSummary(custom)).toBe("osnova foundation: unverified; details via doctor or indexHealth");
+  expect(formatIndexHealthSummary(custom)).toBe("osnova foundation: unverified");
 });

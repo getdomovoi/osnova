@@ -13,6 +13,7 @@ export interface TaskContextOptions {
   readonly maxDepth?: number | undefined;
   readonly maxCodeUnits?: number | undefined;
   readonly excerptLines?: number | undefined;
+  readonly inlineShortDefinitions?: number | undefined;
   readonly measure?: ((result: TaskContextResult) => number) | undefined;
 }
 
@@ -83,7 +84,8 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const addDefinition = (symbol: OsnovaSymbol): void => {
     if (definitions.has(symbol.qualifiedName)) return;
     const lines = index.files.get(symbol.file)!.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine);
-    const excerpt = excerptLines !== undefined && lines.length > excerptLines
+    const keepWhole = options.inlineShortDefinitions !== undefined && lines.length <= options.inlineShortDefinitions;
+    const excerpt = !keepWhole && excerptLines !== undefined && lines.length > excerptLines
       ? `${lines.slice(0, excerptLines).join("\n")}\n[+${lines.length - excerptLines} more lines]`
       : lines.join("\n");
     definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt });
