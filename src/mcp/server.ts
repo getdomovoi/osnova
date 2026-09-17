@@ -82,7 +82,7 @@ const toolDefinitions = [
       properties: {
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers (default), out = callees" },
-        depth: { type: "number", description: "Transitive depth (default 1)" },
+        depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
       },
       required: ["symbol"],
     },
@@ -137,7 +137,7 @@ const toolDefinitions = [
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         sites: { type: "array", items: { type: "string" }, description: "Claimed call sites as repo-relative path:line" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers of the symbol (default), out = callees" },
-        depth: { type: "number", description: "Transitive depth (default 1)" },
+        depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
       },
       required: ["symbol", "sites"],
     },
