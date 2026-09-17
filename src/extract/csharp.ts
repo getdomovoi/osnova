@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -8,6 +9,7 @@ export const csharpAdapter: LanguageAdapter = {
   language: "c_sharp",
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
+    const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
     const visit = (node: Node): void => {
       switch (node.type) {
@@ -36,7 +38,7 @@ export const csharpAdapter: LanguageAdapter = {
         case "constructor_declaration": {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null && IDENTIFIER_RE.test(nameNode.text)) {
-            out.addDef(nameNode.text, "method", node);
+            out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -68,7 +70,7 @@ export const csharpAdapter: LanguageAdapter = {
               out.addEdge("calls", fn.text, node);
             } else if (fn.type === "member_access_expression") {
               const nameNode = fn.childForFieldName("name");
-              if (nameNode !== null) out.addEdge("calls", nameNode.text, node);
+              if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(fn, node));
             }
           }
           for (const child of childrenOf(node)) visit(child);

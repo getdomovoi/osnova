@@ -1,0 +1,460 @@
+import type { Node } from "web-tree-sitter";
+import type { Callee, EdgeBinding, MemberKind, ReceiverOwner, ReturnBinding } from "../types.js";
+import { childrenOf } from "./util.js";
+
+// Receiver identity for languages with declared types and no lexical binding collector of their
+// own. A name is bound to a type name by a typed parameter, a typed local, a constructor literal or
+// the declared return type of the call that produced it. Anything reassigned or untyped is unknown.
+
+export interface TypedSpec {
+  readonly functionNodes: readonly string[];
+  readonly scopeNodes: readonly string[];
+  readonly parameter: (node: Node) => { name: Node; type: Node | null } | undefined;
+  readonly typeName: (node: Node | null) => string | undefined;
+  readonly returnType: (fn: Node) => Node | null;
+  readonly receiver: (fn: Node) => { name: string; type: string } | undefined;
+  readonly memberKind: (fn: Node) => MemberKind | undefined;
+  readonly local: (node: Node) => ReadonlyArray<{ name: Node; type: Node | null; value: Node | null }>;
+  readonly assigned: (node: Node) => readonly Node[];
+  readonly constructed: (value: Node | null) => string | undefined;
+  readonly callee: (fn: Node) => { object: Node | null; name: string; path?: string | undefined } | undefined;
+  readonly imports: (node: Node) => ReadonlyArray<{ local: string; source: string; name: string }>;
+  readonly classNodes?: readonly string[] | undefined;
+  readonly field?: ((node: Node) => ReadonlyArray<{ name: string; type: Node | null; isStatic: boolean }>) | undefined;
+  readonly thisNodes?: readonly string[] | undefined;
+  readonly isStatic?: ((fn: Node) => boolean) | undefined;
+}
+
+interface Import { readonly source: string; readonly name: string }
+interface Declaration { readonly at: number; readonly type: string | undefined; readonly owner?: ReceiverOwner | undefined; readonly importOf?: Import | undefined }
+// Declarations keep their source position so a call sees the binding in force where it occurs,
+// not the last one declared in the scope.
+interface Scope { readonly parent: Scope | null; readonly names: Map<string, Declaration[]>; readonly fn: boolean; receiver?: { name: string; type: string } | undefined; className?: string | undefined; fields?: Map<string, string | undefined> | undefined; staticFn?: boolean | undefined }
+
+export interface TypedBindings {
+  at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
+  returns: (fn: Node) => ReturnBinding | undefined;
+  memberKind: (fn: Node) => MemberKind | undefined;
+}
+
+export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings {
+  const module: Scope = { parent: null, names: new Map(), fn: false };
+  const scopes = new Map<number, Scope>();
+  const reassigned = new Map<Scope, Set<string>>();
+  const fnScopes: Scope[] = [];
+
+  const nearestFunction = (scope: Scope): Scope => { let current = scope; while (!current.fn && current.parent !== null) current = current.parent; return current; };
+  const bind = (scope: Scope, name: string, at: number, type: string | undefined, owner?: ReceiverOwner, importOf?: Import): void => {
+    const list = scope.names.get(name) ?? [];
+    list.push({ at, type, owner, importOf });
+    scope.names.set(name, list);
+  };
+  const declared = (scope: Scope, name: string, at: number): Declaration | undefined => {
+    const list = scope.names.get(name);
+    if (list === undefined) return undefined;
+    let best: Declaration | undefined;
+    for (const item of list) if (item.at <= at && (best === undefined || item.at >= best.at)) best = item;
+    return best;
+  };
+  const importOf = (name: string): Import | undefined => module.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
+  // A type name becomes a local binding, or an import binding when the name (Rust) or its package
+  // qualifier (Go) was imported.
+  const ownerForType = (type: string): ReceiverOwner | undefined => {
+    const dot = type.indexOf(".");
+    if (dot >= 0) {
+      const pkg = importOf(type.slice(0, dot));
+      return pkg === undefined || pkg.name !== "*" ? undefined : { kind: "import", source: pkg.source, importedName: type.slice(dot + 1) };
+    }
+    const item = importOf(type);
+    return item !== undefined && item.name !== "*" ? { kind: "import", source: item.source, importedName: item.name } : { kind: "local", name: type };
+  };
+  const pathOwner = (head: string): ReceiverOwner | undefined => {
+    const item = importOf(head);
+    if (item === undefined) return { kind: "local", name: head };
+    return item.name === "*" ? undefined : { kind: "import", source: item.source, importedName: item.name };
+  };
+  // An unbound capitalised identifier used as a receiver names a type (static access) in Java and C#.
+  const classLike = (name: string, scope: Scope, at: number): boolean => spec.classNodes !== undefined && /^[A-Z]/.test(name) && !scopeBinds(scope, name, at) && fieldOwner(scope, name) === undefined;
+  // A local shadows a package or type name only from its declaration onward.
+  const scopeBinds = (scope: Scope, name: string, at: number): boolean => {
+    for (let current: Scope | null = scope; current !== null && current !== module; current = current.parent) if (declared(current, name, at) !== undefined || current.receiver?.name === name) return true;
+    return false;
+  };
+  // A write anywhere, including inside a closure, invalidates the binding in the scope that declares the name.
+  const declaringScope = (scope: Scope, name: string): Scope => {
+    for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.names.has(name) || current.receiver?.name === name) return current;
+    return nearestFunction(scope);
+  };
+  const calleeOwner = (value: Node, scope: Scope): ReceiverOwner | undefined => {
+    if (value.type !== "call_expression" && value.type !== "method_invocation" && value.type !== "invocation_expression") return undefined;
+    const fn = value.type === "method_invocation" ? value : value.childForFieldName("function");
+    if (fn === null) return undefined;
+    const callee = spec.callee(fn);
+    if (callee === undefined) return undefined;
+    let of: Callee | undefined;
+    const at = value.startIndex;
+    const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text) : callee.path !== undefined ? importOf(callee.path) : undefined;
+    if (pkg?.name === "*") of = { kind: "import", source: pkg.source, importedName: callee.name };
+    else if (pkg !== undefined && callee.path !== undefined && /^[a-z_]/.test(callee.path)) of = { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
+    else if (callee.object === null && callee.path === undefined) {
+      // An unqualified call inside a class body is a call on this (or the class) in Java and C#.
+      const cls = classOf(scope);
+      of = cls?.className !== undefined && spec.classNodes !== undefined && !scopeBinds(scope, callee.name, at)
+        ? { kind: "method", owner: { kind: "local", name: cls.className }, member: callee.name }
+        : { kind: "local", name: callee.name };
+    }
+    else if (callee.object?.type === "identifier" && classLike(callee.object.text, scope, at)) { const owner = ownerForType(callee.object.text); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
+    else if (callee.path !== undefined) { const owner = pathOwner(callee.path); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
+    else {
+      if (callee.object === null) return undefined;
+      const receiver = receiverOf(callee.object, scope);
+      if (receiver === undefined) return undefined;
+      of = { kind: "method", owner: receiver, member: callee.name, mode: "instance" };
+    }
+    return { kind: "return", of };
+  };
+  const classOf = (scope: Scope): Scope | undefined => { for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.className !== undefined) return current; return undefined; };
+  const fieldOwner = (scope: Scope, name: string): ReceiverOwner | undefined => {
+    const cls = classOf(scope);
+    if (cls === undefined || cls.fields === undefined || !cls.fields.has(name)) return undefined;
+    const type = cls.fields.get(name);
+    return type === undefined ? undefined : ownerForType(type);
+  };
+  const receiverOf = (object: Node, scope: Scope): ReceiverOwner | undefined => {
+    const at = object.startIndex;
+    if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression") return calleeOwner(object, scope);
+    if (object.type === "parenthesized_expression") { const inner = childrenOf(object)[0]; return inner === undefined ? undefined : receiverOf(inner, scope); }
+    if (spec.thisNodes?.includes(object.type)) {
+      const cls = classOf(scope);
+      return cls?.className === undefined || nearestFunction(scope).staticFn === true ? undefined : { kind: "local", name: cls.className };
+    }
+    if (object.type === "field_access" || object.type === "member_access_expression") {
+      const inner = object.childForFieldName("object") ?? object.childForFieldName("expression");
+      const field = object.childForFieldName("field") ?? object.childForFieldName("name");
+      if (inner !== null && field !== null && spec.thisNodes?.includes(inner.type)) return fieldOwner(scope, field.text);
+      return undefined;
+    }
+    if (object.type !== "identifier" && object.type !== "self") return undefined;
+    const fn = nearestFunction(scope);
+    if (object.type === "self" || (fn.receiver !== undefined && fn.receiver.name === object.text)) {
+      if (fn.receiver === undefined || reassigned.get(fn)?.has(object.text)) return undefined;
+      return ownerForType(fn.receiver.type);
+    }
+    for (let current: Scope | null = scope; current !== null; current = current.parent) {
+      const found = declared(current, object.text, at);
+      if (found === undefined) continue;
+      if (reassigned.get(current)?.has(object.text)) return undefined;
+      if (found.owner !== undefined) return found.owner;
+      if (found.importOf !== undefined) return undefined;
+      return found.type === undefined ? undefined : ownerForType(found.type);
+    }
+    return fieldOwner(scope, object.text);
+  };
+
+  const visit = (node: Node, outer: Scope): void => {
+    let scope = outer;
+    if (spec.classNodes?.includes(node.type)) {
+      const fields = new Map<string, string | undefined>();
+      for (const member of childrenOf(node.childForFieldName("body") ?? node)) for (const field of spec.field?.(member) ?? []) if (!field.isStatic) fields.set(field.name, spec.typeName(field.type));
+      scope = { parent: outer, names: new Map(), fn: false, className: node.childForFieldName("name")?.text, fields };
+    } else if (spec.functionNodes.includes(node.type)) {
+      scope = { parent: outer, names: new Map(), fn: true, receiver: spec.receiver(node), staticFn: spec.isStatic?.(node) ?? false };
+      fnScopes.push(scope);
+      for (const child of childrenOf(node)) {
+        const parameter = spec.parameter(child);
+        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, spec.typeName(parameter.type));
+        for (const nested of childrenOf(child)) {
+          const inner = spec.parameter(nested);
+          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, spec.typeName(inner.type));
+        }
+      }
+    } else if (spec.scopeNodes.includes(node.type)) {
+      scope = { parent: outer, names: new Map(), fn: false };
+    }
+    scopes.set(node.id, scope);
+    for (const item of spec.imports(node)) bind(module, item.local, -1, undefined, undefined, { source: item.source, name: item.name });
+    for (const local of spec.local(node)) {
+      const declaredType = spec.typeName(local.type);
+      const constructed = declaredType ?? spec.constructed(local.value);
+      const produced = constructed === undefined && local.value !== null ? calleeOwner(local.value, scope) : undefined;
+      bind(scope, local.name.text, node.startIndex, constructed, produced);
+    }
+    for (const target of spec.assigned(node)) {
+      const owner = declaringScope(scope, target.text);
+      const set = reassigned.get(owner) ?? new Set<string>();
+      set.add(target.text);
+      reassigned.set(owner, set);
+    }
+    for (const child of childrenOf(node)) visit(child, scope);
+  };
+  visit(root, module);
+
+  return {
+    at(fn, site) {
+      if (fn === null) return undefined;
+      const callee = spec.callee(fn);
+      if (callee === undefined) return undefined;
+      if (callee.path !== undefined) {
+        const pkg = importOf(callee.path);
+        if (pkg?.name === "*") return { kind: "import", source: pkg.source, importedName: callee.name };
+        if (pkg !== undefined && /^[a-z_]/.test(callee.path)) return { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
+        const owner = pathOwner(callee.path);
+        return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" };
+      }
+      if (callee.object === null) return undefined;
+      const scope = scopes.get(site.id) ?? module;
+      if (callee.object.type === "identifier") {
+        const pkg = importOf(callee.object.text);
+        if (pkg?.name === "*" && receiverOf(callee.object, scope) === undefined && !scopeBinds(scope, callee.object.text, callee.object.startIndex)) return { kind: "import", source: pkg.source, importedName: callee.name };
+        if (classLike(callee.object.text, scope, callee.object.startIndex)) { const owner = ownerForType(callee.object.text); return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" }; }
+      }
+      const owner = receiverOf(callee.object, scope);
+      if (owner === undefined) return { kind: "blocked", reason: "unknown-receiver" };
+      const basis = owner.kind === "return" ? "return" : callee.object.type === "self" || spec.thisNodes?.includes(callee.object.type) || nearestFunction(scope).receiver?.name === callee.object.text ? "lexical" : "annotation";
+      return { kind: "member", owner, member: callee.name, mode: "instance", basis };
+    },
+    returns(fn) {
+      const type = spec.returnType(fn);
+      if (type === null) return undefined;
+      if (type.type === "type_identifier" && type.text === "Self") return spec.memberKind(fn) === undefined ? undefined : { kind: "this" };
+      const name = spec.typeName(type);
+      if (name === undefined) return undefined;
+      const owner = ownerForType(name);
+      return owner === undefined || owner.kind === "return" ? undefined : owner;
+    },
+    memberKind: (fn) => spec.memberKind(fn),
+  };
+}
+
+const simpleType = (node: Node | null, wrappers: readonly string[]): string | undefined => {
+  let current = node;
+  while (current !== null && wrappers.includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current).find((child) => child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null;
+  return current?.type === "type_identifier" ? current.text : undefined;
+};
+
+export const goSpec: TypedSpec = {
+  functionNodes: ["function_declaration", "method_declaration", "func_literal"],
+  scopeNodes: ["block", "if_statement", "for_statement"],
+  parameter: (node) => {
+    if (node.type !== "parameter_declaration") return undefined;
+    const name = node.childForFieldName("name");
+    return name?.type === "identifier" ? { name, type: node.childForFieldName("type") } : undefined;
+  },
+  typeName: (node) => {
+    let current = node;
+    while (current !== null && ["pointer_type", "parenthesized_type"].includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
+    if (current?.type === "qualified_type") return current.text;
+    return simpleType(current, []);
+  },
+  returnType: (fn) => { const result = fn.childForFieldName("result"); return result === null || result.type === "parameter_list" ? null : result; },
+  receiver: (fn) => {
+    if (fn.type !== "method_declaration") return undefined;
+    const declaration = childrenOf(fn.childForFieldName("receiver") ?? fn).find((child) => child.type === "parameter_declaration");
+    const name = declaration?.childForFieldName("name");
+    const type = simpleType(declaration?.childForFieldName("type") ?? null, ["pointer_type", "generic_type"]);
+    return name !== null && name !== undefined && type !== undefined ? { name: name.text, type } : undefined;
+  },
+  memberKind: (fn) => fn.type === "method_declaration" ? "instance" : undefined,
+  local: (node) => {
+    if (node.type === "short_var_declaration") {
+      const names = childrenOf(node.childForFieldName("left") ?? node).filter((child) => child.type === "identifier");
+      const values = childrenOf(node.childForFieldName("right") ?? node);
+      return names.length === 1 && values.length === 1 && names[0] !== undefined ? [{ name: names[0], type: null, value: values[0] ?? null }] : names.map((name) => ({ name, type: null, value: null }));
+    }
+    if (node.type === "var_spec") {
+      const names = childrenOf(node).filter((child) => child.type === "identifier");
+      const values = childrenOf(node.childForFieldName("value") ?? node);
+      return names.map((name, index) => ({ name, type: node.childForFieldName("type"), value: names.length === values.length ? values[index] ?? null : null }));
+    }
+    return [];
+  },
+  assigned: (node) => node.type === "assignment_statement" ? childrenOf(node.childForFieldName("left") ?? node).filter((child) => child.type === "identifier") : [],
+  constructed: (value) => {
+    const literal = value?.type === "unary_expression" ? value.childForFieldName("operand") : value;
+    return literal?.type === "composite_literal" ? simpleType(literal.childForFieldName("type"), []) : undefined;
+  },
+  callee: (fn) => {
+    if (fn.type === "identifier") return { object: null, name: fn.text };
+    if (fn.type !== "selector_expression") return undefined;
+    const object = fn.childForFieldName("operand");
+    const field = fn.childForFieldName("field");
+    return object !== null && field !== null ? { object, name: field.text } : undefined;
+  },
+  imports: (node) => {
+    if (node.type !== "import_spec") return [];
+    const source = node.childForFieldName("path")?.text.replace(/^["'`]|["'`]$/g, "");
+    if (source === undefined) return [];
+    const alias = node.childForFieldName("name")?.text;
+    const local = alias ?? source.split("/").pop() ?? source;
+    return alias === "_" || alias === "." ? [] : [{ local, source, name: "*" }];
+  },
+};
+
+export const rustSpec: TypedSpec = {
+  functionNodes: ["function_item", "closure_expression"],
+  scopeNodes: ["block", "match_arm", "if_expression", "for_expression", "while_expression", "loop_expression"],
+  parameter: (node) => {
+    if (node.type !== "parameter") return undefined;
+    const name = node.childForFieldName("pattern");
+    return name?.type === "identifier" ? { name, type: node.childForFieldName("type") } : undefined;
+  },
+  typeName: (node) => simpleType(node, ["reference_type"]),
+  returnType: (fn) => fn.childForFieldName("return_type"),
+  receiver: (fn) => {
+    if (fn.type !== "function_item" || !childrenOf(fn.childForFieldName("parameters") ?? fn).some((child) => child.type === "self_parameter")) return undefined;
+    let current: Node | null = fn.parent;
+    while (current !== null && current.type !== "impl_item") current = current.parent;
+    const type = current === null ? undefined : simpleType(current.childForFieldName("type"), ["generic_type", "reference_type"]);
+    return type === undefined ? undefined : { name: "self", type };
+  },
+  memberKind: (fn) => {
+    if (fn.type !== "function_item") return undefined;
+    let current: Node | null = fn.parent;
+    while (current !== null && current.type !== "impl_item" && current.type !== "trait_item") current = current.parent;
+    if (current === null) return undefined;
+    return childrenOf(fn.childForFieldName("parameters") ?? fn).some((child) => child.type === "self_parameter") ? "instance" : "static";
+  },
+  local: (node) => {
+    if (node.type !== "let_declaration") return [];
+    const name = node.childForFieldName("pattern");
+    return name?.type === "identifier" ? [{ name, type: node.childForFieldName("type"), value: node.childForFieldName("value") }] : [];
+  },
+  assigned: (node) => {
+    if (node.type !== "assignment_expression" && node.type !== "compound_assignment_expr") return [];
+    const left = node.childForFieldName("left");
+    return left?.type === "identifier" ? [left] : [];
+  },
+  constructed: (value) => value?.type === "struct_expression" ? simpleType(value.childForFieldName("name"), []) : undefined,
+  callee: (fn) => {
+    if (fn.type === "identifier") return { object: null, name: fn.text };
+    if (fn.type === "generic_function") { const inner = fn.childForFieldName("function"); return inner === null ? undefined : rustSpec.callee(inner); }
+    if (fn.type === "scoped_identifier") {
+      const path = fn.childForFieldName("path");
+      const name = fn.childForFieldName("name");
+      if (name === null || path === null) return undefined;
+      const head = path.type === "identifier" ? path.text : undefined;
+      return head === undefined ? undefined : { object: null, name: name.text, path: head };
+    }
+    if (fn.type !== "field_expression") return undefined;
+    const object = fn.childForFieldName("value");
+    const field = fn.childForFieldName("field");
+    return object !== null && field !== null ? { object, name: field.text } : undefined;
+  },
+  imports: (node) => {
+    if (node.type !== "use_declaration") return [];
+    const argument = node.childForFieldName("argument") ?? childrenOf(node).find((child) => child.type !== "visibility_modifier");
+    if (argument === undefined || argument === null) return [];
+    const out: Array<{ local: string; source: string; name: string }> = [];
+    const item = (source: string, entry: Node): void => {
+      if (entry.type === "identifier") out.push({ local: entry.text, source, name: entry.text });
+      else if (entry.type === "use_as_clause") { const path = entry.childForFieldName("path"); const alias = entry.childForFieldName("alias"); if (path !== null && alias !== null) { const segments = path.text.split("::"); out.push({ local: alias.text, source: [source, ...segments.slice(0, -1)].filter((part) => part.length > 0).join("::"), name: segments[segments.length - 1] ?? path.text }); } }
+      else if (entry.type === "scoped_identifier") { const name = entry.childForFieldName("name")?.text; const path = entry.childForFieldName("path")?.text; if (name !== undefined) out.push({ local: name, source: [source, path].filter((part) => part !== undefined && part.length > 0).join("::"), name }); }
+      else if (entry.type === "scoped_use_list") { const path = entry.childForFieldName("path")?.text; for (const child of childrenOf(entry.childForFieldName("list") ?? entry)) item([source, path].filter((part) => part !== undefined && part.length > 0).join("::"), child); }
+    };
+    if (argument.type === "scoped_identifier" || argument.type === "scoped_use_list" || argument.type === "use_as_clause" || argument.type === "identifier") item("", argument);
+    return out;
+  },
+};
+
+const modifiersStatic = (node: Node): boolean => childrenOf(node).some((child) => (child.type === "modifiers" && /\bstatic\b/.test(child.text)) || (child.type === "modifier" && child.text === "static"));
+
+export const javaSpec: TypedSpec = {
+  functionNodes: ["method_declaration", "constructor_declaration", "lambda_expression"],
+  scopeNodes: ["block", "for_statement", "enhanced_for_statement", "if_statement", "try_statement", "catch_clause"],
+  classNodes: ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"],
+  thisNodes: ["this"],
+  isStatic: modifiersStatic,
+  parameter: (node) => {
+    if (node.type !== "formal_parameter" && node.type !== "spread_parameter" && node.type !== "catch_formal_parameter") return undefined;
+    const name = node.childForFieldName("name") ?? childrenOf(node).find((child) => child.type === "identifier");
+    return name !== undefined && name !== null ? { name, type: node.childForFieldName("type") } : undefined;
+  },
+  typeName: (node) => node?.type === "type_identifier" ? node.text : undefined,
+  returnType: (fn) => fn.type === "method_declaration" ? fn.childForFieldName("type") : null,
+  receiver: () => undefined,
+  memberKind: (fn) => fn.type === "method_declaration" ? (modifiersStatic(fn) ? "static" : "instance") : fn.type === "constructor_declaration" ? "static" : undefined,
+  local: (node) => {
+    if (node.type !== "local_variable_declaration") return [];
+    const type = node.childForFieldName("type");
+    const declared = type?.type === "type_identifier" && type.text !== "var" ? type : null;
+    return childrenOf(node).filter((child) => child.type === "variable_declarator").flatMap((declarator) => {
+      const name = declarator.childForFieldName("name");
+      return name === null ? [] : [{ name, type: declared, value: declarator.childForFieldName("value") }];
+    });
+  },
+  assigned: (node) => { if (node.type !== "assignment_expression") return []; const left = node.childForFieldName("left"); return left?.type === "identifier" ? [left] : []; },
+  constructed: (value) => value?.type === "object_creation_expression" ? javaSpec.typeName(value.childForFieldName("type")) : undefined,
+  callee: (fn) => {
+    if (fn.type !== "method_invocation") return undefined;
+    const name = fn.childForFieldName("name");
+    if (name === null) return undefined;
+    return { object: fn.childForFieldName("object"), name: name.text };
+  },
+  imports: (node) => {
+    if (node.type !== "import_declaration") return [];
+    const path = childrenOf(node).find((child) => child.type === "scoped_identifier");
+    if (path === undefined || childrenOf(node).some((child) => child.type === "asterisk")) return [];
+    const name = path.childForFieldName("name")?.text;
+    const scope = path.childForFieldName("scope")?.text;
+    return name === undefined || scope === undefined || childrenOf(node).some((child) => child.type === "static") ? [] : [{ local: name, source: `${scope}.${name}`, name }];
+  },
+  field: (node) => {
+    if (node.type !== "field_declaration") return [];
+    const type = node.childForFieldName("type");
+    return childrenOf(node).filter((child) => child.type === "variable_declarator").flatMap((declarator) => {
+      const name = declarator.childForFieldName("name")?.text;
+      return name === undefined ? [] : [{ name, type, isStatic: modifiersStatic(node) }];
+    });
+  },
+};
+
+export const csharpSpec: TypedSpec = {
+  functionNodes: ["method_declaration", "constructor_declaration", "local_function_statement", "lambda_expression", "anonymous_method_expression"],
+  scopeNodes: ["block", "for_statement", "foreach_statement", "if_statement", "try_statement", "catch_clause", "using_statement"],
+  classNodes: ["class_declaration", "struct_declaration", "record_declaration", "interface_declaration"],
+  thisNodes: ["this_expression"],
+  isStatic: modifiersStatic,
+  parameter: (node) => {
+    if (node.type !== "parameter") return undefined;
+    const name = node.childForFieldName("name");
+    return name === null ? undefined : { name, type: node.childForFieldName("type") };
+  },
+  typeName: (node) => node?.type === "identifier" ? node.text : node?.type === "nullable_type" ? csharpSpec.typeName(childrenOf(node)[0] ?? null) : undefined,
+  returnType: (fn) => fn.type === "method_declaration" || fn.type === "local_function_statement" ? fn.childForFieldName("type") : null,
+  receiver: () => undefined,
+  memberKind: (fn) => fn.type === "method_declaration" ? (modifiersStatic(fn) ? "static" : "instance") : fn.type === "constructor_declaration" ? "static" : undefined,
+  local: (node) => {
+    if (node.type !== "variable_declaration") return [];
+    const type = node.childForFieldName("type");
+    const declared = type?.type === "identifier" ? type : null;
+    return childrenOf(node).filter((child) => child.type === "variable_declarator").flatMap((declarator) => {
+      const name = childrenOf(declarator).find((child) => child.type === "identifier");
+      const value = childrenOf(childrenOf(declarator).find((child) => child.type === "equals_value_clause") ?? declarator).find((child) => child.type !== "=" && child.type !== "identifier") ?? null;
+      return name === undefined ? [] : [{ name, type: declared, value: value === null || value.type === "identifier" ? null : value }];
+    });
+  },
+  assigned: (node) => { if (node.type !== "assignment_expression") return []; const left = node.childForFieldName("left"); return left?.type === "identifier" ? [left] : []; },
+  constructed: (value) => value?.type === "object_creation_expression" ? csharpSpec.typeName(value.childForFieldName("type")) : undefined,
+  callee: (fn) => {
+    if (fn.type === "identifier") return { object: null, name: fn.text };
+    if (fn.type !== "member_access_expression") return undefined;
+    const name = fn.childForFieldName("name");
+    const object = fn.childForFieldName("expression");
+    return name === null || object === null ? undefined : { object, name: name.text };
+  },
+  imports: () => [],
+  field: (node) => {
+    if (node.type === "property_declaration") {
+      const name = node.childForFieldName("name")?.text;
+      return name === undefined ? [] : [{ name, type: node.childForFieldName("type"), isStatic: modifiersStatic(node) }];
+    }
+    if (node.type !== "field_declaration") return [];
+    const declaration = childrenOf(node).find((child) => child.type === "variable_declaration");
+    if (declaration === undefined) return [];
+    const type = declaration.childForFieldName("type");
+    return childrenOf(declaration).filter((child) => child.type === "variable_declarator").flatMap((declarator) => {
+      const name = childrenOf(declarator).find((child) => child.type === "identifier")?.text;
+      return name === undefined ? [] : [{ name, type, isStatic: modifiersStatic(node) }];
+    });
+  },
+};

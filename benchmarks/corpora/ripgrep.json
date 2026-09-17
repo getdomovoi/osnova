@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "ripgrep-v1",
+  "source": { "kind": "checkout", "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7", "repository": "https://github.com/BurntSushi/ripgrep" },
+  "purpose": "resolution coverage only; no retrieval cases"
+}

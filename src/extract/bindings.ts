@@ -51,6 +51,7 @@ export const FUNCTION_VALUE_NODES = new Set([
   "function_signature",
 ]);
 export const FIELD_NODES = new Set(["public_field_definition", "field_definition"]);
+const THIS_TYPE = "\0this";
 const fieldNameOf = (member: Node): Node | null => member.childForFieldName("name") ?? member.childForFieldName("property");
 
 export function memberKindOf(node: Node, python: boolean, decoratorTexts?: readonly string[]): MemberKind {
@@ -126,6 +127,7 @@ export function collectBindings(root: Node, python: boolean): {
   const reExports: ReExport[] = [];
   const importLines = new Map<EdgeBinding, number>();
   const constructions = new Map<EdgeBinding, { expression: Node; site: Node; call?: boolean }>();
+  const pendingProperties: Array<{ fields: Map<string, { typeName: string; site: Node }>; name: string; inner: Node; decorator: Node }> = [];
   const ambient = new Set<string>();
   const implicitReceivers: Array<{ node: Node; scope: Scope; parameter: string }> = [];
   const annotated: Array<{ scope: Scope; parameter: string; typeName: string; site: Node }> = [];
@@ -292,6 +294,32 @@ export function collectBindings(root: Node, python: boolean): {
             }
           }
         }
+        scope.fields = fields;
+      } else {
+        // Class-body annotations (`conn: Conn`) and property return types (`def conn(self) -> Conn`) type Python fields.
+        // Decisions that need bindings (the builtin property, typing.Self) wait until the walk has finished.
+        const fields = new Map<string, { typeName: string; site: Node }>();
+        const plainMethods = new Set<string>();
+        for (const statement of childrenOf(node.childForFieldName("body") ?? node)) {
+          const definition = statement.type === "decorated_definition" ? statement.childForFieldName("definition") : statement;
+          const decorated = statement.type === "decorated_definition" ? childrenOf(statement).filter((child) => child.type === "decorator") : [];
+          const isProperty = decorated.length === 1 && decorated[0]?.text.trim() === "@property";
+          if (definition?.type === "function_definition" && !isProperty) { const name = definition.childForFieldName("name")?.text; if (name !== undefined) plainMethods.add(name); }
+          const assignment = statement.type === "expression_statement" ? childrenOf(statement)[0] : null;
+          if (assignment?.type === "assignment") {
+            const left = assignment.childForFieldName("left");
+            const type = assignment.childForFieldName("type");
+            const inner = type === null ? null : childrenOf(type)[0] ?? null;
+            if (left?.type === "identifier" && inner !== null && (inner.type === "identifier" || inner.type === "attribute")) fields.set(left.text, { typeName: inner.text, site: node });
+          }
+          if (definition?.type === "function_definition" && isProperty && decorated[0] !== undefined) {
+            const name = definition.childForFieldName("name")?.text;
+            const type = definition.childForFieldName("return_type");
+            const inner = type === null ? null : type.type === "type" ? childrenOf(type)[0] ?? null : type;
+            if (name !== undefined && inner !== null && (inner.type === "identifier" || inner.type === "attribute")) pendingProperties.push({ fields, name, inner, decorator: decorated[0] });
+          }
+        }
+        for (const name of plainMethods) fields.delete(name);
         scope.fields = fields;
       }
       scope.constructorFields = new Map();
@@ -601,7 +629,7 @@ export function collectBindings(root: Node, python: boolean): {
             const writes = cls.fieldWrites?.get(field) ?? 0;
             const annotated = cls.fields?.get(field);
             if (annotated !== undefined && writes <= 1) {
-              const owner = ownerFor(annotated.typeName, annotated.site);
+              const owner = annotated.typeName === THIS_TYPE ? { kind: "local" as const, name: cls.owner } : ownerFor(annotated.typeName, annotated.site);
               if (owner !== undefined) return { kind: "member", owner, member: property.text, mode: "instance", basis: "annotation" };
             }
             const constructed = cls.constructorFields?.get(field);
@@ -664,6 +692,34 @@ export function collectBindings(root: Node, python: boolean): {
     const name = annotationTypeName(inner);
     return name === undefined ? undefined : ownerFor(name, node);
   };
+  // Python binds names in execution order: a module-level rebinding of `property` after the class
+  // does not change a decorator evaluated before it.
+  const moduleBindsBefore = (name: string, position: number): boolean => {
+    const binds = (node: Node): boolean => {
+      if (node.startIndex >= position) return false;
+      if (node.type === "function_definition" || node.type === "class_definition") return node.childForFieldName("name")?.text === name;
+      if (node.type === "decorated_definition") return node.childForFieldName("definition")?.childForFieldName("name")?.text === name;
+      if (node.type === "lambda") return false;
+      if (node.type === "assignment" || node.type === "augmented_assignment" || node.type === "named_expression") return patternNames(node.childForFieldName("left") ?? node.childForFieldName("name")).includes(name);
+      if (node.type === "for_statement") return patternNames(node.childForFieldName("left")).includes(name) || childrenOf(node).some(binds);
+      if (node.type === "as_pattern") return patternNames(node.childForFieldName("alias") ?? childrenOf(node)[1] ?? null).includes(name);
+      if (node.type === "import_from_statement") {
+        if (childrenOf(node).some((child) => child.type === "wildcard_import")) return true;
+        const source = node.childForFieldName("module_name");
+        return childrenOf(node).some((item) => item.id !== source?.id && item.type !== "relative_import" &&
+          (item.type === "aliased_import" ? item.childForFieldName("alias")?.text : item.text) === name);
+      }
+      if (node.type === "import_statement") return childrenOf(node).some((item) =>
+        (item.type === "aliased_import" ? item.childForFieldName("alias")?.text : item.text.split(".")[0]) === name);
+      return childrenOf(node).some(binds);
+    };
+    return childrenOf(root).some(binds);
+  };
+  for (const pending of pendingProperties) {
+    const bound = lookup("property", pending.decorator);
+    if (bound !== undefined && (!module.names.has("property") || moduleBindsBefore("property", pending.decorator.startIndex))) continue;
+    pending.fields.set(pending.name, { typeName: isTypingSelf(pending.inner) ? THIS_TYPE : pending.inner.text, site: pending.decorator });
+  }
   return {
     at,
     returns,

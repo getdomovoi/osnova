@@ -2,6 +2,19 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- Unresolved call edges in `osnova_warp` and `warp` carry `nameMatches`: the indexed functions, methods and classes in the same language family that share the call's name, capped at five with the total, printed as `same-name symbols (N, unverified): ...`. `plumb` prints the same count and list on `name-only` verdicts. A same-name list is a reading list, never a resolution.
+
+### Changed
+
+- Go, Rust, Java and C# member calls carry receiver hints: typed parameters, typed locals, constructor literals, declared return types (including chains), struct and class fields, `this`, `self`, the Go method receiver, static access through a type name, and unqualified calls inside a Java or C# class. Methods carry `memberKind` (Go instance; Rust static or instance by `self`; Java and C# by the `static` modifier) and `returns`. Go package imports resolve through `go.mod` to the package directory with package-wide export lookup; Rust `crate::`, `super::` and `self::` paths resolve against the nearest `Cargo.toml`; Java imports resolve to `a/b/Name.java`; a type declared exactly once in the language family resolves without an import, and a type no indexed file declares counts as `unbound-global`. A member call whose receiver is unknown is now `receiver-unresolved` instead of a name-only match, so resolved counts fall where the old name heuristic guessed. Artifact extraction version moves to `structural-9.8`.
+- Python class-body annotations (`conn: Conn`, `other: mod.Conn = make()`) and `@property` methods with a return annotation type the field, so `self.conn.send()` and `self.link.send()` resolve when the field is written at most once. Artifact extraction version moves to `structural-9.8`.
+- Bare import specifiers resolve to workspace packages: a `package.json` `name` plus its `exports` map (every condition is tried, source files first; `*` patterns are expanded) or its `module`, `main` and `types` fields, with `src/index` and `src/<subpath>` as fallbacks. Python absolute imports resolve through every directory that holds a `pyproject.toml`, `setup.py` or `setup.cfg` and through that directory's `src` layout. Two packages with the same name stay unresolved. `node:` builtins and packages outside the repository stay `import-target-unresolved`.
+- A file named `package.json` is scanned even when a repository ignore rule matches it, since a manifest is needed to map the package name; configured output and dependency directories such as `node_modules` and `dist` are still skipped.
+
 ## 0.4.0 (2026-09-17)
 
 ### Added
@@ -12,7 +25,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 ### Changed
 
 - Call resolution follows `export * as name` namespace re-exports, so `name.member(...)` through a barrel resolves to the declaring symbol.
-- Python parameters annotated with a class name (`ctx: Context`, `ctx: mod.Context`) act as instance receivers, so `ctx.method()` resolves to that class's method. Unions, `Optional`, string annotations and reassigned parameters stay unbound. Artifact extraction version moves to `structural-9.6`; older caches rebuild.
+- Python parameters annotated with a class name (`ctx: Context`, `ctx: mod.Context`) act as instance receivers, so `ctx.method()` resolves to that class's method. Unions, `Optional`, string annotations and reassigned parameters stay unbound. Artifact extraction version moves to `structural-9.8`; older caches rebuild.
 - TypeScript type annotations on parameters, class fields, constructor parameter properties and `const` or `let` locals act as instance receivers, and interface method signatures and function-typed property signatures are indexed as members, so `reader.read()` resolves when `reader: Reader`.
 - Members are found through declared inheritance: `extends` clauses on classes and interfaces (TypeScript) and base classes (Python) are followed for up to eight hops when the receiver's own class lacks the member. `implements` clauses are not followed. The walk stays unresolved when a base cannot be identified, when two base chains supply different members, when the chain cycles, or when the class declares a non-method field of that name. Symbols carry `heritage` and `fields` lists. Type-only imports and `readonly` constructor parameter properties supply receivers; static fields, fields written more than once, and fields assigned only inside a nested function do not.
 - A field assigned exactly once in the constructor from a constructor call (`this.client = new Client()`, `self.client = Client()`) acts as a receiver for `this.client.method()` and `self.client.method()`.

@@ -129,8 +129,8 @@ describe("format 9", () => {
     const ws = workspaceDirFor(cacheDir, index.root);
     const corePath = path.join(ws, "index.json");
     const original = (await fs.readFile(corePath)).toString("utf8");
-    expect(original).toContain('"structural-9.6.scan-4');
-    const stale = Buffer.from(original.replace('"structural-9.6.scan-4', '"structural-9.scan-4'), "utf8");
+    expect(original).toContain('"structural-9.8.scan-4');
+    const stale = Buffer.from(original.replace('"structural-9.8.scan-4', '"structural-9.scan-4'), "utf8");
     expect(stale.toString("utf8")).not.toBe(original);
     await fs.writeFile(corePath, stale);
     await fs.writeFile(path.join(ws, "index.sha"), sha256Hex(stale));

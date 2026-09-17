@@ -1,11 +1,13 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectTypedBindings, javaSpec } from "./typed-bindings.js";
 
 export const javaAdapter: LanguageAdapter = {
   language: "java",
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
+    const bindings = collectTypedBindings(tree.rootNode, javaSpec);
 
     const visit = (node: Node): void => {
       switch (node.type) {
@@ -35,7 +37,7 @@ export const javaAdapter: LanguageAdapter = {
             nameNode = childrenOf(node).find((c) => c.type === "identifier") ?? null;
           }
           if (nameNode !== null) {
-            out.addDef(nameNode.text, "method", node);
+            out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -59,7 +61,7 @@ export const javaAdapter: LanguageAdapter = {
         }
         case "method_invocation": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addEdge("calls", nameNode.text, node);
+          if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(node, node));
           for (const child of childrenOf(node)) visit(child);
           return;
         }

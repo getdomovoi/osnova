@@ -3,12 +3,31 @@ import type {
   CallersOptions,
   CallersDetailedResult,
   UnresolvedCallerEdge,
+  NameMatches,
   CallerEvidenceHit,
   EdgeDirection,
   OsnovaIndex,
   OsnovaSymbol,
   OsnovaEdge,
 } from "../types.js";
+import { languageFamily } from "../index/resolve.js";
+
+const NAME_MATCH_LIMIT = 5;
+
+// Indexed callables that carry the same name as an unresolved call: the set a reader would have to
+// check by hand. Capped, deterministic, never a resolution.
+export function nameMatches(index: OsnovaIndex, edge: OsnovaEdge): NameMatches {
+  const family = languageFamily(index.files.get(edge.fromFile)?.language);
+  const name = edge.toName.split(".").pop() ?? edge.toName;
+  const names: string[] = [];
+  for (const symbol of index.symbols.values()) {
+    if (symbol.name !== name || !["function", "method", "class"].includes(symbol.kind)) continue;
+    if (family !== undefined && languageFamily(index.files.get(symbol.file)?.language) !== family) continue;
+    names.push(symbol.qualifiedName);
+  }
+  names.sort();
+  return { candidates: names.slice(0, NAME_MATCH_LIMIT), total: names.length };
+}
 
 function resolveTargets(index: OsnovaIndex, symbol: string): OsnovaSymbol[] {
   const exact = index.symbols.get(symbol);
@@ -99,7 +118,7 @@ function walkCallers(
       for (const edge of candidates) {
         if (seenUnresolved.has(edge)) continue;
         seenUnresolved.add(edge);
-        unresolved.push({ edge, depth: level });
+        unresolved.push({ edge, depth: level, nameMatches: nameMatches(index, edge) });
       }
       for (const edge of edges) {
         const other =
