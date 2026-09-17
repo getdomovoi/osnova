@@ -4,7 +4,7 @@ export function skeleton(index: OsnovaIndex, file: string): SkeletonResult {
   const card = index.files.get(file);
   if (card === undefined) {
     throw new Error(
-      `osnova: file ${JSON.stringify(file)} is not indexed; use findText or ask to locate it`,
+      `osnova: file ${JSON.stringify(file)} is not indexed; search with thread or ground to locate it`,
     );
   }
   const entries: SkeletonEntry[] = card.symbols.map((symbol) => ({
