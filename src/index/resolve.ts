@@ -218,7 +218,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         let owner: OsnovaSymbol | undefined;
         let namespaceVia: readonly ExportHop[] | undefined;
-        if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && exportResult.namespaces.length > 0 &&
+        if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && exportResult.namespaces.length > 1 &&
+          !candidates.some((symbol) => symbol.kind === "class")) {
+          resolution = { status: "unresolved", reason: "binding-blocked" };
+          candidates = [];
+        } else if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && exportResult.namespaces.length === 1 &&
           !candidates.some((symbol) => symbol.kind === "class")) {
           const gathered: OsnovaSymbol[] = [];
           const routes = new Map<string, readonly ExportHop[]>();

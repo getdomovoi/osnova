@@ -41,7 +41,17 @@ describe("re-export resolution", () => {
     });
     const edge = index.outgoing("use.ts#caller")[0];
     expect(edge?.toSymbol).toBeUndefined();
-    expect(edge?.evidence).toMatchObject({ resolution: { status: "ambiguous", candidates: ["a/util.ts#hit", "b/util.ts#hit"] } });
+    expect(edge?.evidence).toMatchObject({ resolution: { status: "unresolved", reason: "binding-blocked" } });
+    const lopsided = await build({
+      "a/util.ts": "export function hit() {}\n",
+      "b/util.ts": "export function other() {}\n",
+      "a/index.ts": "export * as ns from './util.js';\n",
+      "b/index.ts": "export * as ns from './util.js';\n",
+      "root.ts": "export * from './a/index.js';\nexport * from './b/index.js';\n",
+      "use.ts": "import { ns } from './root.js';\nexport function caller() { ns.hit(); }\n",
+    });
+    expect(lopsided.outgoing("use.ts#caller")[0]?.toSymbol).toBeUndefined();
+    expect(lopsided.outgoing("use.ts#caller")[0]?.evidence).toMatchObject({ resolution: { status: "unresolved", reason: "binding-blocked" } });
   });
 
   it("follows a namespace re-export to the member definition", async () => {
