@@ -114,18 +114,18 @@ A typical agent turn with Osnova:
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, or an annotated parameter). Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, or a field assigned once in the constructor), including members inherited through declared `extends` and `implements` clauses. Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding unresolved imports |
 |---|---|---:|---:|---:|---:|
-| click | python | 5018 | 687 | 13.7% | 21.9% |
-| click | all | 5018 | 687 | 13.7% | 21.9% |
-| pyright | python | 11608 | 3172 | 27.3% | 33.6% |
-| pyright | typescript | 46733 | 18488 | 39.6% | 43.1% |
-| pyright | all | 58373 | 21660 | 37.1% | 41.3% |
+| click | python | 5018 | 692 | 13.8% | 22.1% |
+| click | all | 5018 | 692 | 13.8% | 22.1% |
+| pyright | python | 11608 | 3193 | 27.5% | 33.8% |
+| pyright | typescript | 46742 | 21200 | 45.4% | 49.5% |
+| pyright | all | 58382 | 24393 | 41.8% | 46.6% |
 | zod | tsx | 150 | 7 | 4.7% | 6.7% |
-| zod | typescript | 53067 | 5871 | 11.1% | 18.8% |
-| zod | all | 53246 | 5888 | 11.1% | 18.8% |
+| zod | typescript | 53068 | 6236 | 11.8% | 20.0% |
+| zod | all | 53247 | 6253 | 11.7% | 19.9% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, can never resolve locally, so the last column leaves those call sites out of the denominator. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
