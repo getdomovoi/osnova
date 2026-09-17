@@ -158,6 +158,13 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     exportCache.set(key, result);
     return result;
   };
+  // Declaration files are not parsed, but a name they declare is not a missing global either.
+  const ambientGlobals = new Set<string>();
+  for (const [file, card] of files) {
+    if (!file.endsWith(".d.ts")) continue;
+    for (const match of card.text.matchAll(/\bdeclare\s+(?:function|const|let|var|class|enum|namespace|module)\s+([A-Za-z_$][\w$]*)/g)) ambientGlobals.add(match[1]!);
+    for (const match of card.text.matchAll(/^\s*(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)) ambientGlobals.add(match[1]!);
+  }
   const importTargetsByFile = new Map<string, string[]>();
   for (const fromFile of [...rawEdges.keys()].sort()) {
     const raws = rawEdges.get(fromFile);
@@ -196,7 +203,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const reference = binding.kind === "member" ? binding.owner : binding;
         let candidates: readonly OsnovaSymbol[] = [];
         let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved"
-          : binding.kind === "blocked" && binding.reason === "unbound" ? "unbound-global" : "binding-blocked" };
+          : binding.kind === "blocked" && binding.reason === "unbound" && !ambientGlobals.has(raw.toName) ? "unbound-global" : "binding-blocked" };
         let exportResult: ExportResult | undefined;
         if (reference.kind === "import") {
           const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles);

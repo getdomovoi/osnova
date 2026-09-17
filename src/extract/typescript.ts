@@ -168,6 +168,13 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
           }
           return;
         }
+        case "ambient_declaration": {
+          for (const child of childrenOf(node)) {
+            const signatureName = child.type === "function_signature" ? declarationName(child) : null;
+            if (signatureName !== null) ex.def(signatureName, "function", child, child); else visit(child);
+          }
+          return;
+        }
         case "type_alias_declaration": {
           const name = declarationName(node);
           if (name !== null) ex.def(name, "type", node);
