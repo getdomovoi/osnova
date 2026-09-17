@@ -210,7 +210,7 @@ describe("mcp stdio server", () => {
       expect(text).toContain("no-call src/greet.ts:1");
       const missing = await callTool(client, "osnova_plumb", { symbol: "src/loud.ts#shout", sites: ["src/greet.ts:1"] });
       expect(missing).toContain("missing:\nsrc/greet.ts:2 src/greet.ts#greet");
-      for (const args of [{ symbol: "src/loud.ts#shout", sites: [] }, { symbol: "src/loud.ts#shout", sites: ["src/greet.ts"] }, { symbol: "src/loud.ts#shout" }]) {
+      for (const args of [{ symbol: "src/loud.ts#shout", sites: [] }, { symbol: "src/loud.ts#shout", sites: ["src/greet.ts"] }, { symbol: "src/loud.ts#shout" }, { symbol: "src/loud.ts#shout", sites: ["..\\greet.ts:1"] }]) {
         const rejected = await client.callTool({ name: "osnova_plumb", arguments: args });
         expect(rejected.isError, JSON.stringify(args)).toBe(true);
       }
