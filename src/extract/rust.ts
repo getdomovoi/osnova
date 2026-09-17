@@ -76,8 +76,11 @@ export const rustAdapter: LanguageAdapter = {
         }
         case "impl_item": {
           const typeName = implTypeName(node);
+          const traitNode = node.childForFieldName("trait");
+          const traitName = traitNode === null ? null : traitNode.type === "type_identifier" ? traitNode.text : childrenOf(traitNode).find((c) => c.type === "type_identifier")?.text ?? null;
           if (typeName !== null) {
-            out.push(typeName);
+            // A trait implementation is indexed under Type.Trait so receiver lookup, which sees Type.member, treats only inherent methods as members.
+            out.push(traitName === null ? typeName : `${typeName}.${traitName}`);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
           } else {

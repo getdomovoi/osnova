@@ -70,6 +70,15 @@ export const goAdapter: LanguageAdapter = {
                     ? "interface"
                     : "type";
               out.addDef(nameNode.text, kind, spec);
+              if (typeNode.type === "interface_type") {
+                out.push(nameNode.text);
+                for (const member of childrenOf(typeNode)) {
+                  if (member.type !== "method_spec" && member.type !== "method_elem") continue;
+                  const methodName = member.childForFieldName("name");
+                  if (methodName !== null) out.addDef(methodName.text, "method", member, undefined, "instance", undefined, undefined, bindings.returns(member));
+                }
+                out.pop();
+              }
             }
           }
           return;

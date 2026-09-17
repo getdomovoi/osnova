@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "cobra-v1",
+  "source": { "kind": "checkout", "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e", "repository": "https://github.com/spf13/cobra" },
+  "purpose": "resolution coverage only; no retrieval cases"
+}
