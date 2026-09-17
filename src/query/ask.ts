@@ -39,6 +39,15 @@ function excerptFor(
   return { text: lines.slice(start - 1, end).join("\n"), startLine: start };
 }
 
+function identifierCandidates(question: string): Set<string> {
+  const words = question.match(/[$A-Za-z_][$\w]*/g) ?? [];
+  const quoted = new Set((question.match(/[`'"]([$A-Za-z_][$\w]*)[`'"]/g) ?? []).map((match) => match.slice(1, -1).toLowerCase()));
+  const single = words.length === 1;
+  return new Set(words
+    .filter((word) => single || quoted.has(word.toLowerCase()) || /[A-Z_$\d]/.test(word))
+    .map((word) => word.toLowerCase()));
+}
+
 export function ask(index: OsnovaIndex, question: string, options?: AskOptions): AskResult {
   const result = askDetailed(index, question, { ...options, limit: options?.limit ?? DEFAULT_LIMIT });
   return { hits: result.hits, filesSearched: result.filesSearched };
@@ -48,7 +57,7 @@ export function askDetailed(index: OsnovaIndex, question: string, options?: AskO
   const limit = options?.limit ?? Infinity;
   if (options?.limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0)) throw new RangeError("osnova: ask limit must be a nonnegative safe integer");
   const queryTokens = [...new Set(tokenize(question))];
-  const identifiers = new Set((question.match(/[$A-Za-z_][$\w]*/g) ?? []).map((name) => name.toLowerCase()));
+  const identifiers = identifierCandidates(question);
   const qualified = new Set((question.match(/[$A-Za-z_][$\w]*(?:\.[$A-Za-z_][$\w]*)+/g) ?? []).map((name) => name.toLowerCase()));
   const filter = options?.in ?? "";
   const filesSearched = [...index.files.keys()].filter((path) => matchInPath([path], filter)).length;

@@ -47,6 +47,13 @@ describe("cli", () => {
     expect(lines.join("\n")).toMatch(/2 files, \d+ symbols, \d+ edges in \d+ms/);
   });
 
+  it("prints the package version", async () => {
+    const out: string[] = [];
+    expect(await runCli(["--version"], { stdout: (text) => out.push(text), stderr: () => {} })).toBe(0);
+    const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "package.json"), "utf8")) as { version: string };
+    expect(out).toEqual([pkg.version]);
+  });
+
   it("check exits 0 when fresh, 1 after an edit, 0 after refresh via ground", async () => {
     const fresh = capture();
     expect(await runCli(["check", workspace, ...cacheArgs], fresh.io)).toBe(0);

@@ -79,6 +79,14 @@ Cursor, in `~/.cursor/mcp.json`, and any other client that takes the common `mcp
 
 No global install? Replace `osnova` with `npx -y @getdomovoi/osnova` in any of the above. Pin a workspace with `osnova mcp --workspace /path/to/repo` when the client does not start in the project root.
 
+Not sure what your config looks like after the change? Ask for a diff:
+
+```sh
+osnova setup --preview --client codex
+```
+
+It reads the client's real config file, proposes the one entry as a unified diff, and stops. Nothing is written. Other entries, comments and formatting stay as they are. If an `osnova` entry already exists it says so instead of proposing anything. Clients: `claude-code`, `codex`, `opencode`, `kilo`, `cursor`, `pi`. Add `--command npx --command -y --command @getdomovoi/osnova` for the no-install form.
+
 `osnova doctor` checks the runtime, the cache and every packaged grammar.
 
 ## The seven tools
@@ -116,6 +124,7 @@ osnova footing "<question>"    # task context as JSON
 osnova settle --base-cache ... # compare two preserved indexes
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
 osnova doctor                  # read-only runtime and asset checks
+osnova setup --preview --client <name>  # diff for one client's config; never applies
 osnova mcp [--workspace <path>] # MCP stdio server (default: current directory)
 ```
 

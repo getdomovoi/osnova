@@ -18,7 +18,9 @@ import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { taskContext } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
-import { doctor } from "../diagnostics/index.js";
+import { doctor, previewSetup, setupClients } from "../diagnostics/index.js";
+import type { SetupClientId } from "../diagnostics/index.js";
+import { OSNOVA_VERSION } from "../version.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -28,6 +30,7 @@ export interface CliIo {
 const USAGE = `osnova: deterministic repository context engine
 
 usage:
+  osnova --version
   osnova build <root> [--cache-dir <path>]
   osnova check <root> [--cache-dir <path>]
   osnova ground "<question>" [--in <path>] [-n <n>] [--full] [--scoped] [--workspace <path>] [--cache-dir <path>]
@@ -38,6 +41,7 @@ usage:
   osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
   osnova settle --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
+  osnova setup --preview --client <claude-code|codex|opencode|kilo|cursor|pi> [--config <path>] [--command <exe>] [--home <path>]
   osnova mcp [--workspace <path>] [--cache-dir <path>]   (default workspace: current directory)
 
 queries refresh the index first so answers describe current disk state.`;
@@ -92,6 +96,10 @@ export async function runCli(
     stderr: (text) => rawIo.stderr(boundText(text)),
   };
   const [command = "", ...rest] = argv;
+  if (command === "--version" || command === "-v" || command === "version") {
+    io.stdout(OSNOVA_VERSION);
+    return EXIT_OK;
+  }
   if (command.length === 0 || command === "--help" || command === "-h" || command === "help") {
     io.stdout(USAGE);
     return command.length === 0 ? EXIT_ERROR : EXIT_OK;
@@ -307,6 +315,20 @@ export async function runCli(
       const report = await doctor(parsed.values.workspace ?? process.cwd(), { cacheDir: parsed.values["cache-dir"] });
       io.stdout(jsonOutput(report, "doctor"));
       return report.ok ? EXIT_OK : EXIT_STALE;
+    }
+    case "setup": {
+      const parsed = parseArgs({ args: rest, options: { preview: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" } } });
+      if (parsed.values.preview !== true) throw new Error("osnova setup requires --preview; no apply operation is provided");
+      const client = parsed.values.client;
+      if (client === undefined || !setupClients.some((candidate) => candidate.id === client)) {
+        throw new Error(`osnova setup requires --client, one of: ${setupClients.map((candidate) => candidate.id).join(", ")}`);
+      }
+      const preview = await previewSetup(client as SetupClientId, {
+        home: parsed.values.home, configPath: parsed.values.config,
+        command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined,
+      });
+      io.stdout([`osnova setup preview: ${preview.client}, ${preview.action}, ${preview.path}`, preview.diff.trimEnd(), preview.notice].filter((line) => line.length > 0).join("\n"));
+      return EXIT_OK;
     }
     case "mcp": {
       const parsed = parseArgs({

@@ -102,7 +102,7 @@ describe("diff impact evidence", () => {
 
   it("rejects malformed diffs rather than silently reporting no impact", () => {
     expect(() => impact(index([]), index([]), { diff: "not a diff" })).toThrow(/diff/);
-    expect(() => impact(index([]), index([]), { diff: "--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n" })).toThrow(/diff/);
+    expect(() => impact(index([]), index([]), { diff: "--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,3 @@\n-old\n+new\n" })).toThrow(/diff/);
     expect(() => impact(index([]), index([]), { diff: "--- a/../x.ts\n+++ b/x.ts" })).toThrow(/diff/);
   });
 

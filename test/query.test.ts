@@ -4,7 +4,7 @@ import { buildIndex } from "../src/index/build.js";
 import { ask } from "../src/query/ask.js";
 import { findText } from "../src/query/findText.js";
 import { skeleton } from "../src/query/skeleton.js";
-import { callers } from "../src/query/callers.js";
+import { callers, callersDetailed } from "../src/query/callers.js";
 import { map } from "../src/query/map.js";
 import { renderMapCard } from "../src/query/mapCard.js";
 import { maximumOsnovaMapCardCodeUnits } from "../src/types.js";
@@ -111,8 +111,15 @@ describe("callers", () => {
     expect(result.target.qualifiedName).toBe("src/util.ts#compute");
   });
 
-  it("throws for unknown symbols", () => {
-    expect(() => callers(index, "doesNotExist")).toThrow(/no indexed symbol/);
+  it("resolves Class.method without a file prefix", () => {
+    const result = callers(index, "RetryTimer.tick");
+    expect(result.target.qualifiedName).toBe("src/util.ts#RetryTimer.tick");
+    expect(callersDetailed(index, "RetryTimer.tick")).toMatchObject({ status: "found", target: { qualifiedName: "src/util.ts#RetryTimer.tick" } });
+  });
+
+  it("throws for unknown symbols and names the search tools", () => {
+    expect(() => callers(index, "doesNotExist")).toThrow(/no indexed symbol .* thread or ground/);
+    expect(() => callers(index, "Nope.method")).toThrow(/no indexed symbol/);
   });
 });
 
