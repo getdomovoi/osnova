@@ -30,6 +30,20 @@ async function build(files: Record<string, string>) {
 }
 
 describe("re-export resolution", () => {
+  it("keeps competing namespace re-exports ambiguous", async () => {
+    const index = await build({
+      "a/util.ts": "export function hit() {}\n",
+      "b/util.ts": "export function hit() {}\n",
+      "a/index.ts": "export * as ns from './util.js';\n",
+      "b/index.ts": "export * as ns from './util.js';\n",
+      "root.ts": "export * from './a/index.js';\nexport * from './b/index.js';\n",
+      "use.ts": "import { ns } from './root.js';\nexport function caller() { ns.hit(); }\n",
+    });
+    const edge = index.outgoing("use.ts#caller")[0];
+    expect(edge?.toSymbol).toBeUndefined();
+    expect(edge?.evidence).toMatchObject({ resolution: { status: "ambiguous", candidates: ["a/util.ts#hit", "b/util.ts#hit"] } });
+  });
+
   it("follows a namespace re-export to the member definition", async () => {
     const index = await build({
       "core/util.ts": "export function partial() {}\nexport function other() {}\n",
