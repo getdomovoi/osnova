@@ -703,7 +703,14 @@ export function collectBindings(root: Node, python: boolean): {
       if (node.type === "assignment" || node.type === "augmented_assignment" || node.type === "named_expression") return patternNames(node.childForFieldName("left") ?? node.childForFieldName("name")).includes(name);
       if (node.type === "for_statement") return patternNames(node.childForFieldName("left")).includes(name) || childrenOf(node).some(binds);
       if (node.type === "as_pattern") return patternNames(node.childForFieldName("alias") ?? childrenOf(node)[1] ?? null).includes(name);
-      if (node.type === "import_statement" || node.type === "import_from_statement") return new RegExp(`(^|[^\\w.])${name}(?![\\w])`).test(node.text.replace(/^\\s*(from\\s+\\S+\\s+)?import\\s+/, ""));
+      if (node.type === "import_from_statement") {
+        if (childrenOf(node).some((child) => child.type === "wildcard_import")) return true;
+        const source = node.childForFieldName("module_name");
+        return childrenOf(node).some((item) => item.id !== source?.id && item.type !== "relative_import" &&
+          (item.type === "aliased_import" ? item.childForFieldName("alias")?.text : item.text) === name);
+      }
+      if (node.type === "import_statement") return childrenOf(node).some((item) =>
+        (item.type === "aliased_import" ? item.childForFieldName("alias")?.text : item.text.split(".")[0]) === name);
       return childrenOf(node).some(binds);
     };
     return childrenOf(root).some(binds);
