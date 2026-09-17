@@ -697,7 +697,8 @@ export function collectBindings(root: Node, python: boolean): {
   const moduleBindsBefore = (name: string, position: number): boolean => childrenOf(root).some((statement) => {
     if (statement.startIndex >= position) return false;
     const assignment = statement.type === "expression_statement" ? childrenOf(statement)[0] : null;
-    if (assignment?.type === "assignment") return assignment.childForFieldName("left")?.text === name;
+    if (assignment?.type === "assignment" || assignment?.type === "augmented_assignment") return patternNames(assignment.childForFieldName("left")).includes(name);
+    if (statement.type === "for_statement" || statement.type === "with_statement") return patternNames(statement.childForFieldName("left") ?? statement).includes(name) || new RegExp(`\\bas\\s+${name}\\b`).test(statement.text.split("\n")[0] ?? "");
     if (statement.type === "function_definition" || statement.type === "class_definition") return statement.childForFieldName("name")?.text === name;
     if (statement.type === "decorated_definition") return statement.childForFieldName("definition")?.childForFieldName("name")?.text === name;
     if (statement.type === "import_statement" || statement.type === "import_from_statement") return new RegExp(`(^|[^\\w.])${name}(?![\\w])`).test(statement.text.replace(/^\s*(from\s+\S+\s+)?import\s+/, ""));
