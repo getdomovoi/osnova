@@ -47,11 +47,23 @@ export function plumb(index: OsnovaIndex, symbol: string, claims: readonly Plumb
   if (detailed.status === "ambiguous") {
     throw new Error(`osnova plumb: ${JSON.stringify(symbol)} matches ${detailed.candidates.length} symbols; choose one of: ${detailed.candidates.map((candidate) => candidate.qualifiedName).join(", ")}`);
   }
+  // Walk resolved call edges only, so a reference or import edge never carries a claim to the next depth.
   const resolvedBySite = new Map<string, OsnovaEdge>();
-  for (const hit of detailed.hits) {
-    if (hit.edge.kind !== "calls") continue;
-    const site = siteOf(hit.edge, direction);
-    resolvedBySite.set(`${site.file}:${site.line}`, hit.edge);
+  const visited = new Set<string>([detailed.target.qualifiedName]);
+  let frontier = [detailed.target.qualifiedName];
+  for (let level = 0; level < depth && frontier.length > 0; level++) {
+    const next: string[] = [];
+    for (const node of frontier) {
+      const edges = direction === "in" ? index.incoming(node) : index.outgoing(node);
+      for (const edge of edges) {
+        if (edge.kind !== "calls" || edge.evidence?.source !== "syntax" || edge.evidence.resolution.status !== "resolved") continue;
+        const site = siteOf(edge, direction);
+        resolvedBySite.set(`${site.file}:${site.line}`, edge);
+        const beyond = direction === "in" ? edge.fromSymbol : edge.toSymbol;
+        if (beyond !== undefined && beyond.length > 0 && !visited.has(beyond)) { visited.add(beyond); next.push(beyond); }
+      }
+    }
+    frontier = next.sort(compareText);
   }
   const target = detailed.target;
   const callsByFile = new Map<string, OsnovaEdge[]>();
