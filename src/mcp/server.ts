@@ -22,15 +22,17 @@ import { OSNOVA_VERSION } from "../version.js";
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
-const maximumMcpFootingCodeUnits = 8_192;
+const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
 const mcpFootingExcerptLines = 8;
+const mcpInlineShortDefinitions = 40;
+const mcpGenerationDigits = 16;
 
 const toolDefinitions = [
   {
     name: "osnova_ground",
     description:
-      "Search: keyword search over an indexed workspace. Returns ranked hits with exact file:line and a short excerpt of the enclosing definition; full=true inlines the whole definition span. askDetailed provides complete candidate counts through the API.",
+      "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Start here when you do not know where code lives.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -45,7 +47,7 @@ const toolDefinitions = [
   {
     name: "osnova_thread",
     description:
-      "Text search: regex or literal search over indexed text, grouped by enclosing symbol and ranked by incoming-edge count. Shows at most 10 matches per group and 50 groups by default, with totals and explicit omission counts.",
+      "Text search: every indexed occurrence of a regex or literal, grouped by the enclosing definition and ranked by how much else depends on it. Use for exhaustive lists (every call, every string). Totals and omission counts are exact.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -60,7 +62,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_outline",
-    description: "Outline: task-focused signatures and line spans for one indexed file. MCP output is degree-selected under 4096 code units with an exact omission count; the skeleton API returns every signature.",
+    description: "Outline: every definition in one file with its signature and line span, under 4096 code units. Use instead of reading a whole file to learn its shape; read only the span you need afterwards.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -72,7 +74,7 @@ const toolDefinitions = [
   {
     name: "osnova_warp",
     description:
-      "Call graph: direct or transitive indexed callers/callees (direction=in default). MCP output prioritizes confirmed evidence under 2048 code units with exact omission counts; callersDetailed returns the complete structured result. Absence does not prove deletion is safe.",
+      "Call graph: who calls a symbol (direction=in, default) or what it calls (direction=out), with exact call-site file:line. Accepts file#Class.method, Class.method or a bare name. Use before changing a signature or deleting code. An empty list means no indexed caller, not proof that none exists.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -86,7 +88,7 @@ const toolDefinitions = [
   {
     name: "osnova_groundwork",
     description:
-      "Repository map: compact deterministic workspace map. MCP defaults to eight directory clusters and 2048 code units with explicit dropped-detail counts; the map API supports larger structured results.",
+      "Repository map: directory clusters, hubs and hotspots in under 2048 code units. Use once when the repository is unfamiliar; do not follow it with an outline of every directory.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -97,7 +99,7 @@ const toolDefinitions = [
   {
     name: "osnova_footing",
     description:
-      "Task context: definitions, graph relationships and candidate tests around a question or named symbols, sized for one task (understand, change or review). MCP output stays under 8192 code units with exact omission counts; the taskContext API returns the complete structured result.",
+      "Task context: for one task, the seed definitions (inlined when 40 lines or shorter), the callers and callees that connect them, and the test files that touch them, under 4096 code units with exact omission counts. Use once at the start of a change or review that spans more than one file; for a single known symbol use ground or warp instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -113,7 +115,7 @@ const toolDefinitions = [
   {
     name: "osnova_settle",
     description:
-      "Change impact: symbols whose spans a unified diff touches, plus their indexed dependents, against the current index only. Deleted symbols are not visible and diff ranges are not verified against source. MCP output stays under 4096 code units; the impact API compares two indexes.",
+      "Change impact: given the output of git diff, the symbols the diff touches and every indexed dependent of them, under 4096 code units. Use once after editing, before declaring done, to find callers the tests do not cover. Compares against the current index only, so deleted symbols are not visible.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -151,7 +153,7 @@ export function createOsnovaMcpServer(
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
       const index = await refresh();
-      const generation = `osnova generation ${indexGeneration(index)}`;
+      const generation = `osnova generation ${indexGeneration(index).slice(0, mcpGenerationDigits)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
       switch (name) {
         case "osnova_ground": {
@@ -160,6 +162,7 @@ export function createOsnovaMcpServer(
             in: optionalString(args, "in"),
             limit: optionalNumber(args, "limit"),
             full: optionalBoolean(args, "full"),
+            inlineShortDefinitions: mcpInlineShortDefinitions,
           });
           return textResult(`${prefix}\n${formatAsk(result)}`);
         }
@@ -221,7 +224,7 @@ export function createOsnovaMcpServer(
           const available = maximumMcpFootingCodeUnits - prefix.length - 1;
           const result = taskContext(index, {
             task, question: question ?? "", symbols, in: optionalString(args, "in"),
-            limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines,
+            limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines, inlineShortDefinitions: mcpInlineShortDefinitions,
             measure: (partial) => formatTaskContext(partial).length,
           });
           return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);

@@ -102,8 +102,8 @@ describe("mcp stdio server", () => {
       write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function farewell(): string { return shout("bye"); }\n');
 
       const after = await callTool(client, "osnova_outline", { file: "src/greet.ts" });
-      const beforeGeneration = before.match(/osnova generation ([a-f0-9]{64})/)?.[1];
-      const afterGeneration = after.match(/osnova generation ([a-f0-9]{64})/)?.[1];
+      const beforeGeneration = before.match(/osnova generation ([a-f0-9]{16})/)?.[1];
+      const afterGeneration = after.match(/osnova generation ([a-f0-9]{16})/)?.[1];
       expect(beforeGeneration).toBeDefined();
       expect(afterGeneration).toBeDefined();
       expect(afterGeneration).not.toBe(beforeGeneration);
@@ -134,7 +134,7 @@ describe("mcp stdio server", () => {
     const client = await connect();
     try {
       const footing = await callTool(client, "osnova_footing", { question: "shout", task: "change" });
-      expect(footing).toMatch(/^osnova generation [a-f0-9]{64}\nosnova footing: change, scope \., /);
+      expect(footing).toMatch(/^osnova generation [a-f0-9]{16}\nosnova footing: change, scope \., /);
       expect(footing).toContain("- src/loud.ts#shout function lines 1-1");
       expect(footing).toContain("- src/greet.ts#greet -> src/loud.ts#shout calls line 2");
       const bySymbol = await callTool(client, "osnova_footing", { symbols: ["src/loud.ts#shout"] });
@@ -158,6 +158,27 @@ describe("mcp stdio server", () => {
       expect(long.isError).toBe(true);
       const longContent = (long as { content?: readonly ContentBlock[] }).content ?? [];
       expect(longContent.map((c) => (c.type === "text" ? c.text : "")).join("").length).toBeLessThanOrEqual(8_192);
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
+  it("inlines short definitions in ground and footing so no read is needed", async () => {
+    write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
+    write("src/loud.ts", "export function shout(text: string): string {\n  const upper = text.toUpperCase();\n  return upper;\n}\n");
+    const long = `export function tall(): number {\n${Array.from({ length: 60 }, (_, i) => `  const v${i} = ${i};`).join("\n")}\n  return v59;\n}\n`;
+    write("src/tall.ts", long);
+    const client = await connect();
+    try {
+      const ground = await callTool(client, "osnova_ground", { question: "shout" });
+      expect(ground).toContain("L1: export function shout(text: string): string {");
+      expect(ground).toContain("L4: }");
+      expect(ground).not.toContain("excerpt: lines");
+      const tallHit = await callTool(client, "osnova_ground", { question: "tall" });
+      expect(tallHit).toContain("excerpt: lines");
+      const footing = await callTool(client, "osnova_footing", { symbols: ["src/loud.ts#shout"], task: "change" });
+      expect(footing).toContain("  return upper;\n  }");
+      expect(footing).not.toContain("more lines]");
     } finally {
       await client.close();
     }
