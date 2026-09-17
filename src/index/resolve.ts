@@ -566,6 +566,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           const holderOf = (ref: ReceiverOwner, depth: number): OsnovaSymbol | undefined => {
             if (depth > 6) return undefined;
+            if (ref.kind === "super") {
+              // The parent class: exactly one declared base, resolved like the heritage walk does.
+              const cls = unique(symbolsFor(fromFile, ref.of)?.filter(isHolder) ?? null);
+              if (cls === undefined) return undefined;
+              const heritage = declarationsOf(cls).flatMap((declaration) => declaration.heritage ?? []);
+              const base = heritage[0];
+              return heritage.length === 1 && base !== undefined ? basesOf(cls, base)?.[0] : undefined;
+            }
             if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter(isHolder) ?? null);
             const of: Callee = ref.of;
             if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, undefined, undefined);
@@ -577,12 +585,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (depth > 8) return false;
             if (ref.kind === "import") return resolveImportTarget(card.language, fromFile, ref.source, knownFiles, context) === undefined;
             if (ref.kind === "return") return rootImportUnresolved(ref.of, depth + 1);
+            if (ref.kind === "super") return false;
             if (ref.kind === "method") return rootImportUnresolved(ref.owner, depth + 1);
             return false;
           };
           if (binding.owner.kind === "return") {
             owner = holderOf(binding.owner, 0); basis = "return";
             if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
+          } else if (binding.owner.kind === "super") {
+            owner = holderOf(binding.owner, 0);
           }
           else if (owner === undefined && card.language === "python" && binding.basis === "constructor") {
             owner = holderOfCallables(candidates.filter((symbol) => symbol.kind === "function" || symbol.kind === "method"), undefined, undefined);
@@ -600,7 +611,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           });
           if (owner !== undefined && candidates.length > 0) {
             resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis } };
-          } else if (resolution.status === "resolved" || (reference.kind === "local" && resolution.reason !== "unbound-global") || (reference.kind === "return" && resolution.reason !== "import-target-unresolved")) {
+          } else if (resolution.status === "resolved" || reference.kind === "super" || (reference.kind === "local" && resolution.reason !== "unbound-global") || (reference.kind === "return" && resolution.reason !== "import-target-unresolved")) {
             resolution = { status: "unresolved", reason: "receiver-unresolved" };
           }
         }
