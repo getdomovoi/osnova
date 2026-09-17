@@ -206,7 +206,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             else {
               candidates = [...exportResult.symbols.values()].filter((symbol) =>
                 languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-                (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
+                (raw.kind !== "calls" || binding.kind === "member" || (symbol.kind !== "interface" && symbol.kind !== "type")));
               resolution = candidates.length === 0 && exportResult.cycle
                 ? { status: "unresolved", reason: "re-export-cycle" }
                 : { status: "resolved", method: "import-binding" };
@@ -239,7 +239,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           }
           candidates = incomplete ? [] : gathered.filter((symbol) =>
             languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-            (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
+            (raw.kind !== "calls" || binding.kind === "member" || (symbol.kind !== "interface" && symbol.kind !== "type")));
           resolution = incomplete ? { status: "unresolved", reason: "re-export-incomplete" }
             : candidates.length === 0 && cycle ? { status: "unresolved", reason: "re-export-cycle" } : { status: "resolved", method: "import-binding" };
           const first = candidates[0];
@@ -247,9 +247,37 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         } else if (binding.kind === "member") {
           const owners = candidates.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface");
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
-          const ownerName = owner?.qualifiedName;
-          const members = owner === undefined ? [] : (files.get(owner.file)?.symbols ?? []).filter((symbol) =>
-            symbol.kind === "method" && symbol.qualifiedName === `${ownerName}.${binding.member}`);
+          const membersOf = (holder: OsnovaSymbol): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
+            symbol.kind === "method" && symbol.qualifiedName === `${holder.qualifiedName}.${binding.member}`);
+          // Walk declared heritage when the owner itself lacks the member; stop at the first level that declares it.
+          let members: OsnovaSymbol[] = owner === undefined ? [] : membersOf(owner);
+          if (owner !== undefined && members.length === 0) {
+            const visitedHolders = new Set<string>([owner.qualifiedName]);
+            let level: OsnovaSymbol[] = [owner];
+            for (let hop = 0; hop < 8 && members.length === 0 && level.length > 0; hop++) {
+              const next: OsnovaSymbol[] = [];
+              for (const holder of level) {
+                for (const base of holder.heritage ?? []) {
+                  const holderCard = files.get(holder.file);
+                  if (holderCard === undefined) continue;
+                  let bases: OsnovaSymbol[] = [];
+                  if (base.kind === "local") bases = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(holder.file, base.name));
+                  else {
+                    const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles);
+                    if (target !== undefined) { const found = exported(target, base.importedName); if (!found.incomplete) bases = [...found.symbols.values()]; }
+                  }
+                  for (const candidate of bases) {
+                    if ((candidate.kind !== "class" && candidate.kind !== "interface") || visitedHolders.has(candidate.qualifiedName)) continue;
+                    visitedHolders.add(candidate.qualifiedName);
+                    next.push(candidate);
+                  }
+                }
+              }
+              const found = next.flatMap(membersOf);
+              if (found.length > 0) members = found;
+              level = next;
+            }
+          }
           const kinds = new Set(members.map((symbol) => symbol.memberKind));
           candidates = kinds.size > 1 ? [] : members.filter((symbol) => {
             if (symbol.memberKind === undefined || symbol.memberKind === "unknown" || symbol.memberKind === "property") return false;

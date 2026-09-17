@@ -15,6 +15,7 @@ const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 class TsExtractor {
   readonly out = new Extractor();
+  constructor(readonly bindings: ReturnType<typeof collectBindings>) {}
 
   pushFrame(name: string): void {
     this.out.push(name);
@@ -85,7 +86,7 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
 }
 
 function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node) => void): void {
-  ex.def(name, "class", node);
+  ex.out.addDef(name, "class", node, undefined, undefined, ex.bindings.heritage(node));
   ex.pushFrame(name);
   for (const child of childrenOf(node)) {
     if (child.type === "class_body" || child.type === "declaration_list") {
@@ -113,8 +114,8 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
 
 export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript"): LanguageAdapter {
   const extract = (tree: Tree): AdapterOutput => {
-    const ex = new TsExtractor();
     const bindings = collectBindings(tree.rootNode, false);
+    const ex = new TsExtractor(bindings);
     const visit = (node: Node): void => {
       switch (node.type) {
         case "import_statement": {
@@ -158,12 +159,13 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         case "interface_declaration": {
           const name = declarationName(node);
           if (name !== null) {
-            ex.def(name, "interface", node);
+            ex.out.addDef(name, "interface", node, undefined, undefined, ex.bindings.heritage(node));
             ex.pushFrame(name);
             for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
-              if (member.type !== "method_signature") continue;
               const methodName = member.childForFieldName("name")?.text;
-              if (methodName !== undefined && IDENTIFIER_RE.test(methodName)) ex.out.addDef(methodName, "method", member, undefined, "instance");
+              if (methodName === undefined || !IDENTIFIER_RE.test(methodName)) continue;
+              const functionTyped = member.type === "property_signature" && childrenOf(member.childForFieldName("type") ?? member).some((child) => child.type === "function_type");
+              if (member.type === "method_signature" || functionTyped) ex.out.addDef(methodName, "method", member, undefined, "instance");
             }
             ex.popFrame();
           }
