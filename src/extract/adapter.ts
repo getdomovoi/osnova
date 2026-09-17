@@ -10,6 +10,7 @@ export interface RawDefinition {
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
+  readonly fields?: readonly string[] | undefined;
 }
 
 export interface RawEdge {

@@ -47,6 +47,34 @@ describe("receiver identity", () => {
     expect(calls[1]?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "leaf.ts#Leaf", basis: "annotation" } } });
   });
 
+  it("leaves heritage unresolved when bases disagree, are unknown, merge, or are only implemented", async () => {
+    const index = await build({
+      "mro.py": "class A:\n    def hit(self): pass\nclass B(A): pass\nclass C:\n    def hit(self): pass\nclass D(B, C): pass\nclass Diamond(B, A): pass\ndef use(d: D, e: Diamond):\n    d.hit()\n    e.hit()\n",
+      "unknown.py": "from unavailable import Unknown\nclass Known:\n    def hit(self): pass\nclass D(Unknown, Known): pass\nclass Own(Unknown):\n    def hit(self): pass\ndef use(d: D, o: Own):\n    d.hit()\n    o.hit()\n",
+      "a.ts": "interface A { hit(): void; }\ninterface B { hit(): void; }\ninterface I extends A {}\ninterface I extends B {}\ninterface J { hit(): void; }\nclass Base { hit() {} }\nclass D extends Base implements J {}\nclass Field extends Base { hit = 2; }\nclass Arrow extends Base { hit = () => 2; }\nclass Generic<T> extends Base {}\nclass Sub extends Generic<string> {}\nfunction use(i: I, d: D, f: Field, a: Arrow, s: Sub) {\n  i.hit();\n  d.hit();\n  f.hit();\n  a.hit();\n  s.hit();\n}\n",
+    });
+    const sends = (symbol: string) => [...index.outgoing(symbol).filter((edge) => edge.toName === "hit")].sort((a, b) => a.line - b.line).map((edge) => edge.toSymbol);
+    expect(sends("mro.py#use")).toEqual([undefined, "mro.py#A.hit"]);
+    expect(sends("unknown.py#use")).toEqual([undefined, "unknown.py#Own.hit"]);
+    expect(index.symbols.get("a.ts#Field")?.fields).toEqual(["hit"]);
+    expect(index.symbols.get("a.ts#D")?.heritage).toEqual([{ kind: "local", name: "Base" }]);
+    expect(sends("a.ts#use")).toEqual([undefined, "a.ts#Base.hit", undefined, "a.ts#Arrow.hit", "a.ts#Base.hit"]);
+  });
+
+  it("binds field receivers at their declaration and blocks static, rewritten or conditionally assigned fields", async () => {
+    const index = await build({
+      "lib.ts": "export interface Reader { hit(): void; }\n",
+      "a.ts": "import type { Reader } from './lib.js';\nclass Foo { hit() {} }\nclass Shadow {\n  constructor() { this.x = new Foo(); }\n  use() { class Foo { hit() {} } this.x.hit(); }\n}\nclass Static { static x: Foo; use() { this.x.hit(); } }\nclass Rewritten { x: Foo; constructor() { this.x = new Foo(); } reset() { this.x = {} as any; } use() { this.x.hit(); } }\nclass Nested { constructor() { (() => { this.x = new Foo(); }); } use() { this.x.hit(); } }\nclass Readonly { constructor(readonly x: Foo) {} use() { this.x.hit(); } }\nfunction typed(r: Reader) { r.hit(); }\n",
+    });
+    const hit = (symbol: string) => index.outgoing(symbol).find((edge) => edge.toName === "hit")?.toSymbol;
+    expect(hit("a.ts#Shadow.use")).toBe("a.ts#Foo.hit");
+    expect(hit("a.ts#Static.use")).toBeUndefined();
+    expect(hit("a.ts#Rewritten.use")).toBeUndefined();
+    expect(hit("a.ts#Nested.use")).toBeUndefined();
+    expect(hit("a.ts#Readonly.use")).toBe("a.ts#Foo.hit");
+    expect(hit("a.ts#typed")).toBe("lib.ts#Reader.hit");
+  });
+
   it("finds inherited members in Python and through constructor-assigned fields", async () => {
     const index = await build({
       "base.py": "class Base:\n    def send(self):\n        return 1\n",

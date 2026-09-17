@@ -54,6 +54,7 @@ export interface OsnovaSymbol {
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
+  readonly fields?: readonly string[] | undefined;
 }
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";

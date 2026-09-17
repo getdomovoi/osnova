@@ -111,6 +111,7 @@ export async function extractCard(
       ...(def.exportedNames === undefined ? {} : { exportedNames: def.exportedNames }),
       ...(def.memberKind === undefined ? {} : { memberKind: def.memberKind }),
       ...(def.heritage === undefined ? {} : { heritage: def.heritage }),
+      ...(def.fields === undefined ? {} : { fields: def.fields }),
     };
   });
 
