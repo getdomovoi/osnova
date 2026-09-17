@@ -59,8 +59,8 @@ it("ordinary query tools aggregate diagnostics instead of repeating file paths",
   for (const [name, args] of tools) {
     const result = await client.callTool({ name, arguments: args });
     const text = JSON.stringify(result);
-    expect(text, name).toContain("osnova foundation: partial, 15 diagnostics (parse/syntax-errors=15)");
-    expect(text, name).toContain("details via doctor or indexHealth");
+    expect(text, name).toContain("osnova foundation: partial (parse/syntax-errors=15)");
+    expect(text, name).toContain("some files did not parse fully");
     expect(text, name).not.toContain("broken-0.ts");
   }
 });
