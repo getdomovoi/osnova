@@ -53,6 +53,7 @@ export interface OsnovaSymbol {
   readonly lineCount: number;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
+  readonly heritage?: readonly SymbolBinding[] | undefined;
 }
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";

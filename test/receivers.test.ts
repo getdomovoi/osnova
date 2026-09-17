@@ -25,6 +25,51 @@ async function build(files: Record<string, string>) {
 }
 
 describe("receiver identity", () => {
+  it("indexes interface property signatures with function types as methods", async () => {
+    const index = await build({
+      "console.ts": "export interface ConsoleInterface { error: (message: string) => void; level: number; }\nexport function use(c: ConsoleInterface) { c.error('x'); }\n",
+    });
+    expect(index.symbols.get("console.ts#ConsoleInterface.error")).toMatchObject({ kind: "method", memberKind: "instance" });
+    expect(index.symbols.has("console.ts#ConsoleInterface.level")).toBe(false);
+    expect(index.outgoing("console.ts#use")[0]?.toSymbol).toBe("console.ts#ConsoleInterface.error");
+  });
+
+  it("finds inherited members through class and interface heritage", async () => {
+    const index = await build({
+      "base.ts": "export class Base { send() {} }\nexport interface Reader { read(): void; }\nexport interface Both extends Reader { write(): void; }\n",
+      "mid.ts": "import { Base } from './base.js';\nexport class Mid extends Base {}\n",
+      "leaf.ts": "import { Mid } from './mid.js';\nimport * as base from './base.js';\nexport class Leaf extends Mid {}\nexport class Loop extends Loop2 {}\nexport class Loop2 extends Loop {}\nexport function go(leaf: Leaf, both: base.Both, loop: Loop) {\n  both.read();\n  leaf.send();\n  loop.send();\n}\n",
+    });
+    expect(index.symbols.get("leaf.ts#Leaf")?.heritage).toEqual([{ kind: "import", source: "./mid.js", importedName: "Mid" }]);
+    expect(index.symbols.get("base.ts#Both")?.heritage).toEqual([{ kind: "local", name: "Reader" }]);
+    const calls = [...index.outgoing("leaf.ts#go")].sort((a, b) => a.line - b.line || a.toName.localeCompare(b.toName));
+    expect(calls.map((edge) => [edge.toName, edge.toSymbol])).toEqual([["read", "base.ts#Reader.read"], ["send", "base.ts#Base.send"], ["send", undefined]]);
+    expect(calls[1]?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "leaf.ts#Leaf", basis: "annotation" } } });
+  });
+
+  it("finds inherited members in Python and through constructor-assigned fields", async () => {
+    const index = await build({
+      "base.py": "class Base:\n    def send(self):\n        return 1\n",
+      "app.py": "from base import Base\nimport base as mod\n\nclass Child(Base):\n    pass\n\nclass Dotted(mod.Base):\n    pass\n\nclass Holder:\n    def __init__(self):\n        self.child = Child()\n        self.other = make()\n\n    def run(self):\n        a = self.child.send()\n        return a + self.other.send()\n\n    def reset(self):\n        self.child = None\n\nclass Stable:\n    def __init__(self):\n        self.child = Child()\n\n    def run(self):\n        return self.child.send()\n\ndef use(c: Child, d: Dotted):\n    return c.send() + d.send()\n\ndef make():\n    return None\n",
+    });
+    expect(index.symbols.get("app.py#Child")?.heritage).toEqual([{ kind: "import", source: "base", importedName: "Base" }]);
+    const use = [...index.outgoing("app.py#use").filter((edge) => edge.toName === "send")].sort((a, b) => a.line - b.line);
+    expect(use.map((edge) => edge.toSymbol)).toEqual(["base.py#Base.send", "base.py#Base.send"]);
+    expect(index.outgoing("app.py#Holder.run").filter((edge) => edge.toName === "send").map((edge) => edge.toSymbol)).toEqual([undefined, undefined]);
+    const stable = index.outgoing("app.py#Stable.run").find((edge) => edge.toName === "send");
+    expect(stable?.toSymbol).toBe("base.py#Base.send");
+    expect(stable?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "app.py#Child", basis: "constructor" } } });
+  });
+
+  it("resolves TypeScript constructor-assigned fields", async () => {
+    const index = await build({
+      "program.ts": "export class Program { analyze() { return 1; } }\n",
+      "a.ts": "import { Program } from './program.js';\nexport class A {\n  private _p;\n  private _q;\n  constructor() { this._p = new Program(); this._q = new Program(); }\n  m() { return this._p.analyze(); }\n  n() { this._q = other(); return this._q.analyze(); }\n}\nfunction other(): any { return null; }\n",
+    });
+    expect(index.outgoing("a.ts#A.m").find((edge) => edge.toName === "analyze")?.toSymbol).toBe("program.ts#Program.analyze");
+    expect(index.outgoing("a.ts#A.n").find((edge) => edge.toName === "analyze")?.toSymbol).toBeUndefined();
+  });
+
   it("uses TypeScript parameter annotations as instance receivers", async () => {
     const index = await build({
       "program.ts": "export class Program { analyze() { return 1; } }\n",
@@ -182,12 +227,14 @@ describe("receiver identity", () => {
     expect(index.outgoing("a.py#A.rebound")[0]?.toSymbol).toBeUndefined();
   });
 
-  it("does not guess through inheritance, custom decorators or colliding member IDs", async () => {
+  it("follows declared inheritance but not custom decorators or colliding member IDs", async () => {
     const index = await build({
       "a.ts": "export class Base { send() {} }\nexport class Child extends Base {}\nexport class Mixed { static run() {} run() {} }\nexport function caller() { const x = new Child(); x.send(); Mixed.run(); }\n",
       "a.py": "class A:\n    @custom\n    def send(self):\n        pass\n\ndef caller():\n    x = A()\n    x.send()\n",
     });
-    expect(index.outgoing("a.ts#caller").filter((edge) => ["send", "run"].includes(edge.toName)).every((edge) => edge.toSymbol === undefined)).toBe(true);
+    const sends = index.outgoing("a.ts#caller").filter((edge) => ["send", "run"].includes(edge.toName));
+    expect(sends.find((edge) => edge.toName === "send")?.toSymbol).toBe("a.ts#Base.send");
+    expect(sends.find((edge) => edge.toName === "run")?.toSymbol).toBeUndefined();
     expect(index.outgoing("a.py#caller").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
   });
 

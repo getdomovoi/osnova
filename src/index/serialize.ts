@@ -8,6 +8,7 @@ import type {
   OsnovaEdge,
   OsnovaIndex,
   SourceSpan,
+  SymbolBinding,
   SymbolKind,
   IndexDiagnostic,
   ReExport,
@@ -57,6 +58,7 @@ interface SerializedSymbol {
   readonly signature: string;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
+  readonly heritage?: readonly SymbolBinding[] | undefined;
 }
 
 interface SerializedFile {
@@ -126,6 +128,7 @@ export function serializeSections(
         signature: symbol.signature,
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
+        ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
@@ -240,6 +243,11 @@ function deserializeParsedArtifact(
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.memberKind !== undefined && !["instance", "static", "class", "property", "unknown"].includes(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
+      if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
+        (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||
+          ((item as { kind?: unknown }).kind === "import" && typeof (item as { source?: unknown }).source === "string" && typeof (item as { importedName?: unknown }).importedName === "string"))))) {
+        throw new Error("osnova: corrupt heritage metadata");
+      }
       const span: SourceSpan = {
         startLine: symbol.span.s,
         endLine: symbol.span.e,
@@ -256,6 +264,7 @@ function deserializeParsedArtifact(
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
+        ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
       };
     });
     const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports };
