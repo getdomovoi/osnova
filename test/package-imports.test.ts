@@ -69,4 +69,31 @@ describe("workspace package imports", () => {
     expect(index.files.has("packages/lib/debug.log")).toBe(false);
     expect(imports(index, "packages/app/src/main.ts")).toEqual({ lib: "packages/lib/src/index.ts" });
   });
+
+  it("selects the most specific export pattern, honors null exclusions and tolerates bad exports", async () => {
+    const index = await build({
+      "packages/pkg/package.json": '{"name":"pkg","exports":{"./*":"./general/*.ts","./feature/*":"./special/*.ts","./private/*":null,"./dist":"./dist/x.js"}}',
+      "packages/pkg/general/feature/a.ts": "export function f() {}\n",
+      "packages/pkg/general/private/a.ts": "export function f() {}\n",
+      "packages/pkg/special/a.ts": "export function f() {}\n",
+      "packages/nul/package.json": '{"name":"nul","exports":null}',
+      "packages/nul/index.ts": "export function n() {}\n",
+      "packages/num/package.json": '{"name":"num","exports":7}',
+      "packages/app/main.ts": "import { f } from 'pkg/feature/a';\nimport { g } from 'pkg/private/a';\nimport { n } from 'nul';\nimport { m } from 'num';\nexport function run() { f(); g(); n(); m(); }\n",
+    });
+    expect(imports(index, "packages/app/main.ts")).toEqual({ "pkg/feature/a": "packages/pkg/special/a.ts", "pkg/private/a": undefined, nul: undefined, num: undefined });
+  });
+
+  it("uses only Python manifest roots above the importing file and treats two hits as ambiguous", async () => {
+    const index = await build({
+      "a/setup.py": "", "a/mod.py": "def f():\n    pass\n",
+      "b/setup.py": "", "b/mod.py": "def f():\n    pass\n", "b/app.py": "from mod import f\n\ndef use():\n    f()\n",
+      "pyproject.toml": "[project]\nname='x'\n", "src/shared.py": "def s():\n    pass\n", "examples/setup.py": "", "examples/shared.py": "def s():\n    pass\n",
+      "app.py": "from shared import s\n\ndef use():\n    s()\n",
+      "src/both.py": "def q():\n    pass\n", "both.py": "def q():\n    pass\n", "tests/test_both.py": "from both import q\n\ndef test():\n    q()\n",
+    });
+    expect(imports(index, "b/app.py")).toEqual({ mod: "b/mod.py" });
+    expect(imports(index, "app.py")).toEqual({ shared: "src/shared.py" });
+    expect(imports(index, "tests/test_both.py")).toEqual({ both: undefined });
+  });
 });
