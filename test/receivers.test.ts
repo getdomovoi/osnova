@@ -352,6 +352,7 @@ describe("receiver identity", () => {
       "shadow.py": "from conn import Conn\n\ndef fake_property(fn):\n    return fn\n\nproperty = fake_property\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n",
       "tuple.py": "from conn import Conn\n\ndef fake_property(fn):\n    return fn\n\nproperty, marker = fake_property, 1\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n",
       "cond.py": "from conn import Conn\n\ndef fake_property(fn):\n    return fn\n\nif True:\n    property = fake_property\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n",
+      "alias.py": "from conn import Conn\nfrom builtins import property as prop\n\ndef fake_property(fn):\n    return fn\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n\nproperty = fake_property\n",
       "later.py": "from conn import Conn\n\ndef fake_property(fn):\n    return fn\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n\nproperty = fake_property\n",
     });
     expect(index.outgoing("app.py#Clash.run").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
@@ -360,5 +361,6 @@ describe("receiver identity", () => {
     expect(index.outgoing("later.py#Holder.run").find((edge) => edge.toName === "send")?.toSymbol).toBe("conn.py#Conn.send");
     expect(index.outgoing("tuple.py#Holder.run").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
     expect(index.outgoing("cond.py#Holder.run").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
+    expect(index.outgoing("alias.py#Holder.run").find((edge) => edge.toName === "send")?.toSymbol).toBe("conn.py#Conn.send");
   });
 });
