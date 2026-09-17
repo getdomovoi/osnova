@@ -57,6 +57,21 @@ describe("settle on a single index", () => {
   });
 });
 
+describe("footing seeds", () => {
+  it("skips prose documents and keeps looking for definitions", () => {
+    const prose = Array.from({ length: 6 }, (_, i) => ({ ...card(`docs/guide-${i}.md`, [], `# How the resolver walks a package on disk\n\nThe resolver walks the package on disk. ${i}\n`), language: "fallback" as const }));
+    const code = card("src/lookup.ts", ["findModule", "walkPackage", "readEntry"]);
+    const one = index([...prose, code], [edge("src/lookup.ts#findModule", "src/lookup.ts#walkPackage"), edge("src/lookup.ts#walkPackage", "src/lookup.ts#readEntry")]);
+    const question = "how the resolver walks a package on disk";
+    const plain = one.files.get("docs/guide-0.md");
+    expect(plain?.symbols).toHaveLength(0);
+    const result = taskContext(one, { task: "understand", question, limit: 1 });
+    expect(result.sources.map((source) => source.file)).toEqual(["src/lookup.ts"]);
+    expect(result.definitions.map((definition) => definition.symbol.name)).toContain("walkPackage");
+    expect(result.omitted.retrievalHits).toBeGreaterThan(0);
+  });
+});
+
 describe("footing formatting", () => {
   const current = index([card("a.ts", ["target"]), card("b.ts", ["middle"]), card("c.test.ts", ["check"])],
     [edge("b.ts#middle", "a.ts#target"), edge("c.test.ts#check", "b.ts#middle")]);
@@ -105,10 +120,24 @@ describe("footing formatting", () => {
     expect(tight.omitted.definitions + tight.definitions.length).toBe(12);
   });
 
+  it("tolerates missing trailing context lines and says so", () => {
+    const one = index([card("a.ts", ["keep", "other"])]);
+    const short = "--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,3 @@\n-function keep() { return 0; }\n+function keep() { return 1; }\n@@ -2,3 +2,3 @@\n-function other() { return 0; }\n+function other() { return 1; }\n";
+    const result = impact(one, one, { diff: short, maxDepth: 1 });
+    expect(result.changes.map((change) => change.after?.symbol.name)).toEqual(["keep", "other"]);
+    expect(result.uncertainty.notes).toContain("diff-short-by-4-context-lines-treated-as-unchanged");
+  });
+
+  it("still rejects a hunk that is short on one side only", () => {
+    const one = index([card("a.ts", ["keep"])]);
+    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,7 +1,8 @@\n-function keep() { return 0; }\n+function keep() { return 1; }\n";
+    expect(() => impact(one, one, { diff })).toThrow(/incomplete unified diff hunk starting at line 3: the header promised 6 more old and 7 more new lines/);
+  });
+
   it("reports the short hunk line when a diff is summarized", () => {
     const one = index([card("a.ts", ["keep"])]);
-    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,7 +1,7 @@\n-function keep() { return 0; }\n+function keep() { return 1; }\n@@ -20,7 +20,7 @@\n";
-    expect(() => impact(one, one, { diff })).toThrow(/hunk line 6: the hunk header promised 6 more old and 6 more new lines/);
+    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,7 +1,8 @@\n-function keep() { return 0; }\n+function keep() { return 1; }\nnonsense\n";
+    expect(() => impact(one, one, { diff })).toThrow(/hunk line 6: the hunk header promised 6 more old and 7 more new lines/);
   });
 
   it("fits by the caller's measure instead of JSON size", () => {

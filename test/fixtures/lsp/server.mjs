@@ -18,7 +18,7 @@ function send(message) {
 
 function receive(message) {
   events.push(message.method ?? "response");
-  if (log) fs.writeFileSync(log, JSON.stringify(events));
+  if (log) { fs.writeFileSync(`${log}.tmp`, JSON.stringify(events)); fs.renameSync(`${log}.tmp`, log); }
   const { id, method, params } = message;
   if (method === "initialize") {
     if (!params.rootUri.startsWith("file:") || params.capabilities.general.positionEncodings[0] !== "utf-16") process.exit(2);

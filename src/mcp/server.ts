@@ -17,8 +17,8 @@ import { impact } from "../query/impact.js";
 import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
+import { OSNOVA_VERSION } from "../version.js";
 
-const OSNOVA_VERSION = "0.2.0";
 const maximumMcpSkeletonCodeUnits = 4_096;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
