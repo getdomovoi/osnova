@@ -52,6 +52,14 @@ describe("re-export resolution", () => {
     });
     expect(lopsided.outgoing("use.ts#caller")[0]?.toSymbol).toBeUndefined();
     expect(lopsided.outgoing("use.ts#caller")[0]?.evidence).toMatchObject({ resolution: { status: "unresolved", reason: "binding-blocked" } });
+    const sameTarget = await build({
+      "util.ts": "export function hit() {}\n",
+      "a/index.ts": "export * as ns from '../util.js';\n",
+      "b/index.ts": "export * as ns from '../util.js';\n",
+      "root.ts": "export * from './a/index.js';\nexport * from './b/index.js';\n",
+      "use.ts": "import { ns } from './root.js';\nexport function caller() { ns.hit(); }\n",
+    });
+    expect(sameTarget.outgoing("use.ts#caller")[0]?.toSymbol).toBe("util.ts#hit");
   });
 
   it("follows a namespace re-export to the member definition", async () => {

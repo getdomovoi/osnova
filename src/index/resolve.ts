@@ -218,16 +218,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         let owner: OsnovaSymbol | undefined;
         let namespaceVia: readonly ExportHop[] | undefined;
-        if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && exportResult.namespaces.length > 1 &&
+        const namespaceTargets = exportResult === undefined ? [] : [...new Map(exportResult.namespaces.map((space) => [space.file, space])).values()];
+        if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && namespaceTargets.length > 1 &&
           !candidates.some((symbol) => symbol.kind === "class")) {
           resolution = { status: "unresolved", reason: "binding-blocked" };
           candidates = [];
-        } else if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && exportResult.namespaces.length === 1 &&
+        } else if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && namespaceTargets.length === 1 &&
           !candidates.some((symbol) => symbol.kind === "class")) {
           const gathered: OsnovaSymbol[] = [];
           const routes = new Map<string, readonly ExportHop[]>();
           let incomplete = false, cycle = false;
-          for (const space of exportResult.namespaces) {
+          for (const space of namespaceTargets) {
             const nested = exported(space.file, binding.member);
             if (nested.incomplete) { incomplete = true; continue; }
             if (nested.cycle) cycle = true;

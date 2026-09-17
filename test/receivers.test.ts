@@ -44,6 +44,11 @@ describe("receiver identity", () => {
     expect(index.outgoing("ext.py#use")[0]?.toSymbol).toBe("ext.py#D.hit");
     expect(index.outgoing("deleted.py#paren")[0]?.toSymbol).toBeUndefined();
     expect(index.outgoing("deleted.py#tuple_del")[0]?.toSymbol).toBeUndefined();
+    const more = await build({
+      "m.py": "import typing as t\n\ndef wrap(f):\n    return lambda *a: 7\n\nclass F:\n    @t.overload.wrap\n    def hit(self):\n        return 1\n\nclass G:\n    other = 1\n    def hit(self):\n        return 1\n\ndef chained(f: F):\n    return f.hit()\n\ndef attr(g: G):\n    del g.other\n    return g.hit()\n",
+    });
+    expect(more.outgoing("m.py#chained")[0]?.toSymbol).toBeUndefined();
+    expect(more.outgoing("m.py#attr").find((edge) => edge.toName === "hit")?.toSymbol).toBe("m.py#G.hit");
   });
 
   it("keeps annotated receivers honest under variadics, lambdas, deletion and foreign decorators", async () => {
