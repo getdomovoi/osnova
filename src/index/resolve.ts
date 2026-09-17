@@ -52,13 +52,25 @@ function resolvePythonSpecifier(
   }
   const parts = rest.length > 0 ? rest.split(".") : [];
   if (up === 0 && parts.length === 0) return undefined;
-  const modulePaths = up > 0 ? [path.posix.join(baseDir, ...parts)] : roots.map((root) => path.posix.join(root, ...parts));
-  for (const modulePath of modulePaths) {
+  if (up > 0) {
+    const modulePath = path.posix.join(baseDir, ...parts);
     const init = path.posix.join(modulePath, "__init__.py");
     if (knownFiles.has(init)) return init;
-    if (knownFiles.has(`${modulePath}.py`)) return `${modulePath}.py`;
+    return knownFiles.has(`${modulePath}.py`) ? `${modulePath}.py` : undefined;
   }
-  return undefined;
+  // Only manifest roots above the importing file count, nearest first; a module found under two
+  // of them is ambiguous and stays unresolved.
+  const manifestOf = (root: string): string => root === "src" ? "" : root.endsWith("/src") ? root.slice(0, -4) : root;
+  const ancestors = roots.filter((root) => { const dir = manifestOf(root); return dir === "" || fromDir === dir || fromDir.startsWith(`${dir}/`); })
+    .sort((a, b) => manifestOf(b).length - manifestOf(a).length);
+  const found = new Set<string>();
+  for (const root of ancestors) {
+    const modulePath = path.posix.join(root, ...parts);
+    const init = path.posix.join(modulePath, "__init__.py");
+    if (knownFiles.has(init)) found.add(init);
+    else if (knownFiles.has(`${modulePath}.py`)) found.add(`${modulePath}.py`);
+  }
+  return found.size === 1 ? [...found][0] : undefined;
 }
 
 interface PackageEntry { readonly dir: string; readonly exports: unknown; readonly main: readonly string[] }
@@ -119,19 +131,26 @@ function resolveBareSpecifier(spec: string, knownFiles: ReadonlySet<string>, con
   const subpath = spec === name ? "." : `./${spec.slice(name.length + 1)}`;
   const exportsField = entry.exports;
   if (exportsField !== undefined) {
-    const table: Record<string, unknown> = typeof exportsField === "string" || Array.isArray(exportsField) || (typeof exportsField === "object" && exportsField !== null && !Object.keys(exportsField).some((key) => key.startsWith(".")))
+    if (exportsField === null || (typeof exportsField !== "string" && typeof exportsField !== "object")) return undefined;
+    const table: Record<string, unknown> = typeof exportsField === "string" || Array.isArray(exportsField) || !Object.keys(exportsField).some((key) => key.startsWith("."))
       ? { ".": exportsField } : exportsField as Record<string, unknown>;
     const targets: string[] = [];
-    if (table[subpath] !== undefined) exportTargets(table[subpath], targets);
-    else {
+    if (Object.prototype.hasOwnProperty.call(table, subpath)) {
+      if (table[subpath] === null) return undefined;
+      exportTargets(table[subpath], targets);
+    } else {
+      // Node picks the pattern with the longest literal prefix; a null winner excludes the subpath.
+      let best: { prefix: string; suffix: string; value: unknown } | undefined;
       for (const [key, value] of Object.entries(table)) {
         const star = key.indexOf("*");
-        if (star < 0) continue;
+        if (star < 0 || key.indexOf("*", star + 1) >= 0) continue;
         const prefix = key.slice(0, star), suffix = key.slice(star + 1);
         if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix) || subpath.length < prefix.length + suffix.length) continue;
-        const filler = subpath.slice(prefix.length, subpath.length - suffix.length);
-        for (const target of exportTargets(value)) targets.push(target.split("*").join(filler));
+        if (best === undefined || prefix.length > best.prefix.length || (prefix.length === best.prefix.length && suffix.length > best.suffix.length)) best = { prefix, suffix, value };
       }
+      if (best === undefined || best.value === null) return undefined;
+      const filler = subpath.slice(best.prefix.length, subpath.length - best.suffix.length);
+      for (const target of exportTargets(best.value)) targets.push(target.split("*").join(filler));
     }
     const ordered = [...targets.filter((target) => /\.(ts|tsx|mts|cts)$/.test(target) && !/\.d\.(c|m)?ts$/.test(target)), ...targets.filter((target) => !/\.(ts|tsx|mts|cts)$/.test(target) || /\.d\.(c|m)?ts$/.test(target))];
     for (const target of ordered) { const found = resolvePackageFile(entry.dir, target, knownFiles); if (found !== undefined) return found; }
