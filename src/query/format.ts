@@ -11,6 +11,8 @@ import type {
   OsnovaEdge,
 } from "../types.js";
 import type { ImpactResult } from "./impact.js";
+import type { CoverageReport, LanguageCoverage } from "./coverage.js";
+import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
@@ -302,4 +304,34 @@ export function formatImpact(result: ImpactResult): string {
     ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
     `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
   ].join("\n");
+}
+
+const percent = (share: number): string => `${(share * 100).toFixed(1)}%`;
+
+export function formatCoverage(report: CoverageReport): string {
+  const row = (item: LanguageCoverage): string =>
+    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingUnresolvedImports)} of the ${item.calls - item.unresolvedImportCalls} not blocked by an unresolved import), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}`;
+  const reasons = Object.entries(report.total.byReason).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1));
+  const lines = [
+    `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve`,
+    ...report.languages.map(row),
+  ];
+  if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}`));
+  lines.push(`limitations: ${report.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+export function formatPlumb(result: PlumbResult, symbol?: string): string {
+  const name = result.target.qualifiedName ?? symbol ?? "<unknown>";
+  const c = result.counts;
+  const lines = [`osnova plumb: ${name}, ${c.confirmed} confirmed, ${c.nameOnly} name-only, ${c.noCall} no-call, ${c.notIndexed} not-indexed, ${c.missing} missing`];
+  if (result.claims.length > 0) lines.push("claims:");
+  for (const item of result.claims) {
+    const other = item.edge === undefined ? "" : ` -> ${result.direction === "in" ? item.edge.fromSymbol || item.edge.fromFile : item.edge.toSymbol ?? item.edge.toName}`;
+    lines.push(`${item.verdict} ${item.claim.file}:${item.claim.line}${other}`);
+  }
+  if (result.missing.length > 0) lines.push("missing:");
+  for (const edge of result.missing) lines.push(`${edge.fromFile}:${edge.line} ${result.direction === "in" ? edge.fromSymbol || edge.fromFile : edge.toSymbol ?? edge.toName}`);
+  lines.push(`limitations: ${result.limitations.join(", ")}`);
+  return lines.join("\n");
 }

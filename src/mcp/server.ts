@@ -14,7 +14,8 @@ import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
-import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
+import { plumb, parseClaims } from "../query/plumb.js";
+import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -24,6 +25,7 @@ const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
+const maximumMcpPlumbCodeUnits = 4_096;
 const mcpFootingExcerptLines = 8;
 const mcpInlineShortDefinitions = 40;
 const mcpGenerationDigits = 16;
@@ -123,6 +125,21 @@ const toolDefinitions = [
         depth: { type: "number", description: "Dependent walk depth (default 1)" },
       },
       required: ["diff"],
+    },
+  },
+  {
+    name: "osnova_plumb",
+    description:
+      "Check claims: given a symbol and a list of path:line call sites an agent believes depend on it, says which are confirmed by the index, which are name matches only, which have no call, and which indexed dependents were left out. Use before declaring a caller list complete. Confirmed means an indexed resolved edge, not runtime proof.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
+        sites: { type: "array", items: { type: "string" }, description: "Claimed call sites as repo-relative path:line" },
+        direction: { type: "string", enum: ["in", "out"], description: "in = callers of the symbol (default), out = callees" },
+        depth: { type: "number", description: "Transitive depth (default 1)" },
+      },
+      required: ["symbol", "sites"],
     },
   },
 ] as const;
@@ -235,6 +252,17 @@ export function createOsnovaMcpServer(
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
         }
+        case "osnova_plumb": {
+          const symbol = requireString(args, "symbol");
+          const sites = optionalStringArray(args, "sites");
+          if (sites === undefined) throw new Error("osnova_plumb needs a non-empty sites array of path:line");
+          const direction = optionalString(args, "direction");
+          if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
+          if (args.depth !== undefined && typeof args.depth !== "number") throw new RangeError("osnova: plumb depth must be a positive safe integer");
+          const result = plumb(index, symbol, parseClaims(sites), { direction, depth: optionalNumber(args, "depth") });
+          const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
+        }
         default:
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
@@ -257,6 +285,7 @@ function toolErrorBudget(name: string): number | undefined {
     case "osnova_groundwork": return maximumMcpMapCodeUnits;
     case "osnova_footing": return maximumMcpFootingCodeUnits;
     case "osnova_settle": return maximumMcpSettleCodeUnits;
+    case "osnova_plumb": return maximumMcpPlumbCodeUnits;
     default: return undefined;
   }
 }
