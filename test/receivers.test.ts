@@ -350,9 +350,11 @@ describe("receiver identity", () => {
       "conn.py": "class Conn:\n    def send(self):\n        pass\n",
       "app.py": "from conn import Conn\nfrom typing import Self\n\ndef fake_property(fn):\n    return fn\n\nclass Clash:\n    conn: Conn\n    def conn(self):\n        return Conn()\n    def run(self):\n        self.conn.send()\n\nclass Node:\n    @property\n    def peer(self) -> Self:\n        return self\n    def send(self):\n        pass\n    def run(self):\n        self.peer.send()\n",
       "shadow.py": "from conn import Conn\n\ndef fake_property(fn):\n    return fn\n\nproperty = fake_property\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n",
+      "later.py": "from conn import Conn\n\ndef fake_property(fn):\n    return fn\n\nclass Holder:\n    @property\n    def conn(self) -> Conn:\n        return Conn()\n    def run(self):\n        self.conn.send()\n\nproperty = fake_property\n",
     });
     expect(index.outgoing("app.py#Clash.run").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
     expect(index.outgoing("app.py#Node.run").find((edge) => edge.toName === "send")?.toSymbol).toBe("app.py#Node.send");
     expect(index.outgoing("shadow.py#Holder.run").find((edge) => edge.toName === "send")?.toSymbol).toBeUndefined();
+    expect(index.outgoing("later.py#Holder.run").find((edge) => edge.toName === "send")?.toSymbol).toBe("conn.py#Conn.send");
   });
 });
