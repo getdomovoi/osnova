@@ -34,6 +34,18 @@ describe("receiver identity", () => {
     expect(index.incoming("core.py#Context.invoke").map((edge) => edge.fromSymbol).sort()).toEqual(["core.py#Command.invoke", "core.py#Context.forward"]);
   });
 
+  it("trusts overload only when it is bound to typing", async () => {
+    const index = await build({
+      "local.py": "def overload(f):\n    return lambda *a: 7\n\nclass C:\n    @overload\n    def hit(self):\n        return 1\n\ndef use(c: C):\n    return c.hit()\n",
+      "ext.py": "from typing_extensions import overload\n\nclass D:\n    @overload\n    def hit(self, x: int) -> int: ...\n    def hit(self, x):\n        return x\n\ndef use(d: D):\n    return d.hit(1)\n",
+      "deleted.py": "class E:\n    def hit(self):\n        return 1\n\ndef paren(x: E):\n    del (x)\n    return x.hit()\n\ndef tuple_del(x: E, y: E):\n    del (x, y)\n    return y.hit()\n",
+    });
+    expect(index.outgoing("local.py#use")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("ext.py#use")[0]?.toSymbol).toBe("ext.py#D.hit");
+    expect(index.outgoing("deleted.py#paren")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("deleted.py#tuple_del")[0]?.toSymbol).toBeUndefined();
+  });
+
   it("keeps annotated receivers honest under variadics, lambdas, deletion and foreign decorators", async () => {
     const index = await build({
       "core.py": "class C:\n    def hit(self):\n        return 1\n\ndef wrap(f):\n    return lambda *a: 7\n\nclass D:\n    def hit(self):\n        return 1\n    @wrap\n    def hit(self):\n        return 2\n",

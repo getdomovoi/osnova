@@ -16,13 +16,12 @@ const classes = new Set(["class_declaration", "abstract_class_declaration", "cla
 const containers = new Set(["formal_parameters", "parameters", "lambda_parameters", "array_pattern", "object_pattern", "tuple_pattern", "list_pattern", "pattern_list", "rest_pattern", "list_splat_pattern", "dictionary_splat_pattern", "as_pattern_target", "expression_list"]);
 const localValue: EdgeBinding = { kind: "blocked", reason: "local-value" };
 
-export function memberKindOf(node: Node, python: boolean): MemberKind {
+export function memberKindOf(node: Node, python: boolean, decoratorTexts?: readonly string[]): MemberKind {
   if (!python) {
     if (node.children.some((child) => child?.type === "get" || child?.type === "set") || node.childForFieldName("name")?.text === "constructor") return "property";
     return node.children.some((child) => child?.type === "static") ? "static" : "instance";
   }
-  const decorators = (node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : [])
-    .filter((decorator) => !/^@(?:[A-Za-z_][\w]*\.)*overload$/.test(decorator));
+  const decorators = decoratorTexts ?? (node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : []);
   if (decorators.length === 0) return "instance";
   if (decorators.length !== 1) return "unknown";
   if (decorators[0] === "@staticmethod") return "static";
@@ -56,8 +55,10 @@ function reassigns(body: Node, name: string): boolean {
       if (target !== null && patternNames(target).includes(name)) return true;
       if (node.type === "global_statement" || node.type === "nonlocal_statement") return true;
     }
-    if (node.type === "delete_statement" && childrenOf(node).some((child) => child.type === "identifier" && child.text === name ||
-      (child.type === "expression_list" && childrenOf(child).some((item) => item.type === "identifier" && item.text === name)))) return true;
+    if (node.type === "delete_statement") {
+      const inner: Node[] = [...childrenOf(node)];
+      while (inner.length > 0) { const item = inner.pop()!; if (item.type === "identifier" && item.text === name) return true; inner.push(...childrenOf(item)); }
+    }
     if (node.type === "function_definition" && node.id !== body.parent?.id) {
       const params = patternNames(node.childForFieldName("parameters"));
       if (params.includes(name)) continue;
@@ -342,10 +343,19 @@ export function collectBindings(root: Node, python: boolean): {
     }
     return undefined;
   };
+  const isTypingOverload = (decorator: Node): boolean => {
+    const text = decorator.text.trim().slice(1);
+    const [head, member] = text.split(".");
+    if (head === undefined) return false;
+    const binding = lookup(head, decorator);
+    if (binding?.kind !== "import" || !["typing", "typing_extensions"].includes(binding.source)) return false;
+    return member === undefined ? binding.importedName === "overload" : member === "overload" && binding.importedName === "*";
+  };
   const memberKind = (node: Node): MemberKind => {
-    const kind = memberKindOf(node, python);
-    if (!python || node.parent?.type !== "decorated_definition") return kind;
-    for (const decorator of childrenOf(node.parent).filter((child) => child.type === "decorator")) {
+    if (!python || node.parent?.type !== "decorated_definition") return memberKindOf(node, python);
+    const decorators = childrenOf(node.parent).filter((child) => child.type === "decorator");
+    const kind = memberKindOf(node, python, decorators.filter((decorator) => !isTypingOverload(decorator)).map((decorator) => decorator.text.trim()));
+    for (const decorator of decorators) {
       const name = decorator.text.trim().slice(1);
       if (["staticmethod", "classmethod", "property"].includes(name) && lookup(name, decorator) !== undefined) return "unknown";
     }
