@@ -25,6 +25,60 @@ async function build(files: Record<string, string>) {
 }
 
 describe("receiver identity", () => {
+  it("resolves a Python method whose overload declarations are decorated", async () => {
+    const index = await build({
+      "core.py": "import typing as t\n\nclass Context:\n    @t.overload\n    def invoke(self, callback: int) -> int: ...\n    @t.overload\n    def invoke(self, callback: str) -> str: ...\n    def invoke(self, callback):\n        return callback\n\n    def forward(self, cmd):\n        return self.invoke(cmd)\n\nclass Command:\n    def invoke(self, ctx: Context):\n        return ctx.invoke(self.callback)\n",
+    });
+    expect(index.outgoing("core.py#Context.forward")[0]?.toSymbol).toBe("core.py#Context.invoke");
+    expect(index.outgoing("core.py#Command.invoke")[0]?.toSymbol).toBe("core.py#Context.invoke");
+    expect(index.incoming("core.py#Context.invoke").map((edge) => edge.fromSymbol).sort()).toEqual(["core.py#Command.invoke", "core.py#Context.forward"]);
+  });
+
+  it("trusts overload only when it is bound to typing", async () => {
+    const index = await build({
+      "local.py": "def overload(f):\n    return lambda *a: 7\n\nclass C:\n    @overload\n    def hit(self):\n        return 1\n\ndef use(c: C):\n    return c.hit()\n",
+      "ext.py": "from typing_extensions import overload\n\nclass D:\n    @overload\n    def hit(self, x: int) -> int: ...\n    def hit(self, x):\n        return x\n\ndef use(d: D):\n    return d.hit(1)\n",
+      "deleted.py": "class E:\n    def hit(self):\n        return 1\n\ndef paren(x: E):\n    del (x)\n    return x.hit()\n\ndef tuple_del(x: E, y: E):\n    del (x, y)\n    return y.hit()\n",
+    });
+    expect(index.outgoing("local.py#use")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("ext.py#use")[0]?.toSymbol).toBe("ext.py#D.hit");
+    expect(index.outgoing("deleted.py#paren")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("deleted.py#tuple_del")[0]?.toSymbol).toBeUndefined();
+    const more = await build({
+      "m.py": "import typing as t\n\ndef wrap(f):\n    return lambda *a: 7\n\nclass F:\n    @t.overload.wrap\n    def hit(self):\n        return 1\n\nclass G:\n    other = 1\n    def hit(self):\n        return 1\n\ndef chained(f: F):\n    return f.hit()\n\ndef attr(g: G):\n    del g.other\n    return g.hit()\n",
+    });
+    expect(more.outgoing("m.py#chained")[0]?.toSymbol).toBeUndefined();
+    expect(more.outgoing("m.py#attr").find((edge) => edge.toName === "hit")?.toSymbol).toBe("m.py#G.hit");
+  });
+
+  it("keeps annotated receivers honest under variadics, lambdas, deletion and foreign decorators", async () => {
+    const index = await build({
+      "core.py": "class C:\n    def hit(self):\n        return 1\n\ndef wrap(f):\n    return lambda *a: 7\n\nclass D:\n    def hit(self):\n        return 1\n    @wrap\n    def hit(self):\n        return 2\n",
+      "use.py": "from core import C, D\n\ndef star(*xs: C):\n    return xs.hit()\n\ndef double(**xs: C):\n    return xs.hit()\n\ndef lam(x: C):\n    f = lambda x: x.hit()\n    return f\n\ndef deleted(x: C):\n    del x\n    return x.hit()\n\ndef decorated(d: D):\n    return d.hit()\n\ndef fine(x: C):\n    return x.hit()\n",
+    });
+    expect(index.outgoing("use.py#star")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("use.py#double")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("use.py#lam.f")[0]?.toSymbol ?? index.outgoing("use.py#lam")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("use.py#deleted")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("use.py#decorated")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("use.py#fine")[0]?.toSymbol).toBe("core.py#C.hit");
+  });
+
+  it("uses a Python parameter annotation as an instance receiver", async () => {
+    const index = await build({
+      "core.py": "class Context:\n    def invoke(self, callback):\n        return callback()\n\nclass Command:\n    def invoke(self, ctx):\n        return ctx.invoke(self.callback)\n",
+      "decorators.py": "from .core import Context\nimport core as mod\n\ndef new_func(ctx: Context, *args):\n    return ctx.invoke(args)\n\ndef dotted(ctx: mod.Context):\n    return ctx.invoke(None)\n\ndef untyped(ctx):\n    return ctx.invoke(None)\n\ndef optional(ctx: 'Context | None'):\n    return ctx.invoke(None)\n\ndef shadowed(ctx: Context):\n    ctx = object()\n    return ctx.invoke(None)\n",
+    });
+    const typed = index.outgoing("decorators.py#new_func")[0];
+    expect(typed?.toSymbol).toBe("core.py#Context.invoke");
+    expect(typed?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "core.py#Context", mode: "instance", basis: "annotation" } } });
+    expect(index.outgoing("decorators.py#dotted")[0]?.toSymbol).toBe("core.py#Context.invoke");
+    expect(index.outgoing("decorators.py#untyped")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("decorators.py#optional")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("decorators.py#shadowed")[0]?.toSymbol).toBeUndefined();
+    expect(index.outgoing("core.py#Command.invoke")[0]?.toSymbol).toBeUndefined();
+  });
+
   it("does not attach an unknown object to an unrelated same-name method", async () => {
     const index = await build({ "a.ts": "export class Known { send() {} }\nexport function caller(value: any) { value.send(); }\n" });
     expect(index.outgoing("a.ts#caller")[0]?.toSymbol).toBeUndefined();
