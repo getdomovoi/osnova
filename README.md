@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-dark.png">
-  <img alt="osnova. A deterministic code map for AI coding agents. Seven tools: ground, thread, outline, warp, groundwork, footing, settle." src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-light.png" width="1200">
+  <img alt="osnova. A deterministic code map for AI coding agents. Eight tools: ground, thread, outline, warp, groundwork, footing, settle, plumb." src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-light.png" width="1200">
 </picture>
 
 # Osnova
@@ -89,9 +89,9 @@ It reads the client's real config file, proposes the one entry as a unified diff
 
 `osnova doctor` checks the runtime, the cache and every packaged grammar.
 
-## The seven tools
+## The eight tools
 
-The tool names play on the foundation image. The CLI uses the same seven names without the prefix, so `osnova ground` on the command line and `osnova_ground` over MCP are the same query.
+The tool names play on the foundation image. The CLI uses the same eight names without the prefix, so `osnova ground` on the command line and `osnova_ground` over MCP are the same query.
 
 | Tool | Meaning | Does |
 | --- | --- | --- |
@@ -104,17 +104,17 @@ The tool names play on the foundation image. The CLI uses the same seven names w
 | `osnova_settle` | how the ground settles after a change | Change impact: the symbols a unified diff touches and their indexed dependents |
 | `osnova_plumb` | the plumb line that tests true vertical | Check claims: which of a listed set of call sites the index confirms, which are name matches only, and which dependents were left out |
 
-Every response opens with `osnova generation <id>`. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code. Outputs stay under fixed budgets (16,384 code units for search, 8,192 for task context, 4,096 for outlines and change impact, 2,048 for call graphs and maps) and always print exact omission counts, so the agent knows when to ask for more.
+Every successful response opens with `osnova generation <id>`; errors open with `osnova error:` instead. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code (the map card carries its own health line). Outputs stay under fixed budgets (16,384 code units for search, 4,096 for task context, outlines, change impact and claim checks, 2,048 for call graphs and maps). Structured selections print exact omission counts; when text still exceeds the budget, a clipping notice states the omitted code units, so the agent knows when to ask for more.
 
 A typical agent turn with Osnova:
 
 1. `osnova_footing` with `task: "change"` and the question. The agent gets the seed definitions, who calls them, and which tests touch them.
 2. Edit.
-3. `git diff` into `osnova_settle`. The agent gets every indexed dependent of the changed spans and checks them before it finishes.
+3. `git diff` into `osnova_settle`. The agent gets the indexed dependents of the changed spans to the requested depth (one hop by default, with the frontier beyond it counted) and checks them before it finishes.
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, or a field assigned once in the constructor), including members inherited through declared `extends` and `implements` clauses. Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, or a field assigned once in the constructor), including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding unresolved imports |
 |---|---|---:|---:|---:|---:|
