@@ -4,13 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index.js";
 
-let temporary: string;
-beforeEach(async () => { temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-packages-")); });
+let temporary: string; let builds = 0;
+beforeEach(async () => { temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-packages-")); builds = 0; });
 afterEach(async () => { await fs.rm(temporary, { recursive: true, force: true }); });
 async function build(files: Record<string, string>) {
-  const root = path.join(temporary, "ws"); await fs.mkdir(root);
+  builds += 1;
+  const root = path.join(temporary, `ws${builds}`); await fs.mkdir(root);
   for (const [name, text] of Object.entries(files)) { await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true }); await fs.writeFile(path.join(root, name), text); }
-  return buildIndex(root, { cacheDir: path.join(temporary, "cache") });
+  return buildIndex(root, { cacheDir: path.join(temporary, `cache${builds}`) });
 }
 const imports = (index: Awaited<ReturnType<typeof build>>, file: string) =>
   Object.fromEntries(index.edges.filter((edge) => edge.kind === "imports" && edge.fromFile === file).map((edge) => [edge.toName, edge.toFile]));
@@ -95,5 +96,8 @@ describe("workspace package imports", () => {
     expect(imports(index, "b/app.py")).toEqual({ mod: "b/mod.py" });
     expect(imports(index, "app.py")).toEqual({ shared: "src/shared.py" });
     expect(imports(index, "tests/test_both.py")).toEqual({ both: undefined });
+    const named = await build({ "src/setup.py": "", "src/mod.py": "def f():\n    pass\n", "app.py": "from mod import f\n\ndef use():\n    f()\n", "src/inner.py": "from mod import f\n" });
+    expect(imports(named, "app.py")).toEqual({ mod: undefined });
+    expect(imports(named, "src/inner.py")).toEqual({ mod: "src/mod.py" });
   });
 });

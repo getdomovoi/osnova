@@ -36,7 +36,7 @@ function resolvePythonSpecifier(
   fromFile: string,
   spec: string,
   knownFiles: ReadonlySet<string>,
-  roots: readonly string[],
+  roots: readonly PythonRoot[],
 ): string | undefined {
   let up = 0;
   let rest = spec;
@@ -60,12 +60,11 @@ function resolvePythonSpecifier(
   }
   // Only manifest roots above the importing file count, nearest first; a module found under two
   // of them is ambiguous and stays unresolved.
-  const manifestOf = (root: string): string => root === "src" ? "" : root.endsWith("/src") ? root.slice(0, -4) : root;
-  const ancestors = roots.filter((root) => { const dir = manifestOf(root); return dir === "" || fromDir === dir || fromDir.startsWith(`${dir}/`); })
-    .sort((a, b) => manifestOf(b).length - manifestOf(a).length);
+  const ancestors = roots.filter((root) => root.manifest === "" || fromDir === root.manifest || fromDir.startsWith(`${root.manifest}/`))
+    .sort((a, b) => b.manifest.length - a.manifest.length);
   const found = new Set<string>();
   for (const root of ancestors) {
-    const modulePath = path.posix.join(root, ...parts);
+    const modulePath = path.posix.join(root.dir, ...parts);
     const init = path.posix.join(modulePath, "__init__.py");
     if (knownFiles.has(init)) found.add(init);
     else if (knownFiles.has(`${modulePath}.py`)) found.add(`${modulePath}.py`);
@@ -78,11 +77,12 @@ interface PackageEntry { readonly dir: string; readonly exports: unknown; readon
 // Workspace packages let a bare specifier such as "zod/v4" or "click" resolve to indexed source:
 // package.json name and exports (any condition, source files preferred) for the JavaScript family,
 // and manifest directories plus their src layout for Python.
-export interface WorkspaceContext { readonly packages: ReadonlyMap<string, PackageEntry | null>; readonly pythonRoots: readonly string[] }
+export interface PythonRoot { readonly dir: string; readonly manifest: string }
+export interface WorkspaceContext { readonly packages: ReadonlyMap<string, PackageEntry | null>; readonly pythonRoots: readonly PythonRoot[] }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
   const packages = new Map<string, PackageEntry | null>();
-  const pythonRoots = new Set<string>([""]);
+  const pythonRoots = new Map<string, PythonRoot>([["", { dir: "", manifest: "" }]]);
   for (const [file, card] of files) {
     const base = path.posix.basename(file);
     const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
@@ -95,12 +95,12 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       const main = ["module", "main", "types"].map((key) => record[key]).filter((value): value is string => typeof value === "string");
       packages.set(record.name, packages.has(record.name) ? null : { dir, exports: record.exports, main });
     } else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
-      pythonRoots.add(dir);
+      pythonRoots.set(dir, { dir, manifest: dir });
       const src = dir === "" ? "src" : `${dir}/src`;
-      for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.add(src); break; }
+      for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(src, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots].sort() };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0) };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
