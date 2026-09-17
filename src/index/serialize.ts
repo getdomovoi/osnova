@@ -8,6 +8,7 @@ import type {
   OsnovaEdge,
   OsnovaIndex,
   SourceSpan,
+  ReturnBinding,
   SymbolBinding,
   SymbolKind,
   IndexDiagnostic,
@@ -60,7 +61,7 @@ interface SerializedSymbol {
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
   readonly fields?: readonly string[] | undefined;
-  readonly returns?: SymbolBinding | undefined;
+  readonly returns?: ReturnBinding | undefined;
 }
 
 interface SerializedFile {
@@ -255,7 +256,7 @@ function deserializeParsedArtifact(
       if (symbol.fields !== undefined && (!Array.isArray(symbol.fields) || !symbol.fields.every((item: unknown) => typeof item === "string"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.returns !== undefined) {
         const item = symbol.returns as { kind?: unknown; name?: unknown; source?: unknown; importedName?: unknown };
-        if (typeof item !== "object" || item === null || !((item.kind === "local" && typeof item.name === "string") || (item.kind === "import" && typeof item.source === "string" && typeof item.importedName === "string"))) throw new Error("osnova: corrupt return metadata");
+        if (typeof item !== "object" || item === null || !(item.kind === "this" || (item.kind === "local" && typeof item.name === "string") || (item.kind === "import" && typeof item.source === "string" && typeof item.importedName === "string"))) throw new Error("osnova: corrupt return metadata");
       }
       const span: SourceSpan = {
         startLine: symbol.span.s,

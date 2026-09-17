@@ -107,7 +107,7 @@ function validOwner(value: unknown, depth = 0): boolean {
   if (owner.kind !== "return") return false;
   const of = owner.of as Record<string, unknown> | undefined;
   if (validSymbolBinding(of)) return true;
-  return typeof of === "object" && of !== null && of.kind === "method" && typeof of.member === "string" && validOwner(of.owner, depth + 1);
+  return typeof of === "object" && of !== null && of.kind === "method" && typeof of.member === "string" && ["instance", "class"].includes(String(of.mode)) && validOwner(of.owner, depth + 1);
 }
 
 export function validateBinding(value: unknown): EdgeBinding {

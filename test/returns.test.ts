@@ -32,7 +32,7 @@ describe("return-type receivers", () => {
     const index = await build({
       "a.ts": "class Foo { hit() {} }\nclass Builder {\n  make(): Foo { return new Foo(); }\n  trim(): this { return this; }\n  self() { return this; }\n  run() {\n    this.make().hit();\n    this.trim().make().hit();\n    this.self().make().hit();\n  }\n}\nclass Sub extends Builder {}\nfunction builder(): Builder { return new Builder(); }\nfunction use(b: Builder, s: Sub) {\n  b.make().hit();\n  builder().trim().trim().make().hit();\n  s.make().hit();\n  s.trim().make().hit();\n}\n",
     });
-    expect(index.symbols.get("a.ts#Builder.trim")?.returns).toEqual({ kind: "local", name: "Builder" });
+    expect(index.symbols.get("a.ts#Builder.trim")?.returns).toEqual({ kind: "this" });
     expect(hits(index, "a.ts#Builder.run")).toEqual(["a.ts#Foo.hit", "a.ts#Foo.hit", undefined]);
     expect(hits(index, "a.ts#use")).toEqual(["a.ts#Foo.hit", "a.ts#Foo.hit", "a.ts#Foo.hit", "a.ts#Foo.hit"]);
   });
@@ -59,5 +59,27 @@ describe("return-type receivers", () => {
       "a.ts": "type Alias = { hit(): void };\nfunction alias(): Alias { return { hit() {} }; }\nfunction unknownCallee() { return 1; }\nexport function use(g: () => unknown) {\n  alias().hit();\n  g().hit();\n  (unknownCallee as any)().hit();\n  [1].map(String).hit();\n}\n",
     });
     expect(hits(index, "a.ts#use")).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  it("keeps `this` returns relative to the receiver and survives deep chains in the artifact", async () => {
+    const index = await build({
+      "a.ts": "class B { chain(): this { return this; } hit() {} }\nclass D extends B { hit() {} }\nfunction make(): B { return new B(); }\nfunction use(d: D) {\n  d.chain().hit();\n  make().chain().chain().chain().chain().chain().chain().chain().chain().chain().hit();\n  make().chain().chain().hit();\n}\n",
+      "b.py": "from typing import Self\n\nclass B:\n    @classmethod\n    def make(cls) -> Self:\n        return cls()\n\n    def hit(self):\n        pass\n\nclass D(B):\n    def hit(self):\n        pass\n\ndef use():\n    D.make().hit()\n",
+    });
+    expect(hits(index, "a.ts#use")).toEqual(["a.ts#D.hit", undefined, "a.ts#B.hit"]);
+    expect(hits(index, "b.py#use")).toEqual(["b.py#D.hit"]);
+    const { serializeSections, deserializeArtifact } = await import("../src/index/serialize.js");
+    const sections = serializeSections(index);
+    const loaded = deserializeArtifact(sections.core.toString("utf8"), undefined, sections.text.bytes, sections.edges.bytes);
+    expect(loaded.edges.filter((edge) => edge.fromSymbol === "a.ts#use" && edge.toName === "hit").length).toBe(3);
+  });
+
+  it("refuses overloads that disagree, getters, static or decorated callees, coroutines and a shadowed Self", async () => {
+    const index = await build({
+      "a.ts": "class A { hit() {} }\nclass B { hit() {} }\ninterface Source { make(x: string): A; make(x: number): B; same(x: string): A; same(x: number): A; }\nclass G { get make(): A { return new A(); } static build(): A { return new A(); } inst(): A { return new A(); } }\nfunction use(s: Source, g: G) {\n  s.make(1).hit();\n  s.same(1).hit();\n  g.make().hit();\n  g.build().hit();\n  G.inst().hit();\n  G.build().hit();\n  A().hit();\n}\n",
+      "p.py": "def wrap(f):\n    return f\n\nclass A:\n    def hit(self):\n        pass\n\nclass Self:\n    def hit(self):\n        pass\n\nclass M:\n    @wrap\n    def make(self) -> A:\n        return A()\n\n    def own(self) -> Self:\n        return Self()\n\nasync def later() -> A:\n    return A()\n\ndef gen() -> A:\n    yield A()\n\ndef use(m: M):\n    m.make().hit()\n    m.own().hit()\n    later().hit()\n    gen().hit()\n",
+    });
+    expect(hits(index, "a.ts#use")).toEqual([undefined, "a.ts#A.hit", undefined, undefined, undefined, "a.ts#A.hit", undefined]);
+    expect(hits(index, "p.py#use")).toEqual([undefined, "p.py#Self.hit", undefined, undefined]);
   });
 });
