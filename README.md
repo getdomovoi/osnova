@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-dark.png">
-  <img alt="osnova. A deterministic code map for AI coding agents. Seven tools: ground, thread, outline, warp, groundwork, footing, settle." src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-light.png" width="1200">
+  <img alt="osnova. A deterministic code map for AI coding agents. Eight tools: ground, thread, outline, warp, groundwork, footing, settle, plumb." src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-light.png" width="1200">
 </picture>
 
 # Osnova
@@ -89,9 +89,9 @@ It reads the client's real config file, proposes the one entry as a unified diff
 
 `osnova doctor` checks the runtime, the cache and every packaged grammar.
 
-## The seven tools
+## The eight tools
 
-The tool names play on the foundation image. The CLI uses the same seven names without the prefix, so `osnova ground` on the command line and `osnova_ground` over MCP are the same query.
+The tool names play on the foundation image. The CLI uses the same eight names without the prefix, so `osnova ground` on the command line and `osnova_ground` over MCP are the same query.
 
 | Tool | Meaning | Does |
 | --- | --- | --- |
@@ -102,14 +102,32 @@ The tool names play on the foundation image. The CLI uses the same seven names w
 | `osnova_groundwork` | the groundwork under everything | Repository map: directory clusters, hubs and hotspots |
 | `osnova_footing` | the footing you build on | Task context: the definitions, relationships and candidate tests around a question or named symbols |
 | `osnova_settle` | how the ground settles after a change | Change impact: the symbols a unified diff touches and their indexed dependents |
+| `osnova_plumb` | the plumb line that tests true vertical | Check claims: which of a listed set of call sites the index confirms, which are name matches only, and which dependents were left out |
 
-Every response opens with `osnova generation <id>`. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code. Outputs stay under fixed budgets (16,384 code units for search, 8,192 for task context, 4,096 for outlines and change impact, 2,048 for call graphs and maps) and always print exact omission counts, so the agent knows when to ask for more.
+Every successful response opens with `osnova generation <id>`; errors open with `osnova error:` instead. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code (the map card carries its own health line). Outputs stay under fixed budgets (16,384 code units for search, 4,096 for task context, outlines, change impact and claim checks, 2,048 for call graphs and maps). Structured selections print exact omission counts; when text still exceeds the budget, a clipping notice states the omitted code units, so the agent knows when to ask for more.
 
 A typical agent turn with Osnova:
 
 1. `osnova_footing` with `task: "change"` and the question. The agent gets the seed definitions, who calls them, and which tests touch them.
 2. Edit.
-3. `git diff` into `osnova_settle`. The agent gets every indexed dependent of the changed spans and checks them before it finishes.
+3. `git diff` into `osnova_settle`. The agent gets the indexed dependents of the changed spans to the requested depth (one hop by default, with the frontier beyond it counted) and checks them before it finishes.
+
+## How much of the graph is exact
+
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding, a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, or the declared return type of the function or method that produced the value), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. These are the shares on the pinned benchmark checkouts, measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+
+| Corpus | Language | Call sites | Resolved | Share | Excluding externals |
+|---|---|---:|---:|---:|---:|
+| click | python | 5018 | 699 | 13.9% | 29.0% |
+| click | all | 5018 | 699 | 13.9% | 29.0% |
+| pyright | python | 11614 | 3193 | 27.5% | 61.2% |
+| pyright | typescript | 46759 | 25382 | 54.3% | 64.5% |
+| pyright | all | 58405 | 28575 | 48.9% | 64.1% |
+| zod | tsx | 150 | 7 | 4.7% | 8.3% |
+| zod | typescript | 53208 | 6510 | 12.2% | 43.4% |
+| zod | all | 53387 | 6527 | 12.2% | 43.2% |
+
+A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
 ## CLI
 
@@ -122,6 +140,8 @@ osnova warp <symbol>           # direct or transitive callers or callees
 osnova groundwork              # directory clusters, hubs, hotspots
 osnova footing "<question>"    # task context as JSON
 osnova settle --base-cache ... # compare two preserved indexes
+osnova plumb <symbol> --site <path:line> ...  # check claimed call sites against the index
+osnova coverage [--json]       # call-site resolution coverage per language and reason
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
 osnova doctor                  # read-only runtime and asset checks
 osnova setup --preview --client <name>  # diff for one client's config; never applies

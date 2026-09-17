@@ -2,6 +2,30 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## 0.4.0 (2026-09-17)
+
+### Added
+
+- `osnova_plumb` and the CLI command `plumb`: check a claimed list of `path:line` call sites for a symbol against the index. Verdicts per site are confirmed, name-only, no-call or not-indexed, plus the resolved dependents the list left out.
+- `osnova coverage` and `resolutionCoverage`: call-site resolution coverage per language, by method and by reason, with the share among call sites not blocked by an unresolved import shown beside the plain share. `scripts/coverage-corpora.mjs` records it on the pinned checkouts; the README carries the measured numbers.
+
+### Changed
+
+- Call resolution follows `export * as name` namespace re-exports, so `name.member(...)` through a barrel resolves to the declaring symbol.
+- Python parameters annotated with a class name (`ctx: Context`, `ctx: mod.Context`) act as instance receivers, so `ctx.method()` resolves to that class's method. Unions, `Optional`, string annotations and reassigned parameters stay unbound. Artifact extraction version moves to `structural-9.6`; older caches rebuild.
+- TypeScript type annotations on parameters, class fields, constructor parameter properties and `const` or `let` locals act as instance receivers, and interface method signatures and function-typed property signatures are indexed as members, so `reader.read()` resolves when `reader: Reader`.
+- Members are found through declared inheritance: `extends` clauses on classes and interfaces (TypeScript) and base classes (Python) are followed for up to eight hops when the receiver's own class lacks the member. `implements` clauses are not followed. The walk stays unresolved when a base cannot be identified, when two base chains supply different members, when the chain cycles, or when the class declares a non-method field of that name. Symbols carry `heritage` and `fields` lists. Type-only imports and `readonly` constructor parameter properties supply receivers; static fields, fields written more than once, and fields assigned only inside a nested function do not.
+- A field assigned exactly once in the constructor from a constructor call (`this.client = new Client()`, `self.client = Client()`) acts as a receiver for `this.client.method()` and `self.client.method()`.
+- TypeScript `namespace` and `module` blocks are indexed as `module` symbols with their members under them (`Uri.create` is a `function` under `Uri`), so `Uri.create()` and a call through a namespace merged with a class or interface resolve. A namespace function is reachable through the namespace name only, never through an instance. Nested namespaces resolve when the outer name is declared in the same file.
+- Declared return types act as receivers: `make().hit()`, `const x = make(); x.hit()`, `this.build().hit()` and chains such as `builder().trim().make().hit()` resolve when each callee's return annotation names an indexed class or interface (TypeScript `: Foo` and `: this`, Python `-> Foo` and `-> Self`). Symbols carry `returns`. Unions, generics such as `Promise<Foo>`, string annotations, unannotated callees and reassigned locals stay unbound. A call on a value produced by an import the index cannot resolve now counts as `import-target-unresolved` rather than `receiver-unresolved`, and a call to a name with no binding in the file (a builtin or ambient global) counts as `unbound-global`; `osnova coverage` reports both counts and a share that excludes both (`resolvedShareExcludingExternal`).
+- `osnova_ground` and `osnova_footing` inline whole definitions of 40 lines or fewer; the footing budget is 4096 code units; the response prefix is shorter.
+
+### Fixed
+
+- Cache lock recovery: a transient failure while removing the recovery marker could leave a dead lock unrecoverable until timeout, and Windows could refuse the rename while another waiter held a handle. Recovery now yields and retries, and the marker is always removed.
+- The clean-install smoke retries temporary directory cleanup on Windows.
+- Tool count, budgets and heritage wording in the README and reference match the shipped behavior; CLI `plumb` shares the 4,096 code-unit budget.
+
 ## 0.3.0 (2026-09-17)
 
 ### Added

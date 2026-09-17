@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol } from "../types.js";
+import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ReceiverBasis, ReceiverMode, ReceiverOwner, SymbolBinding } from "../types.js";
 import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 
@@ -98,6 +98,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   interface ExportResult {
     symbols: Map<string, OsnovaSymbol>;
     routes: Map<string, readonly ExportHop[]>;
+    namespaces: Array<{ file: string; via: readonly ExportHop[] }>;
     incomplete: boolean;
     cycle: boolean;
   }
@@ -106,7 +107,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const key = JSON.stringify([file, name]);
     const cached = exportCache.get(key);
     if (cached !== undefined) return cached;
-    const result: ExportResult = { symbols: new Map(), routes: new Map(), incomplete: false, cycle: false };
+    const result: ExportResult = { symbols: new Map(), routes: new Map(), namespaces: [], incomplete: false, cycle: false };
     const visited = new Set<string>();
     const active = new Set<string>();
     const family = languageFamily(files.get(file)?.language);
@@ -124,8 +125,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         return;
       }
       const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName));
+      const spaces = links.filter((link) => link.kind === "namespace" && link.exportedName === currentName);
+      for (const link of spaces) {
+        if (link.kind !== "namespace") continue;
+        const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles);
+        if (target === undefined) { result.incomplete = true; continue; }
+        result.namespaces.push({ file: target, via: [...via, { file: currentFile, line: link.line, kind: "namespace", exportedName: currentName, importedName: "*", source: link.source, targetFile: target }] });
+      }
       const named = links.filter((link) => link.kind === "named" && link.exportedName === currentName);
-      const next = direct.length > 0 || named.length > 0 ? named
+      const next = direct.length > 0 || named.length > 0 || spaces.length > 0 ? named
         : currentName === "default" ? [] : links.filter((link) => link.kind === "star");
       for (const symbol of direct) {
         if (!result.symbols.has(symbol.qualifiedName)) {
@@ -135,7 +143,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       }
       active.add(state);
       for (const link of next) {
-        if (link.kind === "blocked") continue;
+        if (link.kind === "blocked" || link.kind === "namespace") continue;
         const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles);
         if (target === undefined) { result.incomplete = true; continue; }
         const importedName = link.kind === "named" ? link.importedName : currentName;
@@ -150,6 +158,32 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     exportCache.set(key, result);
     return result;
   };
+  // Declaration files are not parsed, but a name they declare at the top level or inside
+  // `declare global` is not a missing global either. Comments and strings are blanked first;
+  // a `declare module "x"` body is skipped because its names are not global.
+  const ambientGlobals = new Set<string>();
+  const ambientNamesOf = (text: string): string[] => {
+    const blank = (match: string): string => match.replace(/[^\n]/g, " ");
+    const stripped = text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, blank);
+    const top: string[] = []; const global: string[] = [];
+    const pattern = /\bdeclare\s+global\s*\{|\bdeclare\s+module\s+"[^"]*"\s*\{|\bdeclare\s+(?:function|const|let|var|class|enum|namespace|module)\s+([A-Za-z_$][\w$]*)|\b(?:function|const|let|var|class|enum|interface|type)\s+([A-Za-z_$][\w$]*)|\bimport\b(?!\s*\()|\bexport\b|[{}]/g;
+    let depth = 0; let globalDepth = -1; let moduleDepth = -1; let isModule = false;
+    for (const match of stripped.matchAll(pattern)) {
+      const token = match[0];
+      if (token === "{") { depth += 1; continue; }
+      if (token === "}") { depth -= 1; if (depth <= globalDepth) globalDepth = -1; if (depth <= moduleDepth) moduleDepth = -1; continue; }
+      if (token === "import" || token === "export") { if (depth === 0) isModule = true; continue; }
+      if (token.startsWith("declare") && token.endsWith("{")) { if (depth === 0) { if (/global/.test(token)) globalDepth = depth; else moduleDepth = depth; } depth += 1; continue; }
+      const name = match[1] ?? match[2];
+      if (name === undefined || moduleDepth >= 0) continue;
+      if (depth === 0 && match[1] !== undefined) top.push(name);
+      else if (globalDepth >= 0 && depth === globalDepth + 1) global.push(name);
+    }
+    return isModule ? global : [...top, ...global];
+  };
+  for (const [file, card] of files) {
+    if (file.endsWith(".d.ts")) for (const name of ambientNamesOf(card.text)) ambientGlobals.add(name);
+  }
   const importTargetsByFile = new Map<string, string[]>();
   for (const fromFile of [...rawEdges.keys()].sort()) {
     const raws = rawEdges.get(fromFile);
@@ -187,7 +221,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const binding = raw.binding;
         const reference = binding.kind === "member" ? binding.owner : binding;
         let candidates: readonly OsnovaSymbol[] = [];
-        let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved" : "binding-blocked" };
+        let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved"
+          : binding.kind === "blocked" && binding.reason === "unbound" && !(languageFamily(card.language) === languageFamily("typescript") && ambientGlobals.has(raw.toName)) ? "unbound-global" : "binding-blocked" };
         let exportResult: ExportResult | undefined;
         if (reference.kind === "import") {
           const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles);
@@ -198,7 +233,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             else {
               candidates = [...exportResult.symbols.values()].filter((symbol) =>
                 languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-                (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
+                (raw.kind !== "calls" || binding.kind === "member" || (symbol.kind !== "interface" && symbol.kind !== "type")));
               resolution = candidates.length === 0 && exportResult.cycle
                 ? { status: "unresolved", reason: "re-export-cycle" }
                 : { status: "resolved", method: "import-binding" };
@@ -209,21 +244,145 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           resolution = { status: "resolved", method: "lexical-definition" };
         }
         let owner: OsnovaSymbol | undefined;
-        if (binding.kind === "member") {
-          const owners = candidates.filter((symbol) => symbol.kind === "class");
+        let namespaceVia: readonly ExportHop[] | undefined;
+        const namespaceTargets = exportResult === undefined ? [] : [...new Map(exportResult.namespaces.map((space) => [space.file, space])).values()];
+        if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && namespaceTargets.length > 1 &&
+          !candidates.some((symbol) => symbol.kind === "class")) {
+          resolution = { status: "unresolved", reason: "binding-blocked" };
+          candidates = [];
+        } else if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && namespaceTargets.length === 1 &&
+          !candidates.some((symbol) => symbol.kind === "class")) {
+          const gathered: OsnovaSymbol[] = [];
+          const routes = new Map<string, readonly ExportHop[]>();
+          let incomplete = false, cycle = false;
+          for (const space of namespaceTargets) {
+            const nested = exported(space.file, binding.member);
+            if (nested.incomplete) { incomplete = true; continue; }
+            if (nested.cycle) cycle = true;
+            for (const symbol of nested.symbols.values()) {
+              if (!routes.has(symbol.qualifiedName)) routes.set(symbol.qualifiedName, [...space.via, ...(nested.routes.get(symbol.qualifiedName) ?? [])]);
+              gathered.push(symbol);
+            }
+          }
+          candidates = incomplete ? [] : gathered.filter((symbol) =>
+            languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
+            (raw.kind !== "calls" || binding.kind === "member" || (symbol.kind !== "interface" && symbol.kind !== "type")));
+          resolution = incomplete ? { status: "unresolved", reason: "re-export-incomplete" }
+            : candidates.length === 0 && cycle ? { status: "unresolved", reason: "re-export-cycle" } : { status: "resolved", method: "import-binding" };
+          const first = candidates[0];
+          namespaceVia = first === undefined ? undefined : routes.get(first.qualifiedName);
+        } else if (binding.kind === "member") {
+          let basis: ReceiverBasis = binding.basis;
+          const owners = candidates.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module");
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
-          const ownerName = owner?.qualifiedName;
-          const members = owner === undefined ? [] : (files.get(owner.file)?.symbols ?? []).filter((symbol) =>
-            symbol.kind === "method" && symbol.qualifiedName === `${ownerName}.${binding.member}`);
-          const kinds = new Set(members.map((symbol) => symbol.memberKind));
+          const membersOf = (holder: OsnovaSymbol, member: string = binding.member): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
+            (symbol.kind === "method" || symbol.kind === "function") && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
+          // Walk declared heritage when the owner itself lacks the member. Any base that cannot be
+          // identified, a cycle, an own non-method field of that name, or two base chains that
+          // disagree leaves the member unresolved rather than guessed.
+          const declarationsOf = (holder: OsnovaSymbol): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
+            symbol.qualifiedName === holder.qualifiedName && (symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module"));
+          const basesOf = (holder: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol[] | null => {
+            const holderCard = files.get(holder.file);
+            if (holderCard === undefined) return null;
+            let bases: OsnovaSymbol[] = [];
+            if (base.kind === "local") bases = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(holder.file, base.name));
+            else {
+              const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles);
+              if (target === undefined) return null;
+              const found = exported(target, base.importedName);
+              if (found.incomplete) return null;
+              bases = [...found.symbols.values()];
+            }
+            const holders = bases.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface");
+            return holders.length === 0 || new Set(holders.map((symbol) => symbol.qualifiedName)).size !== 1 ? null : [holders[0]!];
+          };
+          const inherited = (holder: OsnovaSymbol, depth: number, visited: ReadonlySet<string>, member: string = binding.member): OsnovaSymbol[] | null => {
+            const declarations = declarationsOf(holder);
+            if (declarations.some((declaration) => declaration.fields?.includes(member))) return null;
+            const own = membersOf(holder, member);
+            if (own.length > 0) return own;
+            const heritage = declarations.flatMap((declaration) => declaration.heritage ?? []);
+            if (heritage.length === 0) return [];
+            if (depth >= 8) return null;
+            let result: OsnovaSymbol[] = [];
+            for (const base of heritage) {
+              const targets = basesOf(holder, base);
+              const target = targets?.[0];
+              if (target === undefined || visited.has(target.qualifiedName)) return null;
+              const found = inherited(target, depth + 1, new Set([...visited, target.qualifiedName]), member);
+              if (found === null) return null;
+              if (found.length === 0) continue;
+              if (result.length > 0 && result[0]!.qualifiedName !== found[0]!.qualifiedName) return null;
+              result = found;
+            }
+            return result;
+          };
+          const symbolsFor = (file: string, ref: SymbolBinding): OsnovaSymbol[] | null => {
+            const holderCard = files.get(file);
+            if (holderCard === undefined) return null;
+            if (ref.kind === "local") return holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(file, ref.name));
+            const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles);
+            if (target === undefined) return null;
+            const found = exported(target, ref.importedName);
+            return found.incomplete ? null : [...found.symbols.values()];
+          };
+          const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
+            symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
+          const returnKey = (symbol: OsnovaSymbol): string => JSON.stringify(symbol.returns ?? null);
+          // Every declaration sharing the qualified name (overloads) must agree on the return binding.
+          const holderOfCallables = (callables: OsnovaSymbol[] | null, receiver: OsnovaSymbol | undefined, mode: ReceiverMode | undefined): OsnovaSymbol | undefined => {
+            if (callables === null || callables.length === 0) return undefined;
+            const first = callables[0]!;
+            if (callables.some((symbol) => symbol.qualifiedName !== first.qualifiedName)) return undefined;
+            if (first.kind === "class" || first.kind === "interface") return card.language === "python" && receiver === undefined ? first : undefined;
+            if (first.kind !== "function" && first.kind !== "method") return undefined;
+            if (callables.some((symbol) => symbol.returns === undefined || returnKey(symbol) !== returnKey(first))) return undefined;
+            if (first.kind === "method") {
+              if (callables.some((symbol) => symbol.memberKind === undefined || symbol.memberKind === "property" || symbol.memberKind === "unknown")) return undefined;
+              if (card.language !== "python" && mode !== undefined && callables.some((symbol) => (mode === "class" ? symbol.memberKind !== "static" : symbol.memberKind !== "instance"))) return undefined;
+            }
+            const returns = first.returns!;
+            if (returns.kind === "this") return receiver;
+            return unique(symbolsFor(first.file, returns)?.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface") ?? null);
+          };
+          const holderOf = (ref: ReceiverOwner, depth: number): OsnovaSymbol | undefined => {
+            if (depth > 6) return undefined;
+            if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module") ?? null);
+            const of: Callee = ref.of;
+            if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => ["class", "interface", "function", "method"].includes(symbol.kind)) ?? null, undefined, undefined);
+            const holder = holderOf(of.owner, depth + 1);
+            if (holder === undefined) return undefined;
+            return holderOfCallables(inherited(holder, 0, new Set([holder.qualifiedName]), of.member), holder, of.mode);
+          };
+          const rootImportUnresolved = (ref: ReceiverOwner | Callee, depth = 0): boolean => {
+            if (depth > 8) return false;
+            if (ref.kind === "import") return resolveImportTarget(card.language, fromFile, ref.source, knownFiles) === undefined;
+            if (ref.kind === "return") return rootImportUnresolved(ref.of, depth + 1);
+            if (ref.kind === "method") return rootImportUnresolved(ref.owner, depth + 1);
+            return false;
+          };
+          if (binding.owner.kind === "return") {
+            owner = holderOf(binding.owner, 0); basis = "return";
+            if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
+          }
+          else if (owner === undefined && card.language === "python" && binding.basis === "constructor") {
+            owner = holderOfCallables(candidates.filter((symbol) => symbol.kind === "function" || symbol.kind === "method"), undefined, undefined);
+            if (owner !== undefined) basis = "return";
+          }
+          const members: OsnovaSymbol[] = owner === undefined ? [] : inherited(owner, 0, new Set([owner.qualifiedName])) ?? [];
+          // A namespace function behaves like a static member: reachable through the namespace name, never through an instance.
+          const effectiveKind = (symbol: OsnovaSymbol) => symbol.kind === "function" ? "static" : symbol.memberKind;
+          const kinds = new Set(members.map(effectiveKind));
           candidates = kinds.size > 1 ? [] : members.filter((symbol) => {
-            if (symbol.memberKind === undefined || symbol.memberKind === "unknown" || symbol.memberKind === "property") return false;
+            const kind = effectiveKind(symbol);
+            if (kind === undefined || kind === "unknown" || kind === "property") return false;
             if (card.language === "python") return true;
-            return binding.mode === "class" ? symbol.memberKind === "static" : symbol.memberKind === "instance";
+            return binding.mode === "class" ? kind === "static" : kind === "instance";
           });
           if (owner !== undefined && candidates.length > 0) {
-            resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis: binding.basis } };
-          } else if (resolution.status === "resolved" || reference.kind === "local") {
+            resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis } };
+          } else if (resolution.status === "resolved" || reference.kind === "local" || (reference.kind === "return" && resolution.reason !== "import-target-unresolved")) {
             resolution = { status: "unresolved", reason: "receiver-unresolved" };
           }
         }
@@ -231,7 +390,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const resolved = names.length === 1 ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
         else if (resolved === undefined && resolution.status === "resolved") resolution = { status: "unresolved", reason: "bound-symbol-missing" };
-        const via = resolved === undefined ? undefined : exportResult?.routes.get(owner?.qualifiedName ?? resolved.qualifiedName);
+        const via = resolved === undefined ? undefined : namespaceVia ?? exportResult?.routes.get(owner?.qualifiedName ?? resolved.qualifiedName);
         if (via !== undefined && via.length > 0) resolution = resolution.status === "resolved" && resolution.method === "receiver-hint"
           ? { ...resolution, via } : { status: "resolved", method: "re-export-binding", via };
         edges.push({

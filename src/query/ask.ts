@@ -106,7 +106,9 @@ export function askDetailed(index: OsnovaIndex, question: string, options?: AskO
     const symbol = document.symbol;
     const lines = ctx.lines.get(document.file) ?? [];
     const bestLine = exact && symbol !== null ? symbol.span.startLine : bestMatchLine(document, ctx, queryTokens);
-    const excerpt = excerptFor(lines, bestLine, symbol, full);
+    const inline = options?.inlineShortDefinitions;
+    const wholeShort = !full && inline !== undefined && symbol !== null && symbol.span.endLine - symbol.span.startLine + 1 <= inline;
+    const excerpt = excerptFor(lines, bestLine, symbol, full || wholeShort);
     hits.push({
       file: document.file,
       line: bestLine,
