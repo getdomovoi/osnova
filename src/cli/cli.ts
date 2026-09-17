@@ -15,7 +15,7 @@ import { formatAsk, formatCallersDetailed, formatCoverage, formatFindTextResult,
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import type { OsnovaIndex } from "../types.js";
-import { boundText } from "../query/budget.js";
+import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { taskContext } from "../query/task-context.js";
@@ -328,7 +328,7 @@ export async function runCli(
       if (claims.length === 0) throw new Error("osnova plumb: give at least one --site path:line or a --sites-file");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", 1) });
-      io.stdout(formatPlumb(result, symbol));
+      io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
       return EXIT_OK;
     }
     case "coverage": {

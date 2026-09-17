@@ -17,7 +17,7 @@ import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex } from "../types.js";
-import { boundText } from "../query/budget.js";
+import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
 
 const maximumMcpSkeletonCodeUnits = 4_096;
@@ -25,7 +25,7 @@ const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
-const maximumMcpPlumbCodeUnits = 4_096;
+const maximumMcpPlumbCodeUnits = maximumPlumbCodeUnits;
 const mcpFootingExcerptLines = 8;
 const mcpInlineShortDefinitions = 40;
 const mcpGenerationDigits = 16;
@@ -94,7 +94,7 @@ const toolDefinitions = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        maxDirs: { type: "number", description: "Maximum directory clusters (default 16)" },
+        maxDirs: { type: "number", description: "Maximum directory clusters (default 8)" },
       },
     },
   },
