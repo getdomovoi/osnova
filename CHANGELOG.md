@@ -4,6 +4,11 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- `osnova_plumb` and the CLI command `plumb`: check a claimed list of `path:line` call sites for a symbol against the index. Verdicts per site are confirmed, name-only, no-call or not-indexed, plus the resolved dependents the list left out.
+- `osnova coverage` and `resolutionCoverage`: call-site resolution coverage per language, by method and by reason, with the share among call sites not blocked by an unresolved import shown beside the plain share. `scripts/coverage-corpora.mjs` records it on the pinned checkouts; the README carries the measured numbers.
+
 ### Changed
 
 - Call resolution follows `export * as name` namespace re-exports, so `name.member(...)` through a barrel resolves to the declaring symbol.
