@@ -19,7 +19,7 @@ class TsExtractor {
 
   def(name: string, kind: Parameters<Extractor["addDef"]>[1], node: Node, sigNode?: Node): void {
     if (!IDENTIFIER_RE.test(name)) return;
-    this.out.addDef(name, kind, node, sigNode);
+    this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined);
   }
 }
 
@@ -87,7 +87,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
         if (member.type === "method_definition" || (fieldValue !== null && FUNCTION_VALUE_NODES.has(fieldValue.type))) {
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {
-            ex.out.addDef(methodName, "method", member, fieldValue ?? undefined, memberKindOf(member, false));
+            ex.out.addDef(methodName, "method", member, fieldValue ?? undefined, memberKindOf(member, false), undefined, undefined, ex.bindings.returns(fieldValue ?? member));
             ex.pushFrame(methodName);
             for (const bodyPart of childrenOf(member)) visit(bodyPart);
             ex.popFrame();
@@ -163,7 +163,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
             }
             ex.out.addDef(name, "interface", node, undefined, undefined, ex.bindings.heritage(node), fields);
             ex.pushFrame(name);
-            for (const member of methods) ex.out.addDef(member.childForFieldName("name")!.text, "method", member, undefined, "instance");
+            for (const member of methods) ex.out.addDef(member.childForFieldName("name")!.text, "method", member, undefined, "instance", undefined, undefined, ex.bindings.returns(member));
             ex.popFrame();
           }
           return;

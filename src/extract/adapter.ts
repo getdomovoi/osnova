@@ -11,6 +11,7 @@ export interface RawDefinition {
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
   readonly fields?: readonly string[] | undefined;
+  readonly returns?: SymbolBinding | undefined;
 }
 
 export interface RawEdge {

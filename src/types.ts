@@ -55,11 +55,12 @@ export interface OsnovaSymbol {
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
   readonly fields?: readonly string[] | undefined;
+  readonly returns?: SymbolBinding | undefined;
 }
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
 export type ReceiverMode = "instance" | "class";
-export type ReceiverBasis = "constructor" | "lexical" | "class-reference" | "annotation";
+export type ReceiverBasis = "constructor" | "lexical" | "class-reference" | "annotation" | "return";
 
 export type EdgeKind = "calls" | "references" | "imports";
 
@@ -90,9 +91,12 @@ export type SymbolBinding =
   | { readonly kind: "import"; readonly source: string; readonly importedName: string }
   | { readonly kind: "local"; readonly name: string };
 
+export type Callee = SymbolBinding | { readonly kind: "method"; readonly owner: ReceiverOwner; readonly member: string };
+export type ReceiverOwner = SymbolBinding | { readonly kind: "return"; readonly of: Callee };
+
 export type EdgeBinding = SymbolBinding
-  | { readonly kind: "instance"; readonly owner: SymbolBinding; readonly basis: "constructor" | "lexical" | "annotation" }
-  | { readonly kind: "member"; readonly owner: SymbolBinding; readonly member: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }
+  | { readonly kind: "instance"; readonly owner: ReceiverOwner; readonly basis: "constructor" | "lexical" | "annotation" | "return" }
+  | { readonly kind: "member"; readonly owner: ReceiverOwner; readonly member: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }
   | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" };
 
 export type EdgeEvidence =
