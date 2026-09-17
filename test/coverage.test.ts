@@ -43,4 +43,14 @@ describe("resolution coverage", () => {
     expect(report.total).toMatchObject({ calls: 0, resolved: 0, resolvedShare: 0 });
     expect(report.languages).toHaveLength(1);
   });
+
+  it("keeps ambient declarations out of the unbound-global bucket", async () => {
+    const workspace = path.join(temporary, "ambient"); await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "globals.d.ts"), "declare function shared(): void;\n");
+    await fs.writeFile(path.join(workspace, "a.ts"), "declare function here(): void;\nfunction local() {}\nexport function use() {\n  here();\n  shared();\n  local();\n  missing();\n}\n");
+    const index = await buildIndex(workspace, { cacheDir: path.join(temporary, "cache-ambient") });
+    const reasons = index.outgoing("a.ts#use").map((edge) => { const r = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined; return [edge.toName, r?.status === "unresolved" ? r.reason : edge.toSymbol]; });
+    expect(reasons).toEqual([["here", "binding-blocked"], ["shared", "binding-blocked"], ["local", "a.ts#local"], ["missing", "unbound-global"]]);
+    expect(resolutionCoverage(index).total).toMatchObject({ calls: 4, resolved: 1, unboundGlobalCalls: 1, resolvedShareExcludingExternal: 0.3333 });
+  });
 });

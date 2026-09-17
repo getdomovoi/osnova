@@ -126,6 +126,7 @@ export function collectBindings(root: Node, python: boolean): {
   const reExports: ReExport[] = [];
   const importLines = new Map<EdgeBinding, number>();
   const constructions = new Map<EdgeBinding, { expression: Node; site: Node; call?: boolean }>();
+  const ambient = new Set<string>();
   const implicitReceivers: Array<{ node: Node; scope: Scope; parameter: string }> = [];
   const annotated: Array<{ scope: Scope; parameter: string; typeName: string; site: Node }> = [];
   const memberWrites: Array<{ object: Node; member: string; scope: Scope }> = [];
@@ -194,6 +195,12 @@ export function collectBindings(root: Node, python: boolean): {
   };
 
   function visit(node: Node, outer: Scope): void {
+    if (!python && node.type === "ambient_declaration") {
+      for (const child of childrenOf(node)) {
+        const name = child.type === "function_signature" ? child.childForFieldName("name")?.text : undefined;
+        if (name !== undefined) ambient.add(name);
+      }
+    }
     let scope = outer;
     if (functions.has(node.type)) {
       const nameNode = node.childForFieldName("name");
@@ -558,7 +565,7 @@ export function collectBindings(root: Node, python: boolean): {
   };
   const at = (expression: Node | null, site: Node): EdgeBinding | undefined => {
       expression = unwrap(expression);
-      if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: "unbound" };
+      if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: ambient.has(expression.text) ? "unsupported" : "unbound" };
       if (expression !== null && ["member_expression", "attribute"].includes(expression.type)) {
         const object = unwrap(expression.childForFieldName("object"));
         const property = expression.childForFieldName(python ? "attribute" : "property");
