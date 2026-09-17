@@ -184,6 +184,20 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("keeps the excerpt notice when inlining would overflow the ground budget", async () => {
+    const wide = "x".repeat(50);
+    for (let n = 0; n < 12; n++) write(`src/wide${n}.ts`, `export function wideFn${n}(): string {\n${Array.from({ length: 30 }, (_, i) => `  const a${i} = "${wide}";`).join("\n")}\n  return a0;\n}\n`);
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_ground", { question: "wide", limit: 12 });
+      expect(text.length).toBeLessThanOrEqual(16_384);
+      expect(text).toContain("excerpt: lines");
+      expect(text).not.toContain("[output truncated");
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
   it("returns isError for tool failures without crashing the server", async () => {
     const client = await connect();
     try {

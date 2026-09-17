@@ -15,7 +15,7 @@ import { renderMapCard } from "../query/mapCard.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
-import { maximumOsnovaMapCardCodeUnits, type OsnovaIndex } from "../types.js";
+import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex } from "../types.js";
 import { boundText } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
 
@@ -47,7 +47,7 @@ const toolDefinitions = [
   {
     name: "osnova_thread",
     description:
-      "Text search: every indexed occurrence of a regex or literal, grouped by the enclosing definition and ranked by how much else depends on it. Use for exhaustive lists (every call, every string). Totals and omission counts are exact.",
+      "Text search: regex or literal matches over indexed text, grouped by the enclosing definition and ranked by how much else depends on it. Shows up to 10 matches per group and 50 groups by default (limit raises the group cap); totals and omission counts are exact, so you know what was left out.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -62,7 +62,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_outline",
-    description: "Outline: every definition in one file with its signature and line span, under 4096 code units. Use instead of reading a whole file to learn its shape; read only the span you need afterwards.",
+    description: "Outline: the definitions of one file with signature and line span, selected by connectivity to fit 4096 code units, with an exact count of any omitted. Use instead of reading a whole file to learn its shape; read only the span you need afterwards.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -115,7 +115,7 @@ const toolDefinitions = [
   {
     name: "osnova_settle",
     description:
-      "Change impact: given the output of git diff, the symbols the diff touches and every indexed dependent of them, under 4096 code units. Use once after editing, before declaring done, to find callers the tests do not cover. Compares against the current index only, so deleted symbols are not visible.",
+      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Compares against the current index only, so deleted symbols are not visible.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -158,13 +158,10 @@ export function createOsnovaMcpServer(
       switch (name) {
         case "osnova_ground": {
           const question = requireString(args, "question");
-          const result = ask(index, question, {
-            in: optionalString(args, "in"),
-            limit: optionalNumber(args, "limit"),
-            full: optionalBoolean(args, "full"),
-            inlineShortDefinitions: mcpInlineShortDefinitions,
-          });
-          return textResult(`${prefix}\n${formatAsk(result)}`);
+          const askOptions = { in: optionalString(args, "in"), limit: optionalNumber(args, "limit"), full: optionalBoolean(args, "full") };
+          let text = `${prefix}\n${formatAsk(ask(index, question, { ...askOptions, inlineShortDefinitions: mcpInlineShortDefinitions }))}`;
+          if (text.length > maximumTextResponseCodeUnits) text = `${prefix}\n${formatAsk(ask(index, question, askOptions))}`;
+          return textResult(text);
         }
         case "osnova_thread": {
           const pattern = requireString(args, "pattern");
