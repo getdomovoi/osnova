@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import type { Callee, EdgeBinding, MemberKind, ReceiverOwner, ReturnBinding } from "../types.js";
+import type { Callee, EdgeBinding, MemberKind, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
 import { childrenOf } from "./util.js";
 
 // Receiver identity for languages with declared types and no lexical binding collector of their
@@ -23,6 +23,7 @@ export interface TypedSpec {
   readonly field?: ((node: Node) => ReadonlyArray<{ name: string; type: Node | null; isStatic: boolean }>) | undefined;
   readonly thisNodes?: readonly string[] | undefined;
   readonly isStatic?: ((fn: Node) => boolean) | undefined;
+  readonly bases?: ((classNode: Node) => readonly string[]) | undefined;
 }
 
 interface Import { readonly source: string; readonly name: string }
@@ -33,6 +34,7 @@ interface Scope { readonly parent: Scope | null; readonly names: Map<string, Dec
 
 export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
+  heritage: (classNode: Node) => SymbolBinding[];
   returns: (fn: Node) => ReturnBinding | undefined;
   memberKind: (fn: Node) => MemberKind | undefined;
 }
@@ -128,6 +130,10 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const cls = classOf(scope);
       return cls?.className === undefined || nearestFunction(scope).staticFn === true ? undefined : { kind: "local", name: cls.className };
     }
+    if (object.type === "super" || object.type === "base_expression") {
+      const cls = classOf(scope);
+      return cls?.className === undefined ? undefined : { kind: "super", of: { kind: "local", name: cls.className } };
+    }
     if (object.type === "field_access" || object.type === "member_access_expression") {
       const inner = object.childForFieldName("object") ?? object.childForFieldName("expression");
       const field = object.childForFieldName("field") ?? object.childForFieldName("name");
@@ -220,9 +226,17 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const name = spec.typeName(type);
       if (name === undefined) return undefined;
       const owner = ownerForType(name);
-      return owner === undefined || owner.kind === "return" ? undefined : owner;
+      return owner === undefined || owner.kind === "return" || owner.kind === "super" ? undefined : owner;
     },
     memberKind: (fn) => spec.memberKind(fn),
+    heritage: (classNode) => {
+      const out: SymbolBinding[] = [];
+      for (const base of spec.bases?.(classNode) ?? []) {
+        const owner = ownerForType(base);
+        if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out.push(owner);
+      }
+      return out;
+    },
   };
 }
 
@@ -390,6 +404,12 @@ export const javaSpec: TypedSpec = {
     if (name === null) return undefined;
     return { object: fn.childForFieldName("object"), name: name.text };
   },
+  bases: (classNode) => {
+    const superclass = classNode.childForFieldName("superclass");
+    const type = superclass === null ? null : childrenOf(superclass).find((child) => child.type === "type_identifier" || child.type === "generic_type") ?? null;
+    const name = type === null ? undefined : type.type === "type_identifier" ? type.text : childrenOf(type).find((child) => child.type === "type_identifier")?.text;
+    return name === undefined ? [] : [name];
+  },
   imports: (node) => {
     if (node.type !== "import_declaration") return [];
     const path = childrenOf(node).find((child) => child.type === "scoped_identifier");
@@ -443,6 +463,13 @@ export const csharpSpec: TypedSpec = {
     return name === null || object === null ? undefined : { object, name: name.text };
   },
   imports: () => [],
+  bases: (classNode) => {
+    const list = childrenOf(classNode).find((child) => child.type === "base_list");
+    const first = list === undefined ? undefined : childrenOf(list).find((child) => child.type === "identifier" || child.type === "generic_name" || child.type === "qualified_name");
+    if (first === undefined) return [];
+    const name = first.type === "identifier" ? first.text : first.type === "generic_name" ? childrenOf(first).find((child) => child.type === "identifier")?.text : first.text.split(".").pop();
+    return name === undefined ? [] : [name];
+  },
   field: (node) => {
     if (node.type === "property_declaration") {
       const name = node.childForFieldName("name")?.text;
