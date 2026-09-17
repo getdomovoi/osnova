@@ -4,6 +4,11 @@ import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
+const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
+const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
+// Languages whose receiver hints name a type without an import binding; a type not declared in the
+// file may still be the single declaration of that name in the same language family.
+const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
 
 export function languageFamily(language: CardLanguage | undefined): string | undefined {
   if (language === "typescript" || language === "tsx" || language === "javascript") return "javascript";
@@ -78,11 +83,18 @@ interface PackageEntry { readonly dir: string; readonly exports: unknown; readon
 // package.json name and exports (any condition, source files preferred) for the JavaScript family,
 // and manifest directories plus their src layout for Python.
 export interface PythonRoot { readonly dir: string; readonly manifest: string }
-export interface WorkspaceContext { readonly packages: ReadonlyMap<string, PackageEntry | null>; readonly pythonRoots: readonly PythonRoot[] }
+export interface WorkspaceContext {
+  readonly packages: ReadonlyMap<string, PackageEntry | null>;
+  readonly pythonRoots: readonly PythonRoot[];
+  readonly goModules: ReadonlyMap<string, string>;
+  readonly cargoRoots: readonly string[];
+}
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
   const packages = new Map<string, PackageEntry | null>();
   const pythonRoots = new Map<string, PythonRoot>([["\0", { dir: "", manifest: "" }]]);
+  const goModules = new Map<string, string>();
+  const cargoRoots: string[] = [];
   for (const [file, card] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     const base = path.posix.basename(file);
     const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
@@ -94,13 +106,18 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       if (typeof record.name !== "string" || record.name.length === 0) continue;
       const main = ["module", "main", "types"].map((key) => record[key]).filter((value): value is string => typeof value === "string");
       packages.set(record.name, packages.has(record.name) ? null : { dir, exports: record.exports, main });
+    } else if (base === "go.mod") {
+      const match = card.text.match(/^\s*module\s+(\S+)/m);
+      if (match?.[1] !== undefined) goModules.set(match[1], dir);
+    } else if (base === "Cargo.toml") {
+      cargoRoots.push(dir);
     } else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
       pythonRoots.set(`${dir}\0${dir}`, { dir, manifest: dir });
       const src = dir === "" ? "src" : `${dir}/src`;
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0) };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort() };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -177,6 +194,60 @@ function resolveImportTarget(
   if (language === "python") {
     return resolvePythonSpecifier(fromFile, spec, knownFiles, context.pythonRoots);
   }
+  if (language === "go") return resolveGoPackage(spec, knownFiles, context);
+  if (language === "java") {
+    // a.b.Server names the file a/b/Server.java under some source root.
+    const suffix = `/${spec.split(".").join("/")}.java`;
+    const matches = [...knownFiles].filter((file) => file.endsWith(suffix) || file === suffix.slice(1));
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  if (language === "rust") return resolveRustModule(fromFile, spec, knownFiles, context);
+  return undefined;
+}
+
+// A Go import names a package directory. The target is the first Go file in it (sorted, test files
+// last) and export lookup gathers top-level symbols from every Go file in that directory.
+function resolveGoPackage(spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): string | undefined {
+  let module: string | undefined;
+  for (const candidate of context.goModules.keys()) if ((spec === candidate || spec.startsWith(`${candidate}/`)) && (module === undefined || candidate.length > module.length)) module = candidate;
+  if (module === undefined) return undefined;
+  const base = context.goModules.get(module) ?? "";
+  const rest = spec === module ? "" : spec.slice(module.length + 1);
+  const dir = [base, rest].filter((part) => part.length > 0).join("/");
+  const prefix = dir === "" ? "" : `${dir}/`;
+  const members = [...knownFiles].filter((file) => file.startsWith(prefix) && file.endsWith(".go") && !file.slice(prefix.length).includes("/"))
+    .sort((a, b) => Number(a.endsWith("_test.go")) - Number(b.endsWith("_test.go")) || (a < b ? -1 : a > b ? 1 : 0));
+  return members[0];
+}
+
+// A Rust path resolves against the crate whose Cargo.toml is nearest above the file: crate:: from
+// its src directory, super:: and self:: from the module directory of the importing file. The
+// longest file prefix wins, so an inline module inside a file still lands on that file.
+function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): string | undefined {
+  const segments = spec.split("::").filter((part) => part.length > 0);
+  const head = segments[0];
+  if (head === undefined) return undefined;
+  const fromDir = path.posix.dirname(fromFile) === "." ? "" : path.posix.dirname(fromFile);
+  let start: string;
+  let rest: string[];
+  if (head === "crate") {
+    const crate = context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
+    if (crate === undefined) return undefined;
+    start = crate === "" ? "src" : `${crate}/src`;
+    rest = segments.slice(1);
+  } else if (head === "self" || head === "super") {
+    const base = path.posix.basename(fromFile);
+    let dir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
+    let index = 0;
+    while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
+    start = dir;
+    rest = segments.slice(index);
+  } else return undefined;
+  for (let take = rest.length; take >= 0; take -= 1) {
+    const modulePath = path.posix.join(start, ...rest.slice(0, take));
+    const candidates = take === 0 ? [`${modulePath}/lib.rs`, `${modulePath}/main.rs`, `${modulePath}/mod.rs`] : [`${modulePath}.rs`, `${modulePath}/mod.rs`];
+    for (const candidate of candidates) if (knownFiles.has(candidate)) return candidate;
+  }
   return undefined;
 }
 
@@ -226,12 +297,21 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       visited.add(state);
       const card = files.get(currentFile);
       if (card === undefined || languageFamily(card.language) !== family) { result.incomplete = true; return; }
+      if (card.language === "go") {
+        const dir = path.posix.dirname(currentFile);
+        for (const [file, other] of files) {
+          if (other.language !== "go" || path.posix.dirname(file) !== dir) continue;
+          for (const symbol of other.symbols) if (symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")) result.symbols.set(symbol.qualifiedName, symbol);
+        }
+        return;
+      }
       const links = card.reExports ?? [];
       if (links.some((link) => link.kind === "blocked" && (link.exportedName === currentName || link.exportedName === "*"))) {
         result.incomplete = true;
         return;
       }
-      const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName));
+      const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName) ||
+        (TYPED_FAMILY.has(card.language) && symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")));
       const spaces = links.filter((link) => link.kind === "namespace" && link.exportedName === currentName);
       for (const link of spaces) {
         if (link.kind !== "namespace") continue;
@@ -349,6 +429,13 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         } else if (reference.kind === "local") {
           candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, reference.name));
           resolution = { status: "resolved", method: "lexical-definition" };
+          if (candidates.length === 0 && TYPED_FAMILY.has(card.language) && binding.kind === "member") {
+            const family = languageFamily(card.language);
+            const holders = (symbolsByName.get(reference.name) ?? []).filter((symbol) => isHolder(symbol) && languageFamily(files.get(symbol.file)?.language) === family);
+            if (new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1) { candidates = holders; resolution = { status: "resolved", method: "unique-name" }; }
+            // A type no indexed file declares is a builtin or a dependency type: external, like an unbound global.
+            else if (holders.length === 0 && !(symbolsByName.get(reference.name) ?? []).some((symbol) => languageFamily(files.get(symbol.file)?.language) === family)) resolution = { status: "unresolved", reason: "unbound-global" };
+          }
         }
         let owner: OsnovaSymbol | undefined;
         let namespaceVia: readonly ExportHop[] | undefined;
@@ -380,15 +467,24 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           namespaceVia = first === undefined ? undefined : routes.get(first.qualifiedName);
         } else if (binding.kind === "member") {
           let basis: ReceiverBasis = binding.basis;
-          const owners = candidates.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module");
+          const owners = candidates.filter(isHolder);
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
-          const membersOf = (holder: OsnovaSymbol, member: string = binding.member): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
-            (symbol.kind === "method" || symbol.kind === "function") && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
+          const membersOf = (holder: OsnovaSymbol, member: string = binding.member): OsnovaSymbol[] => {
+            const own = (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
+              (symbol.kind === "method" || symbol.kind === "function") && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
+            if (own.length > 0 || !TYPED_FAMILY.has(card.language)) return own;
+            // Go methods and Rust impl blocks may sit in another file of the same package or crate.
+            const family = languageFamily(card.language);
+            const holderDir = path.posix.dirname(holder.file);
+            const local = `${holder.qualifiedName.slice(holder.qualifiedName.indexOf("#") + 1)}.${member}`;
+            return (symbolsByName.get(member) ?? []).filter((symbol) => symbol.kind === "method" && languageFamily(files.get(symbol.file)?.language) === family &&
+              symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === local && (card.language !== "go" || path.posix.dirname(symbol.file) === holderDir));
+          };
           // Walk declared heritage when the owner itself lacks the member. Any base that cannot be
           // identified, a cycle, an own non-method field of that name, or two base chains that
           // disagree leaves the member unresolved rather than guessed.
           const declarationsOf = (holder: OsnovaSymbol): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
-            symbol.qualifiedName === holder.qualifiedName && (symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module"));
+            symbol.qualifiedName === holder.qualifiedName && isHolder(symbol));
           const basesOf = (holder: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol[] | null => {
             const holderCard = files.get(holder.file);
             if (holderCard === undefined) return null;
@@ -401,7 +497,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               if (found.incomplete) return null;
               bases = [...found.symbols.values()];
             }
-            const holders = bases.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface");
+            const holders = bases.filter(isHolder);
             return holders.length === 0 || new Set(holders.map((symbol) => symbol.qualifiedName)).size !== 1 ? null : [holders[0]!];
           };
           const inherited = (holder: OsnovaSymbol, depth: number, visited: ReadonlySet<string>, member: string = binding.member): OsnovaSymbol[] | null => {
@@ -428,7 +524,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           const symbolsFor = (file: string, ref: SymbolBinding): OsnovaSymbol[] | null => {
             const holderCard = files.get(file);
             if (holderCard === undefined) return null;
-            if (ref.kind === "local") return holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(file, ref.name));
+            if (ref.kind === "local") {
+              const local = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(file, ref.name));
+              if (local.length > 0 || !TYPED_FAMILY.has(holderCard.language)) return local;
+              const family = languageFamily(holderCard.language);
+              return (symbolsByName.get(ref.name) ?? []).filter((symbol) => (isHolder(symbol) || symbol.kind === "function") && languageFamily(files.get(symbol.file)?.language) === family);
+            }
             const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles, context);
             if (target === undefined) return null;
             const found = exported(target, ref.importedName);
@@ -451,13 +552,13 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             }
             const returns = first.returns!;
             if (returns.kind === "this") return receiver;
-            return unique(symbolsFor(first.file, returns)?.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface") ?? null);
+            return unique(symbolsFor(first.file, returns)?.filter(isHolder) ?? null);
           };
           const holderOf = (ref: ReceiverOwner, depth: number): OsnovaSymbol | undefined => {
             if (depth > 6) return undefined;
-            if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter((symbol) => symbol.kind === "class" || symbol.kind === "interface" || symbol.kind === "module") ?? null);
+            if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter(isHolder) ?? null);
             const of: Callee = ref.of;
-            if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => ["class", "interface", "function", "method"].includes(symbol.kind)) ?? null, undefined, undefined);
+            if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, undefined, undefined);
             const holder = holderOf(of.owner, depth + 1);
             if (holder === undefined) return undefined;
             return holderOfCallables(inherited(holder, 0, new Set([holder.qualifiedName]), of.member), holder, of.mode);
@@ -489,7 +590,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           });
           if (owner !== undefined && candidates.length > 0) {
             resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis } };
-          } else if (resolution.status === "resolved" || reference.kind === "local" || (reference.kind === "return" && resolution.reason !== "import-target-unresolved")) {
+          } else if (resolution.status === "resolved" || (reference.kind === "local" && resolution.reason !== "unbound-global") || (reference.kind === "return" && resolution.reason !== "import-target-unresolved")) {
             resolution = { status: "unresolved", reason: "receiver-unresolved" };
           }
         }
