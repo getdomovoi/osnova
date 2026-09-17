@@ -13,7 +13,7 @@ interface Scope {
 
 const functions = new Set(["function_declaration", "generator_function_declaration", "function_expression", "function", "generator_function", "arrow_function", "method_definition", "function_definition", "lambda"]);
 const classes = new Set(["class_declaration", "abstract_class_declaration", "class_definition"]);
-const containers = new Set(["formal_parameters", "parameters", "array_pattern", "object_pattern", "tuple_pattern", "list_pattern", "pattern_list", "rest_pattern", "list_splat_pattern", "dictionary_splat_pattern", "as_pattern_target", "expression_list"]);
+const containers = new Set(["formal_parameters", "parameters", "lambda_parameters", "array_pattern", "object_pattern", "tuple_pattern", "list_pattern", "pattern_list", "rest_pattern", "list_splat_pattern", "dictionary_splat_pattern", "as_pattern_target", "expression_list"]);
 const localValue: EdgeBinding = { kind: "blocked", reason: "local-value" };
 
 export function memberKindOf(node: Node, python: boolean): MemberKind {
@@ -21,7 +21,8 @@ export function memberKindOf(node: Node, python: boolean): MemberKind {
     if (node.children.some((child) => child?.type === "get" || child?.type === "set") || node.childForFieldName("name")?.text === "constructor") return "property";
     return node.children.some((child) => child?.type === "static") ? "static" : "instance";
   }
-  const decorators = node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : [];
+  const decorators = (node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : [])
+    .filter((decorator) => !/^@(?:[A-Za-z_][\w]*\.)*overload$/.test(decorator));
   if (decorators.length === 0) return "instance";
   if (decorators.length !== 1) return "unknown";
   if (decorators[0] === "@staticmethod") return "static";
@@ -55,6 +56,8 @@ function reassigns(body: Node, name: string): boolean {
       if (target !== null && patternNames(target).includes(name)) return true;
       if (node.type === "global_statement" || node.type === "nonlocal_statement") return true;
     }
+    if (node.type === "delete_statement" && childrenOf(node).some((child) => child.type === "identifier" && child.text === name ||
+      (child.type === "expression_list" && childrenOf(child).some((item) => item.type === "identifier" && item.text === name)))) return true;
     if (node.type === "function_definition" && node.id !== body.parent?.id) {
       const params = patternNames(node.childForFieldName("parameters"));
       if (params.includes(name)) continue;
@@ -140,6 +143,7 @@ export function collectBindings(root: Node, python: boolean): {
       if (python && node.type === "function_definition") {
         for (const parameter of childrenOf(node.childForFieldName("parameters") ?? node)) {
           if (parameter.type !== "typed_parameter" && parameter.type !== "typed_default_parameter") continue;
+          if (childrenOf(parameter).some((child) => child.type === "list_splat_pattern" || child.type === "dictionary_splat_pattern")) continue;
           const name = patternNames(parameter)[0];
           const type = parameter.childForFieldName("type");
           const typeText = type === null ? undefined : type.type === "type" ? (childrenOf(type)[0]?.type === "identifier" || childrenOf(type)[0]?.type === "attribute" ? childrenOf(type)[0]?.text : undefined) : type.type === "identifier" || type.type === "attribute" ? type.text : undefined;

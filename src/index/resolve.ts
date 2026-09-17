@@ -125,14 +125,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         return;
       }
       const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName));
-      for (const link of links) {
-        if (link.kind !== "namespace" || link.exportedName !== currentName) continue;
+      const spaces = links.filter((link) => link.kind === "namespace" && link.exportedName === currentName);
+      for (const link of spaces) {
+        if (link.kind !== "namespace") continue;
         const target = resolveImportTarget(card.language, currentFile, link.source, knownFiles);
         if (target === undefined) { result.incomplete = true; continue; }
         result.namespaces.push({ file: target, via: [...via, { file: currentFile, line: link.line, kind: "namespace", exportedName: currentName, importedName: "*", source: link.source, targetFile: target }] });
       }
       const named = links.filter((link) => link.kind === "named" && link.exportedName === currentName);
-      const next = direct.length > 0 || named.length > 0 || result.namespaces.length > 0 ? named
+      const next = direct.length > 0 || named.length > 0 || spaces.length > 0 ? named
         : currentName === "default" ? [] : links.filter((link) => link.kind === "star");
       for (const symbol of direct) {
         if (!result.symbols.has(symbol.qualifiedName)) {
@@ -217,28 +218,33 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         let owner: OsnovaSymbol | undefined;
         let namespaceVia: readonly ExportHop[] | undefined;
-        if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && exportResult.namespaces.length === 1 &&
+        if (binding.kind === "member" && exportResult !== undefined && !exportResult.incomplete && exportResult.namespaces.length > 0 &&
           !candidates.some((symbol) => symbol.kind === "class")) {
-          const space = exportResult.namespaces[0]!;
-          const nested = exported(space.file, binding.member);
-          if (nested.incomplete) { resolution = { status: "unresolved", reason: "re-export-incomplete" }; candidates = []; }
-          else {
-            candidates = [...nested.symbols.values()].filter((symbol) =>
-              languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-              (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
-            resolution = candidates.length === 0 && nested.cycle ? { status: "unresolved", reason: "re-export-cycle" } : { status: "resolved", method: "import-binding" };
-            const first = candidates[0];
-            namespaceVia = first === undefined ? space.via : [...space.via, ...(nested.routes.get(first.qualifiedName) ?? [])];
+          const gathered: OsnovaSymbol[] = [];
+          const routes = new Map<string, readonly ExportHop[]>();
+          let incomplete = false, cycle = false;
+          for (const space of exportResult.namespaces) {
+            const nested = exported(space.file, binding.member);
+            if (nested.incomplete) { incomplete = true; continue; }
+            if (nested.cycle) cycle = true;
+            for (const symbol of nested.symbols.values()) {
+              if (!routes.has(symbol.qualifiedName)) routes.set(symbol.qualifiedName, [...space.via, ...(nested.routes.get(symbol.qualifiedName) ?? [])]);
+              gathered.push(symbol);
+            }
           }
+          candidates = incomplete ? [] : gathered.filter((symbol) =>
+            languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
+            (raw.kind !== "calls" || (symbol.kind !== "interface" && symbol.kind !== "type")));
+          resolution = incomplete ? { status: "unresolved", reason: "re-export-incomplete" }
+            : candidates.length === 0 && cycle ? { status: "unresolved", reason: "re-export-cycle" } : { status: "resolved", method: "import-binding" };
+          const first = candidates[0];
+          namespaceVia = first === undefined ? undefined : routes.get(first.qualifiedName);
         } else if (binding.kind === "member") {
           const owners = candidates.filter((symbol) => symbol.kind === "class");
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
           const ownerName = owner?.qualifiedName;
-          const allMembers = owner === undefined ? [] : (files.get(owner.file)?.symbols ?? []).filter((symbol) =>
+          const members = owner === undefined ? [] : (files.get(owner.file)?.symbols ?? []).filter((symbol) =>
             symbol.kind === "method" && symbol.qualifiedName === `${ownerName}.${binding.member}`);
-          // Decorated overload declarations carry memberKind "unknown"; when a known-kind definition exists they are declarations of it, not competitors.
-          const known = allMembers.filter((symbol) => symbol.memberKind !== undefined && symbol.memberKind !== "unknown");
-          const members = known.length > 0 && allMembers.some((symbol) => symbol.memberKind === "unknown") ? known : allMembers;
           const kinds = new Set(members.map((symbol) => symbol.memberKind));
           candidates = kinds.size > 1 ? [] : members.filter((symbol) => {
             if (symbol.memberKind === undefined || symbol.memberKind === "unknown" || symbol.memberKind === "property") return false;
