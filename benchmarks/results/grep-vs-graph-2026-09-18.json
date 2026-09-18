@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "measured": "2026-09-18T19:29:10.182Z",
-  "osnova": "9bd953be23dc1bf5e348499f0ef4ef913b7f72f0",
+  "measured": "2026-09-18T20:04:32.252Z",
+  "osnova": "e9040cf32dc0b96b15018b4f2182117270cd4ca2",
   "manifest": "exactness-v1",
   "cases": [
     {
@@ -239,14 +239,12 @@
         "missed": []
       },
       "graph": {
-        "sites": 25,
-        "hit": 25,
+        "sites": 26,
+        "hit": 26,
         "precision": 1,
-        "recall": 0.962,
+        "recall": 1,
         "falsePositives": [],
-        "missed": [
-          "crates/searcher/src/searcher/core.rs:691"
-        ]
+        "missed": []
       }
     },
     {

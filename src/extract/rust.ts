@@ -42,7 +42,7 @@ export const rustAdapter: LanguageAdapter = {
         }
         case "function_signature_item": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addDef(nameNode.text, "method", node);
+          if (nameNode !== null) out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, bindings.unwrapped(node));
           return;
         }
         case "struct_item": {
