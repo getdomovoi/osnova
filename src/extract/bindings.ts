@@ -130,6 +130,7 @@ export function collectBindings(root: Node, python: boolean): {
   heritage: (node: Node) => SymbolBinding[];
   returns: (node: Node) => ReturnBinding | undefined;
   ownFields: (node: Node) => string[];
+  fieldTypes: (node: Node) => Record<string, SymbolBinding> | undefined;
   exportedNames: (name: string, parent: string) => readonly string[];
   reExports: readonly ReExport[];
   memberKind: (node: Node) => MemberKind;
@@ -612,6 +613,30 @@ export function collectBindings(root: Node, python: boolean): {
     const produced = returnOwner(calleeOf(created.expression, created.site));
     return produced === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "instance", owner: produced, basis: "return" };
   };
+  // The owner of a receiver expression: `this`/`self`, a bound instance, a call result, or a field of one of those.
+  // A field's declared type is looked up on the holder at resolution time, so the holder may live in another file.
+  const chainOwner = (expression: Node | null, site: Node, member: string): ReceiverOwner | undefined => {
+    expression = unwrap(expression);
+    if (expression === null) return undefined;
+    if (!python && expression.type === "this") {
+      const receiver = thisFor(scopes.get(site.id) ?? module);
+      return receiver === null || receiver === undefined || receiver.mode !== "instance" || mutated(receiver, member) ? undefined : receiver.owner;
+    }
+    if (expression.type === "identifier") {
+      const binding = normalize(lookup(expression.text, site));
+      return binding?.kind === "instance" && !mutated(binding, member) ? binding.owner : undefined;
+    }
+    if (expression.type === (python ? "call" : "call_expression")) {
+      const constructed = python ? symbolBinding(expression.childForFieldName("function"), site) : undefined;
+      return constructed ?? returnOwner(calleeOf(expression.childForFieldName("function"), site));
+    }
+    if (expression.type === "member_expression" || expression.type === "attribute") {
+      const field = expression.childForFieldName(python ? "attribute" : "property")?.text;
+      const base = field === undefined ? undefined : chainOwner(expression.childForFieldName("object"), site, field);
+      return base === undefined || field === undefined ? undefined : { kind: "field", of: base, member: field };
+    }
+    return undefined;
+  };
   const at = (expression: Node | null, site: Node): EdgeBinding | undefined => {
       expression = unwrap(expression);
       if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: ambient.has(expression.text) ? "unsupported" : "unbound" };
@@ -657,7 +682,10 @@ export function collectBindings(root: Node, python: boolean): {
               const owner = ownerFor(constructed.typeName, constructed.site, true);
               if (owner !== undefined) return { kind: "member", owner, member: property.text, mode: "instance", basis: "constructor" };
             }
+            if (writes > 1) return { kind: "blocked", reason: "unknown-receiver" };
           }
+          const chained = chainOwner(object, site, property.text);
+          if (chained !== undefined) return { kind: "member", owner: chained, member: property.text, mode: "instance", basis: "annotation" };
         }
         if (object !== null && object.type === (python ? "call" : "call_expression") && (python ? symbolBinding(object.childForFieldName("function"), site) === undefined : true)) {
           const owner = returnOwner(calleeOf(object.childForFieldName("function"), site));
@@ -762,6 +790,30 @@ export function collectBindings(root: Node, python: boolean): {
         }
       }
       return out;
+    },
+    fieldTypes: (node) => {
+      const out: Record<string, SymbolBinding> = {};
+      const scope = scopes.get(node.id);
+      if (scope?.kind === "class") {
+        for (const [name, field] of scope.fields ?? []) {
+          const owner = field.typeName === THIS_TYPE ? { kind: "local" as const, name: scope.owner } : ownerFor(field.typeName, field.site);
+          if (owner !== undefined) out[name] = owner;
+        }
+        for (const [name, field] of scope.constructorFields ?? []) {
+          if (name in out || (scope.fieldWrites?.get(name) ?? 0) !== 1) continue;
+          const owner = ownerFor(field.typeName, field.site, true);
+          if (owner !== undefined) out[name] = owner;
+        }
+      } else if (!python && node.type === "interface_declaration") {
+        for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
+          if (member.type !== "property_signature") continue;
+          const name = member.childForFieldName("name");
+          const typeName = annotationTypeName(member.childForFieldName("type"));
+          const owner = typeName === undefined ? undefined : ownerFor(typeName, node);
+          if (name?.type === "property_identifier" && owner !== undefined) out[name.text] = owner;
+        }
+      }
+      return Object.keys(out).length === 0 ? undefined : out;
     },
     ownFields: (node) => {
       const out = new Set<string>();

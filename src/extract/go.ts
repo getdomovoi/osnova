@@ -66,7 +66,8 @@ export const goAdapter: LanguageAdapter = {
                   : typeNode.type === "interface_type"
                     ? "interface"
                     : "type";
-              out.addDef(nameNode.text, kind, spec);
+              const structBody = typeNode.type === "struct_type" ? childrenOf(typeNode).find((child) => child.type === "field_declaration_list") : undefined;
+              out.addDef(nameNode.text, kind, spec, undefined, undefined, undefined, undefined, undefined, undefined, structBody === undefined ? undefined : bindings.fieldTypes(childrenOf(structBody)));
               if (typeNode.type === "interface_type") {
                 out.push(nameNode.text);
                 for (const member of childrenOf(typeNode)) {

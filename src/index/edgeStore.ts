@@ -105,6 +105,7 @@ function validOwner(value: unknown, depth = 0): boolean {
   if (typeof value !== "object" || value === null || depth > 8) return false;
   const owner = value as Record<string, unknown>;
   if (owner.kind === "super") return validSymbolBinding(owner.of);
+  if (owner.kind === "field") return typeof owner.member === "string" && validOwner(owner.of, depth + 1);
   if (owner.kind !== "return") return false;
   if (owner.index !== undefined && !(Number.isSafeInteger(owner.index) && (owner.index as number) >= 0)) return false;
   const of = owner.of as Record<string, unknown> | undefined;
