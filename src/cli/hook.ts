@@ -22,6 +22,10 @@ const minimumPromptLength = 12;
 const maximumDiffBytes = 4 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
+export function hookFileDescription(client: HookClient): string {
+  return client === "codex" ? "~/.codex/hooks.json" : client === "cursor" ? "~/.cursor/hooks.json" : "~/.claude/settings.json";
+}
+
 export interface HookInput {
   readonly prompt?: string | undefined;
   readonly cwd?: string | undefined;
@@ -62,13 +66,26 @@ export function workspaceRootFor(dir: string): string {
   } catch { return path.resolve(dir); }
 }
 
-export function hookSettingsSnippet(command: readonly string[]): string {
-  const quoted = command.map((part) => (/[\s"]/.test(part) ? JSON.stringify(part) : part)).join(" ");
-  const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}`, timeout }] });
-  return JSON.stringify({ hooks: { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] } }, null, 2);
+export function hookSettingsSnippet(command: readonly string[], client: HookClient = "claude-code"): string {
+  return JSON.stringify(hookSettingsObject(command, client), null, 2);
 }
 
+// The hook groups a client's file needs. Claude Code and Codex share one shape; Cursor's beforeSubmitPrompt cannot add context,
+// so Cursor gets the stop hook only, as a follow-up message.
+export function hookSettingsObject(command: readonly string[], client: HookClient): Record<string, unknown> {
+  const quoted = command.map((part) => (/[\s"]/.test(part) ? JSON.stringify(part) : part)).join(" ");
+  const suffix = client === "claude-code" ? "" : ` --client ${client}`;
+  if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
+  const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
+  return { hooks: { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] } };
+}
+
+export type HookClient = "claude-code" | "codex" | "cursor";
+export const hookClients: readonly HookClient[] = ["claude-code", "codex", "cursor"];
+
 export interface HookOptions {
+  /** Which harness reads the output: Claude Code takes plain text, Codex takes additionalContext JSON, Cursor takes followup_message on stop. */
+  readonly client?: HookClient | undefined;
   readonly workspace?: string | undefined;
   readonly cacheDir?: string | undefined;
   readonly command?: readonly string[] | undefined;
@@ -83,11 +100,23 @@ function defaultBackgroundBuild(workspace: string, cacheDir: string | undefined)
   child.unref();
 }
 
+// The same context, shaped for the harness that asked: plain text for Claude Code, additionalContext for Codex.
+function emitContext(io: CliIo, client: HookClient, text: string): void {
+  if (client === "codex") { io.stdout(JSON.stringify({ additionalContext: text })); return; }
+  io.stdout(text);
+}
+
+function emitStop(io: CliIo, client: HookClient, reason: string): void {
+  if (client === "cursor") { io.stdout(JSON.stringify({ followup_message: reason })); return; }
+  io.stdout(JSON.stringify({ decision: "block", reason }));
+}
+
 export async function runHook(event: HookEvent, raw: string, io: CliIo, options: HookOptions): Promise<void> {
+  const client = options.client ?? "claude-code";
   if (event === "install-preview") {
     io.stdout([
-      "osnova hook preview: add these hooks to the client's settings (Claude Code: ~/.claude/settings.json). osnova never edits that file.",
-      hookSettingsSnippet(options.command ?? ["osnova"]),
+      `osnova hook preview for ${client}: add these hooks to ${hookFileDescription(client)}, or run osnova setup --apply --hooks --client ${client}.`,
+      hookSettingsSnippet(options.command ?? ["osnova"], client),
     ].join("\n"));
     return;
   }
@@ -99,11 +128,11 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
       if (cached === undefined) {
         (options.backgroundBuild ?? defaultBackgroundBuild)(workspace, options.cacheDir);
-        io.stdout(boundText(`${hookToolContract}\nIndex: building in the background; starting points appear from the next prompt.`, hookSessionCodeUnits));
+        emitContext(io, client, boundText(`${hookToolContract}\nIndex: building in the background; starting points appear from the next prompt.`, hookSessionCodeUnits));
         return;
       }
       const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
-      io.stdout(boundText(`${hookToolContract}\nIndexed: ${index.files.size} files, ${index.symbols.size} symbols.`, hookSessionCodeUnits));
+      emitContext(io, client, boundText(`${hookToolContract}\nIndexed: ${index.files.size} files, ${index.symbols.size} symbols.`, hookSessionCodeUnits));
     } catch (error) { fail(error); }
     return;
   }
@@ -118,7 +147,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       const result = impact(index, index, { diff, maxDepth: 1 });
       const dependents = result.dependents.filter((dependent) => dependent.snapshot === "current");
       if (dependents.length === 0) return;
-      io.stdout(JSON.stringify({ decision: "block", reason: boundText(formatStopReason(result), hookStopCodeUnits) }));
+      emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits));
     } catch (error) { fail(error); }
     return;
   }
@@ -133,7 +162,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     const result = taskContext(index, { task: "understand", question: prompt, limit: 8, maxDepth: 1, maxCodeUnits: available, excerptLines: 1, measure: (partial) => formatStartingPoints(partial).length });
     const text = formatStartingPoints(result);
     if (!text.startsWith("- ")) return;
-    io.stdout(`${header}\n${boundText(text, available)}`);
+    emitContext(io, client, `${header}\n${boundText(text, available)}`);
   } catch (error) { fail(error); }
 }
 
