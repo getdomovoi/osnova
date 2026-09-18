@@ -31,7 +31,7 @@ export const rustAdapter: LanguageAdapter = {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
             const inTrait = node.parent?.type === "declaration_list" && node.parent?.parent?.type === "trait_item";
-            out.addDef(nameNode.text, hasImplAncestor(node) || inTrait ? "method" : "function", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, bindings.unwrapped(node));
+            out.addDef(nameNode.text, hasImplAncestor(node) || inTrait ? "method" : "function", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, bindings.unwrapped(node), bindings.elements(node), undefined, bindings.values(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -45,7 +45,7 @@ export const rustAdapter: LanguageAdapter = {
         }
         case "struct_item": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addDef(nameNode.text, "struct", node, undefined, undefined, undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          if (nameNode !== null) out.addDef(nameNode.text, "struct", node, undefined, undefined, undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           return;
         }
         case "enum_item": {
