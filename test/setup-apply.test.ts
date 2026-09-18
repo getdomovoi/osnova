@@ -111,6 +111,25 @@ describe("the Claude Code skill", () => {
   });
 });
 
+describe("doctor integration file checks", () => {
+  it("reports installed plugin and skill files that match or differ from the shipped ones", async () => {
+    const c = capture();
+    let report = await doctor(process.cwd(), { home });
+    expect(report.checks.find((check) => check.id === "integrations")?.status).toBe("ok");
+    expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
+    expect(await runCli(["setup", "--apply", "--skill", "--home", home], c.io)).toBe(0);
+    report = await doctor(process.cwd(), { home });
+    expect(report.checks.find((check) => check.id === "plugin:opencode")?.status).toBe("ok");
+    expect(report.checks.find((check) => check.id === "skill:claude-code")?.status).toBe("ok");
+    expect(report.checks.find((check) => check.id === "plugin:pi")).toBeUndefined();
+    await fs.appendFile(path.join(home, ".claude", "skills", "osnova", "SKILL.md"), "\nlocal note\n");
+    report = await doctor(process.cwd(), { home });
+    const skill = report.checks.find((check) => check.id === "skill:claude-code");
+    expect(skill?.status).toBe("warning");
+    expect(skill?.message).toContain("osnova setup --apply --skill");
+  });
+});
+
 describe("plugins for OpenCode, Kilo and Pi", () => {
   it("copies the shipped plugin or extension file once and refuses to overwrite a different one", async () => {
     let c = capture();

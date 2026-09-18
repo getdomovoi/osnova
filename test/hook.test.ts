@@ -123,9 +123,13 @@ describe("osnova hook", () => {
       const { runHook } = await import("../src/cli/hook.js");
       const builds: string[] = [];
       let c = capture();
-      await runHook("session", JSON.stringify({ cwd: path.join(root, "src") }), c.io, { cacheDir, backgroundBuild: (workspace) => builds.push(workspace) });
+      await runHook("session", JSON.stringify({ cwd: path.join(root, "src") }), c.io, { cacheDir, sessionWaitMs: 0, backgroundBuild: (workspace) => builds.push(workspace) });
       expect(builds.map((dir) => path.resolve(dir))).toEqual([path.resolve(await fs.realpath(root))]);
       expect(c.out.join("\n")).toContain("building in the background");
+      c = capture();
+      const { buildIndex: build } = await import("../src/index.js");
+      await runHook("session", JSON.stringify({ cwd: path.join(root, "src") }), c.io, { cacheDir: path.join(temporary, "cache-2"), sessionWaitMs: 10_000, backgroundBuild: (workspace, dir) => { void build(workspace, { cacheDir: dir }); } });
+      expect(c.out.join("\n")).toMatch(/Indexed: 2 files/);
       const { buildIndex } = await import("../src/index.js");
       await buildIndex(root, { cacheDir });
       c = capture();
