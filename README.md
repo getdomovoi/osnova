@@ -118,20 +118,20 @@ A call site counts as resolved when the index ties it to one definition through 
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5022 | 1916 | 38.1% | 54.5% |
-| click | all | 5022 | 1916 | 38.1% | 54.5% |
+| click | python | 5022 | 1932 | 38.5% | 54.9% |
+| click | all | 5022 | 1932 | 38.5% | 54.9% |
 | cobra | go | 4374 | 1931 | 44.1% | 75.3% |
 | cobra | all | 4374 | 1931 | 44.1% | 75.3% |
 | gson | java | 23341 | 7515 | 32.2% | 37.1% |
 | gson | all | 23341 | 7515 | 32.2% | 37.1% |
-| humanizer | c_sharp | 28783 | 7628 | 26.5% | 41.5% |
-| humanizer | javascript | 927 | 132 | 14.2% | 39.4% |
+| humanizer | c_sharp | 28782 | 7628 | 26.5% | 41.5% |
+| humanizer | javascript | 927 | 132 | 14.2% | 39.3% |
 | humanizer | tsx | 120 | 14 | 11.7% | 18.2% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30514 | 7778 | 25.5% | 40.6% |
-| pyright | python | 11617 | 3320 | 28.6% | 65.3% |
+| humanizer | all | 30513 | 7778 | 25.5% | 40.6% |
+| pyright | python | 11617 | 3323 | 28.6% | 65.3% |
 | pyright | typescript | 46810 | 26619 | 56.9% | 72.4% |
-| pyright | all | 58459 | 29939 | 51.2% | 71.5% |
+| pyright | all | 58459 | 29942 | 51.2% | 71.5% |
 | ripgrep | rust | 13350 | 3952 | 29.6% | 39.7% |
 | ripgrep | all | 13364 | 3956 | 29.6% | 39.7% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
