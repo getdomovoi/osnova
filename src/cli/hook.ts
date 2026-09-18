@@ -76,19 +76,20 @@ export function workspaceRootFor(dir: string): string {
   } catch { return path.resolve(dir); }
 }
 
-export function hookSettingsSnippet(command: readonly string[], client: HookClient = "claude-code"): string {
-  return JSON.stringify(hookSettingsObject(command, client), null, 2);
+export function hookSettingsSnippet(command: readonly string[], client: HookClient = "claude-code", nudge = false): string {
+  return JSON.stringify(hookSettingsObject(command, client, nudge), null, 2);
 }
 
 // The hook groups a client's file needs. Claude Code and Codex share one shape; Cursor's beforeSubmitPrompt cannot add context,
 // so Cursor gets the stop hook only, as a follow-up message.
-export function hookSettingsObject(command: readonly string[], client: HookClient): Record<string, unknown> {
+// The PostToolUse grep nudge is opt-in (`nudge`): measured, it did not change what the agent did after a grep.
+export function hookSettingsObject(command: readonly string[], client: HookClient, nudge = false): Record<string, unknown> {
   const quoted = command.map((part) => (/[\s"]/.test(part) ? JSON.stringify(part) : part)).join(" ");
   const suffix = client === "claude-code" ? "" : ` --client ${client}`;
   if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
   const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
   const hooks: Record<string, unknown[]> = { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] };
-  if (client === "claude-code") hooks.PostToolUse = [{ matcher: "Grep|Bash", ...entry("tool", 10) }];
+  if (client === "claude-code" && nudge) hooks.PostToolUse = [{ matcher: "Grep|Bash", ...entry("tool", 10) }];
   return { hooks };
 }
 
@@ -101,6 +102,8 @@ export interface HookOptions {
   readonly workspace?: string | undefined;
   readonly cacheDir?: string | undefined;
   readonly command?: readonly string[] | undefined;
+  /** Include the opt-in PostToolUse grep nudge in the install preview. */
+  readonly nudge?: boolean | undefined;
   /** How to start a background build; defaults to this executable. Tests pass a no-op. */
   readonly backgroundBuild?: ((workspace: string, cacheDir: string | undefined) => void) | undefined;
 }
@@ -128,7 +131,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
   if (event === "install-preview") {
     io.stdout([
       `osnova hook preview for ${client}: add these hooks to ${hookFileDescription(client)}, or run osnova setup --apply --hooks --client ${client}.`,
-      hookSettingsSnippet(options.command ?? ["osnova"], client),
+      hookSettingsSnippet(options.command ?? ["osnova"], client, options.nudge === true),
     ].join("\n"));
     return;
   }

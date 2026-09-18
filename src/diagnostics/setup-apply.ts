@@ -35,7 +35,7 @@ export async function planMcp(client: SetupClientId, options: { home?: string | 
 // Hook files: Claude Code (~/.claude/settings.json) and Codex (~/.codex/hooks.json) share the event-group shape;
 // Cursor (~/.cursor/hooks.json) lists commands per event under a version key. A group or entry is added only when
 // none already runs that `osnova hook <event>`; every other key survives and the file keeps its indent.
-export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined }): Promise<PlannedChange> {
+export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined }): Promise<PlannedChange> {
   const client = options.client ?? "claude-code";
   const home = path.resolve(options.home ?? os.homedir());
   const defaultPath = client === "codex" ? path.join(home, ".codex", "hooks.json") : client === "cursor" ? path.join(home, ".cursor", "hooks.json") : path.join(home, ".claude", "settings.json");
@@ -48,7 +48,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`osnova setup: ${target} is not a JSON object`);
     root = parsed as Record<string, unknown>;
   }
-  const wanted = hookSettingsObject(options.command ?? ["osnova"], client);
+  const wanted = hookSettingsObject(options.command ?? ["osnova"], client, options.nudge === true);
   const wantedHooks = wanted.hooks as Record<string, unknown[]>;
   const hooks = (root.hooks !== null && typeof root.hooks === "object" && !Array.isArray(root.hooks) ? { ...(root.hooks as Record<string, unknown>) } : {});
   const commandOf = (item: unknown): string[] => {
