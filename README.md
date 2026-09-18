@@ -135,14 +135,14 @@ A call site counts as resolved when the index ties it to one definition through 
 | humanizer | tsx | 120 | 14 | 11.7% | 18.2% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
 | humanizer | all | 30513 | 7778 | 25.5% | 40.6% |
-| pyright | python | 11617 | 3323 | 28.6% | 65.3% |
-| pyright | typescript | 46810 | 26619 | 56.9% | 72.4% |
-| pyright | all | 58459 | 29942 | 51.2% | 71.5% |
+| pyright | python | 11617 | 3326 | 28.6% | 65.4% |
+| pyright | typescript | 46810 | 26716 | 57.1% | 72.7% |
+| pyright | all | 58459 | 30042 | 51.4% | 71.8% |
 | ripgrep | rust | 13350 | 3952 | 29.6% | 39.7% |
 | ripgrep | all | 13364 | 3956 | 29.6% | 39.7% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
-| zod | typescript | 53234 | 20069 | 37.7% | 63.2% |
-| zod | all | 53413 | 20086 | 37.6% | 63.1% |
+| zod | typescript | 53234 | 20070 | 37.7% | 63.2% |
+| zod | all | 53413 | 20087 | 37.6% | 63.1% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework, and calls at the end of a field, element or return chain whose recorded type is a builtin (`string`, `Array`, `Map`, a Rust primitive, `Vec` or `Option`) or a type behind an unresolved import; a chain that ends on a type parameter stays unresolved, not external. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
