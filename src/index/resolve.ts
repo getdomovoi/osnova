@@ -566,8 +566,30 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (returns.kind === "this") return receiver;
             return unique(symbolsFor(first.file, returns)?.filter(isHolder) ?? null);
           };
+          // The declared type of a field, own declarations first, then the single-base heritage walk.
+          const fieldTypeOf = (holder: OsnovaSymbol, member: string, depth: number, visited: Set<string>): { file: string; binding: SymbolBinding } | undefined => {
+            const declarations = declarationsOf(holder);
+            const own = declarations.flatMap((declaration) => { const binding = declaration.fieldTypes?.[member]; return binding === undefined ? [] : [{ file: declaration.file, binding }]; });
+            if (own.length > 0) return new Set(own.map((item) => JSON.stringify(item))).size === 1 ? own[0] : undefined;
+            if (declarations.some((declaration) => declaration.fields?.includes(member)) || depth >= 8) return undefined;
+            let result: { file: string; binding: SymbolBinding } | undefined;
+            for (const base of declarations.flatMap((declaration) => declaration.heritage ?? [])) {
+              const target = basesOf(holder, base)?.[0];
+              if (target === undefined || visited.has(target.qualifiedName)) return undefined;
+              const found = fieldTypeOf(target, member, depth + 1, new Set([...visited, target.qualifiedName]));
+              if (found === undefined) continue;
+              if (result !== undefined && JSON.stringify(result) !== JSON.stringify(found)) return undefined;
+              result = found;
+            }
+            return result;
+          };
           const holderOf = (ref: ReceiverOwner, depth: number): OsnovaSymbol | undefined => {
             if (depth > 6) return undefined;
+            if (ref.kind === "field") {
+              const holder = holderOf(ref.of, depth + 1);
+              const typed = holder === undefined ? undefined : fieldTypeOf(holder, ref.member, 0, new Set([holder.qualifiedName]));
+              return typed === undefined ? undefined : unique(symbolsFor(typed.file, typed.binding)?.filter(isHolder) ?? null);
+            }
             if (ref.kind === "super") {
               // The parent class: exactly one declared base, resolved like the heritage walk does.
               const cls = unique(symbolsFor(fromFile, ref.of)?.filter(isHolder) ?? null);
@@ -588,6 +610,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (ref.kind === "import") return resolveImportTarget(card.language, fromFile, ref.source, knownFiles, context) === undefined;
             if (ref.kind === "return") return rootImportUnresolved(ref.of, depth + 1);
             if (ref.kind === "super") return false;
+            if (ref.kind === "field") return rootImportUnresolved(ref.of, depth + 1);
             if (ref.kind === "method") return rootImportUnresolved(ref.owner, depth + 1);
             return false;
           };
@@ -596,6 +619,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           } else if (binding.owner.kind === "super") {
             owner = holderOf(binding.owner, 0);
+          } else if (binding.owner.kind === "field") {
+            owner = holderOf(binding.owner, 0);
+            if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           }
           else if (owner === undefined && card.language === "python" && binding.basis === "constructor") {
             owner = holderOfCallables(candidates.filter((symbol) => symbol.kind === "function" || symbol.kind === "method"), undefined, undefined);
@@ -613,7 +639,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           });
           if (owner !== undefined && candidates.length > 0) {
             resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis } };
-          } else if (resolution.status === "resolved" || reference.kind === "super" || (reference.kind === "local" && resolution.reason !== "unbound-global") || (reference.kind === "return" && resolution.reason !== "import-target-unresolved")) {
+          } else if (resolution.status === "resolved" || reference.kind === "super" || (reference.kind === "local" && resolution.reason !== "unbound-global") || ((reference.kind === "return" || reference.kind === "field") && resolution.reason !== "import-target-unresolved")) {
             resolution = { status: "unresolved", reason: "receiver-unresolved" };
           }
         }

@@ -78,7 +78,7 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
 }
 
 function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node) => void): void {
-  ex.out.addDef(name, "class", node, undefined, undefined, ex.bindings.heritage(node), ex.bindings.ownFields(node));
+  ex.out.addDef(name, "class", node, undefined, undefined, ex.bindings.heritage(node), ex.bindings.ownFields(node), undefined, undefined, ex.bindings.fieldTypes(node));
   ex.pushFrame(name);
   for (const child of childrenOf(node)) {
     if (child.type === "class_body" || child.type === "declaration_list") {
@@ -161,7 +161,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
               if (member.type === "method_signature" || functionTyped) methods.push(member);
               else if (member.type === "property_signature") fields.push(methodName);
             }
-            ex.out.addDef(name, "interface", node, undefined, undefined, ex.bindings.heritage(node), fields);
+            ex.out.addDef(name, "interface", node, undefined, undefined, ex.bindings.heritage(node), fields, undefined, undefined, ex.bindings.fieldTypes(node));
             ex.pushFrame(name);
             for (const member of methods) ex.out.addDef(member.childForFieldName("name")!.text, "method", member, undefined, "instance", undefined, undefined, ex.bindings.returns(member));
             ex.popFrame();

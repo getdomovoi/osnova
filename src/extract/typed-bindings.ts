@@ -39,6 +39,7 @@ export interface TypedBindings {
   returns: (fn: Node) => ReturnBinding | undefined;
   returnTuple: (fn: Node) => (ReturnBinding | null)[] | undefined;
   memberKind: (fn: Node) => MemberKind | undefined;
+  fieldTypes: (members: readonly Node[]) => Record<string, SymbolBinding> | undefined;
 }
 
 export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings {
@@ -136,11 +137,14 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const cls = classOf(scope);
       return cls?.className === undefined ? undefined : { kind: "super", of: { kind: "local", name: cls.className } };
     }
-    if (object.type === "field_access" || object.type === "member_access_expression") {
-      const inner = object.childForFieldName("object") ?? object.childForFieldName("expression");
+    if (["field_access", "member_access_expression", "selector_expression", "field_expression"].includes(object.type)) {
+      const inner = object.childForFieldName("object") ?? object.childForFieldName("expression") ?? object.childForFieldName("operand") ?? object.childForFieldName("value");
       const field = object.childForFieldName("field") ?? object.childForFieldName("name");
-      if (inner !== null && field !== null && spec.thisNodes?.includes(inner.type)) return fieldOwner(scope, field.text);
-      return undefined;
+      if (inner === null || field === null || (field.type !== "identifier" && field.type !== "field_identifier")) return undefined;
+      if (spec.thisNodes?.includes(inner.type)) { const own = fieldOwner(scope, field.text); if (own !== undefined) return own; }
+      // A field of a bound receiver: the holder's declared field type is looked up at resolution time.
+      const base = receiverOf(inner, scope);
+      return base === undefined ? undefined : { kind: "field", of: base, member: field.text };
     }
     if (object.type !== "identifier" && object.type !== "self") return undefined;
     const fn = nearestFunction(scope);
@@ -228,14 +232,24 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const name = spec.typeName(type);
       if (name === undefined) return undefined;
       const owner = ownerForType(name);
-      return owner === undefined || owner.kind === "return" || owner.kind === "super" ? undefined : owner;
+      return owner === undefined || owner.kind === "return" || owner.kind === "super" || owner.kind === "field" ? undefined : owner;
     },
     returnTuple(fn) {
       const types = spec.returnTypes?.(fn);
       if (types === undefined || types.length < 2) return undefined;
-      return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name); return owner === undefined || owner.kind === "return" || owner.kind === "super" ? null : owner; });
+      return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name); return owner === undefined || owner.kind === "return" || owner.kind === "super" || owner.kind === "field" ? null : owner; });
     },
     memberKind: (fn) => spec.memberKind(fn),
+    fieldTypes: (members) => {
+      const out: Record<string, SymbolBinding> = {};
+      for (const member of members) for (const field of spec.field?.(member) ?? []) {
+        if (field.isStatic) continue;
+        const name = spec.typeName(field.type);
+        const owner = name === undefined ? undefined : ownerForType(name);
+        if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out[field.name] = owner;
+      }
+      return Object.keys(out).length === 0 ? undefined : out;
+    },
     heritage: (classNode) => {
       const out: SymbolBinding[] = [];
       for (const base of spec.bases?.(classNode) ?? []) {
@@ -259,6 +273,11 @@ const simpleType = (node: Node | null, wrappers: readonly string[]): string | un
 export const goSpec: TypedSpec = {
   functionNodes: ["function_declaration", "method_declaration", "func_literal"],
   scopeNodes: ["block", "if_statement", "for_statement"],
+  field: (node) => {
+    if (node.type !== "field_declaration") return [];
+    const type = node.childForFieldName("type");
+    return childrenOf(node).filter((child) => child.type === "field_identifier").map((name) => ({ name: name.text, type, isStatic: false }));
+  },
   parameter: (node) => {
     if (node.type !== "parameter_declaration") return undefined;
     const name = node.childForFieldName("name");
@@ -332,6 +351,11 @@ export const goSpec: TypedSpec = {
 
 export const rustSpec: TypedSpec = {
   functionNodes: ["function_item", "closure_expression"],
+  field: (node) => {
+    if (node.type !== "field_declaration") return [];
+    const name = node.childForFieldName("name")?.text;
+    return name === undefined ? [] : [{ name, type: node.childForFieldName("type"), isStatic: false }];
+  },
   scopeNodes: ["block", "match_arm", "if_expression", "for_expression", "while_expression", "loop_expression"],
   parameter: (node) => {
     if (node.type !== "parameter") return undefined;

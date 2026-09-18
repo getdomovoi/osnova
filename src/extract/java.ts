@@ -23,7 +23,7 @@ export const javaAdapter: LanguageAdapter = {
               : node.type === "enum_declaration"
                 ? "enum"
                 : "class";
-          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined);
+          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)));
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
