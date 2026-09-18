@@ -76,7 +76,7 @@ export const pythonAdapter: LanguageAdapter = {
         case "class_definition": {
           const name = nameField(node);
           if (name !== null && IDENTIFIER_RE.test(name)) {
-            out.addDef(name, "class", node, undefined, undefined, bindings.heritage(node), bindings.ownFields(node));
+            out.addDef(name, "class", node, undefined, undefined, bindings.heritage(node), bindings.ownFields(node), undefined, undefined, bindings.fieldTypes(node));
             out.push(name);
             inClassDepth += 1;
             for (const child of childrenOf(node)) visit(child);
