@@ -185,7 +185,9 @@ function callerHitLines(hit: CallerEvidenceHit): string[] {
   const evidence = hit.edge.evidence;
   const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
     ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
-  const lines = [`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`];
+  // The source suffix repeats the hit's own location for `in` results, so it is printed only when it differs.
+  const source = hit.file === hit.edge.fromFile && hit.line === hit.edge.line ? "" : `; source ${hit.edge.fromFile}:${hit.edge.line}`;
+  const lines = [`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}${source}]`];
   if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
     if (evidence.resolution.method === "receiver-hint") {
       const receiver = evidence.resolution.receiver;
