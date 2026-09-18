@@ -171,7 +171,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       if (receiver === undefined) return undefined;
       of = { kind: "method", owner: receiver, member: callee.name, mode: "instance" };
     }
-    return index === undefined ? { kind: "return", of } : { kind: "return", of, index };
+    return bounded(index === undefined ? { kind: "return", of } : { kind: "return", of, index });
   };
   const classOf = (scope: Scope): Scope | undefined => { for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.className !== undefined) return current; return undefined; };
   const fieldOwner = (scope: Scope, name: string): ReceiverOwner | undefined => {
@@ -183,6 +183,10 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const fieldContents = (scope: Scope, name: string): Contents | undefined => classOf(scope)?.fields?.get(name)?.contents;
   const pick = (contents: Contents | undefined, mode: "value" | "either" | undefined): string | undefined =>
     contents === undefined ? undefined : mode === "value" ? contents.value : mode === "either" ? contents.value ?? contents.element : contents.element;
+  // Owner nesting is capped so the cache validator (limit sixteen) always accepts what extraction stores.
+  const ownerDepth = (owner: ReceiverOwner | Callee): number =>
+    owner.kind === "return" ? 1 + ownerDepth(owner.of) : owner.kind === "method" ? 1 + ownerDepth(owner.owner) : owner.kind === "field" || owner.kind === "element" ? 1 + ownerDepth(owner.of) : 0;
+  const bounded = (owner: ReceiverOwner | undefined): ReceiverOwner | undefined => owner !== undefined && ownerDepth(owner) > 12 ? undefined : owner;
   const STRIP = new Set(["parenthesized_expression", "reference_expression", "unary_expression"]);
   const strip = (node: Node): Node => { let current = node; while (STRIP.has(current.type)) { const inner = childrenOf(current).find((child) => child.isNamed); if (inner === undefined) break; current = inner; } return current; };
   const PASS_THROUGH = new Set(["iter", "iter_mut", "into_iter", "cloned", "copied", "stream", "values", "sorted", "distinct", "Where", "OrderBy", "OrderByDescending", "Distinct", "ToList", "ToArray", "AsEnumerable", "Skip", "Take", "Reverse"]);
@@ -213,7 +217,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     const name = pick(knownContentsOf(object, scope), mode);
     if (name !== undefined) return ownerForType(name);
     const base = receiverOf(object, scope);
-    return base === undefined ? undefined : { kind: "element", of: base, ...(mode === undefined ? {} : { mode }) };
+    return base === undefined ? undefined : bounded({ kind: "element", of: base, ...(mode === undefined ? {} : { mode }) });
   };
   const receiverOf = (object: Node, scope: Scope): ReceiverOwner | undefined => {
     const at = object.startIndex;
@@ -236,7 +240,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       if (spec.thisNodes?.includes(inner.type)) { const own = fieldOwner(scope, field.text); if (own !== undefined) return own; }
       // A field of a bound receiver: the holder's declared field type is looked up at resolution time.
       const base = receiverOf(inner, scope);
-      return base === undefined ? undefined : { kind: "field", of: base, member: field.text };
+      return base === undefined ? undefined : bounded({ kind: "field", of: base, member: field.text });
     }
     if (object.type !== "identifier" && object.type !== "self") return undefined;
     const fn = nearestFunction(scope);

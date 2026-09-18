@@ -708,12 +708,16 @@ export function collectBindings(root: Node, python: boolean): {
     const target = at(expression, site);
     return target?.kind === "member" ? { kind: "method", owner: target.owner, member: target.member, mode: target.mode } : undefined;
   };
+  // Every wrapper counts: a chain the resolver will never follow (its limit is six hops) is not worth storing,
+  // and the cache validator refuses owners nested deeper than sixteen.
   const ownerDepth = (owner: ReceiverOwner | Callee): number =>
-    owner.kind === "return" ? 1 + ownerDepth(owner.of) : owner.kind === "method" ? 1 + ownerDepth(owner.owner) : 0;
+    owner.kind === "return" ? 1 + ownerDepth(owner.of) : owner.kind === "method" ? 1 + ownerDepth(owner.owner) : owner.kind === "field" || owner.kind === "element" ? 1 + ownerDepth(owner.of) : 0;
+  const MAX_OWNER_DEPTH = 12;
+  const bounded = (owner: ReceiverOwner | undefined): ReceiverOwner | undefined => owner !== undefined && ownerDepth(owner) > MAX_OWNER_DEPTH ? undefined : owner;
   const returnOwner = (callee: Callee | undefined, awaited = false): ReceiverOwner | undefined => {
     if (callee === undefined) return undefined;
     const owner: ReceiverOwner = awaited ? { kind: "return", of: callee, unwrapped: true } : { kind: "return", of: callee };
-    return ownerDepth(owner) > 12 ? undefined : owner;
+    return bounded(owner);
   };
   // `await f()` names the value inside the promise: the callee's unwrapped return type.
   const awaitedCall = (expression: Node | null): Node | null => {
@@ -753,7 +757,7 @@ export function collectBindings(root: Node, python: boolean): {
     if (expression.type === "member_expression" || expression.type === "attribute") {
       const field = expression.childForFieldName(python ? "attribute" : "property")?.text;
       const base = field === undefined ? undefined : chainOwner(expression.childForFieldName("object"), site, field);
-      return base === undefined || field === undefined ? undefined : { kind: "field", of: base, member: field };
+      return base === undefined || field === undefined ? undefined : bounded({ kind: "field", of: base, member: field });
     }
     return undefined;
   };
@@ -986,14 +990,14 @@ export function collectBindings(root: Node, python: boolean): {
       const known = knownContents(expression, site, mode);
       if (known !== undefined) return known;
       const binding = normalize(lookup(expression.text, site));
-      return binding?.kind === "instance" && !mutated(binding, "*") ? { kind: "element", of: binding.owner, ...(mode === undefined ? {} : { mode }) } : undefined;
+      return binding?.kind === "instance" && !mutated(binding, "*") ? bounded({ kind: "element", of: binding.owner, ...(mode === undefined ? {} : { mode }) }) : undefined;
     }
     if (expression.type === (python ? "call" : "call_expression")) {
       const owner = returnOwner(calleeOf(expression.childForFieldName("function"), site));
-      return owner === undefined ? undefined : { kind: "element", of: owner, ...(mode === undefined ? {} : { mode }) };
+      return owner === undefined ? undefined : bounded({ kind: "element", of: owner, ...(mode === undefined ? {} : { mode }) });
     }
     const owner = chainOwner(expression, site, "");
-    return owner === undefined ? undefined : { kind: "element", of: owner, ...(mode === undefined ? {} : { mode }) };
+    return owner === undefined ? undefined : bounded({ kind: "element", of: owner, ...(mode === undefined ? {} : { mode }) });
   };
   const flows: Array<{ kind: "loop"; item: (typeof loops)[number] } | { kind: "alias"; item: (typeof aliases)[number] }> = [
     ...loops.map((item) => ({ kind: "loop" as const, item })), ...aliases.map((item) => ({ kind: "alias" as const, item }))].sort((a, b) => a.item.site.startIndex - b.item.site.startIndex);
