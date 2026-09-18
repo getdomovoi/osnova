@@ -247,9 +247,12 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   };
 }
 
+// The base name of a type: wrappers such as pointers and references are stripped, and a generic
+// instantiation names its base (Vec<T> is a Vec, Wrapper<Foo> is a Wrapper).
 const simpleType = (node: Node | null, wrappers: readonly string[]): string | undefined => {
   let current = node;
   while (current !== null && wrappers.includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current).find((child) => child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null;
+  if (current?.type === "generic_type") current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
   return current?.type === "type_identifier" ? current.text : undefined;
 };
 
@@ -265,7 +268,7 @@ export const goSpec: TypedSpec = {
     let current = node;
     while (current !== null && ["pointer_type", "parenthesized_type"].includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
     if (current?.type === "qualified_type") return current.text;
-    return simpleType(current, []);
+    return simpleType(current, ["generic_type"]);
   },
   returnType: (fn) => { const result = fn.childForFieldName("result"); return result === null || result.type === "parameter_list" ? null : result; },
   returnTypes: (fn) => {
@@ -406,7 +409,7 @@ export const javaSpec: TypedSpec = {
     const name = node.childForFieldName("name") ?? childrenOf(node).find((child) => child.type === "identifier");
     return name !== undefined && name !== null ? { name, type: node.childForFieldName("type") } : undefined;
   },
-  typeName: (node) => node?.type === "type_identifier" ? node.text : undefined,
+  typeName: (node) => node?.type === "type_identifier" ? node.text : node?.type === "generic_type" ? (childrenOf(node).find((child) => child.type === "type_identifier")?.text) : node?.type === "array_type" ? undefined : undefined,
   returnType: (fn) => fn.type === "method_declaration" ? fn.childForFieldName("type") : null,
   receiver: () => undefined,
   memberKind: (fn) => fn.type === "method_declaration" ? (modifiersStatic(fn) ? "static" : "instance") : fn.type === "constructor_declaration" ? "static" : undefined,
@@ -462,7 +465,7 @@ export const csharpSpec: TypedSpec = {
     const name = node.childForFieldName("name");
     return name === null ? undefined : { name, type: node.childForFieldName("type") };
   },
-  typeName: (node) => node?.type === "identifier" ? node.text : node?.type === "nullable_type" ? csharpSpec.typeName(childrenOf(node)[0] ?? null) : undefined,
+  typeName: (node) => node?.type === "identifier" ? node.text : node?.type === "nullable_type" ? csharpSpec.typeName(childrenOf(node)[0] ?? null) : node?.type === "generic_name" ? childrenOf(node).find((child) => child.type === "identifier")?.text : undefined,
   returnType: (fn) => fn.type === "method_declaration" || fn.type === "local_function_statement" ? fn.childForFieldName("type") : null,
   receiver: () => undefined,
   memberKind: (fn) => fn.type === "method_declaration" ? (modifiersStatic(fn) ? "static" : "instance") : fn.type === "constructor_declaration" ? "static" : undefined,

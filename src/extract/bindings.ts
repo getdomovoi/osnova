@@ -19,11 +19,24 @@ interface Scope {
 
 const nullish = new Set(["undefined", "null"]);
 
+function pythonTypeName(type: Node | null): string | undefined {
+  if (type === null) return undefined;
+  const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
+  if (inner === null) return undefined;
+  if (inner.type === "identifier" || inner.type === "attribute") return inner.text;
+  if (inner.type === "generic_type" || inner.type === "subscript") { const base = childrenOf(inner)[0]; return base !== undefined && (base.type === "identifier" || base.type === "attribute") ? base.text : undefined; }
+  return undefined;
+}
+
 function annotationTypeName(annotation: Node | null): string | undefined {
   if (annotation === null) return undefined;
   const inner = annotation.type === "type_annotation" ? childrenOf(annotation).find((child) => child.type !== ":") ?? null : annotation;
   if (inner === null) return undefined;
   if (inner.type === "type_identifier" || inner.type === "nested_type_identifier") return inner.text;
+  // A generic instantiation or an array names its base type: Map<K, V> is a Map, Foo[] is an Array.
+  if (inner.type === "generic_type") { const base = childrenOf(inner)[0]; return base !== undefined && (base.type === "type_identifier" || base.type === "nested_type_identifier") ? base.text : undefined; }
+  if (inner.type === "array_type") return "Array";
+  if (inner.type === "parenthesized_type" || inner.type === "readonly_type") return annotationTypeName(childrenOf(inner).find((child) => child.isNamed) ?? null);
   if (inner.type === "union_type") {
     const members = childrenOf(inner).filter((child) => child.type !== "|" && !(child.type === "literal_type" && nullish.has(child.text)));
     return members.length === 1 ? annotationTypeName(members[0]!) : undefined;
@@ -237,7 +250,7 @@ export function collectBindings(root: Node, python: boolean): {
           if (childrenOf(parameter).some((child) => child.type === "list_splat_pattern" || child.type === "dictionary_splat_pattern")) continue;
           const name = patternNames(parameter)[0];
           const type = parameter.childForFieldName("type");
-          const typeText = type === null ? undefined : type.type === "type" ? (childrenOf(type)[0]?.type === "identifier" || childrenOf(type)[0]?.type === "attribute" ? childrenOf(type)[0]?.text : undefined) : type.type === "identifier" || type.type === "attribute" ? type.text : undefined;
+          const typeText = pythonTypeName(type);
           if (name === undefined || typeText === undefined) continue;
           annotated.push({ scope: inner, parameter: name, typeName: typeText, site: parameter });
         }
@@ -308,15 +321,15 @@ export function collectBindings(root: Node, python: boolean): {
           const assignment = statement.type === "expression_statement" ? childrenOf(statement)[0] : null;
           if (assignment?.type === "assignment") {
             const left = assignment.childForFieldName("left");
-            const type = assignment.childForFieldName("type");
-            const inner = type === null ? null : childrenOf(type)[0] ?? null;
-            if (left?.type === "identifier" && inner !== null && (inner.type === "identifier" || inner.type === "attribute")) fields.set(left.text, { typeName: inner.text, site: node });
+            const typeName = pythonTypeName(assignment.childForFieldName("type"));
+            if (left?.type === "identifier" && typeName !== undefined) fields.set(left.text, { typeName, site: node });
           }
           if (definition?.type === "function_definition" && isProperty && decorated[0] !== undefined) {
             const name = definition.childForFieldName("name")?.text;
             const type = definition.childForFieldName("return_type");
             const inner = type === null ? null : type.type === "type" ? childrenOf(type)[0] ?? null : type;
-            if (name !== undefined && inner !== null && (inner.type === "identifier" || inner.type === "attribute")) pendingProperties.push({ fields, name, inner, decorator: decorated[0] });
+            const base = inner === null ? null : inner.type === "generic_type" || inner.type === "subscript" ? childrenOf(inner)[0] ?? null : inner;
+            if (name !== undefined && base !== null && (base.type === "identifier" || base.type === "attribute")) pendingProperties.push({ fields, name, inner: base, decorator: decorated[0] });
           }
         }
         for (const name of plainMethods) fields.delete(name);
@@ -530,7 +543,8 @@ export function collectBindings(root: Node, python: boolean): {
   const ownerFor = (typeName: string, site: Node, valueOnly = false): SymbolBinding | undefined => {
     const dotted = typeName.split(".");
     const head = lookup(dotted[0]!, site) ?? (valueOnly ? undefined : typeLookup(dotted[0]!, site));
-    if (head === undefined) return undefined;
+    // An unbound type name is a builtin or an ambient type; a local binding lets resolution say so.
+    if (head === undefined) return dotted.length === 1 && !valueOnly ? { kind: "local", name: dotted[0]! } : undefined;
     if (!valueOnly && head.kind === "blocked" && head.reason === "unsupported") { const typed = typeLookup(dotted[0]!, site); if (typed !== undefined) return dotted.length === 1 ? typed : undefined; }
     if (dotted.length === 1) return head.kind === "local" || head.kind === "import" ? head : undefined;
     if (dotted.length === 2 && head.kind === "import" && head.importedName === "*") return { ...head, importedName: dotted[1]! };
@@ -680,9 +694,10 @@ export function collectBindings(root: Node, python: boolean): {
       const body = node.childForFieldName("body");
       if (body !== null && ownYield(body)) return undefined;
       const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
-      if (inner === null || !(inner.type === "identifier" || inner.type === "attribute")) return undefined;
-      if (isTypingSelf(inner)) return classOf(scopes.get(node.id) ?? module) === null ? undefined : { kind: "this" };
-      return ownerFor(inner.text, node);
+      if (inner === null) return undefined;
+      if ((inner.type === "identifier" || inner.type === "attribute") && isTypingSelf(inner)) return classOf(scopes.get(node.id) ?? module) === null ? undefined : { kind: "this" };
+      const name = pythonTypeName(inner);
+      return name === undefined ? undefined : ownerFor(name, node);
     }
     if (node.children.some((child) => child?.type === "async") || node.type === "generator_function_declaration" || node.type === "generator_function" || node.children.some((child) => child?.type === "*")) return undefined;
     let holder: Node = node;

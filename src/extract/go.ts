@@ -16,12 +16,9 @@ function receiverTypeName(node: Node): string | null {
   if (fieldDecl === undefined) return null;
   const typeNode = fieldDecl.childForFieldName("type") ?? childrenOf(fieldDecl)[childrenOf(fieldDecl).length - 1];
   if (typeNode === undefined) return null;
-  if (typeNode.type === "type_identifier") return typeNode.text;
-  if (typeNode.type === "pointer_type" || typeNode.type === "generic_type") {
-    const id = childrenOf(typeNode).find((c) => c.type === "type_identifier");
-    return id !== undefined ? id.text : null;
-  }
-  return null;
+  let current: Node | null = typeNode;
+  while (current !== null && (current.type === "pointer_type" || current.type === "generic_type" || current.type === "parenthesized_type")) current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
+  return current?.type === "type_identifier" ? current.text : null;
 }
 
 export const goAdapter: LanguageAdapter = {

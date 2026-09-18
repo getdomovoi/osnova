@@ -439,10 +439,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         } else if (reference.kind === "local") {
           candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, reference.name));
           resolution = { status: "resolved", method: "lexical-definition" };
-          if (candidates.length === 0 && TYPED_FAMILY.has(card.language) && binding.kind === "member") {
+          if (candidates.length === 0 && binding.kind === "member") {
             const family = languageFamily(card.language);
             const holders = (symbolsByName.get(reference.name) ?? []).filter((symbol) => isHolder(symbol) && languageFamily(files.get(symbol.file)?.language) === family);
-            if (new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1) { candidates = holders; resolution = { status: "resolved", method: "unique-name" }; }
+            // Languages without import bindings for types may take the single declaration of that name in the family.
+            if (TYPED_FAMILY.has(card.language) && new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1) { candidates = holders; resolution = { status: "resolved", method: "unique-name" }; }
             // A type no indexed file declares is a builtin or a dependency type: external, like an unbound global.
             else if (holders.length === 0 && !(symbolsByName.get(reference.name) ?? []).some((symbol) => languageFamily(files.get(symbol.file)?.language) === family)) resolution = { status: "unresolved", reason: "unbound-global" };
           }
