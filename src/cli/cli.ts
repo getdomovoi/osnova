@@ -46,7 +46,7 @@ usage:
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup --preview --client <claude-code|codex|opencode|kilo|cursor|pi> [--config <path>] [--command <exe>] [--home <path>]
-  osnova mcp [--workspace <path>] [--cache-dir <path>]   (default workspace: current directory)
+  osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
 
 queries refresh the index first so answers describe current disk state.`;
 
@@ -362,12 +362,13 @@ export async function runCli(
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { workspace: { type: "string" }, "cache-dir": { type: "string" } },
+        options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" } },
       });
       const workspace = parsed.values.workspace ?? process.cwd();
       const { runMcpStdio } = await import("../mcp/server.js");
       await runMcpStdio(path.resolve(workspace), {
         ...(parsed.values["cache-dir"] !== undefined ? { cacheDir: parsed.values["cache-dir"] } : {}),
+        ...(parsed.values.watch === true ? { watch: true } : {}),
       });
       return EXIT_OK;
     }

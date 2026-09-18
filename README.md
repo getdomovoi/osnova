@@ -214,7 +214,7 @@ osnova coverage [--json]       # call-site resolution coverage per language and 
 osnova check <root>            # staleness gate for CI (exit 1 when stale)
 osnova doctor                  # read-only runtime and asset checks
 osnova setup --preview --client <name>  # diff for one client's config; never applies
-osnova mcp [--workspace <path>] # MCP stdio server (default: current directory)
+osnova mcp [--workspace <path>] [--watch] # MCP stdio server; --watch refreshes on file change instead of per query
 ```
 
 ## Library
