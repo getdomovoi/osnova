@@ -113,6 +113,7 @@ export async function extractCard(
       ...(def.heritage === undefined ? {} : { heritage: def.heritage }),
       ...(def.fields === undefined ? {} : { fields: def.fields }),
       ...(def.returns === undefined ? {} : { returns: def.returns }),
+      ...(def.returnTuple === undefined ? {} : { returnTuple: def.returnTuple }),
     };
   });
 
