@@ -252,6 +252,8 @@ export interface CallersResult {
 
 export interface CallerEvidenceHit extends CallerHit {
   readonly edge: OsnovaEdge;
+  /** The call-site line, trimmed, so the site can be checked without opening the file. */
+  readonly sourceText?: string | undefined;
 }
 
 export interface CallersOptions {

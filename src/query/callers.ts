@@ -82,6 +82,18 @@ export function callersDetailed(
   };
 }
 
+const SOURCE_TEXT_LIMIT = 160;
+function siteText(index: OsnovaIndex, file: string, line: number): string | undefined {
+  const text = index.files.get(file)?.text;
+  if (text === undefined || text.length === 0) return undefined;
+  let start = 0;
+  for (let current = 1; current < line; current += 1) { const next = text.indexOf("\n", start); if (next < 0) return undefined; start = next + 1; }
+  const end = text.indexOf("\n", start);
+  const raw = text.slice(start, end < 0 ? undefined : end).trim();
+  if (raw.length === 0) return undefined;
+  return raw.length > SOURCE_TEXT_LIMIT ? `${raw.slice(0, SOURCE_TEXT_LIMIT - 1)}\u2026` : raw;
+}
+
 function walkCallers(
   index: OsnovaIndex,
   target: OsnovaSymbol,
@@ -136,6 +148,7 @@ function walkCallers(
             depth: level,
             resolved: true,
             edge,
+            sourceText: siteText(index, edge.fromFile, edge.line),
           });
         } else {
           hits.push({
@@ -147,6 +160,7 @@ function walkCallers(
             depth: level,
             resolved: edge.toSymbol !== undefined,
             edge,
+            sourceText: siteText(index, edge.fromFile, edge.line),
           });
         }
         if (other.length > 0 && !visited.has(other) && index.symbols.has(other)) {

@@ -24,7 +24,7 @@ import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
 
 const maximumMcpSkeletonCodeUnits = 4_096;
-const maximumMcpCallersCodeUnits = 2_048;
+const maximumMcpCallersCodeUnits = 4_096;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
