@@ -2,7 +2,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
-import { runHook } from "./hook.js";
+import { runHook, workspaceRootFor } from "./hook.js";
 import { refreshWorkspace } from "../api.js";
 import { indexHealth } from "../index/health.js";
 import { loadArtifact } from "../index/serialize.js";
@@ -49,7 +49,7 @@ usage:
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup --preview --client <claude-code|codex|opencode|kilo|cursor|pi> [--config <path>] [--command <exe>] [--home <path>]
-  osnova hook <prompt|session|install-preview> [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
+  osnova hook <prompt|session|stop|install-preview> [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
 
 queries refresh the index first so answers describe current disk state.`;
@@ -373,7 +373,7 @@ export async function runCli(
     case "hook": {
       const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true } } });
       const event = parsed.positionals[0];
-      if (event !== "prompt" && event !== "session" && event !== "install-preview") throw new Error("osnova hook needs one of: prompt, session, install-preview");
+      if (event !== "prompt" && event !== "session" && event !== "stop" && event !== "install-preview") throw new Error("osnova hook needs one of: prompt, session, stop, install-preview");
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
       await runHook(event, raw, io, { workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;
@@ -384,7 +384,7 @@ export async function runCli(
         allowPositionals: true,
         options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" } },
       });
-      const workspace = parsed.values.workspace ?? process.cwd();
+      const workspace = parsed.values.workspace ?? workspaceRootFor(process.cwd());
       const { runMcpStdio } = await import("../mcp/server.js");
       await runMcpStdio(path.resolve(workspace), {
         ...(parsed.values["cache-dir"] !== undefined ? { cacheDir: parsed.values["cache-dir"] } : {}),

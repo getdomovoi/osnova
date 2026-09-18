@@ -6,7 +6,8 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Added
 
-- `osnova hook prompt` and `osnova hook session`: Claude Code hooks that read the payload on stdin and print starting points for the prompt (definitions and relationships from `footing`, callable and holder kinds only, under 1,024 code units) and the tool contract at session start. Nothing is printed on a slash command, a prompt under twelve characters, or any failure, and the hook always exits 0. `osnova hook install-preview` prints the settings snippet. The CLI wrapper now carries a caller-supplied stdin reader through to commands.
+- `osnova hook prompt`, `osnova hook session` and `osnova hook stop`: Claude Code hooks that read the payload on stdin. `prompt` prints starting points for the prompt (definitions and relationships from `footing`, callable and holder kinds only, under 1,024 code units); `session` prints the tool contract and the index size; `stop` diffs the worktree against `HEAD` and, once per stop, returns a `block` decision whose reason lists the indexed dependents of the changed symbols (under 1,536 code units), so the agent checks them before it finishes (`OSNOVA_HOOK_SETTLE=off` disables it). A repository with no cache is indexed in the background by the session hook; the prompt and stop hooks answer only from an existing cache. Nothing is printed on a slash command, a prompt under twelve characters, or any failure, and every hook exits 0. `osnova hook install-preview` prints the settings snippet. The CLI wrapper now carries a caller-supplied stdin reader through to commands.
+- Hooks and `osnova mcp` without `--workspace` resolve the workspace to the git top level of the starting directory, so a client started in a subdirectory indexes the repository.
 
 ### Changed
 
