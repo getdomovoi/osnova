@@ -288,7 +288,8 @@ export function grepName(toolName: string | undefined, toolInput: Readonly<Recor
     pattern = pattern.replace(/^["']|["']$/g, "");
   }
   if (pattern === undefined) return null;
-  const bare = pattern.replace(/^\\b|\\b$/g, "").replace(/^\^|\$$/g, "");
+  // `\.invoke(` and `.total(` are how a method is grepped; the name is what the index knows.
+  const bare = pattern.replace(/^\\b|\\b$/g, "").replace(/^\^|\$$/g, "").replace(/^(?:\\\.|\.)/, "").replace(/(?:\\\(|\()$/, "");
   return bare.length >= 3 && identifierPattern.test(bare) ? bare : null;
 }
 

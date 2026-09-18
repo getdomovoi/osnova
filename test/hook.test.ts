@@ -89,6 +89,9 @@ describe("osnova hook", () => {
       c = capture(payload("Bash", { command: "rg -n 'unrelated' ." }));
       expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out).toEqual([]);
+      c = capture(JSON.stringify({ session_id: `${session}-d`, cwd: root, tool_name: "Bash", tool_input: { command: "grep -n \"\\.total(\" billing.ts" } }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out.join("\n")).toContain("billing.ts#Invoice.total is indexed: 1 resolved call sites");
       c = capture(payload("Grep", { pattern: "render.*Invoice" }));
       expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out).toEqual([]);
