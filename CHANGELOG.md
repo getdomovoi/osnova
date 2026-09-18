@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova setup --apply --skill` copies the shipped Claude Code skill (`integrations/claude-code/skills/osnova/SKILL.md`) to `~/.claude/skills/osnova/SKILL.md`. The skill states the order of work (`osnova_footing` first, `osnova_warp` for callers, `osnova_plumb` on any claimed list of call sites, `osnova_settle` before finishing) and the rules the trials taught (do not re-read a file the tool already quoted; no indexed callers is not proof of absence). Claude Code loads it only when the task matches its description. A differing file is a conflict and is never overwritten.
+
 ## 0.6.0 (2026-09-18)
 
 ### Added
