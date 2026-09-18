@@ -2,6 +2,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
+import { runHook } from "./hook.js";
 import { refreshWorkspace } from "../api.js";
 import { indexHealth } from "../index/health.js";
 import { loadArtifact } from "../index/serialize.js";
@@ -27,6 +28,8 @@ import { OSNOVA_VERSION } from "../version.js";
 export interface CliIo {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
+  /** The hook payload; defaults to reading the process's stdin. */
+  readonly stdin?: (() => Promise<string>) | undefined;
 }
 
 const USAGE = `osnova: deterministic repository context engine
@@ -46,6 +49,7 @@ usage:
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup --preview --client <claude-code|codex|opencode|kilo|cursor|pi> [--config <path>] [--command <exe>] [--home <path>]
+  osnova hook <prompt|session|install-preview> [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
 
 queries refresh the index first so answers describe current disk state.`;
@@ -63,6 +67,13 @@ async function ensureIndex(
   const diagnostics = formatIndexDiagnostics(index);
   if (diagnostics.length > 0) warn?.(diagnostics);
   return index;
+}
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function requirePositional(values: readonly string[], name: string, command: string): string {
@@ -98,6 +109,7 @@ export async function runCli(
   io = {
     stdout: (text) => rawIo.stdout(boundText(text)),
     stderr: (text) => rawIo.stderr(boundText(text)),
+    stdin: rawIo.stdin,
   };
   const [command = "", ...rest] = argv;
   if (command === "--version" || command === "-v" || command === "version") {
@@ -356,6 +368,14 @@ export async function runCli(
         command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined,
       });
       io.stdout([`osnova setup preview: ${preview.client}, ${preview.action}, ${preview.path}`, preview.diff.trimEnd(), preview.notice].filter((line) => line.length > 0).join("\n"));
+      return EXIT_OK;
+    }
+    case "hook": {
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true } } });
+      const event = parsed.positionals[0];
+      if (event !== "prompt" && event !== "session" && event !== "install-preview") throw new Error("osnova hook needs one of: prompt, session, install-preview");
+      const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
+      await runHook(event, raw, io, { workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;
     }
     case "mcp": {

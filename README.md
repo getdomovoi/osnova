@@ -59,6 +59,8 @@ OpenCode, in `~/.config/opencode/opencode.json`:
 { "mcp": { "osnova": { "type": "local", "command": ["osnova", "mcp"], "enabled": true } } }
 ```
 
+Claude Code hooks, so the graph speaks first without a tool call: `osnova hook session` prints the tool contract and the index size when a session starts, and `osnova hook prompt` prints up to eight starting points (definitions and relationships the prompt names, exact `file:line`, under 1,024 code units) on every prompt. Both read the hook payload on stdin, never write to the repository, and print nothing on a slash command, a short prompt, or a failure. `osnova hook install-preview` prints the settings snippet; paste it into `~/.claude/settings.json` yourself, since osnova never edits that file.
+
 Pi, through the `pi-mcp-adapter` extension, in `~/.pi/agent/mcp.json`:
 
 ```json
