@@ -181,11 +181,12 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
   return lines.join("\n");
 }
 
-function callerHitLines(hit: CallerEvidenceHit): string[] {
+function callerHitLines(hit: CallerEvidenceHit, withText = true): string[] {
   const evidence = hit.edge.evidence;
   const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
     ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
   const lines = [`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`];
+  if (withText && hit.sourceText !== undefined) lines.push(`  > ${hit.sourceText}`);
   if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
     if (evidence.resolution.method === "receiver-hint") {
       const receiver = evidence.resolution.receiver;
@@ -228,12 +229,19 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
     }
     return [header, ...selected, `omitted: ${result.candidates.length - selected.length} of ${result.candidates.length} ambiguous candidates. Use callersDetailed API for the complete candidate list.`].join("\n");
   }
+  const unresolvedBlocks = result.unresolved.map(({ edge, depth, nameMatches }) => unresolvedCallerLines(edge, depth, nameMatches));
+  // Site text is dropped before any relationship is: a complete list without text beats a partial list with it.
+  const withText = selectHits(result, unresolvedBlocks, maxCodeUnits, true);
+  const chosen = withText.selectedHits.length === result.hits.length ? withText : selectHits(result, unresolvedBlocks, maxCodeUnits, false);
+  return chosen.text;
+}
+
+function selectHits(result: Extract<CallersDetailedResult, { status: "found" }>, unresolvedBlocks: string[][], maxCodeUnits: number, withText: boolean): { selectedHits: string[][]; text: string } {
   const base = [
     "indexed-graph results; relationships use heuristic resolution, not type inference",
     "This does not prove absence of callers or that deletion is safe.",
   ];
-  const hitBlocks = result.hits.map(callerHitLines);
-  const unresolvedBlocks = result.unresolved.map(({ edge, depth, nameMatches }) => unresolvedCallerLines(edge, depth, nameMatches));
+  const hitBlocks = result.hits.map((hit) => callerHitLines(hit, withText));
   const selectedHits: string[][] = [];
   const selectedUnresolved: string[][] = [];
   const footer = (): string => `omitted: ${hitBlocks.length - selectedHits.length} of ${hitBlocks.length} confirmed relationships; ${unresolvedBlocks.length - selectedUnresolved.length} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
@@ -249,11 +257,11 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
   ].join("\n").length <= maxCodeUnits;
   for (const block of hitBlocks) if (fits(block, false)) selectedHits.push(block);
   for (const block of unresolvedBlocks) if (fits(block, true)) selectedUnresolved.push(block);
-  return [
+  return { selectedHits, text: [
     ...fixed, ...selectedHits.flat(),
     ...(selectedUnresolved.length > 0 ? [unresolvedHeader, ...selectedUnresolved.flat()] : []),
     footer(),
-  ].join("\n");
+  ].join("\n") };
 }
 
 export function formatMap(result: MapResult): string {

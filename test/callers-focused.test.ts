@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { formatCallersDetailed, formatCallersDetailedBounded } from "../src/query/format.js";
 import type { CallersDetailedResult, CallerEvidenceHit, OsnovaEdge, OsnovaSymbol, UnresolvedCallerEdge } from "../src/types.js";
 
@@ -62,4 +62,34 @@ it("compacts hostile target names while preserving exact omissions", () => {
   const text = formatCallersDetailedBounded(hostile, 512);
   expect(text.length).toBeLessThanOrEqual(512);
   expect(text).toContain("omitted: 100 of 100 confirmed relationships; 100 of 100 unresolved evidence items");
+});
+
+describe("call-site text", () => {
+  it("prints the call-site line under each relationship and drops the text before any relationship", async () => {
+    const { buildIndex } = await import("../src/index.js");
+    const fs = await import("node:fs/promises"); const os = await import("node:os"); const path = await import("node:path");
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-site-text-"));
+    try {
+      const root = path.join(temporary, "ws"); await fs.mkdir(root);
+      const callers = Array.from({ length: 40 }, (_, i) => `export function caller${i}() {\n  return target(${i}); // site ${i}\n}`).join("\n");
+      await fs.writeFile(path.join(root, "a.ts"), `export function target(n: number) { return n; }\n${callers}\n`);
+      const index = await buildIndex(root, { cacheDir: path.join(temporary, "cache") });
+      const { callersDetailed } = await import("../src/query/callers.js");
+      const result = callersDetailed(index, "a.ts#target", { direction: "in", depth: 1 });
+      if (result.status !== "found") throw new Error(result.status);
+      expect(result.hits[0]?.sourceText).toBe("return target(0); // site 0");
+      const full = formatCallersDetailed(result);
+      expect(full).toContain("  > return target(7); // site 7");
+      const roomy = formatCallersDetailedBounded(result, 16_384);
+      expect(roomy).toBe(full);
+      const tight = formatCallersDetailedBounded(result, 2_048);
+      expect(tight.length).toBeLessThanOrEqual(2_048);
+      expect(tight).not.toContain("  > ");
+      expect(tight).toMatch(/omitted: \d+ of 40 confirmed relationships/);
+      const withoutTextLines = (tight.match(/^d1 /gm) ?? []).length;
+      const withTextLines = (formatCallersDetailedBounded({ ...result, hits: result.hits.slice(0, 12) }, 2_048).match(/^ {2}> /gm) ?? []).length;
+      expect(withoutTextLines).toBeGreaterThan(12);
+      expect(withTextLines).toBe(12);
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
 });
