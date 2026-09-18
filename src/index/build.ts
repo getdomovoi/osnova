@@ -115,6 +115,11 @@ export async function extractCard(
       ...(def.returns === undefined ? {} : { returns: def.returns }),
       ...(def.returnTuple === undefined ? {} : { returnTuple: def.returnTuple }),
       ...(def.fieldTypes === undefined ? {} : { fieldTypes: def.fieldTypes }),
+      ...(def.unwrapped === undefined ? {} : { unwrapped: def.unwrapped }),
+      ...(def.elements === undefined ? {} : { elements: def.elements }),
+      ...(def.elementTypes === undefined ? {} : { elementTypes: def.elementTypes }),
+      ...(def.values === undefined ? {} : { values: def.values }),
+      ...(def.valueTypes === undefined ? {} : { valueTypes: def.valueTypes }),
     };
   });
 
