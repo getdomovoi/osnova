@@ -30,7 +30,7 @@ export function workspaceDirFor(cacheDir: string, absRoot: string): string {
   return path.join(cacheDir, workspaceKey(absRoot));
 }
 
-export const defaultLruCap = 8;
+export const defaultLruCap = 32;
 export const defaultCacheMaxBytes = 256 * 1024 * 1024;
 
 export interface CachePolicy {
