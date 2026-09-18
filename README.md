@@ -154,6 +154,50 @@ The reason to keep a call graph instead of running a text search is not speed. I
 
 What the text search got wrong: a comment that mentioned the method, a Javadoc example, a definition line, and four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next). What the graph missed: a receiver that is reassigned later in the same function, and a receiver that comes out of a multi-value return, both left unresolved on purpose rather than guessed. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-17.json`](benchmarks/results/grep-vs-graph-2026-09-17.json).
 
+## In CI
+
+The same check runs on every pull request without an agent. The action indexes the base commit and the head at the same path, then lists every indexed dependent of the symbols the pull request changed in the job summary, and as a comment when asked:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- uses: getdomovoi/osnova@main
+  with:
+    depth: "2"
+```
+
+Inputs: `base-ref` (default: the pull request base), `depth`, `workspace`, `version` (the npm version run through `npx`), `command` (run a local build instead), `comment` (post a PR comment; needs `GH_TOKEN` with pull-requests write). The report is indexed structural evidence only: a missing dependent is not proof that nothing depends on the change. `scripts/settle-ci.sh` is the whole action and runs by hand with `BASE_REF=<commit> bash scripts/settle-ci.sh`.
+
+## Checking a claim
+
+A reviewer, an agent or a commit message claims "these are all the callers". `plumb` checks the claim against the index instead of trusting it. Each claimed site is confirmed, name-only, no-call or not-indexed, and the resolved dependents the list left out are named. This is the click repository at the revision pinned in `benchmarks/click-v1.json`, with a claim that has two wrong lines and misses six:
+
+```sh
+osnova plumb "src/click/core.py#Context.invoke" --depth 2 \
+  --site src/click/core.py:934 --site src/click/core.py:1420 --site src/click/core.py:2000 \
+  --site src/click/decorators.py:93 --site src/click/decorators.py:200
+```
+
+```text
+osnova plumb: src/click/core.py#Context.invoke, 3 confirmed, 0 name-only, 2 no-call, 0 not-indexed, 6 missing
+claims:
+confirmed src/click/core.py:934 -> src/click/core.py#Context.forward
+confirmed src/click/core.py:1420 -> src/click/core.py#Command.invoke
+no-call src/click/core.py:2000
+confirmed src/click/decorators.py:93 -> src/click/decorators.py#make_pass_decorator.decorator.new_func
+no-call src/click/decorators.py:200
+missing:
+src/click/core.py:1566 src/click/core.py#Command.main
+src/click/core.py:2029 src/click/core.py#Group.invoke._process_result
+src/click/core.py:2039 src/click/core.py#Group.invoke
+src/click/core.py:2060 src/click/core.py#Group.invoke
+src/click/core.py:2092 src/click/core.py#Group.invoke
+src/click/decorators.py:119 src/click/decorators.py#pass_meta_key.decorator.new_func
+```
+
+`confirmed` means the index holds a resolved call edge at that line; it is not a runtime proof. `missing` covers indexed resolved edges only, so a call the index could not resolve, such as `super().invoke(ctx)`, does not appear in either list; `osnova_warp` shows those as unresolved evidence with same-name candidates. Over MCP the same check is `osnova_plumb` with `symbol`, `sites` and `depth`.
+
 ## CLI
 
 ```sh
