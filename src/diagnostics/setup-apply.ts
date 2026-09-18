@@ -73,7 +73,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
   const indent = existing === null ? "  " : (/^( +|\t+)"/m.exec(existing)?.[1] ?? "  ");
   const merged = `${JSON.stringify({ ...(client === "cursor" && root.version === undefined ? { version: 1 } : {}), ...root, hooks }, null, indent)}\n`;
   const action = existing === null ? "create" : "append";
-  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${added} osnova hook entr${added === 1 ? "y" : "ies"} for ${client} in ${target}; other keys are kept, the file is re-serialized with its indent.` };
+  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${added} osnova hook entr${added === 1 ? "y" : "ies"} for ${client} in ${target}; other keys are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}` };
 }
 
 // The shipped integration file for a client that runs plugins instead of hooks, copied into its plugin directory.

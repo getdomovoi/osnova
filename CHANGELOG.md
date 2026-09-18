@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- `osnova setup --apply --hooks --client codex` says in its notice that Codex skips new hooks until they are trusted in `/hooks`; the README and reference say the same. `osnova setup --apply` now prints each written change's notice under its line, as `--preview` already did. Codex records trust per hook hash, so the three osnova entries run only after that step, and osnova cannot trust them on the user's behalf.
+
 ## 0.6.2 (2026-09-18)
 
 ### Added
