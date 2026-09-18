@@ -33,6 +33,8 @@ function annotationTypeName(annotation: Node | null): string | undefined {
   const inner = annotation.type === "type_annotation" ? childrenOf(annotation).find((child) => child.type !== ":") ?? null : annotation;
   if (inner === null) return undefined;
   if (inner.type === "type_identifier" || inner.type === "nested_type_identifier") return inner.text;
+  // A primitive names a builtin the index cannot hold, so a call on it classifies as external; any and unknown stay unknown.
+  if (inner.type === "predefined_type") return ["string", "number", "boolean", "symbol", "bigint"].includes(inner.text) ? inner.text : undefined;
   // A generic instantiation or an array names its base type: Map<K, V> is a Map, Foo[] is an Array.
   if (inner.type === "generic_type") { const base = childrenOf(inner)[0]; return base !== undefined && (base.type === "type_identifier" || base.type === "nested_type_identifier") ? base.text : undefined; }
   if (inner.type === "array_type") return "Array";
@@ -81,6 +83,20 @@ function pythonContentTypeNames(type: Node | null): Contents | undefined {
   if (PYTHON_ELEMENT_GENERICS.has(baseName)) return { element: pythonTypeName(arguments_[0] ?? null) };
   if (PYTHON_VALUE_GENERICS.has(baseName)) return { value: pythonTypeName(arguments_[1] ?? null) };
   return undefined;
+}
+
+// A type parameter of an enclosing declaration (`class Box<T>`, `function f<T>()`) names no type the index can hold.
+function isTypeParameter(name: string, site: Node): boolean {
+  for (let current: Node | null = site; current !== null; current = current.parent) {
+    const parameters = current.childForFieldName("type_parameters") ?? childrenOf(current).find((child) => child.type === "type_parameters");
+    if (parameters === undefined || parameters === null || parameters.hasError) continue;
+    for (const parameter of childrenOf(parameters)) {
+      if (parameter.type !== "type_parameter") continue;
+      const declared = parameter.childForFieldName("name") ?? childrenOf(parameter).find((child) => child.type === "type_identifier" || child.type === "identifier");
+      if (declared?.text === name) return true;
+    }
+  }
+  return false;
 }
 
 function enclosingBody(site: Node, root: Node): Node {
@@ -634,7 +650,7 @@ export function collectBindings(root: Node, python: boolean): {
     const dotted = typeName.split(".");
     const head = lookup(dotted[0]!, site) ?? (valueOnly ? undefined : typeLookup(dotted[0]!, site));
     // An unbound type name is a builtin or an ambient type; a local binding lets resolution say so.
-    if (head === undefined) return dotted.length === 1 && !valueOnly ? { kind: "local", name: dotted[0]! } : undefined;
+    if (head === undefined) return dotted.length === 1 && !valueOnly && !(!python && isTypeParameter(dotted[0]!, site)) ? { kind: "local", name: dotted[0]! } : undefined;
     // A type position ignores value bindings: an interface that shares its name with a const still names the interface.
     if (!valueOnly && head.kind === "blocked") { const typed = typeBinding(dotted[0]!, site); if (typed !== undefined) return dotted.length === 1 ? typed : dotted.length === 2 && typed.kind === "import" && typed.importedName === "*" ? { ...typed, importedName: dotted[1]! } : undefined; }
     if (dotted.length === 1) return head.kind === "local" || head.kind === "import" ? head : undefined;
