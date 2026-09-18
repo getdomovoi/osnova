@@ -108,6 +108,7 @@ function validOwner(value: unknown, depth = 0): boolean {
   if (owner.kind === "field") return typeof owner.member === "string" && validOwner(owner.of, depth + 1);
   if (owner.kind !== "return") return false;
   if (owner.index !== undefined && !(Number.isSafeInteger(owner.index) && (owner.index as number) >= 0)) return false;
+  if (owner.unwrapped !== undefined && owner.unwrapped !== true) return false;
   const of = owner.of as Record<string, unknown> | undefined;
   if (validSymbolBinding(of)) return true;
   return typeof of === "object" && of !== null && of.kind === "method" && typeof of.member === "string" && (of.mode === undefined || ["instance", "class"].includes(String(of.mode))) && validOwner(of.owner, depth + 1);
