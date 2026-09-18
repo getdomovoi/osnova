@@ -33,7 +33,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.13.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.14.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 class ExtractionVersionError extends Error {}
@@ -65,6 +65,10 @@ interface SerializedSymbol {
   readonly returnTuple?: readonly (ReturnBinding | null)[] | undefined;
   readonly fieldTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly unwrapped?: ReturnBinding | undefined;
+  readonly elements?: ReturnBinding | undefined;
+  readonly elementTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly values?: ReturnBinding | undefined;
+  readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
 }
 
 interface SerializedFile {
@@ -140,6 +144,10 @@ export function serializeSections(
         ...(symbol.returnTuple === undefined ? {} : { returnTuple: symbol.returnTuple }),
         ...(symbol.fieldTypes === undefined ? {} : { fieldTypes: symbol.fieldTypes }),
         ...(symbol.unwrapped === undefined ? {} : { unwrapped: symbol.unwrapped }),
+        ...(symbol.elements === undefined ? {} : { elements: symbol.elements }),
+        ...(symbol.elementTypes === undefined ? {} : { elementTypes: symbol.elementTypes }),
+        ...(symbol.values === undefined ? {} : { values: symbol.values }),
+        ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
@@ -263,6 +271,10 @@ function deserializeParsedArtifact(
       const validReturn = (item: unknown): boolean => { const value = item as { kind?: unknown; name?: unknown; source?: unknown; importedName?: unknown }; return typeof value === "object" && value !== null && (value.kind === "this" || (value.kind === "local" && typeof value.name === "string") || (value.kind === "import" && typeof value.source === "string" && typeof value.importedName === "string")); };
       if (symbol.returns !== undefined && !validReturn(symbol.returns)) throw new Error("osnova: corrupt return metadata");
       if (symbol.unwrapped !== undefined && !validReturn(symbol.unwrapped)) throw new Error("osnova: corrupt return metadata");
+      if (symbol.elements !== undefined && !validReturn(symbol.elements)) throw new Error("osnova: corrupt return metadata");
+      if (symbol.values !== undefined && !validReturn(symbol.values)) throw new Error("osnova: corrupt return metadata");
+      if (symbol.valueTypes !== undefined && (typeof symbol.valueTypes !== "object" || symbol.valueTypes === null || Array.isArray(symbol.valueTypes) || !Object.values(symbol.valueTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
+      if (symbol.elementTypes !== undefined && (typeof symbol.elementTypes !== "object" || symbol.elementTypes === null || Array.isArray(symbol.elementTypes) || !Object.values(symbol.elementTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.returnTuple !== undefined && (!Array.isArray(symbol.returnTuple) || !symbol.returnTuple.every((item: unknown) => item === null || validReturn(item)))) throw new Error("osnova: corrupt return metadata");
       if (symbol.fieldTypes !== undefined && (typeof symbol.fieldTypes !== "object" || symbol.fieldTypes === null || Array.isArray(symbol.fieldTypes) || !Object.values(symbol.fieldTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       const span: SourceSpan = {
@@ -287,6 +299,10 @@ function deserializeParsedArtifact(
         ...(symbol.returnTuple === undefined ? {} : { returnTuple: symbol.returnTuple }),
         ...(symbol.fieldTypes === undefined ? {} : { fieldTypes: symbol.fieldTypes }),
         ...(symbol.unwrapped === undefined ? {} : { unwrapped: symbol.unwrapped }),
+        ...(symbol.elements === undefined ? {} : { elements: symbol.elements }),
+        ...(symbol.elementTypes === undefined ? {} : { elementTypes: symbol.elementTypes }),
+        ...(symbol.values === undefined ? {} : { values: symbol.values }),
+        ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
       };
     });
     const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports };
