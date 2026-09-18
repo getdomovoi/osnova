@@ -97,7 +97,7 @@ describe("the Claude Code skill", () => {
     expect(await runCli(["setup", "--apply", "--skill", "--home", home], c.io)).toBe(0);
     const target = path.join(home, ".claude", "skills", "osnova", "SKILL.md");
     const text = await fs.readFile(target, "utf8");
-    expect(text.startsWith("---\nname: osnova\n")).toBe(true);
+    expect(text.replace(/\r\n/g, "\n").startsWith("---\nname: osnova\n")).toBe(true);
     expect(text).toContain("osnova_settle");
     expect(c.out.join("\n")).toMatch(/skill, create, .*SKILL\.md/);
     c = capture();
