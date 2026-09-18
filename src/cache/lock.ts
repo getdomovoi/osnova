@@ -55,8 +55,17 @@ export function lockOwnerExited(owner: LockOwner): boolean {
 
 const TRANSIENT_CODES = new Set(["ENOENT", "EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
 
+// An owner file that cannot be read right now (another process is renaming or removing the lock,
+// which Windows reports as EPERM or EBUSY) is not evidence of anything: skip this poll.
+async function readOwnerIfSettled(lockPath: string): Promise<LockOwner | undefined> {
+  try { return await readOwner(lockPath); } catch (error) {
+    if (TRANSIENT_CODES.has((error as NodeJS.ErrnoException).code ?? "")) return undefined;
+    throw error;
+  }
+}
+
 async function recoverExitedOwner(lockPath: string): Promise<void> {
-  const owner = await readOwner(lockPath);
+  const owner = await readOwnerIfSettled(lockPath);
   if (owner === undefined || !lockOwnerExited(owner)) return;
   const names = await fs.readdir(lockPath).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -86,7 +95,7 @@ async function recoverExitedOwner(lockPath: string): Promise<void> {
   let renamed = false;
   const abandoned = `${lockPath}.abandoned-${randomUUID()}`;
   try {
-    const current = await readOwner(lockPath);
+    const current = await readOwnerIfSettled(lockPath);
     const entries = await fs.readdir(lockPath).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
@@ -150,7 +159,11 @@ export async function withCacheLock<T>(
         }
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // EEXIST is the normal contended case. A transient code means another process is mid-way
+        // through renaming or removing the lock directory (Windows answers EPERM or EBUSY for the
+        // moment it takes); poll again rather than fail the whole cache operation.
+        const code = (error as NodeJS.ErrnoException).code ?? "";
+        if (code !== "EEXIST" && !TRANSIENT_CODES.has(code)) throw error;
         if ((await fs.lstat(lockPath).catch((statError: unknown) => {
           if ((statError as NodeJS.ErrnoException).code === "ENOENT") return undefined;
           throw statError;
