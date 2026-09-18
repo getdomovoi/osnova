@@ -49,7 +49,11 @@ describe("osnova hook", () => {
       c = capture(payload);
       expect(await runCli(["hook", "prompt", "--client", "codex", "--cache-dir", cacheDir], c.io)).toBe(0);
       const codex = JSON.parse(c.out.join("\n"));
-      expect(codex.additionalContext).toContain("billing.ts#renderInvoice");
+      expect(codex.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+      expect(codex.hookSpecificOutput.additionalContext).toContain("billing.ts#renderInvoice");
+      c = capture(JSON.stringify({ cwd: root }));
+      expect(await runCli(["hook", "session", "--client", "codex", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(JSON.parse(c.out.join("\n")).hookSpecificOutput.hookEventName).toBe("SessionStart");
       c = capture();
       expect(await runCli(["hook", "install-preview", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
       const snippet = JSON.parse(c.out.join("\n").split("\n").slice(1).join("\n"));
