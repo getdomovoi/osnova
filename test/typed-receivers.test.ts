@@ -26,7 +26,7 @@ describe("Go receivers", () => {
     expect(index.symbols.get("server.go#NewServer")?.returns).toEqual({ kind: "local", name: "Server" });
     expect(calls(index, "server.go#Server.Start", "Stop")).toEqual(["server.go#Server.Stop"]);
     expect(calls(index, "use.go#use", "Start")).toEqual([
-      undefined, "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", undefined, undefined, undefined,
+      "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start", undefined, undefined, "server.go#Server.Start",
     ]);
   });
 
@@ -51,7 +51,7 @@ describe("Rust receivers", () => {
     expect(index.symbols.get("src/server.rs#Server.start")?.memberKind).toBe("instance");
     expect(index.symbols.get("src/server.rs#Server.build")?.returns).toEqual({ kind: "this" });
     expect(calls(index, "src/server.rs#Server.start", "stop")).toEqual(["src/server.rs#Server.stop"]);
-    expect(calls(index, "src/main.rs#run", "start")).toEqual([...Array.from({ length: 8 }, () => "src/server.rs#Server.start"), undefined, undefined]);
+    expect(calls(index, "src/main.rs#run", "start")).toEqual([...Array.from({ length: 8 }, () => "src/server.rs#Server.start"), undefined, "src/server.rs#Server.start"]);
     expect(calls(index, "src/main.rs#run", "new")).toEqual(["src/server.rs#Server.new", "src/server.rs#Server.new", "src/server.rs#Server.new"]);
     expect(calls(index, "src/main.rs#run", "stop")).toEqual([undefined]);
   });
@@ -97,7 +97,7 @@ describe("Java and C# receivers", () => {
     expect(index.symbols.get("src/main/java/a/App.java#App.make")?.returns).toEqual({ kind: "import", source: "a.b.Server", importedName: "Server" });
     expect(calls(index, "src/main/java/a/App.java#App.run", "start")).toEqual([
       "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start",
-      "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", undefined, undefined,
+      "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", undefined, "src/main/java/a/b/Server.java#Server.start",
     ]);
     expect(calls(index, "src/main/java/a/App.java#App.run", "create")).toEqual(["src/main/java/a/b/Server.java#Server.create", "src/main/java/a/b/Server.java#Server.create"]);
     expect(calls(index, "src/main/java/a/App.java#App.run", "run")).toEqual(["src/main/java/a/App.java#App.run"]);
@@ -110,14 +110,14 @@ describe("Java and C# receivers", () => {
     });
     expect(index.symbols.get("Lib/Server.cs#Server.Create")?.memberKind).toBe("static");
     expect(calls(index, "App/Runner.cs#Runner.Run", "Start")).toEqual([
-      undefined, "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", undefined, undefined,
+      "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", undefined, "Lib/Server.cs#Server.Start",
     ]);
     expect(calls(index, "App/Runner.cs#Runner.Run", "Create")).toEqual(["Lib/Server.cs#Server.Create"]);
   });
 });
 
 describe("typed receiver precision", () => {
-  it("sees the binding in force at the call site, invalidates captured writes, and keeps test packages apart", async () => {
+  it("sees the binding in force at the call site, keeps a declared type through captured writes, and keeps test packages apart", async () => {
     const index = await build({
       "Cargo.toml": "[package]\nname = 'x'\n",
       "src/main.rs": "struct Other;\nimpl Other { fn start(&self) {} }\nstruct Server;\nimpl Server { fn start(&self) {} }\nfn unknown() -> Other { Other }\nfn shadow() {\n    let x = unknown();\n    x.start();\n    let x: Server = Server;\n    x.start();\n}\ntrait Trait { fn run(&self); fn make() -> Self; }\nimpl Trait for Server { fn run(&self) {} fn make() -> Self { Server } }\nimpl Server { fn own(&self) {} }\nfn use_it(s: &Server) {\n    s.run();\n    s.own();\n    Server::make();\n}\n",
@@ -131,7 +131,7 @@ describe("typed receiver precision", () => {
     expect(calls(index, "src/main.rs#use_it", "run")).toEqual([undefined]);
     expect(calls(index, "src/main.rs#use_it", "own")).toEqual(["src/main.rs#Server.own"]);
     expect(calls(index, "src/main.rs#use_it", "make")).toEqual([undefined]);
-    expect(calls(index, "pkg/prod.go#closure", "Start")).toEqual([undefined, undefined]);
+    expect(calls(index, "pkg/prod.go#closure", "Start")).toEqual(["pkg/prod.go#Server.Start", "pkg/prod.go#Server.Start"]);
     expect(calls(index, "pkg/prod.go#closure", "Run")).toEqual(["pkg/prod.go#Runner.Run"]);
     expect(index.symbols.get("pkg/prod.go#Runner.Run")?.memberKind).toBe("instance");
     expect(calls(index, "cmd/main.go#f", "Start")).toEqual(["pkg/prod.go#Server.Start"]);
@@ -160,5 +160,68 @@ describe("Go tuple returns", () => {
     expect(calls(index, "server.go#use", "Start")).toEqual(["server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start"]);
     expect(calls(index, "server.go#use", "Send")).toEqual(["server.go#Conn.Send", "server.go#Conn.Send", "server.go#Conn.Send", "server.go#Conn.Send"]);
     expect(calls(index, "server.go#use", "Error")).toEqual([undefined]);
+  });
+});
+
+describe("Rust receivers inside closures and unwrap patterns", () => {
+  it("sees self from a closure, and binds the name an if let, while let or match arm takes out of an Option", async () => {
+    const index = await build({
+      "Cargo.toml": "[package]\nname = 'x'\n",
+      "src/lib.rs": [
+        "pub struct Term(u8);",
+        "impl Term {",
+        "    pub fn as_byte(&self) -> u8 { self.0 }",
+        "    pub fn is_suffix(&self, slice: &[u8]) -> bool { slice.last().map_or(false, |&b| b == self.as_byte()) }",
+        "}",
+        "pub struct Sink { pub(crate) term: Term }",
+        "impl Sink {",
+        "    pub fn byte(&self) -> u8 { self.term.as_byte() }",
+        "    pub fn find(&self) -> Option<Term> { None }",
+        "    pub fn each(&self) -> u8 { let mut n = 0; while let Some(t) = self.find() { n += t.as_byte(); } n }",
+        "}",
+        "pub fn maybe(t: Option<Term>) -> u8 { if let Some(term) = t { term.as_byte() } else { 0 } }",
+        "pub fn matched(t: Option<&Term>) -> u8 { match t { Some(term) => term.as_byte(), None => 0 } }",
+        "pub fn result(r: Result<Term, String>) -> u8 { if let Ok(term) = r { term.as_byte() } else { 0 } }",
+        "pub fn wrapped(s: &Sink) -> u8 { if let Some(term) = s.find() { term.as_byte() } else { 0 } }",
+        "pub fn other(t: Option<u8>) -> u8 { if let Some(term) = t { term.as_byte() } else { 0 } }",
+        "",
+      ].join("\n"),
+    });
+    expect(calls(index, "src/lib.rs#Term.is_suffix", "as_byte")).toEqual(["src/lib.rs#Term.as_byte"]);
+    expect(calls(index, "src/lib.rs#Sink.byte", "as_byte")).toEqual(["src/lib.rs#Term.as_byte"]);
+    expect(calls(index, "src/lib.rs#Sink.each", "as_byte")).toEqual(["src/lib.rs#Term.as_byte"]);
+    for (const fn of ["maybe", "matched", "result", "wrapped"]) expect(calls(index, `src/lib.rs#${fn}`, "as_byte"), fn).toEqual(["src/lib.rs#Term.as_byte"]);
+    expect(calls(index, "src/lib.rs#other", "as_byte")).toEqual([undefined]);
+  });
+});
+
+describe("Rust workspace crates and inline modules", () => {
+  it("resolves a use of another workspace crate by package name through its pub use re-export, a brace-rooted use list, and keeps a test module's use super out of the file scope", async () => {
+    const index = await build({
+      "Cargo.toml": "[workspace]\nmembers = [\"crates/matcher\", \"crates/searcher\"]\n",
+      "crates/matcher/Cargo.toml": "[package]\nname = \"grep-matcher\"\nversion = \"0.1.0\"\n",
+      "crates/matcher/src/lib.rs": "mod term;\npub use crate::term::LineTerminator;\n",
+      "crates/matcher/src/term.rs": "pub struct LineTerminator(u8);\nimpl LineTerminator { pub fn as_byte(&self) -> u8 { self.0 } }\n",
+      "crates/searcher/Cargo.toml": "[package]\nname = \"grep-searcher\"\nversion = \"0.1.0\"\n",
+      "crates/searcher/src/lib.rs": [
+        "use {",
+        "    grep_matcher::LineTerminator,",
+        "    std::io,",
+        "};",
+        "pub struct SinkMatch { pub(crate) term: LineTerminator }",
+        "impl SinkMatch { pub fn byte(&self) -> u8 { self.term.as_byte() } }",
+        "pub fn strip(term: LineTerminator) -> u8 { term.as_byte() }",
+        "#[cfg(test)]",
+        "mod tests {",
+        "    use super::{LineTerminator, SinkMatch};",
+        "    fn check(m: &SinkMatch, t: LineTerminator) -> u8 { m.byte() + t.as_byte() }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    expect(calls(index, "crates/searcher/src/lib.rs#strip", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
+    expect(calls(index, "crates/searcher/src/lib.rs#SinkMatch.byte", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
+    expect(calls(index, "crates/searcher/src/lib.rs#check", "byte")).toEqual(["crates/searcher/src/lib.rs#SinkMatch.byte"]);
+    expect(calls(index, "crates/searcher/src/lib.rs#check", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
   });
 });

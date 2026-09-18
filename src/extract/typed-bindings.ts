@@ -4,7 +4,8 @@ import { childrenOf } from "./util.js";
 
 // Receiver identity for languages with declared types and no lexical binding collector of their
 // own. A name is bound to a type name by a typed parameter, a typed local, a constructor literal or
-// the declared return type of the call that produced it. Anything reassigned or untyped is unknown.
+// the declared return type of the call that produced it. Anything untyped is unknown. Reassignment never
+// changes a binding: in these languages a name's static type is fixed for its whole lifetime.
 
 export interface TypedSpec {
   readonly functionNodes: readonly string[];
@@ -16,7 +17,6 @@ export interface TypedSpec {
   readonly receiver: (fn: Node) => { name: string; type: string } | undefined;
   readonly memberKind: (fn: Node) => MemberKind | undefined;
   readonly local: (node: Node) => ReadonlyArray<{ name: Node; type: Node | null; value: Node | null; index?: number | undefined }>;
-  readonly assigned: (node: Node) => readonly Node[];
   readonly constructed: (value: Node | null) => string | undefined;
   readonly callee: (fn: Node) => { object: Node | null; name: string; path?: string | undefined } | undefined;
   readonly imports: (node: Node) => ReadonlyArray<{ local: string; source: string; name: string }>;
@@ -27,6 +27,8 @@ export interface TypedSpec {
   readonly bases?: ((classNode: Node) => readonly string[]) | undefined;
   readonly innerType?: ((type: Node) => Node | null) | undefined;
   readonly unwrapCalls?: readonly string[] | undefined;
+  // `if let Some(x) = source`, `while let`, and a `Some(x) =>` match arm: `x` is what the source wraps.
+  readonly unwrapPattern?: ((node: Node) => ReadonlyArray<{ name: Node; source: Node }>) | undefined;
   // What a collection type holds: the element type of a slice, array, list or set, or the value type of a map.
   readonly contents?: ((type: Node | null) => { element?: Node | null | undefined; value?: Node | null | undefined } | undefined) | undefined;
   // Index access (`xs[i]`, `m[k]`) and the operand it indexes.
@@ -40,7 +42,7 @@ export interface TypedSpec {
 
 interface Import { readonly source: string; readonly name: string }
 interface Contents { readonly element?: string | undefined; readonly value?: string | undefined }
-interface Declaration { readonly at: number; readonly type: string | undefined; readonly owner?: ReceiverOwner | undefined; readonly importOf?: Import | undefined; readonly contents?: Contents | undefined }
+interface Declaration { readonly at: number; readonly type: string | undefined; readonly owner?: ReceiverOwner | undefined; readonly importOf?: Import | undefined; readonly contents?: Contents | undefined; readonly inner?: string | undefined }
 // Declarations keep their source position so a call sees the binding in force where it occurs,
 // not the last one declared in the scope.
 interface Scope { readonly parent: Scope | null; readonly names: Map<string, Declaration[]>; readonly fn: boolean; receiver?: { name: string; type: string } | undefined; className?: string | undefined; fields?: Map<string, { type: string | undefined; contents?: Contents | undefined }> | undefined; staticFn?: boolean | undefined }
@@ -62,13 +64,12 @@ export interface TypedBindings {
 export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings {
   const module: Scope = { parent: null, names: new Map(), fn: false };
   const scopes = new Map<number, Scope>();
-  const reassigned = new Map<Scope, Set<string>>();
   const fnScopes: Scope[] = [];
 
   const nearestFunction = (scope: Scope): Scope => { let current = scope; while (!current.fn && current.parent !== null) current = current.parent; return current; };
-  const bind = (scope: Scope, name: string, at: number, type: string | undefined, owner?: ReceiverOwner, importOf?: Import, contents?: Contents): void => {
+  const bind = (scope: Scope, name: string, at: number, type: string | undefined, owner?: ReceiverOwner, importOf?: Import, contents?: Contents, inner?: string): void => {
     const list = scope.names.get(name) ?? [];
-    list.push({ at, type, owner, importOf, contents });
+    list.push({ at, type, owner, importOf, contents, inner });
     scope.names.set(name, list);
   };
   const declared = (scope: Scope, name: string, at: number): Declaration | undefined => {
@@ -104,6 +105,11 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     return element === undefined && value === undefined ? undefined : { element, value };
   };
   const knownType = (type: string | undefined, site: Node): string | undefined => type !== undefined && isTypeParameter(type, site) ? undefined : type;
+  // The type an `Option<T>` or `Result<T, E>` annotation wraps, when the spec knows the wrapper.
+  const innerOfType = (type: Node | null, site: Node): string | undefined => {
+    const inner = type === null ? null : spec.innerType?.(type) ?? null;
+    return inner === null ? undefined : knownType(spec.typeName(inner), site);
+  };
   const ownerForType = (type: string, site?: Node): ReceiverOwner | undefined => {
     if (site !== undefined && isTypeParameter(type, site)) return undefined;
     const dot = type.indexOf(".");
@@ -125,11 +131,6 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const scopeBinds = (scope: Scope, name: string, at: number): boolean => {
     for (let current: Scope | null = scope; current !== null && current !== module; current = current.parent) if (declared(current, name, at) !== undefined || current.receiver?.name === name) return true;
     return false;
-  };
-  // A write anywhere, including inside a closure, invalidates the binding in the scope that declares the name.
-  const declaringScope = (scope: Scope, name: string): Scope => {
-    for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.names.has(name) || current.receiver?.name === name) return current;
-    return nearestFunction(scope);
   };
   const calleeOwner = (value: Node, scope: Scope, index?: number): ReceiverOwner | undefined => {
     // `f()?` and `f().unwrap()` name the value inside the wrapper: the callee's unwrapped return type.
@@ -195,7 +196,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const knownContentsOf = (object: Node, scope: Scope): Contents | undefined => {
     object = strip(object);
     if (object.type === "identifier") {
-      for (let current: Scope | null = scope; current !== null; current = current.parent) { const found = declared(current, object.text, object.startIndex); if (found !== undefined) return reassigned.get(current)?.has(object.text) ? undefined : found.contents; }
+      for (let current: Scope | null = scope; current !== null; current = current.parent) { const found = declared(current, object.text, object.startIndex); if (found !== undefined) return found.contents; }
       return fieldContents(scope, object.text);
     }
     if (["field_access", "member_access_expression", "selector_expression", "field_expression"].includes(object.type)) {
@@ -243,20 +244,18 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       return base === undefined ? undefined : bounded({ kind: "field", of: base, member: field.text });
     }
     if (object.type !== "identifier" && object.type !== "self") return undefined;
-    const fn = nearestFunction(scope);
-    if (object.type === "self" || (fn.receiver !== undefined && fn.receiver.name === object.text)) {
-      if (fn.receiver === undefined || reassigned.get(fn)?.has(object.text)) return undefined;
-      return ownerForType(fn.receiver.type);
-    }
+    // Walk outward: a closure inside a method still sees the method's receiver (`self`, `s`), and a
+    // closer binding of the same name shadows it.
     for (let current: Scope | null = scope; current !== null; current = current.parent) {
+      if (current.receiver !== undefined && (object.type === "self" || current.receiver.name === object.text)) return ownerForType(current.receiver.type);
+      if (object.type === "self") continue;
       const found = declared(current, object.text, at);
       if (found === undefined) continue;
-      if (reassigned.get(current)?.has(object.text)) return undefined;
       if (found.owner !== undefined) return found.owner;
       if (found.importOf !== undefined) return undefined;
       return found.type === undefined ? undefined : ownerForType(found.type);
     }
-    return fieldOwner(scope, object.text);
+    return object.type === "self" ? undefined : fieldOwner(scope, object.text);
   };
 
   const visit = (node: Node, outer: Scope): void => {
@@ -270,10 +269,10 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       fnScopes.push(scope);
       for (const child of childrenOf(node)) {
         const parameter = spec.parameter(child);
-        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, knownType(spec.typeName(parameter.type), node), undefined, undefined, contentsOfType(parameter.type, node));
+        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, knownType(spec.typeName(parameter.type), node), undefined, undefined, contentsOfType(parameter.type, node), innerOfType(parameter.type, node));
         for (const nested of childrenOf(child)) {
           const inner = spec.parameter(nested);
-          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, knownType(spec.typeName(inner.type), node), undefined, undefined, contentsOfType(inner.type, node));
+          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, knownType(spec.typeName(inner.type), node), undefined, undefined, contentsOfType(inner.type, node), innerOfType(inner.type, node));
         }
       }
       // `xs.forEach(x -> ..)`: an untyped first lambda parameter takes the element of the receiver.
@@ -292,24 +291,34 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       scope = { parent: outer, names: new Map(), fn: false };
     }
     scopes.set(node.id, scope);
-    for (const item of spec.imports(node)) bind(module, item.local, -1, undefined, undefined, { source: item.source, name: item.name });
+    // An import inside an inline module (Rust `mod tests { use super::X; }`) binds there, so it never
+    // shadows the file's own import or definition of that name.
+    for (const item of spec.imports(node)) bind(scope, item.local, scope === module ? -1 : node.startIndex, undefined, undefined, { source: item.source, name: item.name });
     for (const local of spec.local(node)) {
       const declaredType = knownType(spec.typeName(local.type), node);
       const constructed = declaredType ?? spec.constructed(local.value);
       const produced = constructed === undefined && local.value !== null ? calleeOwner(local.value, scope, local.index) : undefined;
       const indexed = constructed === undefined && produced === undefined && local.value !== null ? spec.subscript?.(strip(local.value)) : undefined;
-      bind(scope, local.name.text, node.startIndex, constructed, produced ?? (indexed === undefined || indexed === null ? undefined : elementOf(indexed, scope, "either")), undefined, contentsOfType(local.type, node));
+      bind(scope, local.name.text, node.startIndex, constructed, produced ?? (indexed === undefined || indexed === null ? undefined : elementOf(indexed, scope, "either")), undefined, contentsOfType(local.type, node), innerOfType(local.type, node));
+    }
+    for (const item of spec.unwrapPattern?.(node) ?? []) {
+      const source = strip(item.source);
+      if (source.type === "identifier") {
+        for (let current: Scope | null = scope; current !== null; current = current.parent) {
+          const found = declared(current, source.text, source.startIndex);
+          if (found === undefined) continue;
+          if (found.inner !== undefined) bind(scope, item.name.text, node.startIndex, found.inner);
+          break;
+        }
+      } else {
+        const owner = calleeOwner(source, scope);
+        if (owner?.kind === "return") bind(scope, item.name.text, node.startIndex, undefined, { ...owner, unwrapped: true });
+      }
     }
     for (const item of spec.loop?.(node) ?? []) {
       const declaredType = knownType(spec.typeName(item.type), node);
       if (declaredType !== undefined) bind(scope, item.name.text, node.startIndex, declaredType, undefined, undefined, contentsOfType(item.type, node));
       else if (item.source !== null) { const owner = elementOf(item.source, scope, item.mode); if (owner !== undefined) bind(scope, item.name.text, node.startIndex, undefined, owner); }
-    }
-    for (const target of spec.assigned(node)) {
-      const owner = declaringScope(scope, target.text);
-      const set = reassigned.get(owner) ?? new Set<string>();
-      set.add(target.text);
-      reassigned.set(owner, set);
     }
     for (const child of childrenOf(node)) visit(child, scope);
   };
@@ -484,7 +493,6 @@ export const goSpec: TypedSpec = {
     }
     return [];
   },
-  assigned: (node) => node.type === "assignment_statement" ? childrenOf(node.childForFieldName("left") ?? node).filter((child) => child.type === "identifier") : [],
   constructed: (value) => {
     // `new(T)` and `&T{}` construct a T, keeping the package qualifier so a `pkg.T` binds through the import.
     if (value?.type === "call_expression" && value.childForFieldName("function")?.text === "new") {
@@ -535,6 +543,24 @@ export const rustSpec: TypedSpec = {
   lambdaParam: (lambda) => { const parameters = lambda.childForFieldName("parameters"); const first = parameters === null ? undefined : childrenOf(parameters).find((child) => child.isNamed); return first?.type === "identifier" ? first : null; },
   callbackMethods: ["map", "filter", "for_each", "any", "all", "find", "filter_map", "flat_map", "position", "take_while", "skip_while", "inspect", "max_by_key", "min_by_key", "sort_by_key", "retain", "partition", "find_map"],
   unwrapCalls: ["unwrap", "expect", "unwrap_or_default", "unwrap_unchecked"],
+  unwrapPattern: (node) => {
+    const unwrapped = (pattern: Node | null, source: Node | null): ReadonlyArray<{ name: Node; source: Node }> => {
+      if (pattern?.type === "match_pattern") pattern = childrenOf(pattern).find((child) => child.isNamed) ?? null;
+      if (pattern?.type !== "tuple_struct_pattern" || source === null) return [];
+      const wrapper = pattern.childForFieldName("type")?.text;
+      const inner = childrenOf(pattern).filter((child) => child.isNamed && child.id !== pattern!.childForFieldName("type")?.id);
+      return (wrapper === "Some" || wrapper === "Ok") && inner.length === 1 && inner[0]!.type === "identifier" ? [{ name: inner[0]!, source }] : [];
+    };
+    if (node.type === "if_expression" || node.type === "while_expression") {
+      const condition = node.childForFieldName("condition");
+      return condition?.type === "let_condition" ? unwrapped(condition.childForFieldName("pattern"), condition.childForFieldName("value")) : [];
+    }
+    if (node.type === "match_arm") {
+      const match = node.parent?.parent;
+      return match?.type === "match_expression" ? unwrapped(node.childForFieldName("pattern"), match.childForFieldName("value")) : [];
+    }
+    return [];
+  },
   innerType: (type) => {
     if (type.type !== "generic_type") return null;
     const base = type.childForFieldName("type") ?? childrenOf(type)[0];
@@ -548,7 +574,7 @@ export const rustSpec: TypedSpec = {
     const name = node.childForFieldName("name")?.text;
     return name === undefined ? [] : [{ name, type: node.childForFieldName("type"), isStatic: false }];
   },
-  scopeNodes: ["block", "match_arm", "if_expression", "for_expression", "while_expression", "loop_expression"],
+  scopeNodes: ["block", "match_arm", "if_expression", "for_expression", "while_expression", "loop_expression", "mod_item"],
   parameter: (node) => {
     if (node.type !== "parameter") return undefined;
     const name = node.childForFieldName("pattern");
@@ -588,11 +614,6 @@ export const rustSpec: TypedSpec = {
     const name = node.childForFieldName("pattern");
     return name?.type === "identifier" ? [{ name, type: node.childForFieldName("type"), value: node.childForFieldName("value") }] : [];
   },
-  assigned: (node) => {
-    if (node.type !== "assignment_expression" && node.type !== "compound_assignment_expr") return [];
-    const left = node.childForFieldName("left");
-    return left?.type === "identifier" ? [left] : [];
-  },
   constructed: (value) => value?.type === "struct_expression" ? simpleType(value.childForFieldName("name"), []) : undefined,
   callee: (fn) => {
     if (fn.type === "identifier") return { object: null, name: fn.text };
@@ -621,6 +642,7 @@ export const rustSpec: TypedSpec = {
       else if (entry.type === "scoped_use_list") { const path = entry.childForFieldName("path")?.text; for (const child of childrenOf(entry.childForFieldName("list") ?? entry)) item([source, path].filter((part) => part !== undefined && part.length > 0).join("::"), child); }
     };
     if (argument.type === "scoped_identifier" || argument.type === "scoped_use_list" || argument.type === "use_as_clause" || argument.type === "identifier") item("", argument);
+    else if (argument.type === "use_list") for (const child of childrenOf(argument)) item("", child);
     return out;
   },
 };
@@ -678,7 +700,6 @@ export const javaSpec: TypedSpec = {
       return name === null ? [] : [{ name, type: declared, value: declarator.childForFieldName("value") }];
     });
   },
-  assigned: (node) => { if (node.type !== "assignment_expression") return []; const left = node.childForFieldName("left"); return left?.type === "identifier" ? [left] : []; },
   constructed: (value) => value?.type === "object_creation_expression" ? javaSpec.typeName(value.childForFieldName("type")) : undefined,
   callee: (fn) => {
     if (fn.type !== "method_invocation") return undefined;
@@ -766,7 +787,6 @@ export const csharpSpec: TypedSpec = {
       return name === undefined ? [] : [{ name, type: declared, value: value === null || value.type === "identifier" ? null : value }];
     });
   },
-  assigned: (node) => { if (node.type !== "assignment_expression") return []; const left = node.childForFieldName("left"); return left?.type === "identifier" ? [left] : []; },
   constructed: (value) => value?.type === "object_creation_expression" ? csharpSpec.typeName(value.childForFieldName("type")) : undefined,
   callee: (fn) => {
     if (fn.type === "identifier") return { object: null, name: fn.text };

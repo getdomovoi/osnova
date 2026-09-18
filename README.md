@@ -120,26 +120,26 @@ A typical agent turn with Osnova:
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, the declared return type of the function or method that produced the value (or, without an annotation, the constructor it returns on every path), a field of any of those whose declared type the holder records, so `this.pool.conn.send()` follows two field types across files, or the value inside a wrapper: `await f()` on a `Promise<Foo>` return type, and Rust `f()?`, `f().unwrap()` and `f().expect(..)` on `Result<Foo, E>` and `Option<Foo>`; and the element or value of a collection whose annotation names it: `for (const x of xs)`, `xs.forEach((x) => ..)`, `xs[0]`, `map.get(k)`, `map.values()` over `Foo[]`, `Set<Foo>`, `Map<K, Foo>`, `list[Foo]` and `dict[K, Foo]`, including fields and return types in other files, and a local that aliases a member chain), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` (which also reloads each index from its cache and checks the edge count and resolved count match) and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, the declared return type of the function or method that produced the value (or, without an annotation, the constructor it returns on every path), a field of any of those whose declared type the holder records, so `this.pool.conn.send()` follows two field types across files, or the value inside a wrapper: `await f()` on a `Promise<Foo>` return type, and Rust `f()?`, `f().unwrap()` and `f().expect(..)` on `Result<Foo, E>` and `Option<Foo>`; and the element or value of a collection whose annotation names it: `for (const x of xs)`, `xs.forEach((x) => ..)`, `xs[0]`, `map.get(k)`, `map.values()` over `Foo[]`, `Set<Foo>`, `Map<K, Foo>`, `list[Foo]` and `dict[K, Foo]`, including fields and return types in other files, and a local that aliases a member chain), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` (which also reloads each index from its cache and checks the edge count and resolved count match) and recorded in [`benchmarks/results/resolution-coverage-2026-09-18.json`](benchmarks/results/resolution-coverage-2026-09-18.json):
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
 | click | python | 5022 | 1932 | 38.5% | 54.9% |
 | click | all | 5022 | 1932 | 38.5% | 54.9% |
-| cobra | go | 4374 | 1931 | 44.1% | 75.3% |
-| cobra | all | 4374 | 1931 | 44.1% | 75.3% |
-| gson | java | 23341 | 7515 | 32.2% | 37.1% |
-| gson | all | 23341 | 7515 | 32.2% | 37.1% |
-| humanizer | c_sharp | 28782 | 7628 | 26.5% | 41.5% |
+| cobra | go | 4374 | 1980 | 45.3% | 77.8% |
+| cobra | all | 4374 | 1980 | 45.3% | 77.8% |
+| gson | java | 23340 | 7643 | 32.7% | 37.9% |
+| gson | all | 23340 | 7643 | 32.7% | 37.9% |
+| humanizer | c_sharp | 28786 | 7648 | 26.6% | 41.7% |
 | humanizer | javascript | 927 | 132 | 14.2% | 39.3% |
 | humanizer | tsx | 120 | 14 | 11.7% | 18.2% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30513 | 7778 | 25.5% | 40.6% |
+| humanizer | all | 30517 | 7798 | 25.6% | 40.8% |
 | pyright | python | 11617 | 3326 | 28.6% | 65.4% |
 | pyright | typescript | 46810 | 26716 | 57.1% | 72.7% |
 | pyright | all | 58459 | 30042 | 51.4% | 71.8% |
-| ripgrep | rust | 13350 | 3952 | 29.6% | 39.7% |
-| ripgrep | all | 13364 | 3956 | 29.6% | 39.7% |
+| ripgrep | rust | 13352 | 5454 | 40.8% | 50.8% |
+| ripgrep | all | 13366 | 5458 | 40.8% | 50.7% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
 | zod | typescript | 53234 | 20070 | 37.7% | 63.2% |
 | zod | all | 53413 | 20087 | 37.6% | 63.1% |
@@ -154,15 +154,15 @@ The reason to keep a call graph instead of running a text search is not speed. I
 |---|---|---:|---:|---:|
 | click | `Context.invoke` depth 2 | 13 | 12 (0.92 / 0.85) | 12 (1.00 / 0.92) |
 | pyright | `getChildNodes` depth 2 | 28 | 5 (0.80 / 0.14) | 28 (1.00 / 1.00) |
-| cobra | `Command.Root` depth 1 | 30 | 30 (1.00 / 1.00) | 28 (1.00 / 0.93) |
+| cobra | `Command.Root` depth 1 | 30 | 30 (1.00 / 1.00) | 30 (1.00 / 1.00) |
 | cobra | `Command.PersistentFlags` depth 1 | 12 | 13 (0.92 / 1.00) | 12 (1.00 / 1.00) |
 | humanizer | `Configurator.GetFormatter` depth 1 | 18 | 19 (0.74 / 0.78) | 18 (1.00 / 1.00) |
 | ripgrep | `Searcher.line_terminator` depth 1 | 12 | 32 (0.38 / 1.00) | 12 (1.00 / 1.00) |
-| ripgrep | `LineTerminator.as_byte` depth 1 | 26 | 26 (1.00 / 1.00) | 21 (1.00 / 0.81) |
+| ripgrep | `LineTerminator.as_byte` depth 1 | 26 | 26 (1.00 / 1.00) | 25 (1.00 / 0.96) |
 | gson | `JsonReader.beginObject` depth 1 | 10 | 29 (0.34 / 1.00) | 10 (1.00 / 1.00) |
-| gson | `TypeToken.getRawType` depth 1 | 27 | 43 (0.63 / 1.00) | 26 (1.00 / 0.96) |
+| gson | `TypeToken.getRawType` depth 1 | 27 | 43 (0.63 / 1.00) | 27 (1.00 / 1.00) |
 
-What the text search got wrong: a comment that mentioned the method, Javadoc examples, a definition line, four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next), and same-named methods on other types: `line_terminator` on three builders and on the `Matcher` trait, `beginObject` on `JsonWriter`, `getRawType` on `ParameterizedType` and as a static helper on `GsonTypes`. What the graph missed: a receiver that is reassigned later in the same function (cobra, gson), a receiver that comes out of a multi-value return, and in ripgrep five `as_byte` calls whose receiver is `self` inside the type's own `impl`, a struct field, or a value unwrapped from an `Option`, all left unresolved rather than guessed. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-18.json`](benchmarks/results/grep-vs-graph-2026-09-18.json).
+What the text search got wrong: a comment that mentioned the method, Javadoc examples, a definition line, four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next), and same-named methods on other types: `line_terminator` on three builders and on the `Matcher` trait, `beginObject` on `JsonWriter`, `getRawType` on `ParameterizedType` and as a static helper on `GsonTypes`. What the graph missed: a receiver that comes out of a multi-value return in click, and in ripgrep one `as_byte` call on a value taken out of a generic field (`self.matcher`, whose type is a type parameter), both left unresolved rather than guessed. Reassigned receivers in Go, Rust, Java and C# now resolve, since a name's static type cannot change in those languages, as do `self` inside a closure, a name taken out of an `Option` by `if let`, `while let` or a match arm, and a type imported from another crate of the same Cargo workspace through its `pub use`. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-18.json`](benchmarks/results/grep-vs-graph-2026-09-18.json).
 
 ## In CI
 
