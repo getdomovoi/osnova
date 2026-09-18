@@ -66,3 +66,17 @@ describe("resolution coverage", () => {
     expect(reason("b.py#use")).toEqual([["plain", "unbound-global"]]);
   });
 });
+
+describe("external chains", () => {
+  it("classifies chains that end on a builtin type or an unresolved import as external", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-external-chains-"));
+    try {
+      const root = path.join(temporary, "ws"); await fs.mkdir(root);
+      await fs.writeFile(path.join(root, "lib.ts"), "import { Conn } from 'pg';\nexport class Foo { hit() {} }\nexport class Store {\n  names: string[] = [];\n  byId: Map<number, string> = new Map();\n  conn: Conn;\n  foos: Foo[] = [];\n  label(): string { return ''; }\n  make(): Foo { return new Foo(); }\n  missing(): Foo | undefined { return undefined; }\n}\n");
+      await fs.writeFile(path.join(root, "a.ts"), "import { Store } from './lib.js';\nexport function use(s: Store) {\n  s.names[0].trim();\n  for (const n of s.names) n.trim();\n  s.byId.get(1)?.trim();\n  s.conn.query();\n  s.label().trim();\n  s.make().nope();\n  s.foos[0].nope();\n  s.missing().hit();\n}\n");
+      const index = await buildIndex(root, { cacheDir: path.join(temporary, "cache") });
+      const reasons = [...index.outgoing("a.ts#use")].filter((edge) => edge.kind === "calls" && ["trim", "query", "nope", "hit"].includes(edge.toName)).sort((a, b) => a.line - b.line).map((edge) => { const resolution = (edge.evidence as { resolution?: { status: string; reason?: string } } | undefined)?.resolution; return `${edge.toName}:${resolution?.status === "unresolved" ? resolution.reason : resolution?.status}`; });
+      expect(reasons).toEqual(["trim:unbound-global", "trim:unbound-global", "trim:unbound-global", "query:import-target-unresolved", "trim:unbound-global", "nope:receiver-unresolved", "nope:receiver-unresolved", "hit:resolved"]);
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+});

@@ -300,3 +300,26 @@ describe("re-export resolution", () => {
     expect(edges[0]?.evidence).toMatchObject({ resolution: { status: "unresolved", reason: "re-export-incomplete" } });
   });
 });
+
+describe("namespace import forwarded by name", () => {
+  it("resolves members through `import * as ns; export { ns }` and through a default alias", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-ns-forward-"));
+    try {
+      const root = path.join(temporary, "ws"); await fs.mkdir(root);
+      const files: Record<string, string> = {
+        "lib.ts": "export function hit(): Foo { return new Foo(); }\nexport class Foo { go() {} }\n",
+        "index.ts": "import * as ns from './lib.js';\nexport * from './lib.js';\nexport { ns, ns as default };\n",
+        "use.ts": "import { ns } from './index.js';\nimport pkg from './index.js';\nimport * as direct from './lib.js';\nexport function use() {\n  ns.hit().go();\n  pkg.hit();\n  direct.hit().go();\n}\n",
+      };
+      for (const [name, text] of Object.entries(files)) await fs.writeFile(path.join(root, name), text);
+      const index = await buildIndex(root, { cacheDir: path.join(temporary, "cache") });
+      expect(index.files.get("index.ts")?.reExports).toEqual([
+        { kind: "star", source: "./lib.js", line: 2 },
+        { kind: "namespace", exportedName: "default", source: "./lib.js", line: 3 },
+        { kind: "namespace", exportedName: "ns", source: "./lib.js", line: 3 },
+      ]);
+      const calls = [...index.outgoing("use.ts#use")].filter((edge) => edge.kind === "calls").sort((a, b) => a.line - b.line).map((edge) => `${edge.toName}:${edge.toSymbol}`);
+      expect(calls).toEqual(["go:lib.ts#Foo.go", "hit:lib.ts#hit", "hit:lib.ts#hit", "go:lib.ts#Foo.go", "hit:lib.ts#hit"]);
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+});

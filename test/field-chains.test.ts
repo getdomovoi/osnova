@@ -23,7 +23,7 @@ describe("field chains", () => {
       "use.ts": "import { Pool, Holder } from './pool.js';\nexport class Service {\n  constructor(private pool: Pool) {}\n  run(h: Holder, p: Pool) {\n    this.pool.conn.hit();\n    this.pool.spare.hit();\n    h.conn.hit();\n    h.count.hit();\n    p.conn.hit();\n    p.missing.hit();\n  }\n}\n",
     });
     expect(index.symbols.get("pool.ts#Pool")?.fieldTypes).toEqual({ conn: { kind: "import", source: "./conn.js", importedName: "Conn" }, spare: { kind: "import", source: "./conn.js", importedName: "Conn" } });
-    expect(index.symbols.get("pool.ts#Holder")?.fieldTypes).toEqual({ conn: { kind: "import", source: "./conn.js", importedName: "Conn" } });
+    expect(index.symbols.get("pool.ts#Holder")?.fieldTypes).toEqual({ conn: { kind: "import", source: "./conn.js", importedName: "Conn" }, count: { kind: "local", name: "number" } });
     expect(hits(index, "use.ts#Service.run")).toEqual(["conn.ts#Conn.hit", "conn.ts#Conn.hit", "conn.ts#Conn.hit", undefined, "conn.ts#Conn.hit", undefined]);
     const first = index.outgoing("use.ts#Service.run").find((edge) => edge.toName === "hit");
     expect(first?.binding).toEqual({ kind: "member", owner: { kind: "field", of: { kind: "field", of: { kind: "local", name: "Service" }, member: "pool" }, member: "conn" }, member: "hit", mode: "instance", basis: "annotation" });

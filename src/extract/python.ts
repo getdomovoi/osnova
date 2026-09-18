@@ -61,7 +61,7 @@ export const pythonAdapter: LanguageAdapter = {
           const name = nameField(node);
           const isMethod = inClassDepth > 0;
           if (name !== null && IDENTIFIER_RE.test(name)) {
-            out.addDef(name, isMethod ? "method" : "function", node, undefined, isMethod ? bindings.memberKind(node) : undefined, undefined, undefined, bindings.returns(node));
+            out.addDef(name, isMethod ? "method" : "function", node, undefined, isMethod ? bindings.memberKind(node) : undefined, undefined, undefined, bindings.returns(node), undefined, undefined, bindings.unwrapped(node), bindings.elements(node), undefined, bindings.values(node));
             out.push(name);
             const pushDepth = inClassDepth;
             if (isMethod) inClassDepth = 0;
@@ -76,7 +76,7 @@ export const pythonAdapter: LanguageAdapter = {
         case "class_definition": {
           const name = nameField(node);
           if (name !== null && IDENTIFIER_RE.test(name)) {
-            out.addDef(name, "class", node, undefined, undefined, bindings.heritage(node), bindings.ownFields(node), undefined, undefined, bindings.fieldTypes(node));
+            out.addDef(name, "class", node, undefined, undefined, bindings.heritage(node), bindings.ownFields(node), undefined, undefined, bindings.fieldTypes(node), undefined, undefined, bindings.elementTypes(node), undefined, bindings.valueTypes(node));
             out.push(name);
             inClassDepth += 1;
             for (const child of childrenOf(node)) visit(child);

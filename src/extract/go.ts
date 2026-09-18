@@ -32,7 +32,7 @@ export const goAdapter: LanguageAdapter = {
         case "function_declaration": {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
-            out.addDef(nameNode.text, "function", node, undefined, undefined, undefined, undefined, bindings.returns(node), bindings.returnTuple(node));
+            out.addDef(nameNode.text, "function", node, undefined, undefined, undefined, undefined, bindings.returns(node), bindings.returnTuple(node), undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -44,7 +44,7 @@ export const goAdapter: LanguageAdapter = {
           const recv = receiverTypeName(node);
           if (nameNode !== null && recv !== null) {
             out.push(recv);
-            out.addDef(nameNode.text, "method", node, undefined, "instance", undefined, undefined, bindings.returns(node), bindings.returnTuple(node));
+            out.addDef(nameNode.text, "method", node, undefined, "instance", undefined, undefined, bindings.returns(node), bindings.returnTuple(node), undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -67,7 +67,7 @@ export const goAdapter: LanguageAdapter = {
                     ? "interface"
                     : "type";
               const structBody = typeNode.type === "struct_type" ? childrenOf(typeNode).find((child) => child.type === "field_declaration_list") : undefined;
-              out.addDef(nameNode.text, kind, spec, undefined, undefined, undefined, undefined, undefined, undefined, structBody === undefined ? undefined : bindings.fieldTypes(childrenOf(structBody)));
+              out.addDef(nameNode.text, kind, spec, undefined, undefined, undefined, undefined, undefined, undefined, structBody === undefined ? undefined : bindings.fieldTypes(childrenOf(structBody)), undefined, undefined, structBody === undefined ? undefined : bindings.elementTypes(childrenOf(structBody)), undefined, structBody === undefined ? undefined : bindings.valueTypes(childrenOf(structBody)));
               if (typeNode.type === "interface_type") {
                 out.push(nameNode.text);
                 for (const member of childrenOf(typeNode)) {
