@@ -31,7 +31,7 @@ export const rustAdapter: LanguageAdapter = {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
             const inTrait = node.parent?.type === "declaration_list" && node.parent?.parent?.type === "trait_item";
-            out.addDef(nameNode.text, hasImplAncestor(node) || inTrait ? "method" : "function", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node));
+            out.addDef(nameNode.text, hasImplAncestor(node) || inTrait ? "method" : "function", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, bindings.unwrapped(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();

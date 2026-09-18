@@ -58,6 +58,7 @@ export interface OsnovaSymbol {
   readonly returns?: ReturnBinding | undefined;
   readonly returnTuple?: readonly (ReturnBinding | null)[] | undefined;
   readonly fieldTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly unwrapped?: ReturnBinding | undefined;
 }
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
@@ -94,7 +95,7 @@ export type SymbolBinding =
   | { readonly kind: "local"; readonly name: string };
 
 export type Callee = SymbolBinding | { readonly kind: "method"; readonly owner: ReceiverOwner; readonly member: string; readonly mode?: ReceiverMode | undefined };
-export type ReceiverOwner = SymbolBinding | { readonly kind: "return"; readonly of: Callee; readonly index?: number | undefined } | { readonly kind: "super"; readonly of: SymbolBinding } | { readonly kind: "field"; readonly of: ReceiverOwner; readonly member: string };
+export type ReceiverOwner = SymbolBinding | { readonly kind: "return"; readonly of: Callee; readonly index?: number | undefined; readonly unwrapped?: true | undefined } | { readonly kind: "super"; readonly of: SymbolBinding } | { readonly kind: "field"; readonly of: ReceiverOwner; readonly member: string };
 
 export type ReturnBinding = SymbolBinding | { readonly kind: "this" };
 
