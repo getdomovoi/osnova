@@ -482,7 +482,10 @@ export function collectBindings(root: Node, python: boolean): {
     const binding = bindings?.length === 1 ? bindings[0] : undefined;
     if (binding?.kind === "import" && binding.importedName !== "*") {
       reExports.push({ kind: "named", exportedName, source: binding.source, importedName: binding.importedName, line });
-    } else if (binding === undefined || (binding.kind === "blocked" && binding.reason !== "local-value") || binding.kind === "import") {
+    } else if (binding?.kind === "import") {
+      // `import * as ns from "./x"; export { ns }` forwards the whole module under the exported name.
+      reExports.push({ kind: "namespace", exportedName, source: binding.source, line });
+    } else if (binding === undefined || (binding.kind === "blocked" && binding.reason !== "local-value")) {
       reExports.push({ kind: "blocked", exportedName, line });
     }
   };
@@ -536,8 +539,20 @@ export function collectBindings(root: Node, python: boolean): {
   const typeLookup = (name: string, site: Node): SymbolBinding | undefined => {
     for (let scope: Scope | null = scopes.get(site.id) ?? module; scope !== null; scope = scope.parent) {
       const typed = scope.typeNames?.get(name);
-      if (typed !== undefined) return scope.names.get(name)?.length === 1 ? typed : undefined;
+      if (typed !== undefined) return (scope.names.get(name) ?? []).filter((binding) => binding !== localValue).length <= 1 ? typed : undefined;
       if (scope.names.has(name) || scope.names.has("*")) return undefined;
+    }
+    return undefined;
+  };
+  const typeBinding = (name: string, site: Node): SymbolBinding | undefined => {
+    const typed = typeLookup(name, site);
+    if (typed !== undefined) return typed;
+    for (let scope: Scope | null = scopes.get(site.id) ?? module; scope !== null; scope = scope.parent) {
+      if (scope.names.has("*")) return undefined;
+      const bindings = scope.names.get(name);
+      if (bindings === undefined) continue;
+      const capable = [...new Map(bindings.flatMap((binding) => binding.kind === "local" || binding.kind === "import" ? [[JSON.stringify(binding), binding] as const] : [])).values()];
+      return capable.length === 1 ? capable[0] : undefined;
     }
     return undefined;
   };
@@ -546,7 +561,8 @@ export function collectBindings(root: Node, python: boolean): {
     const head = lookup(dotted[0]!, site) ?? (valueOnly ? undefined : typeLookup(dotted[0]!, site));
     // An unbound type name is a builtin or an ambient type; a local binding lets resolution say so.
     if (head === undefined) return dotted.length === 1 && !valueOnly ? { kind: "local", name: dotted[0]! } : undefined;
-    if (!valueOnly && head.kind === "blocked" && head.reason === "unsupported") { const typed = typeLookup(dotted[0]!, site); if (typed !== undefined) return dotted.length === 1 ? typed : undefined; }
+    // A type position ignores value bindings: an interface that shares its name with a const still names the interface.
+    if (!valueOnly && head.kind === "blocked") { const typed = typeBinding(dotted[0]!, site); if (typed !== undefined) return dotted.length === 1 ? typed : dotted.length === 2 && typed.kind === "import" && typed.importedName === "*" ? { ...typed, importedName: dotted[1]! } : undefined; }
     if (dotted.length === 1) return head.kind === "local" || head.kind === "import" ? head : undefined;
     if (dotted.length === 2 && head.kind === "import" && head.importedName === "*") return { ...head, importedName: dotted[1]! };
     return undefined;

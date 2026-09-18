@@ -118,8 +118,8 @@ A call site counts as resolved when the index ties it to one definition through 
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5021 | 1914 | 38.1% | 53.8% |
-| click | all | 5021 | 1914 | 38.1% | 53.8% |
+| click | python | 5021 | 1909 | 38.0% | 53.6% |
+| click | all | 5021 | 1909 | 38.0% | 53.6% |
 | cobra | go | 4374 | 1875 | 42.9% | 63.5% |
 | cobra | all | 4374 | 1875 | 42.9% | 63.5% |
 | gson | java | 23341 | 7495 | 32.1% | 36.2% |
@@ -135,8 +135,8 @@ A call site counts as resolved when the index ties it to one definition through 
 | ripgrep | rust | 13341 | 3914 | 29.3% | 34.7% |
 | ripgrep | all | 13355 | 3918 | 29.3% | 34.7% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
-| zod | typescript | 53216 | 16189 | 30.4% | 50.8% |
-| zod | all | 53395 | 16206 | 30.3% | 50.7% |
+| zod | typescript | 53216 | 20063 | 37.7% | 62.9% |
+| zod | all | 53395 | 20080 | 37.6% | 62.8% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
