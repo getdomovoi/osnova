@@ -138,8 +138,8 @@ A call site counts as resolved when the index ties it to one definition through 
 | pyright | python | 11617 | 3326 | 28.6% | 65.4% |
 | pyright | typescript | 46810 | 26716 | 57.1% | 72.7% |
 | pyright | all | 58459 | 30042 | 51.4% | 71.8% |
-| ripgrep | rust | 13352 | 5454 | 40.8% | 50.8% |
-| ripgrep | all | 13366 | 5458 | 40.8% | 50.7% |
+| ripgrep | rust | 13351 | 5469 | 41.0% | 51.5% |
+| ripgrep | all | 13365 | 5473 | 41.0% | 51.4% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
 | zod | typescript | 53234 | 20070 | 37.7% | 63.2% |
 | zod | all | 53413 | 20087 | 37.6% | 63.1% |
@@ -158,11 +158,11 @@ The reason to keep a call graph instead of running a text search is not speed. I
 | cobra | `Command.PersistentFlags` depth 1 | 12 | 13 (0.92 / 1.00) | 12 (1.00 / 1.00) |
 | humanizer | `Configurator.GetFormatter` depth 1 | 18 | 19 (0.74 / 0.78) | 18 (1.00 / 1.00) |
 | ripgrep | `Searcher.line_terminator` depth 1 | 12 | 32 (0.38 / 1.00) | 12 (1.00 / 1.00) |
-| ripgrep | `LineTerminator.as_byte` depth 1 | 26 | 26 (1.00 / 1.00) | 25 (1.00 / 0.96) |
+| ripgrep | `LineTerminator.as_byte` depth 1 | 26 | 26 (1.00 / 1.00) | 26 (1.00 / 1.00) |
 | gson | `JsonReader.beginObject` depth 1 | 10 | 29 (0.34 / 1.00) | 10 (1.00 / 1.00) |
 | gson | `TypeToken.getRawType` depth 1 | 27 | 43 (0.63 / 1.00) | 27 (1.00 / 1.00) |
 
-What the text search got wrong: a comment that mentioned the method, Javadoc examples, a definition line, four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next), and same-named methods on other types: `line_terminator` on three builders and on the `Matcher` trait, `beginObject` on `JsonWriter`, `getRawType` on `ParameterizedType` and as a static helper on `GsonTypes`. What the graph missed: a receiver that comes out of a multi-value return in click, and in ripgrep one `as_byte` call on a value taken out of a generic field (`self.matcher`, whose type is a type parameter), both left unresolved rather than guessed. Reassigned receivers in Go, Rust, Java and C# now resolve, since a name's static type cannot change in those languages, as do `self` inside a closure, a name taken out of an `Option` by `if let`, `while let` or a match arm, and a type imported from another crate of the same Cargo workspace through its `pub use`. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-18.json`](benchmarks/results/grep-vs-graph-2026-09-18.json).
+What the text search got wrong: a comment that mentioned the method, Javadoc examples, a definition line, four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next), and same-named methods on other types: `line_terminator` on three builders and on the `Matcher` trait, `beginObject` on `JsonWriter`, `getRawType` on `ParameterizedType` and as a static helper on `GsonTypes`. What the graph missed: one receiver that comes out of a multi-value return in click, left unresolved rather than guessed. Reassigned receivers in Go, Rust, Java and C# resolve, since a name's static type cannot change in those languages, as do `self` inside a closure, a name taken out of an `Option` by `if let`, `while let` or a match arm, a type imported from another crate of the same Cargo workspace through its `pub use`, and a call on a bounded type parameter (`M: Matcher`, `T extends Runner`, `[T Runner]`, `where T : IRunner`) or an `impl Trait` parameter, which resolves to the trait or interface method the compiler dispatches through. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-18.json`](benchmarks/results/grep-vs-graph-2026-09-18.json).
 
 ## In CI
 

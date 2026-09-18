@@ -26,6 +26,13 @@ export interface TypedSpec {
   readonly isStatic?: ((fn: Node) => boolean) | undefined;
   readonly bases?: ((classNode: Node) => readonly string[]) | undefined;
   readonly innerType?: ((type: Node) => Node | null) | undefined;
+  // A declared type parameter and its bounds (`T: Runner`, `T extends Runner`, `[T Runner]`); a where or
+  // constraints clause on the declaring node adds bounds by name.
+  readonly typeBounds?: ((parameter: Node) => { name: string; bounds: readonly Node[] } | undefined) | undefined;
+  readonly whereBounds?: ((declaration: Node, name: string) => readonly Node[]) | undefined;
+  // `self.field` inside an impl block: the struct's declared field type, or, when that type is one of the
+  // struct's parameters, the impl's argument in that position together with the impl node whose bounds apply.
+  readonly implField?: ((site: Node, member: string) => { type: Node | null; parameter?: { name: string; at: Node } | undefined } | undefined) | undefined;
   readonly unwrapCalls?: readonly string[] | undefined;
   // `if let Some(x) = source`, `while let`, and a `Some(x) =>` match arm: `x` is what the source wraps.
   readonly unwrapPattern?: ((node: Node) => ReadonlyArray<{ name: Node; source: Node }>) | undefined;
@@ -82,20 +89,34 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const importOf = (name: string): Import | undefined => module.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
   // A type name becomes a local binding, or an import binding when the name (Rust) or its package
   // qualifier (Go) was imported.
-  // A type parameter of an enclosing declaration names no type the index can hold.
-  const isTypeParameter = (name: string, site: Node | undefined): boolean => {
+  // A type parameter of an enclosing declaration names no type the index can hold, unless it is bounded
+  // by a trait or interface: a call on `t: T` where `T: Runner` is a call on `Runner`, which is what the
+  // compiler dispatches through too. Marker bounds (`Clone`, `Cloneable`, `class`) name no methods.
+  const MARKER_BOUNDS = new Set(["Clone", "Copy", "Send", "Sync", "Sized", "Unpin", "Debug", "Default", "PartialEq", "Eq", "Hash", "Ord", "PartialOrd", "Display", "Cloneable", "Serializable", "Comparable", "Object", "IEquatable", "IComparable", "ICloneable", "class", "struct", "notnull", "unmanaged", "any", "comparable"]);
+  const boundName = (bounds: readonly Node[]): string | undefined => {
+    for (const bound of bounds) {
+      const name = spec.typeName(bound);
+      if (name !== undefined && !MARKER_BOUNDS.has(name)) return name;
+    }
+    return undefined;
+  };
+  const typeParameterOf = (name: string, site: Node | undefined): { declared: boolean; bound?: string | undefined } => {
     for (let current: Node | null = site ?? null; current !== null; current = current.parent) {
       const parameters = childrenOf(current).find((child) => child.type === "type_parameters" || child.type === "type_parameter_list");
       // A list the parser recovered from an error is not a declaration (a primary constructor can parse this way).
       if (parameters === undefined || parameters.hasError) continue;
       for (const parameter of childrenOf(parameters)) {
-        const declared = parameter.type === "type_parameter" || parameter.type === "type_parameter_declaration" || parameter.type === "constrained_type_parameter" || parameter.type === "type_identifier" || parameter.type === "identifier"
-          ? (parameter.childForFieldName("name") ?? parameter.childForFieldName("left") ?? (parameter.type === "type_identifier" || parameter.type === "identifier" ? parameter : childrenOf(parameter).find((child) => child.type === "type_identifier" || child.type === "identifier")))
-          : undefined;
-        if (declared?.text === name) return true;
+        const typed = spec.typeBounds?.(parameter);
+        const declared = typed !== undefined ? typed.name
+          : parameter.type === "type_parameter" || parameter.type === "type_parameter_declaration" || parameter.type === "constrained_type_parameter" || parameter.type === "type_identifier" || parameter.type === "identifier"
+            ? (parameter.childForFieldName("name") ?? parameter.childForFieldName("left") ?? (parameter.type === "type_identifier" || parameter.type === "identifier" ? parameter : childrenOf(parameter).find((child) => child.type === "type_identifier" || child.type === "identifier")))?.text
+            : undefined;
+        if (declared !== name) continue;
+        const bounds = [...(typed?.bounds ?? []), ...(spec.whereBounds?.(current, name) ?? [])];
+        return { declared: true, bound: boundName(bounds) };
       }
     }
-    return false;
+    return { declared: false };
   };
   const contentsOfType = (type: Node | null, site: Node): Contents | undefined => {
     const found = spec.contents?.(type);
@@ -104,14 +125,21 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     const value = knownType(spec.typeName(found.value ?? null), site);
     return element === undefined && value === undefined ? undefined : { element, value };
   };
-  const knownType = (type: string | undefined, site: Node): string | undefined => type !== undefined && isTypeParameter(type, site) ? undefined : type;
+  const knownType = (type: string | undefined, site: Node): string | undefined => {
+    if (type === undefined) return undefined;
+    const parameter = typeParameterOf(type, site);
+    return parameter.declared ? parameter.bound : type;
+  };
   // The type an `Option<T>` or `Result<T, E>` annotation wraps, when the spec knows the wrapper.
   const innerOfType = (type: Node | null, site: Node): string | undefined => {
     const inner = type === null ? null : spec.innerType?.(type) ?? null;
     return inner === null ? undefined : knownType(spec.typeName(inner), site);
   };
   const ownerForType = (type: string, site?: Node): ReceiverOwner | undefined => {
-    if (site !== undefined && isTypeParameter(type, site)) return undefined;
+    if (site !== undefined) {
+      const parameter = typeParameterOf(type, site);
+      if (parameter.declared) return parameter.bound === undefined ? undefined : ownerForType(parameter.bound);
+    }
     const dot = type.indexOf(".");
     if (dot >= 0) {
       const pkg = importOf(type.slice(0, dot));
@@ -239,6 +267,11 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const field = object.childForFieldName("field") ?? object.childForFieldName("name");
       if (inner === null || field === null || (field.type !== "identifier" && field.type !== "field_identifier")) return undefined;
       if (spec.thisNodes?.includes(inner.type)) { const own = fieldOwner(scope, field.text); if (own !== undefined) return own; }
+      if (inner.type === "self" && spec.implField !== undefined) {
+        const found = spec.implField(object, field.text);
+        const name = found === undefined ? undefined : found.parameter !== undefined ? knownType(found.parameter.name, found.parameter.at) : knownType(spec.typeName(found.type), object);
+        if (name !== undefined) return ownerForType(name);
+      }
       // A field of a bound receiver: the holder's declared field type is looked up at resolution time.
       const base = receiverOf(inner, scope);
       return base === undefined ? undefined : bounded({ kind: "field", of: base, member: field.text });
@@ -420,6 +453,12 @@ const simpleType = (node: Node | null, wrappers: readonly string[]): string | un
 
 export const goSpec: TypedSpec = {
   functionNodes: ["function_declaration", "method_declaration", "func_literal"],
+  typeBounds: (parameter) => {
+    if (parameter.type !== "type_parameter_declaration" && parameter.type !== "parameter_declaration") return undefined;
+    const name = parameter.childForFieldName("name")?.text;
+    const type = parameter.childForFieldName("type");
+    return name === undefined ? undefined : { name, bounds: type !== null && (type.type === "type_identifier" || type.type === "qualified_type") ? [type] : [] };
+  },
   scopeNodes: ["block", "if_statement", "for_statement"],
   contents: (type) => {
     let current = type;
@@ -543,6 +582,39 @@ export const rustSpec: TypedSpec = {
   lambdaParam: (lambda) => { const parameters = lambda.childForFieldName("parameters"); const first = parameters === null ? undefined : childrenOf(parameters).find((child) => child.isNamed); return first?.type === "identifier" ? first : null; },
   callbackMethods: ["map", "filter", "for_each", "any", "all", "find", "filter_map", "flat_map", "position", "take_while", "skip_while", "inspect", "max_by_key", "min_by_key", "sort_by_key", "retain", "partition", "find_map"],
   unwrapCalls: ["unwrap", "expect", "unwrap_or_default", "unwrap_unchecked"],
+  typeBounds: (parameter) => {
+    if (parameter.type === "constrained_type_parameter") {
+      const name = parameter.childForFieldName("left")?.text;
+      return name === undefined ? undefined : { name, bounds: childrenOf(parameter.childForFieldName("bounds") ?? parameter).filter((child) => child.type !== "lifetime" && child.isNamed) };
+    }
+    return parameter.type === "type_identifier" ? { name: parameter.text, bounds: [] } : undefined;
+  },
+  implField: (site, member) => {
+    let impl: Node | null = site;
+    while (impl !== null && impl.type !== "impl_item") impl = impl.parent;
+    if (impl === null) return undefined;
+    let implType = impl.childForFieldName("type");
+    const args: Node[] = [];
+    if (implType?.type === "generic_type") { for (const child of childrenOf(childrenOf(implType).find((c) => c.type === "type_arguments") ?? implType)) if (child.isNamed && child.type !== "lifetime") args.push(child); implType = implType.childForFieldName("type"); }
+    if (implType?.type !== "type_identifier") return undefined;
+    const structName = implType.text;
+    const declarations = (node: Node): Node[] => childrenOf(node).flatMap((child) => child.type === "mod_item" ? declarations(child.childForFieldName("body") ?? child) : [child]);
+    const struct = declarations(site.tree.rootNode).find((node) => node.type === "struct_item" && node.childForFieldName("name")?.text === structName);
+    if (struct === undefined) return undefined;
+    const fieldNode = childrenOf(struct.childForFieldName("body") ?? struct).find((child) => child.type === "field_declaration" && child.childForFieldName("name")?.text === member);
+    if (fieldNode === undefined) return undefined;
+    const type = fieldNode.childForFieldName("type");
+    const parameters = childrenOf(childrenOf(struct).find((child) => child.type === "type_parameters") ?? struct).filter((child) => child.isNamed && child.type !== "lifetime").map((child) => child.type === "constrained_type_parameter" ? child.childForFieldName("left")?.text : child.text);
+    const index = type?.type === "type_identifier" ? parameters.indexOf(type.text) : -1;
+    const argument = index >= 0 ? args[index] : undefined;
+    return argument?.type === "type_identifier" ? { type, parameter: { name: argument.text, at: impl } } : { type };
+  },
+  whereBounds: (declaration, name) => {
+    const clause = childrenOf(declaration).find((child) => child.type === "where_clause");
+    if (clause === undefined) return [];
+    return childrenOf(clause).filter((predicate) => predicate.type === "where_predicate" && predicate.childForFieldName("left")?.text === name)
+      .flatMap((predicate) => childrenOf(predicate.childForFieldName("bounds") ?? predicate).filter((child) => child.type !== "lifetime" && child.isNamed));
+  },
   unwrapPattern: (node) => {
     const unwrapped = (pattern: Node | null, source: Node | null): ReadonlyArray<{ name: Node; source: Node }> => {
       if (pattern?.type === "match_pattern") pattern = childrenOf(pattern).find((child) => child.isNamed) ?? null;
@@ -603,7 +675,7 @@ export const rustSpec: TypedSpec = {
     return type === undefined ? undefined : { name: "self", type };
   },
   memberKind: (fn) => {
-    if (fn.type !== "function_item") return undefined;
+    if (fn.type !== "function_item" && fn.type !== "function_signature_item") return undefined;
     let current: Node | null = fn.parent;
     while (current !== null && current.type !== "impl_item" && current.type !== "trait_item") current = current.parent;
     if (current === null) return undefined;
@@ -681,6 +753,12 @@ export const javaSpec: TypedSpec = {
   scopeNodes: ["block", "for_statement", "enhanced_for_statement", "if_statement", "try_statement", "catch_clause"],
   classNodes: ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"],
   thisNodes: ["this"],
+  typeBounds: (parameter) => {
+    if (parameter.type !== "type_parameter") return undefined;
+    const name = childrenOf(parameter).find((child) => child.type === "type_identifier")?.text;
+    const bound = childrenOf(parameter).find((child) => child.type === "type_bound");
+    return name === undefined ? undefined : { name, bounds: bound === undefined ? [] : childrenOf(bound).filter((child) => child.isNamed) };
+  },
   isStatic: modifiersStatic,
   parameter: (node) => {
     if (node.type !== "formal_parameter" && node.type !== "spread_parameter" && node.type !== "catch_formal_parameter") return undefined;
@@ -764,6 +842,17 @@ export const csharpSpec: TypedSpec = {
     return first.type === "parameter" && first.childForFieldName("type") === null ? first.childForFieldName("name") : null;
   },
   callbackMethods: ["ForEach", "Where", "Select", "SelectMany", "Any", "All", "First", "FirstOrDefault", "Last", "LastOrDefault", "Single", "SingleOrDefault", "Count", "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending", "GroupBy", "TakeWhile", "SkipWhile", "Find", "FindAll", "FindIndex", "Exists", "RemoveAll", "Sum", "Max", "Min", "MaxBy", "MinBy", "ToDictionary", "ToLookup", "Aggregate", "Distinct", "DistinctBy", "TrueForAll", "ConvertAll"],
+  typeBounds: (parameter) => {
+    if (parameter.type !== "type_parameter") return undefined;
+    const name = parameter.childForFieldName("name")?.text ?? childrenOf(parameter).find((child) => child.type === "identifier")?.text;
+    return name === undefined ? undefined : { name, bounds: [] };
+  },
+  whereBounds: (declaration, name) => childrenOf(declaration)
+    .filter((child) => child.type === "type_parameter_constraints_clause" && child.childForFieldName("target")?.text === name)
+    .flatMap((clause) => childrenOf(clause).filter((child) => child.type === "type_parameter_constraint"))
+    .flatMap((constraint) => childrenOf(constraint).filter((child) => child.type === "type_constraint"))
+    .map((constraint) => constraint.childForFieldName("type") ?? childrenOf(constraint).find((child) => child.isNamed) ?? null)
+    .filter((node): node is Node => node !== null),
   scopeNodes: ["block", "for_statement", "for_each_statement", "if_statement", "try_statement", "catch_clause", "using_statement"],
   classNodes: ["class_declaration", "struct_declaration", "record_declaration", "interface_declaration"],
   thisNodes: ["this_expression"],

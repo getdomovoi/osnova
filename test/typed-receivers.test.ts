@@ -225,3 +225,44 @@ describe("Rust workspace crates and inline modules", () => {
     expect(calls(index, "crates/searcher/src/lib.rs#check", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
   });
 });
+
+describe("bounded type parameters", () => {
+  it("calls on a bounded type parameter, an impl Trait or dyn Trait parameter resolve to the trait or interface method", async () => {
+    const index = await build({
+      "Cargo.toml": "[package]\nname = 'x'\n",
+      "src/lib.rs": [
+        "pub trait Runner { fn run(&self); }",
+        "pub struct Core<M> { matcher: M }",
+        "impl<M: Runner> Core<M> { pub fn go(&self) { self.matcher.run(); } }",
+        "pub fn bounded<T: Runner + Clone>(t: T) { t.run(); }",
+        "pub fn where_bound<T>(t: T) where T: Runner { t.run(); }",
+        "pub fn impl_arg(t: &impl Runner, d: &dyn Runner) {",
+        "    t.run();",
+        "    d.run();",
+        "}",
+        "pub fn unbounded<T>(t: T) { t.run(); }",
+        "pub fn marker<T: Clone>(t: T) { t.run(); }",
+        "",
+      ].join("\n"),
+      "go.mod": "module example.com/app\n",
+      "pkg/run.go": "package pkg\n\ntype Runner interface { Run() }\n\nfunc Go[T Runner](t T) { t.Run() }\n\nfunc Loose[T any](t T) { t.Run() }\n",
+      "src/main/java/a/Runner.java": "package a;\n\npublic interface Runner { void run(); }\n",
+      "src/main/java/a/App.java": "package a;\n\npublic class App<T extends Runner & Cloneable> {\n  void f(T t) { t.run(); }\n  <U extends Runner> void g(U u) { u.run(); }\n  <V> void h(V v) { v.run(); }\n}\n",
+      "Lib/Runner.cs": "namespace Lib {\n  public interface IRunner { void Run(); }\n}\n",
+      "App/A.cs": "using Lib;\n\nnamespace App {\n  public class A<T> where T : IRunner {\n    void F(T t) { t.Run(); }\n    void G<U>(U u) where U : class, IRunner { u.Run(); }\n    void H<V>(V v) { v.Run(); }\n  }\n}\n",
+    });
+    expect(calls(index, "src/lib.rs#Core.go", "run")).toEqual(["src/lib.rs#Runner.run"]);
+    for (const fn of ["bounded", "where_bound"]) expect(calls(index, `src/lib.rs#${fn}`, "run"), fn).toEqual(["src/lib.rs#Runner.run"]);
+    expect(calls(index, "src/lib.rs#impl_arg", "run")).toEqual(["src/lib.rs#Runner.run", "src/lib.rs#Runner.run"]);
+    expect(calls(index, "src/lib.rs#unbounded", "run")).toEqual([undefined]);
+    expect(calls(index, "src/lib.rs#marker", "run")).toEqual([undefined]);
+    expect(calls(index, "pkg/run.go#Go", "Run")).toEqual(["pkg/run.go#Runner.Run"]);
+    expect(calls(index, "pkg/run.go#Loose", "Run")).toEqual([undefined]);
+    expect(calls(index, "src/main/java/a/App.java#App.f", "run")).toEqual(["src/main/java/a/Runner.java#Runner.run"]);
+    expect(calls(index, "src/main/java/a/App.java#App.g", "run")).toEqual(["src/main/java/a/Runner.java#Runner.run"]);
+    expect(calls(index, "src/main/java/a/App.java#App.h", "run")).toEqual([undefined]);
+    expect(calls(index, "App/A.cs#A.F", "Run")).toEqual(["Lib/Runner.cs#IRunner.Run"]);
+    expect(calls(index, "App/A.cs#A.G", "Run")).toEqual(["Lib/Runner.cs#IRunner.Run"]);
+    expect(calls(index, "App/A.cs#A.H", "Run")).toEqual([undefined]);
+  });
+});
