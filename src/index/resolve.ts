@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ReceiverBasis, ReceiverMode, ReceiverOwner, SymbolBinding } from "../types.js";
+import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ReceiverBasis, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
 import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 
@@ -547,20 +547,21 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
             symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
-          const returnKey = (symbol: OsnovaSymbol): string => JSON.stringify(symbol.returns ?? null);
           // Every declaration sharing the qualified name (overloads) must agree on the return binding.
-          const holderOfCallables = (callables: OsnovaSymbol[] | null, receiver: OsnovaSymbol | undefined, mode: ReceiverMode | undefined): OsnovaSymbol | undefined => {
+          const holderOfCallables = (callables: OsnovaSymbol[] | null, receiver: OsnovaSymbol | undefined, mode: ReceiverMode | undefined, index?: number): OsnovaSymbol | undefined => {
             if (callables === null || callables.length === 0) return undefined;
             const first = callables[0]!;
             if (callables.some((symbol) => symbol.qualifiedName !== first.qualifiedName)) return undefined;
             if (first.kind === "class" || first.kind === "interface") return card.language === "python" && receiver === undefined ? first : undefined;
             if (first.kind !== "function" && first.kind !== "method") return undefined;
-            if (callables.some((symbol) => symbol.returns === undefined || returnKey(symbol) !== returnKey(first))) return undefined;
+            const returnOf = (symbol: OsnovaSymbol): ReturnBinding | null | undefined => index === undefined ? symbol.returns : symbol.returnTuple?.[index];
+            if (callables.some((symbol) => returnOf(symbol) === undefined || returnOf(symbol) === null || JSON.stringify(returnOf(symbol)) !== JSON.stringify(returnOf(first)))) return undefined;
             if (first.kind === "method") {
               if (callables.some((symbol) => symbol.memberKind === undefined || symbol.memberKind === "property" || symbol.memberKind === "unknown")) return undefined;
               if (card.language !== "python" && mode !== undefined && callables.some((symbol) => (mode === "class" ? symbol.memberKind !== "static" : symbol.memberKind !== "instance"))) return undefined;
             }
-            const returns = first.returns!;
+            const returns = returnOf(first);
+            if (returns === undefined || returns === null) return undefined;
             if (returns.kind === "this") return receiver;
             return unique(symbolsFor(first.file, returns)?.filter(isHolder) ?? null);
           };
@@ -576,10 +577,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             }
             if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter(isHolder) ?? null);
             const of: Callee = ref.of;
-            if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, undefined, undefined);
+            if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, undefined, undefined, ref.index);
             const holder = holderOf(of.owner, depth + 1);
             if (holder === undefined) return undefined;
-            return holderOfCallables(inherited(holder, 0, new Set([holder.qualifiedName]), of.member), holder, of.mode);
+            return holderOfCallables(inherited(holder, 0, new Set([holder.qualifiedName]), of.member), holder, of.mode, ref.index);
           };
           const rootImportUnresolved = (ref: ReceiverOwner | Callee, depth = 0): boolean => {
             if (depth > 8) return false;

@@ -148,3 +148,17 @@ describe("typed receiver precision", () => {
     expect(calls(index, "App.java#App.f", "start")).toEqual(["App.java#Server.start", undefined]);
   });
 });
+
+describe("Go tuple returns", () => {
+  it("binds each name of a multi-value declaration to its position in the result list", async () => {
+    const index = await build({
+      "server.go": "package a\n\ntype Server struct{}\n\nfunc (s *Server) Start() {}\n\ntype Conn struct{}\n\nfunc (c *Conn) Send() {}\n\nfunc dial() (*Server, *Conn, error) { return nil, nil, nil }\n\nfunc named() (srv *Server, err error) { return nil, nil }\n\nfunc pair() (a, b *Conn) { return nil, nil }\n\nfunc use() {\n  s, c, err := dial()\n  s.Start()\n  c.Send()\n  err.Error()\n  n, _ := named()\n  n.Start()\n  x, y := pair()\n  x.Send()\n  y.Send()\n  p, q := dial()\n  p.Start()\n  q.Send()\n}\n",
+    });
+    expect(index.symbols.get("server.go#dial")?.returnTuple).toEqual([{ kind: "local", name: "Server" }, { kind: "local", name: "Conn" }, { kind: "local", name: "error" }]);
+    expect(index.symbols.get("server.go#named")?.returnTuple).toEqual([{ kind: "local", name: "Server" }, { kind: "local", name: "error" }]);
+    expect(index.symbols.get("server.go#pair")?.returnTuple).toEqual([{ kind: "local", name: "Conn" }, { kind: "local", name: "Conn" }]);
+    expect(calls(index, "server.go#use", "Start")).toEqual(["server.go#Server.Start", "server.go#Server.Start", "server.go#Server.Start"]);
+    expect(calls(index, "server.go#use", "Send")).toEqual(["server.go#Conn.Send", "server.go#Conn.Send", "server.go#Conn.Send", "server.go#Conn.Send"]);
+    expect(calls(index, "server.go#use", "Error")).toEqual([undefined]);
+  });
+});

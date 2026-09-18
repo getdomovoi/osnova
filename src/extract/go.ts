@@ -35,7 +35,7 @@ export const goAdapter: LanguageAdapter = {
         case "function_declaration": {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
-            out.addDef(nameNode.text, "function", node, undefined, undefined, undefined, undefined, bindings.returns(node));
+            out.addDef(nameNode.text, "function", node, undefined, undefined, undefined, undefined, bindings.returns(node), bindings.returnTuple(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -47,7 +47,7 @@ export const goAdapter: LanguageAdapter = {
           const recv = receiverTypeName(node);
           if (nameNode !== null && recv !== null) {
             out.push(recv);
-            out.addDef(nameNode.text, "method", node, undefined, "instance", undefined, undefined, bindings.returns(node));
+            out.addDef(nameNode.text, "method", node, undefined, "instance", undefined, undefined, bindings.returns(node), bindings.returnTuple(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
