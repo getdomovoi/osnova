@@ -19,12 +19,41 @@ interface Scope {
 
 const nullish = new Set(["undefined", "null"]);
 
+// `X | None`, `None | X`, `Optional[X]`, `t.Optional[X]` and `Union[X, None]` name X, as TypeScript's `X | undefined` names X.
+function pythonNonNull(type: Node | null): Node | null {
+  let inner = type !== null && type.type === "type" ? childrenOf(type)[0] ?? null : type;
+  for (let guard = 0; inner !== null && guard < 4; guard += 1) {
+    if (inner.type === "binary_operator") {
+      const left = inner.childForFieldName("left"), right = inner.childForFieldName("right");
+      const operator = inner.children.find((child) => child !== null && !child.isNamed)?.text;
+      if (operator !== "|" || left === null || right === null) return inner;
+      if (left.type === "none" && right.type !== "none") inner = right; else if (right.type === "none" && left.type !== "none") inner = left; else return inner;
+      continue;
+    }
+    if (inner.type === "generic_type" || inner.type === "subscript") {
+      const base = childrenOf(inner)[0];
+      const baseName = base === undefined ? undefined : base.type === "identifier" ? base.text : base.type === "attribute" ? base.childForFieldName("attribute")?.text : undefined;
+      const arguments_ = inner.type === "subscript" ? childrenOf(inner).filter((child) => child.isNamed).slice(1) : childrenOf(childrenOf(inner).find((child) => child.type === "type_parameter") ?? inner).filter((child) => child.isNamed);
+      const nonNull = arguments_.filter((argument) => !(argument.type === "none" || (argument.type === "type" && childrenOf(argument)[0]?.type === "none")));
+      if (baseName === "Optional" && arguments_.length === 1) { inner = arguments_[0]!.type === "type" ? childrenOf(arguments_[0]!)[0] ?? null : arguments_[0]!; continue; }
+      if (baseName === "Union" && nonNull.length === 1) { inner = nonNull[0]!.type === "type" ? childrenOf(nonNull[0]!)[0] ?? null : nonNull[0]!; continue; }
+      return inner;
+    }
+    return inner;
+  }
+  return inner;
+}
 function pythonTypeName(type: Node | null): string | undefined {
   if (type === null) return undefined;
-  const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
+  const inner = pythonNonNull(type);
   if (inner === null) return undefined;
   if (inner.type === "identifier" || inner.type === "attribute") return inner.text;
-  if (inner.type === "generic_type" || inner.type === "subscript") { const base = childrenOf(inner)[0]; return base !== undefined && (base.type === "identifier" || base.type === "attribute") ? base.text : undefined; }
+  if (inner.type === "generic_type" || inner.type === "subscript") {
+    const base = childrenOf(inner)[0];
+    const name = base !== undefined && (base.type === "identifier" || base.type === "attribute") ? base.text : undefined;
+    // A union of two or more real types names no single receiver.
+    return name === undefined || /(^|\.)(Union|Optional)$/.test(name) ? undefined : name;
+  }
   return undefined;
 }
 
@@ -74,7 +103,7 @@ function contentTypeNames(annotation: Node | null): Contents | undefined {
 }
 function pythonContentTypeNames(type: Node | null): Contents | undefined {
   if (type === null) return undefined;
-  const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
+  const inner = pythonNonNull(type);
   if (inner === null || (inner.type !== "generic_type" && inner.type !== "subscript")) return undefined;
   const base = childrenOf(inner)[0];
   const baseName = base === undefined ? undefined : base.type === "identifier" ? base.text : base.type === "attribute" ? base.childForFieldName("attribute")?.text : undefined;

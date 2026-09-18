@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "test/fixtures/**", ".changeset/**"],
+    ignores: ["dist/**", "node_modules/**", "coverage/**", "test/fixtures/**", ".changeset/**", ".claude/**"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
@@ -22,6 +22,10 @@ export default tseslint.config(
       ],
       "no-console": "error",
     },
+  },
+  {
+    files: ["integrations/**/*.js"],
+    languageOptions: { globals: { process: "readonly", setTimeout: "readonly", clearTimeout: "readonly", Buffer: "readonly" } },
   },
   {
     files: ["scripts/**/*.mjs"],

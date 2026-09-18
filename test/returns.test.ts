@@ -16,6 +16,18 @@ const hits = (index: Awaited<ReturnType<typeof build>>, symbol: string, name = "
   [...index.outgoing(symbol).filter((edge) => edge.toName === name)].sort((a, b) => a.line - b.line).map((edge) => edge.toSymbol);
 
 describe("return-type receivers", () => {
+  it("Python: Optional and None unions name the non-null type in parameters, returns, fields and overloads", async () => {
+    const index = await build({
+      "lib.py": "from typing import Optional, Union, overload\nimport typing as t\n\nclass Foo:\n    def hit(self):\n        pass\n\nclass Holder:\n    foo: Optional[Foo]\n    foos: Optional[list[Foo]]\n\n@overload\ndef current(silent: bool = False) -> Foo: ...\n@overload\ndef current(silent: bool = ...) -> Foo | None: ...\ndef current(silent=False) -> Foo | None:\n    return Foo()\n\ndef maybe() -> Union[Foo, None]:\n    return None\n\ndef either() -> Union[Foo, Holder]:\n    return Foo()\n",
+      "a.py": "from lib import Foo, Holder, current, maybe, either\nfrom typing import Optional\nimport typing as t\n\ndef use(a: Foo | None, b: Optional[Foo], c: t.Optional[Foo], d: None | Foo, h: Holder):\n    a.hit()\n    b.hit()\n    c.hit()\n    d.hit()\n    current().hit()\n    maybe().hit()\n    either().hit()\n    h.foo.hit()\n    for f in h.foos:\n        f.hit()\n",
+    });
+    expect(index.symbols.get("lib.py#current")?.returns).toEqual({ kind: "local", name: "Foo" });
+    expect(index.symbols.get("lib.py#either")?.returns).toBeUndefined();
+    expect(index.symbols.get("lib.py#Holder")).toMatchObject({ fieldTypes: { foo: { kind: "local", name: "Foo" } }, elementTypes: { foos: { kind: "local", name: "Foo" } } });
+    const F = "lib.py#Foo.hit";
+    expect(hits(index, "a.py#use")).toEqual([F, F, F, F, F, F, undefined, F, F]);
+  });
+
   it("requires imported overload declarations to agree on the return type", async () => {
     const index = await build({
       "lib.py": "from typing import overload\n\nclass Foo:\n    def hit(self):\n        pass\n\nclass Other:\n    def hit(self):\n        pass\n\n@overload\ndef pick(a: str) -> Foo: ...\n@overload\ndef pick(a: int) -> Other: ...\ndef pick(a) -> Foo:\n    return Foo()\n\n@overload\ndef same(a: str) -> Foo: ...\n@overload\ndef same(a: int) -> Foo: ...\ndef same(a) -> Foo:\n    return Foo()\n",
