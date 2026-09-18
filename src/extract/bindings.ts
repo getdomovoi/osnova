@@ -265,10 +265,35 @@ export function collectBindings(root: Node, python: boolean): {
     while (scope.kind === "block" && scope.parent !== null) scope = scope.parent;
     return scope;
   };
-  const construction = (value: Node | null, site: Node): EdgeBinding | undefined => {
+  // A literal names the builtin type it constructs, so a call on `", ".join(..)`, `[]` or a local assigned
+  // from one classifies as external instead of unknown. Object literals stay unknown: their shape is the type.
+  const literalTypeName = (value: Node): string | undefined => {
+    if (python) {
+      if (value.type === "string" || value.type === "concatenated_string") return "str";
+      if (value.type === "list" || value.type === "list_comprehension") return "list";
+      if (value.type === "dictionary" || value.type === "dictionary_comprehension") return "dict";
+      if (value.type === "set" || value.type === "set_comprehension") return "set";
+      if (value.type === "tuple") return "tuple";
+      if (value.type === "integer") return "int";
+      if (value.type === "float") return "float";
+      if (value.type === "true" || value.type === "false") return "bool";
+      return undefined;
+    }
+    if (value.type === "string" || value.type === "template_string") return "string";
+    if (value.type === "array") return "Array";
+    if (value.type === "regex") return "RegExp";
+    if (value.type === "number") return "number";
+    if (value.type === "true" || value.type === "false") return "boolean";
+    return undefined;
+  };
+  // `literals` is off for an annotated declaration (`const xs: Entry[] = []`): the annotation carries the
+  // element type the literal cannot, and the annotation path binds it.
+  const construction = (value: Node | null, site: Node, literals = true): EdgeBinding | undefined => {
     value = unwrap(value);
     const awaited = value !== null && value.type === (python ? "await" : "await_expression");
     if (awaited) value = unwrap(childrenOf(value!).find((child) => child.isNamed) ?? null);
+    const literal = value === null || !literals ? undefined : literalTypeName(value);
+    if (literal !== undefined) return { kind: "instance", owner: { kind: "local", name: literal }, basis: "constructor" };
     if (value === null || !(value.type === (python ? "call" : "new_expression") || value.type === (python ? "call" : "call_expression"))) return undefined;
     const expression = value.childForFieldName(value.type === "new_expression" ? "constructor" : "function");
     if (expression === null) return undefined;
@@ -548,7 +573,7 @@ export function collectBindings(root: Node, python: boolean): {
       const callable = value !== null && (functions.has(value.type) || ["class", "class_expression"].includes(value.type));
       const binding: EdgeBinding = callable && target?.type === "identifier"
         ? { kind: "local", name: join(destination.owner, target.text) }
-        : target?.type === "identifier" ? construction(value, node) ?? localValue : localValue;
+        : target?.type === "identifier" ? construction(value, node, node.childForFieldName("type") === null) ?? localValue : localValue;
       bindPattern(destination, target, binding);
       if (binding.kind === "local" || binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(destination) });
       const typeName = (binding === localValue || constructions.get(binding)?.call === true) && target?.type === "identifier" ? annotationTypeName(node.childForFieldName("type")) : undefined;
@@ -559,7 +584,7 @@ export function collectBindings(root: Node, python: boolean): {
     if (python && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression"].includes(node.type)) {
       const target = node.childForFieldName("left") ?? node.childForFieldName("name");
       recordMemberWrite(target, scope, node.type === "assignment" ? node.childForFieldName("right") : null);
-      const binding = node.type === "assignment" && target?.type === "identifier" ? construction(node.childForFieldName("right"), node) ?? localValue : localValue;
+      const binding = node.type === "assignment" && target?.type === "identifier" ? construction(node.childForFieldName("right"), node, node.childForFieldName("type") === null) ?? localValue : localValue;
       bindPattern(scope, target, binding);
       const iterated = node.type === "for_statement" || node.type === "for_in_clause" ? node.childForFieldName("right") : null;
       if (iterated !== null && target?.type === "identifier") loops.push({ scope, name: target.text, source: iterated, site: node });

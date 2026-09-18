@@ -1,0 +1,900 @@
+{
+  "schemaVersion": 1,
+  "measured": "call-site resolution coverage on pinned checkouts",
+  "osnova": {
+    "commit": "24b477561eaaaf1cd493d5a4520f7d8dc42fa13e",
+    "version": "0.6.1"
+  },
+  "corpora": [
+    {
+      "corpus": "click-v1",
+      "repository": "https://github.com/pallets/click",
+      "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+      "generation": "ab06a472034ad63b9b0c8e8fdd2515edef691d4c42e4916f7626e88a8d5772cd",
+      "cacheRoundTrip": {
+        "edges": 7361,
+        "resolved": 1932
+      },
+      "total": {
+        "language": "all",
+        "files": 160,
+        "symbols": 2038,
+        "calls": 5022,
+        "resolved": 1932,
+        "ambiguous": 0,
+        "unresolved": 3090,
+        "imports": 669,
+        "importsResolved": 333,
+        "byMethod": {
+          "import-binding": 375,
+          "lexical-definition": 361,
+          "re-export-binding": 738,
+          "receiver-hint": 458
+        },
+        "byReason": {
+          "binding-blocked": 57,
+          "bound-symbol-missing": 3,
+          "import-target-unresolved": 735,
+          "receiver-unresolved": 1385,
+          "unbound-global": 910
+        },
+        "resolvedShare": 0.3847,
+        "unresolvedImportCalls": 735,
+        "unboundGlobalCalls": 910,
+        "resolvedShareExcludingUnresolvedImports": 0.4507,
+        "resolvedShareExcludingExternal": 0.5721
+      },
+      "languages": [
+        {
+          "language": "fallback",
+          "files": 70,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "python",
+          "files": 90,
+          "symbols": 2038,
+          "calls": 5022,
+          "resolved": 1932,
+          "ambiguous": 0,
+          "unresolved": 3090,
+          "imports": 669,
+          "importsResolved": 333,
+          "byMethod": {
+            "import-binding": 375,
+            "lexical-definition": 361,
+            "re-export-binding": 738,
+            "receiver-hint": 458
+          },
+          "byReason": {
+            "binding-blocked": 57,
+            "bound-symbol-missing": 3,
+            "import-target-unresolved": 735,
+            "receiver-unresolved": 1385,
+            "unbound-global": 910
+          },
+          "resolvedShare": 0.3847,
+          "unresolvedImportCalls": 735,
+          "unboundGlobalCalls": 910,
+          "resolvedShareExcludingUnresolvedImports": 0.4507,
+          "resolvedShareExcludingExternal": 0.5721
+        }
+      ],
+      "limitations": [
+        "indexed-call-sites-only",
+        "resolution-is-heuristic-not-type-inference",
+        "unindexed-files-not-counted",
+        "unresolved-import-calls-are-import-target-unresolved-edges",
+        "unbound-global-calls-are-names-with-no-binding-in-the-file"
+      ]
+    },
+    {
+      "corpus": "cobra-v1",
+      "repository": "https://github.com/spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "generation": "22b89b7e13cad7fac75c40fbc6a61536251eb823ff87640c0fc8081e8e603de3",
+      "cacheRoundTrip": {
+        "edges": 4564,
+        "resolved": 1980
+      },
+      "total": {
+        "language": "all",
+        "files": 59,
+        "symbols": 675,
+        "calls": 4374,
+        "resolved": 1980,
+        "ambiguous": 137,
+        "unresolved": 2257,
+        "imports": 190,
+        "importsResolved": 12,
+        "byMethod": {
+          "import-binding": 15,
+          "receiver-hint": 1068,
+          "same-file-name": 457,
+          "unique-name": 440
+        },
+        "byReason": {
+          "import-target-unresolved": 1786,
+          "receiver-unresolved": 109,
+          "unbound-global": 362
+        },
+        "resolvedShare": 0.4527,
+        "unresolvedImportCalls": 1786,
+        "unboundGlobalCalls": 362,
+        "resolvedShareExcludingUnresolvedImports": 0.7651,
+        "resolvedShareExcludingExternal": 0.8895
+      },
+      "languages": [
+        {
+          "language": "fallback",
+          "files": 23,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "go",
+          "files": 36,
+          "symbols": 675,
+          "calls": 4374,
+          "resolved": 1980,
+          "ambiguous": 137,
+          "unresolved": 2257,
+          "imports": 190,
+          "importsResolved": 12,
+          "byMethod": {
+            "import-binding": 15,
+            "receiver-hint": 1068,
+            "same-file-name": 457,
+            "unique-name": 440
+          },
+          "byReason": {
+            "import-target-unresolved": 1786,
+            "receiver-unresolved": 109,
+            "unbound-global": 362
+          },
+          "resolvedShare": 0.4527,
+          "unresolvedImportCalls": 1786,
+          "unboundGlobalCalls": 362,
+          "resolvedShareExcludingUnresolvedImports": 0.7651,
+          "resolvedShareExcludingExternal": 0.8895
+        }
+      ],
+      "limitations": [
+        "indexed-call-sites-only",
+        "resolution-is-heuristic-not-type-inference",
+        "unindexed-files-not-counted",
+        "unresolved-import-calls-are-import-target-unresolved-edges",
+        "unbound-global-calls-are-names-with-no-binding-in-the-file"
+      ]
+    },
+    {
+      "corpus": "gson-v1",
+      "repository": "https://github.com/google/gson",
+      "revision": "854c8255b625cf1e13c701a83ea9ccb4caaa576a",
+      "generation": "01e30d71331142441296e7051b1cde6c72cf534ec5a888fc2d1290e2ec1660bd",
+      "cacheRoundTrip": {
+        "edges": 26014,
+        "resolved": 7643
+      },
+      "total": {
+        "language": "all",
+        "files": 298,
+        "symbols": 4485,
+        "calls": 23340,
+        "resolved": 7643,
+        "ambiguous": 1917,
+        "unresolved": 13780,
+        "imports": 2674,
+        "importsResolved": 987,
+        "byMethod": {
+          "imported-file-name": 44,
+          "receiver-hint": 5793,
+          "same-file-name": 1768,
+          "unique-name": 38
+        },
+        "byReason": {
+          "import-target-unresolved": 2304,
+          "receiver-unresolved": 5368,
+          "unbound-global": 6108
+        },
+        "resolvedShare": 0.3275,
+        "unresolvedImportCalls": 2304,
+        "unboundGlobalCalls": 6108,
+        "resolvedShareExcludingUnresolvedImports": 0.3633,
+        "resolvedShareExcludingExternal": 0.512
+      },
+      "languages": [
+        {
+          "language": "fallback",
+          "files": 34,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "java",
+          "files": 264,
+          "symbols": 4485,
+          "calls": 23340,
+          "resolved": 7643,
+          "ambiguous": 1917,
+          "unresolved": 13780,
+          "imports": 2674,
+          "importsResolved": 987,
+          "byMethod": {
+            "imported-file-name": 44,
+            "receiver-hint": 5793,
+            "same-file-name": 1768,
+            "unique-name": 38
+          },
+          "byReason": {
+            "import-target-unresolved": 2304,
+            "receiver-unresolved": 5368,
+            "unbound-global": 6108
+          },
+          "resolvedShare": 0.3275,
+          "unresolvedImportCalls": 2304,
+          "unboundGlobalCalls": 6108,
+          "resolvedShareExcludingUnresolvedImports": 0.3633,
+          "resolvedShareExcludingExternal": 0.512
+        }
+      ],
+      "limitations": [
+        "indexed-call-sites-only",
+        "resolution-is-heuristic-not-type-inference",
+        "unindexed-files-not-counted",
+        "unresolved-import-calls-are-import-target-unresolved-edges",
+        "unbound-global-calls-are-names-with-no-binding-in-the-file"
+      ]
+    },
+    {
+      "corpus": "humanizer-v1",
+      "repository": "https://github.com/Humanizr/Humanizer",
+      "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b",
+      "generation": "8c67d0e2bd6c9e4eba4a8e1405f8bfe58ce428b3ecc91790526597a86089c978",
+      "cacheRoundTrip": {
+        "edges": 31307,
+        "resolved": 7798
+      },
+      "total": {
+        "language": "all",
+        "files": 2728,
+        "symbols": 6693,
+        "calls": 30517,
+        "resolved": 7798,
+        "ambiguous": 248,
+        "unresolved": 22471,
+        "imports": 790,
+        "importsResolved": 13,
+        "byMethod": {
+          "import-binding": 17,
+          "lexical-definition": 133,
+          "receiver-hint": 2234,
+          "same-file-name": 4554,
+          "unique-name": 860
+        },
+        "byReason": {
+          "binding-blocked": 12,
+          "import-target-unresolved": 897,
+          "receiver-unresolved": 7510,
+          "unbound-global": 14052
+        },
+        "resolvedShare": 0.2555,
+        "unresolvedImportCalls": 897,
+        "unboundGlobalCalls": 14052,
+        "resolvedShareExcludingUnresolvedImports": 0.2633,
+        "resolvedShareExcludingExternal": 0.5009
+      },
+      "languages": [
+        {
+          "language": "c_sharp",
+          "files": 733,
+          "symbols": 6282,
+          "calls": 28786,
+          "resolved": 7648,
+          "ambiguous": 248,
+          "unresolved": 20890,
+          "imports": 681,
+          "importsResolved": 0,
+          "byMethod": {
+            "receiver-hint": 2234,
+            "same-file-name": 4554,
+            "unique-name": 860
+          },
+          "byReason": {
+            "receiver-unresolved": 7001,
+            "unbound-global": 13889
+          },
+          "resolvedShare": 0.2657,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 13889,
+          "resolvedShareExcludingUnresolvedImports": 0.2657,
+          "resolvedShareExcludingExternal": 0.5134
+        },
+        {
+          "language": "fallback",
+          "files": 1965,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "javascript",
+          "files": 16,
+          "symbols": 268,
+          "calls": 927,
+          "resolved": 132,
+          "ambiguous": 0,
+          "unresolved": 795,
+          "imports": 57,
+          "importsResolved": 3,
+          "byMethod": {
+            "import-binding": 13,
+            "lexical-definition": 119
+          },
+          "byReason": {
+            "binding-blocked": 3,
+            "import-target-unresolved": 538,
+            "receiver-unresolved": 142,
+            "unbound-global": 112
+          },
+          "resolvedShare": 0.1424,
+          "unresolvedImportCalls": 538,
+          "unboundGlobalCalls": 112,
+          "resolvedShareExcludingUnresolvedImports": 0.3393,
+          "resolvedShareExcludingExternal": 0.4765
+        },
+        {
+          "language": "tsx",
+          "files": 8,
+          "symbols": 57,
+          "calls": 120,
+          "resolved": 14,
+          "ambiguous": 0,
+          "unresolved": 106,
+          "imports": 37,
+          "importsResolved": 5,
+          "byMethod": {
+            "import-binding": 4,
+            "lexical-definition": 10
+          },
+          "byReason": {
+            "binding-blocked": 7,
+            "import-target-unresolved": 32,
+            "receiver-unresolved": 50,
+            "unbound-global": 17
+          },
+          "resolvedShare": 0.1167,
+          "unresolvedImportCalls": 32,
+          "unboundGlobalCalls": 17,
+          "resolvedShareExcludingUnresolvedImports": 0.1591,
+          "resolvedShareExcludingExternal": 0.1972
+        },
+        {
+          "language": "typescript",
+          "files": 6,
+          "symbols": 86,
+          "calls": 684,
+          "resolved": 4,
+          "ambiguous": 0,
+          "unresolved": 680,
+          "imports": 15,
+          "importsResolved": 5,
+          "byMethod": {
+            "lexical-definition": 4
+          },
+          "byReason": {
+            "binding-blocked": 2,
+            "import-target-unresolved": 327,
+            "receiver-unresolved": 317,
+            "unbound-global": 34
+          },
+          "resolvedShare": 0.0058,
+          "unresolvedImportCalls": 327,
+          "unboundGlobalCalls": 34,
+          "resolvedShareExcludingUnresolvedImports": 0.0112,
+          "resolvedShareExcludingExternal": 0.0124
+        }
+      ],
+      "limitations": [
+        "indexed-call-sites-only",
+        "resolution-is-heuristic-not-type-inference",
+        "unindexed-files-not-counted",
+        "unresolved-import-calls-are-import-target-unresolved-edges",
+        "unbound-global-calls-are-names-with-no-binding-in-the-file"
+      ]
+    },
+    {
+      "corpus": "pyright-v1",
+      "repository": "https://github.com/microsoft/pyright",
+      "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+      "generation": "5a64b7d119a9bc79494d65a812e54ada76c41c97075d52e95138170f478cfe4e",
+      "cacheRoundTrip": {
+        "edges": 68340,
+        "resolved": 30042
+      },
+      "total": {
+        "language": "all",
+        "files": 7653,
+        "symbols": 31161,
+        "calls": 58461,
+        "resolved": 30042,
+        "ambiguous": 0,
+        "unresolved": 28419,
+        "imports": 4442,
+        "importsResolved": 2516,
+        "byMethod": {
+          "import-binding": 9836,
+          "lexical-definition": 6640,
+          "re-export-binding": 3,
+          "receiver-hint": 13563
+        },
+        "byReason": {
+          "binding-blocked": 1824,
+          "bound-symbol-missing": 1,
+          "import-target-unresolved": 6323,
+          "re-export-incomplete": 20,
+          "receiver-unresolved": 9616,
+          "unbound-global": 10635
+        },
+        "resolvedShare": 0.5139,
+        "unresolvedImportCalls": 6323,
+        "unboundGlobalCalls": 10635,
+        "resolvedShareExcludingUnresolvedImports": 0.5762,
+        "resolvedShareExcludingExternal": 0.7239
+      },
+      "languages": [
+        {
+          "language": "fallback",
+          "files": 5684,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "javascript",
+          "files": 9,
+          "symbols": 20,
+          "calls": 32,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 32,
+          "imports": 16,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {
+            "binding-blocked": 15,
+            "receiver-unresolved": 17
+          },
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "python",
+          "files": 1357,
+          "symbols": 10374,
+          "calls": 11617,
+          "resolved": 3326,
+          "ambiguous": 0,
+          "unresolved": 8291,
+          "imports": 1646,
+          "importsResolved": 24,
+          "byMethod": {
+            "import-binding": 17,
+            "lexical-definition": 2905,
+            "receiver-hint": 404
+          },
+          "byReason": {
+            "binding-blocked": 702,
+            "bound-symbol-missing": 1,
+            "import-target-unresolved": 2240,
+            "receiver-unresolved": 958,
+            "unbound-global": 4390
+          },
+          "resolvedShare": 0.2863,
+          "unresolvedImportCalls": 2240,
+          "unboundGlobalCalls": 4390,
+          "resolvedShareExcludingUnresolvedImports": 0.3547,
+          "resolvedShareExcludingExternal": 0.6669
+        },
+        {
+          "language": "typescript",
+          "files": 603,
+          "symbols": 20767,
+          "calls": 46812,
+          "resolved": 26716,
+          "ambiguous": 0,
+          "unresolved": 20096,
+          "imports": 2780,
+          "importsResolved": 2492,
+          "byMethod": {
+            "import-binding": 9819,
+            "lexical-definition": 3735,
+            "re-export-binding": 3,
+            "receiver-hint": 13159
+          },
+          "byReason": {
+            "binding-blocked": 1107,
+            "import-target-unresolved": 4083,
+            "re-export-incomplete": 20,
+            "receiver-unresolved": 8641,
+            "unbound-global": 6245
+          },
+          "resolvedShare": 0.5707,
+          "unresolvedImportCalls": 4083,
+          "unboundGlobalCalls": 6245,
+          "resolvedShareExcludingUnresolvedImports": 0.6252,
+          "resolvedShareExcludingExternal": 0.7323
+        }
+      ],
+      "limitations": [
+        "indexed-call-sites-only",
+        "resolution-is-heuristic-not-type-inference",
+        "unindexed-files-not-counted",
+        "unresolved-import-calls-are-import-target-unresolved-edges",
+        "unbound-global-calls-are-names-with-no-binding-in-the-file"
+      ]
+    },
+    {
+      "corpus": "ripgrep-v1",
+      "repository": "https://github.com/BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "generation": "b71da75b87138585e0fdae78a6d48e661971d75a5848b5658b9af2ecd30cacfd",
+      "cacheRoundTrip": {
+        "edges": 17301,
+        "resolved": 5473
+      },
+      "total": {
+        "language": "all",
+        "files": 225,
+        "symbols": 3516,
+        "calls": 13365,
+        "resolved": 5473,
+        "ambiguous": 187,
+        "unresolved": 7705,
+        "imports": 399,
+        "importsResolved": 126,
+        "byMethod": {
+          "import-binding": 1,
+          "imported-file-name": 14,
+          "receiver-hint": 3821,
+          "same-file-name": 1011,
+          "unique-name": 626
+        },
+        "byReason": {
+          "bound-symbol-missing": 2,
+          "import-target-unresolved": 1607,
+          "no-matching-symbol": 10,
+          "receiver-unresolved": 3759,
+          "unbound-global": 2327
+        },
+        "resolvedShare": 0.4095,
+        "unresolvedImportCalls": 1607,
+        "unboundGlobalCalls": 2327,
+        "resolvedShareExcludingUnresolvedImports": 0.4655,
+        "resolvedShareExcludingExternal": 0.5803
+      },
+      "languages": [
+        {
+          "language": "bash",
+          "files": 2,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "fallback",
+          "files": 112,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "ruby",
+          "files": 1,
+          "symbols": 2,
+          "calls": 14,
+          "resolved": 4,
+          "ambiguous": 0,
+          "unresolved": 10,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {
+            "same-file-name": 4
+          },
+          "byReason": {
+            "no-matching-symbol": 10
+          },
+          "resolvedShare": 0.2857,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0.2857,
+          "resolvedShareExcludingExternal": 0.2857
+        },
+        {
+          "language": "rust",
+          "files": 110,
+          "symbols": 3514,
+          "calls": 13351,
+          "resolved": 5469,
+          "ambiguous": 187,
+          "unresolved": 7695,
+          "imports": 399,
+          "importsResolved": 126,
+          "byMethod": {
+            "import-binding": 1,
+            "imported-file-name": 14,
+            "receiver-hint": 3821,
+            "same-file-name": 1007,
+            "unique-name": 626
+          },
+          "byReason": {
+            "bound-symbol-missing": 2,
+            "import-target-unresolved": 1607,
+            "receiver-unresolved": 3759,
+            "unbound-global": 2327
+          },
+          "resolvedShare": 0.4096,
+          "unresolvedImportCalls": 1607,
+          "unboundGlobalCalls": 2327,
+          "resolvedShareExcludingUnresolvedImports": 0.4657,
+          "resolvedShareExcludingExternal": 0.5808
+        }
+      ],
+      "limitations": [
+        "indexed-call-sites-only",
+        "resolution-is-heuristic-not-type-inference",
+        "unindexed-files-not-counted",
+        "unresolved-import-calls-are-import-target-unresolved-edges",
+        "unbound-global-calls-are-names-with-no-binding-in-the-file"
+      ]
+    },
+    {
+      "corpus": "zod-v1",
+      "repository": "https://github.com/colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "generation": "148cf98bd2456e15a89d73a778ad2f40879ec2ec4ca1e82539e48d023ed80c3a",
+      "cacheRoundTrip": {
+        "edges": 54862,
+        "resolved": 20087
+      },
+      "total": {
+        "language": "all",
+        "files": 702,
+        "symbols": 12784,
+        "calls": 53416,
+        "resolved": 20087,
+        "ambiguous": 0,
+        "unresolved": 33329,
+        "imports": 1446,
+        "importsResolved": 972,
+        "byMethod": {
+          "import-binding": 1428,
+          "lexical-definition": 3086,
+          "re-export-binding": 11728,
+          "receiver-hint": 3845
+        },
+        "byReason": {
+          "binding-blocked": 439,
+          "bound-symbol-missing": 349,
+          "import-target-unresolved": 19837,
+          "re-export-incomplete": 78,
+          "receiver-unresolved": 10518,
+          "unbound-global": 2108
+        },
+        "resolvedShare": 0.376,
+        "unresolvedImportCalls": 19837,
+        "unboundGlobalCalls": 2108,
+        "resolvedShareExcludingUnresolvedImports": 0.5982,
+        "resolvedShareExcludingExternal": 0.6383
+      },
+      "languages": [
+        {
+          "language": "bash",
+          "files": 1,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "fallback",
+          "files": 181,
+          "symbols": 0,
+          "calls": 0,
+          "resolved": 0,
+          "ambiguous": 0,
+          "unresolved": 0,
+          "imports": 0,
+          "importsResolved": 0,
+          "byMethod": {},
+          "byReason": {},
+          "resolvedShare": 0,
+          "unresolvedImportCalls": 0,
+          "unboundGlobalCalls": 0,
+          "resolvedShareExcludingUnresolvedImports": 0,
+          "resolvedShareExcludingExternal": 0
+        },
+        {
+          "language": "javascript",
+          "files": 5,
+          "symbols": 11,
+          "calls": 29,
+          "resolved": 10,
+          "ambiguous": 0,
+          "unresolved": 19,
+          "imports": 12,
+          "importsResolved": 0,
+          "byMethod": {
+            "lexical-definition": 10
+          },
+          "byReason": {
+            "import-target-unresolved": 12,
+            "receiver-unresolved": 5,
+            "unbound-global": 2
+          },
+          "resolvedShare": 0.3448,
+          "unresolvedImportCalls": 12,
+          "unboundGlobalCalls": 2,
+          "resolvedShareExcludingUnresolvedImports": 0.5882,
+          "resolvedShareExcludingExternal": 0.6667
+        },
+        {
+          "language": "tsx",
+          "files": 34,
+          "symbols": 164,
+          "calls": 150,
+          "resolved": 7,
+          "ambiguous": 0,
+          "unresolved": 143,
+          "imports": 92,
+          "importsResolved": 1,
+          "byMethod": {
+            "lexical-definition": 7
+          },
+          "byReason": {
+            "binding-blocked": 11,
+            "import-target-unresolved": 55,
+            "receiver-unresolved": 54,
+            "unbound-global": 23
+          },
+          "resolvedShare": 0.0467,
+          "unresolvedImportCalls": 55,
+          "unboundGlobalCalls": 23,
+          "resolvedShareExcludingUnresolvedImports": 0.0737,
+          "resolvedShareExcludingExternal": 0.0972
+        },
+        {
+          "language": "typescript",
+          "files": 481,
+          "symbols": 12609,
+          "calls": 53237,
+          "resolved": 20070,
+          "ambiguous": 0,
+          "unresolved": 33167,
+          "imports": 1342,
+          "importsResolved": 971,
+          "byMethod": {
+            "import-binding": 1428,
+            "lexical-definition": 3069,
+            "re-export-binding": 11728,
+            "receiver-hint": 3845
+          },
+          "byReason": {
+            "binding-blocked": 428,
+            "bound-symbol-missing": 349,
+            "import-target-unresolved": 19770,
+            "re-export-incomplete": 78,
+            "receiver-unresolved": 10459,
+            "unbound-global": 2083
+          },
+          "resolvedShare": 0.377,
+          "unresolvedImportCalls": 19770,
+          "unboundGlobalCalls": 2083,
+          "resolvedShareExcludingUnresolvedImports": 0.5997,
+          "resolvedShareExcludingExternal": 0.6395
+        }
+      ],
+      "limitations": [
+        "indexed-call-sites-only",
+        "resolution-is-heuristic-not-type-inference",
+        "unindexed-files-not-counted",
+        "unresolved-import-calls-are-import-target-unresolved-edges",
+        "unbound-global-calls-are-names-with-no-binding-in-the-file"
+      ]
+    }
+  ]
+}

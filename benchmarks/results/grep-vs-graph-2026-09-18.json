@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "measured": "2026-09-18T16:04:21.520Z",
-  "osnova": "b6a4e1654fe94e6cf596e39e06ce8edfd7a8c375",
+  "measured": "2026-09-18T20:04:32.252Z",
+  "osnova": "e9040cf32dc0b96b15018b4f2182117270cd4ca2",
   "manifest": "exactness-v1",
   "cases": [
     {
@@ -105,15 +105,12 @@
         "missed": []
       },
       "graph": {
-        "sites": 28,
-        "hit": 28,
+        "sites": 30,
+        "hit": 30,
         "precision": 1,
-        "recall": 0.933,
+        "recall": 1,
         "falsePositives": [],
-        "missed": [
-          "command.go:1091",
-          "completions.go:505"
-        ]
+        "missed": []
       }
     },
     {
@@ -242,18 +239,12 @@
         "missed": []
       },
       "graph": {
-        "sites": 21,
-        "hit": 21,
+        "sites": 26,
+        "hit": 26,
         "precision": 1,
-        "recall": 0.808,
+        "recall": 1,
         "falsePositives": [],
-        "missed": [
-          "crates/matcher/src/lib.rs:264",
-          "crates/regex/src/strip.rs:47",
-          "crates/searcher/src/searcher/core.rs:691",
-          "crates/searcher/src/sink.rs:393",
-          "crates/searcher/src/sink.rs:472"
-        ]
+        "missed": []
       }
     },
     {
@@ -335,14 +326,12 @@
         "missed": []
       },
       "graph": {
-        "sites": 26,
-        "hit": 26,
+        "sites": 27,
+        "hit": 27,
         "precision": 1,
-        "recall": 0.963,
+        "recall": 1,
         "falsePositives": [],
-        "missed": [
-          "gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java:447"
-        ]
+        "missed": []
       }
     }
   ],
