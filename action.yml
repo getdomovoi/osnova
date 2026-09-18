@@ -1,0 +1,47 @@
+name: osnova settle
+description: Report every indexed dependent of the symbols a pull request changes, from the resolved call graph, into the job summary and optionally a PR comment.
+branding:
+  icon: anchor
+  color: gray-dark
+inputs:
+  base-ref:
+    description: Commit or ref to compare against. Defaults to the pull request base.
+    default: ${{ github.event.pull_request.base.sha }}
+  depth:
+    description: How many dependent hops to report.
+    default: "1"
+  workspace:
+    description: Repository root to index.
+    default: "."
+  version:
+    description: Osnova version to run through npx. Ignored when command is set.
+    default: latest
+  command:
+    description: Command that runs osnova. Overrides version, for example "node dist/bin.js" when testing this repository.
+    default: ""
+  comment:
+    description: Post the report as a pull request comment. Needs a token with pull-requests write permission in GH_TOKEN.
+    default: "false"
+outputs:
+  report:
+    description: Path of the report file.
+    value: ${{ steps.settle.outputs.report }}
+runs:
+  using: composite
+  steps:
+    - id: settle
+      shell: bash
+      env:
+        OSNOVA: ${{ inputs.command != '' && inputs.command || format('npx -y @getdomovoi/osnova@{0}', inputs.version) }}
+        BASE_REF: ${{ inputs.base-ref }}
+        DEPTH: ${{ inputs.depth }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: bash "${{ github.action_path }}/scripts/settle-ci.sh"
+    - if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ env.GH_TOKEN || github.token }}
+        REPORT: ${{ steps.settle.outputs.report }}
+      run: |
+        { echo "### osnova settle"; echo; echo '```'; cat "$REPORT"; echo '```'; } > "$RUNNER_TEMP/osnova-settle-comment.md"
+        gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/osnova-settle-comment.md"

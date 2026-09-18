@@ -154,6 +154,21 @@ The reason to keep a call graph instead of running a text search is not speed. I
 
 What the text search got wrong: a comment that mentioned the method, a Javadoc example, a definition line, and four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next). What the graph missed: a receiver that is reassigned later in the same function, and a receiver that comes out of a multi-value return, both left unresolved on purpose rather than guessed. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-17.json`](benchmarks/results/grep-vs-graph-2026-09-17.json).
 
+## In CI
+
+The same check runs on every pull request without an agent. The action indexes the base commit and the head at the same path, then lists every indexed dependent of the symbols the pull request changed in the job summary, and as a comment when asked:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- uses: getdomovoi/osnova@main
+  with:
+    depth: "2"
+```
+
+Inputs: `base-ref` (default: the pull request base), `depth`, `workspace`, `version` (the npm version run through `npx`), `command` (run a local build instead), `comment` (post a PR comment; needs `GH_TOKEN` with pull-requests write). The report is indexed structural evidence only: a missing dependent is not proof that nothing depends on the change. `scripts/settle-ci.sh` is the whole action and runs by hand with `BASE_REF=<commit> bash scripts/settle-ci.sh`.
+
 ## CLI
 
 ```sh
