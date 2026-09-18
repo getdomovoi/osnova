@@ -68,7 +68,7 @@ describe("osnova hook", () => {
       const builds: string[] = [];
       let c = capture();
       await runHook("session", JSON.stringify({ cwd: path.join(root, "src") }), c.io, { cacheDir, backgroundBuild: (workspace) => builds.push(workspace) });
-      expect(builds).toEqual([await fs.realpath(root)]);
+      expect(builds.map((dir) => path.resolve(dir))).toEqual([path.resolve(await fs.realpath(root))]);
       expect(c.out.join("\n")).toContain("building in the background");
       const { buildIndex } = await import("../src/index.js");
       await buildIndex(root, { cacheDir });
