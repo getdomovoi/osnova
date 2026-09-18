@@ -59,6 +59,12 @@ OpenCode, in `~/.config/opencode/opencode.json`:
 { "mcp": { "osnova": { "type": "local", "command": ["osnova", "mcp"], "enabled": true } } }
 ```
 
+One command applies all of it for Claude Code: `osnova setup --apply --client claude-code --hooks` writes the MCP entry to `~/.claude.json` and the three hook groups to `~/.claude/settings.json`, backing up each file it changes as `<file>.bak-osnova-<stamp>`, and does nothing on a second run; `--preview` prints the same diffs without writing, and a conflicting entry stops the whole apply. `--instructions AGENTS.md` appends the tool contract once between `<!-- osnova:start -->` and `<!-- osnova:end -->` markers for clients without hooks. `osnova doctor` then checks that every configured hook and MCP command reports this osnova's version.
+
+Measured on Claude Code with blast-radius tasks that name their symbol, the hooks did not cut turns or cost against the MCP server alone, which already carries the contract as MCP instructions; they pay on prompts that name no symbol and on editing turns. Claude Code hooks, so the graph speaks first without a tool call: `osnova hook session` prints the tool contract and the index size when a session starts, and `osnova hook prompt` prints up to eight starting points (definitions and relationships the prompt names, exact `file:line`, under 1,024 code units) on every prompt. Both read the hook payload on stdin, never write to the repository, and print nothing on a slash command, a short prompt, or a failure. `osnova hook stop` runs when the agent is about to finish: it diffs the worktree against `HEAD` and, once, hands back the indexed dependents of the changed symbols so the agent checks them first. On a repository with no cache the session hook starts the build in the background and the other hooks stay quiet until it exists. The workspace is the git top level of the client's directory. `osnova hook install-preview` prints the settings snippet; paste it into `~/.claude/settings.json` yourself, since osnova never edits that file.
+
+Other harnesses get the same three levers by their own means. `osnova setup --apply --client codex --hooks` writes `~/.codex/hooks.json` with the same session, prompt and stop hooks (Codex reads `additionalContext` JSON). `--client cursor --hooks` writes `~/.cursor/hooks.json` with the stop hook as a follow-up message, since Cursor's prompt hook cannot add context. `--client opencode --plugin` and `--client kilo --plugin` copy the shipped plugin into the client's `plugins/` directory: it puts the contract into the system prompt and appends starting points to each user message by calling `osnova hook`. `--client pi --plugin` copies the shipped extension into `~/.pi/agent/extensions/`, which does the same through `before_agent_start`. Every MCP client also receives the contract as the server's `instructions` on initialize, so a client without hooks or plugins still sees it.
+
 Pi, through the `pi-mcp-adapter` extension, in `~/.pi/agent/mcp.json`:
 
 ```json
@@ -114,29 +120,29 @@ A typical agent turn with Osnova:
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, the declared return type of the function or method that produced the value, a field of any of those whose declared type the holder records, so `this.pool.conn.send()` follows two field types across files, or the value inside a wrapper: `await f()` on a `Promise<Foo>` return type, and Rust `f()?`, `f().unwrap()` and `f().expect(..)` on `Result<Foo, E>` and `Option<Foo>`; and the element or value of a collection whose annotation names it: `for (const x of xs)`, `xs.forEach((x) => ..)`, `xs[0]`, `map.get(k)`, `map.values()` over `Foo[]`, `Set<Foo>`, `Map<K, Foo>`, `list[Foo]` and `dict[K, Foo]`, including fields and return types in other files, and a local that aliases a member chain), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` (which also reloads each index from its cache and checks the edge count and resolved count match) and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, the declared return type of the function or method that produced the value (or, without an annotation, the constructor it returns on every path), a field of any of those whose declared type the holder records, so `this.pool.conn.send()` follows two field types across files, or the value inside a wrapper: `await f()` on a `Promise<Foo>` return type, and Rust `f()?`, `f().unwrap()` and `f().expect(..)` on `Result<Foo, E>` and `Option<Foo>`; and the element or value of a collection whose annotation names it: `for (const x of xs)`, `xs.forEach((x) => ..)`, `xs[0]`, `map.get(k)`, `map.values()` over `Foo[]`, `Set<Foo>`, `Map<K, Foo>`, `list[Foo]` and `dict[K, Foo]`, including fields and return types in other files, and a local that aliases a member chain), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` (which also reloads each index from its cache and checks the edge count and resolved count match) and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5022 | 1916 | 38.1% | 54.5% |
-| click | all | 5022 | 1916 | 38.1% | 54.5% |
+| click | python | 5022 | 1932 | 38.5% | 54.9% |
+| click | all | 5022 | 1932 | 38.5% | 54.9% |
 | cobra | go | 4374 | 1931 | 44.1% | 75.3% |
 | cobra | all | 4374 | 1931 | 44.1% | 75.3% |
 | gson | java | 23341 | 7515 | 32.2% | 37.1% |
 | gson | all | 23341 | 7515 | 32.2% | 37.1% |
-| humanizer | c_sharp | 28783 | 7628 | 26.5% | 41.5% |
-| humanizer | javascript | 927 | 132 | 14.2% | 39.4% |
+| humanizer | c_sharp | 28782 | 7628 | 26.5% | 41.5% |
+| humanizer | javascript | 927 | 132 | 14.2% | 39.3% |
 | humanizer | tsx | 120 | 14 | 11.7% | 18.2% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30514 | 7778 | 25.5% | 40.6% |
-| pyright | python | 11617 | 3320 | 28.6% | 65.3% |
-| pyright | typescript | 46810 | 26619 | 56.9% | 72.4% |
-| pyright | all | 58459 | 29939 | 51.2% | 71.5% |
+| humanizer | all | 30513 | 7778 | 25.5% | 40.6% |
+| pyright | python | 11617 | 3326 | 28.6% | 65.4% |
+| pyright | typescript | 46810 | 26716 | 57.1% | 72.7% |
+| pyright | all | 58459 | 30042 | 51.4% | 71.8% |
 | ripgrep | rust | 13350 | 3952 | 29.6% | 39.7% |
 | ripgrep | all | 13364 | 3956 | 29.6% | 39.7% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
-| zod | typescript | 53234 | 20069 | 37.7% | 63.2% |
-| zod | all | 53413 | 20086 | 37.6% | 63.1% |
+| zod | typescript | 53234 | 20070 | 37.7% | 63.2% |
+| zod | all | 53413 | 20087 | 37.6% | 63.1% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework, and calls at the end of a field, element or return chain whose recorded type is a builtin (`string`, `Array`, `Map`, a Rust primitive, `Vec` or `Option`) or a type behind an unresolved import; a chain that ends on a type parameter stays unresolved, not external. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 

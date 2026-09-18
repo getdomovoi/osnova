@@ -16,6 +16,49 @@ const hits = (index: Awaited<ReturnType<typeof build>>, symbol: string, name = "
   [...index.outgoing(symbol).filter((edge) => edge.toName === name)].sort((a, b) => a.line - b.line).map((edge) => edge.toSymbol);
 
 describe("return-type receivers", () => {
+  it("infers the result from constructor-literal and this returns when there is no annotation", async () => {
+    const index = await build({
+      "lib.ts": "export class Foo { hit() {} }\nexport class Bar { hit() {} }\n",
+      "a.ts": "import { Foo, Bar } from './lib.js';\nexport function make() { return new Foo(); }\nexport const arrow = () => new Foo();\nexport function branches(flag: boolean) { if (flag) { return new Foo(); } return new Foo(); }\nexport function mixed(flag: boolean) { return flag ? new Foo() : new Bar(); }\nexport function twoKinds(flag: boolean) { if (flag) return new Foo(); return new Bar(); }\nexport function nested() { const inner = () => new Bar(); return new Foo(); }\nexport function bare() { return; }\nexport async function later() { return new Foo(); }\nexport class Builder { self() { return this; } hit() {} }\nexport function use(b: Builder) {\n  make().hit();\n  arrow().hit();\n  branches(true).hit();\n  mixed(true).hit();\n  twoKinds(true).hit();\n  nested().hit();\n  later().hit();\n  b.self().hit();\n}\nexport async function useAsync() {\n  (await later()).hit();\n}\n",
+    });
+    expect(index.symbols.get("a.ts#make")?.returns).toEqual({ kind: "import", source: "./lib.js", importedName: "Foo" });
+    expect(index.symbols.get("a.ts#arrow")?.returns).toEqual({ kind: "import", source: "./lib.js", importedName: "Foo" });
+    expect(index.symbols.get("a.ts#mixed")?.returns).toBeUndefined();
+    expect(index.symbols.get("a.ts#twoKinds")?.returns).toBeUndefined();
+    expect(index.symbols.get("a.ts#bare")?.returns).toBeUndefined();
+    expect(index.symbols.get("a.ts#later")?.returns).toBeUndefined();
+    expect(index.symbols.get("a.ts#later")?.unwrapped).toEqual({ kind: "import", source: "./lib.js", importedName: "Foo" });
+    expect(index.symbols.get("a.ts#Builder.self")?.returns).toEqual({ kind: "this" });
+    const F = "lib.ts#Foo.hit";
+    expect(hits(index, "a.ts#use")).toEqual([F, F, F, undefined, undefined, F, undefined, "a.ts#Builder.hit"]);
+    expect(hits(index, "a.ts#useAsync")).toEqual([F]);
+  });
+
+  it("Python: infers the result from a constructor call return without an annotation", async () => {
+    const index = await build({
+      "lib.py": "class Foo:\n    def hit(self):\n        pass\n\nclass Bar:\n    def hit(self):\n        pass\n",
+      "a.py": "from lib import Foo, Bar\n\ndef make():\n    return Foo()\n\ndef either(flag):\n    if flag:\n        return Foo()\n    return Bar()\n\ndef gen():\n    yield Foo()\n\nasync def later():\n    return Foo()\n\ndef use():\n    make().hit()\n    either(True).hit()\n\nasync def use_async():\n    (await later()).hit()\n",
+    });
+    expect(index.symbols.get("a.py#make")?.returns).toEqual({ kind: "import", source: "lib", importedName: "Foo" });
+    expect(index.symbols.get("a.py#either")?.returns).toBeUndefined();
+    expect(index.symbols.get("a.py#gen")?.returns).toBeUndefined();
+    expect(index.symbols.get("a.py#later")?.unwrapped).toEqual({ kind: "import", source: "lib", importedName: "Foo" });
+    expect(hits(index, "a.py#use")).toEqual(["lib.py#Foo.hit", undefined]);
+    expect(hits(index, "a.py#use_async")).toEqual(["lib.py#Foo.hit"]);
+  });
+
+  it("Python: Optional and None unions name the non-null type in parameters, returns, fields and overloads", async () => {
+    const index = await build({
+      "lib.py": "from typing import Optional, Union, overload\nimport typing as t\n\nclass Foo:\n    def hit(self):\n        pass\n\nclass Holder:\n    foo: Optional[Foo]\n    foos: Optional[list[Foo]]\n\n@overload\ndef current(silent: bool = False) -> Foo: ...\n@overload\ndef current(silent: bool = ...) -> Foo | None: ...\ndef current(silent=False) -> Foo | None:\n    return Foo()\n\ndef maybe() -> Union[Foo, None]:\n    return None\n\ndef either() -> Union[Foo, Holder]:\n    return Foo()\n",
+      "a.py": "from lib import Foo, Holder, current, maybe, either\nfrom typing import Optional\nimport typing as t\n\ndef use(a: Foo | None, b: Optional[Foo], c: t.Optional[Foo], d: None | Foo, h: Holder):\n    a.hit()\n    b.hit()\n    c.hit()\n    d.hit()\n    current().hit()\n    maybe().hit()\n    either().hit()\n    h.foo.hit()\n    for f in h.foos:\n        f.hit()\n",
+    });
+    expect(index.symbols.get("lib.py#current")?.returns).toEqual({ kind: "local", name: "Foo" });
+    expect(index.symbols.get("lib.py#either")?.returns).toBeUndefined();
+    expect(index.symbols.get("lib.py#Holder")).toMatchObject({ fieldTypes: { foo: { kind: "local", name: "Foo" } }, elementTypes: { foos: { kind: "local", name: "Foo" } } });
+    const F = "lib.py#Foo.hit";
+    expect(hits(index, "a.py#use")).toEqual([F, F, F, F, F, F, undefined, F, F]);
+  });
+
   it("requires imported overload declarations to agree on the return type", async () => {
     const index = await build({
       "lib.py": "from typing import overload\n\nclass Foo:\n    def hit(self):\n        pass\n\nclass Other:\n    def hit(self):\n        pass\n\n@overload\ndef pick(a: str) -> Foo: ...\n@overload\ndef pick(a: int) -> Other: ...\ndef pick(a) -> Foo:\n    return Foo()\n\n@overload\ndef same(a: str) -> Foo: ...\n@overload\ndef same(a: int) -> Foo: ...\ndef same(a) -> Foo:\n    return Foo()\n",
@@ -41,7 +84,7 @@ describe("return-type receivers", () => {
     });
     expect(index.symbols.get("lib.ts#make")?.returns).toEqual({ kind: "local", name: "Foo" });
     expect(index.symbols.get("a.ts#local")?.returns).toEqual({ kind: "import", source: "./lib.js", importedName: "Foo" });
-    expect(hits(index, "a.ts#use")).toEqual(["lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit", undefined, "lib.ts#Foo.hit", undefined, undefined]);
+    expect(hits(index, "a.ts#use")).toEqual(["lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit", undefined, undefined]);
     const first = index.outgoing("a.ts#use").find((edge) => edge.toName === "hit");
     expect(first?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "lib.ts#Foo", basis: "return" } } });
   });
@@ -51,7 +94,7 @@ describe("return-type receivers", () => {
       "a.ts": "class Foo { hit() {} }\nclass Builder {\n  make(): Foo { return new Foo(); }\n  trim(): this { return this; }\n  self() { return this; }\n  run() {\n    this.make().hit();\n    this.trim().make().hit();\n    this.self().make().hit();\n  }\n}\nclass Sub extends Builder {}\nfunction builder(): Builder { return new Builder(); }\nfunction use(b: Builder, s: Sub) {\n  b.make().hit();\n  builder().trim().trim().make().hit();\n  s.make().hit();\n  s.trim().make().hit();\n}\n",
     });
     expect(index.symbols.get("a.ts#Builder.trim")?.returns).toEqual({ kind: "this" });
-    expect(hits(index, "a.ts#Builder.run")).toEqual(["a.ts#Foo.hit", "a.ts#Foo.hit", undefined]);
+    expect(hits(index, "a.ts#Builder.run")).toEqual(["a.ts#Foo.hit", "a.ts#Foo.hit", "a.ts#Foo.hit"]);
     expect(hits(index, "a.ts#use")).toEqual(["a.ts#Foo.hit", "a.ts#Foo.hit", "a.ts#Foo.hit", "a.ts#Foo.hit"]);
   });
 
@@ -69,7 +112,7 @@ describe("return-type receivers", () => {
     });
     expect(index.symbols.get("lib.py#make")?.returns).toEqual({ kind: "local", name: "Foo" });
     expect(hits(index, "app.py#Builder.run")).toEqual(["lib.py#Foo.hit", "lib.py#Foo.hit"]);
-    expect(hits(index, "app.py#use")).toEqual(["lib.py#Foo.hit", "lib.py#Foo.hit", undefined, undefined, undefined, "lib.py#Foo.hit"]);
+    expect(hits(index, "app.py#use")).toEqual(["lib.py#Foo.hit", "lib.py#Foo.hit", "lib.py#Foo.hit", undefined, "lib.py#Foo.hit", "lib.py#Foo.hit"]);
   });
 
   it("stays unresolved when the return type is not a unique indexed class or the callee is unknown", async () => {
