@@ -25,7 +25,7 @@ describe("unwrapped receivers", () => {
     expect(index.symbols.get("lib.ts#load")?.returns).toBeUndefined();
     expect(index.symbols.get("lib.ts#later")).toMatchObject({ returns: { kind: "local", name: "Promise" }, unwrapped: { kind: "local", name: "Foo" } });
     expect(index.symbols.get("lib.ts#Box.self")?.unwrapped).toEqual({ kind: "this" });
-    expect(hits(index, "a.ts#use")).toEqual(["lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit", undefined, undefined, undefined, "lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit"]);
+    expect(hits(index, "a.ts#use")).toEqual(["lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit", undefined, undefined, "lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit", "lib.ts#Foo.hit"]);
     const first = index.outgoing("a.ts#use").find((edge) => edge.toName === "hit");
     expect(first?.binding).toEqual({ kind: "member", owner: { kind: "return", of: { kind: "import", source: "./lib.js", importedName: "load" }, unwrapped: true }, member: "hit", mode: "instance", basis: "return" });
   });
