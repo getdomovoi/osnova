@@ -1,0 +1,354 @@
+{
+  "schemaVersion": 1,
+  "measured": "2026-09-18T16:04:21.520Z",
+  "osnova": "b6a4e1654fe94e6cf596e39e06ce8edfd7a8c375",
+  "manifest": "exactness-v1",
+  "cases": [
+    {
+      "id": "click-context-invoke",
+      "corpus": "click",
+      "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+      "symbol": "src/click/core.py#Context.invoke",
+      "depth": 2,
+      "truth": 13,
+      "grep": {
+        "pattern": "\\.invoke\\(",
+        "sites": 12,
+        "hit": 11,
+        "precision": 0.917,
+        "recall": 0.846,
+        "falsePositives": [
+          "src/click/decorators.py:67"
+        ],
+        "missed": [
+          "src/click/core.py:2039",
+          "src/click/core.py:2092"
+        ]
+      },
+      "graph": {
+        "sites": 12,
+        "hit": 12,
+        "precision": 1,
+        "recall": 0.923,
+        "falsePositives": [],
+        "missed": [
+          "src/click/core.py:2091"
+        ]
+      }
+    },
+    {
+      "id": "pyright-getChildNodes",
+      "corpus": "pyright",
+      "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+      "symbol": "packages/pyright-internal/src/parser/parseTreeUtils.ts#getChildNodes",
+      "depth": 2,
+      "truth": 28,
+      "grep": {
+        "pattern": "getChildNodes\\(",
+        "sites": 5,
+        "hit": 4,
+        "precision": 0.8,
+        "recall": 0.143,
+        "falsePositives": [
+          "packages/pyright-internal/src/parser/parseTreeUtils.ts:6"
+        ],
+        "missed": [
+          "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:154",
+          "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:2111",
+          "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:98",
+          "packages/pyright-internal/src/analyzer/parseTreeWalker.ts:676",
+          "packages/pyright-internal/src/analyzer/testWalker.ts:23",
+          "packages/pyright-internal/src/commands/dumpFileDebugInfoCommand.ts:102",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:189",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:190",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:308",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:495",
+          "packages/pyright-internal/src/common/textEditTracker.ts:363",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1319",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1345",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1388",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1849",
+          "packages/pyright-internal/src/languageService/definitionProvider.ts:338",
+          "packages/pyright-internal/src/languageService/documentHighlightProvider.ts:47",
+          "packages/pyright-internal/src/languageService/hoverProvider.ts:334",
+          "packages/pyright-internal/src/languageService/referencesProvider.ts:589",
+          "packages/pyright-internal/src/languageService/signatureHelpProvider.ts:113",
+          "packages/pyright-internal/src/languageService/signatureHelpProvider.ts:130",
+          "packages/pyright-internal/src/typeServer/typeServerConversionTypes.ts:133",
+          "packages/pyright-internal/src/typeServer/typeServerConversionUtils.ts:444",
+          "packages/pyright-internal/src/typeServer/typeServerConversionUtils.ts:610"
+        ]
+      },
+      "graph": {
+        "sites": 28,
+        "hit": 28,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    },
+    {
+      "id": "cobra-command-root",
+      "corpus": "cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "symbol": "command.go#Command.Root",
+      "depth": 1,
+      "truth": 30,
+      "grep": {
+        "pattern": "\\.Root\\(",
+        "sites": 30,
+        "hit": 30,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      },
+      "graph": {
+        "sites": 28,
+        "hit": 28,
+        "precision": 1,
+        "recall": 0.933,
+        "falsePositives": [],
+        "missed": [
+          "command.go:1091",
+          "completions.go:505"
+        ]
+      }
+    },
+    {
+      "id": "cobra-command-persistentflags",
+      "corpus": "cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "symbol": "command.go#Command.PersistentFlags",
+      "depth": 1,
+      "truth": 12,
+      "grep": {
+        "pattern": "\\.PersistentFlags\\(",
+        "sites": 13,
+        "hit": 12,
+        "precision": 0.923,
+        "recall": 1,
+        "falsePositives": [
+          "command.go:1896"
+        ],
+        "missed": []
+      },
+      "graph": {
+        "sites": 12,
+        "hit": 12,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    },
+    {
+      "id": "humanizer-configurator-getformatter",
+      "corpus": "humanizer",
+      "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b",
+      "symbol": "src/Humanizer/Configuration/Configurator.cs#Configurator.GetFormatter",
+      "depth": 1,
+      "truth": 18,
+      "grep": {
+        "pattern": "GetFormatter\\(",
+        "sites": 19,
+        "hit": 14,
+        "precision": 0.737,
+        "recall": 0.778,
+        "falsePositives": [
+          "src/Humanizer/Configuration/Configurator.cs:62",
+          "src/Humanizer/DateHumanizeExtensions.cs:107",
+          "src/Humanizer/DateHumanizeExtensions.cs:142",
+          "src/Humanizer/DateHumanizeExtensions.cs:41",
+          "src/Humanizer/DateHumanizeExtensions.cs:74"
+        ],
+        "missed": [
+          "src/Humanizer/DateHumanizeExtensions.cs:106",
+          "src/Humanizer/DateHumanizeExtensions.cs:141",
+          "src/Humanizer/DateHumanizeExtensions.cs:40",
+          "src/Humanizer/DateHumanizeExtensions.cs:73"
+        ]
+      },
+      "graph": {
+        "sites": 18,
+        "hit": 18,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    },
+    {
+      "id": "ripgrep-searcher-line-terminator",
+      "corpus": "ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "symbol": "crates/searcher/src/searcher/mod.rs#Searcher.line_terminator",
+      "depth": 1,
+      "truth": 12,
+      "grep": {
+        "pattern": "\\.line_terminator\\(",
+        "sites": 32,
+        "hit": 12,
+        "precision": 0.375,
+        "recall": 1,
+        "falsePositives": [
+          "crates/core/flags/hiargs.rs:493",
+          "crates/core/flags/hiargs.rs:496",
+          "crates/core/flags/hiargs.rs:506",
+          "crates/core/flags/hiargs.rs:733",
+          "crates/matcher/src/lib.rs:1369",
+          "crates/printer/src/json.rs:1045",
+          "crates/printer/src/standard.rs:3547",
+          "crates/printer/src/standard.rs:3554",
+          "crates/printer/src/standard.rs:3907",
+          "crates/printer/src/standard.rs:3959",
+          "crates/regex/src/matcher.rs:402",
+          "crates/regex/src/matcher.rs:580",
+          "crates/regex/src/matcher.rs:592",
+          "crates/regex/src/matcher.rs:664",
+          "crates/regex/src/matcher.rs:83",
+          "crates/searcher/src/searcher/core.rs:682",
+          "crates/searcher/src/searcher/glue.rs:1531",
+          "crates/searcher/src/searcher/mod.rs:221",
+          "crates/searcher/src/searcher/mod.rs:810",
+          "crates/searcher/src/searcher/mod.rs:900"
+        ],
+        "missed": []
+      },
+      "graph": {
+        "sites": 12,
+        "hit": 12,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    },
+    {
+      "id": "ripgrep-lineterminator-as-byte",
+      "corpus": "ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "symbol": "crates/matcher/src/lib.rs#LineTerminator.as_byte",
+      "depth": 1,
+      "truth": 26,
+      "grep": {
+        "pattern": "\\.as_byte\\(",
+        "sites": 26,
+        "hit": 26,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      },
+      "graph": {
+        "sites": 21,
+        "hit": 21,
+        "precision": 1,
+        "recall": 0.808,
+        "falsePositives": [],
+        "missed": [
+          "crates/matcher/src/lib.rs:264",
+          "crates/regex/src/strip.rs:47",
+          "crates/searcher/src/searcher/core.rs:691",
+          "crates/searcher/src/sink.rs:393",
+          "crates/searcher/src/sink.rs:472"
+        ]
+      }
+    },
+    {
+      "id": "gson-jsonreader-beginobject",
+      "corpus": "gson",
+      "revision": "854c8255b625cf1e13c701a83ea9ccb4caaa576a",
+      "symbol": "gson/src/main/java/com/google/gson/stream/JsonReader.java#JsonReader.beginObject",
+      "depth": 1,
+      "truth": 10,
+      "grep": {
+        "pattern": "\\.beginObject\\(",
+        "sites": 29,
+        "hit": 10,
+        "precision": 0.345,
+        "recall": 1,
+        "falsePositives": [
+          "gson/src/main/java/com/google/gson/JsonParser.java:55",
+          "gson/src/main/java/com/google/gson/annotations/JsonAdapter.java:50",
+          "gson/src/main/java/com/google/gson/annotations/JsonAdapter.java:58",
+          "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:143",
+          "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:197",
+          "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:238",
+          "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:327",
+          "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:332",
+          "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:381",
+          "gson/src/main/java/com/google/gson/internal/bind/JsonElementTypeAdapter.java:160",
+          "gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java:224",
+          "gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java:254",
+          "gson/src/main/java/com/google/gson/internal/bind/ObjectTypeAdapter.java:179",
+          "gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java:512",
+          "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:889",
+          "gson/src/main/java/com/google/gson/stream/JsonReader.java:134",
+          "gson/src/main/java/com/google/gson/stream/JsonReader.java:168",
+          "gson/src/main/java/com/google/gson/stream/JsonWriter.java:125",
+          "gson/src/main/java/com/google/gson/stream/JsonWriter.java:140"
+        ],
+        "missed": []
+      },
+      "graph": {
+        "sites": 10,
+        "hit": 10,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    },
+    {
+      "id": "gson-typetoken-getrawtype",
+      "corpus": "gson",
+      "revision": "854c8255b625cf1e13c701a83ea9ccb4caaa576a",
+      "symbol": "gson/src/main/java/com/google/gson/reflect/TypeToken.java#TypeToken.getRawType",
+      "depth": 1,
+      "truth": 27,
+      "grep": {
+        "pattern": "\\.getRawType\\(",
+        "sites": 43,
+        "hit": 27,
+        "precision": 0.628,
+        "recall": 1,
+        "falsePositives": [
+          "gson/src/main/java/com/google/gson/TypeAdapterFactory.java:109",
+          "gson/src/main/java/com/google/gson/TypeAdapterFactory.java:36",
+          "gson/src/main/java/com/google/gson/internal/GsonTypes.java:112",
+          "gson/src/main/java/com/google/gson/internal/GsonTypes.java:138",
+          "gson/src/main/java/com/google/gson/internal/GsonTypes.java:191",
+          "gson/src/main/java/com/google/gson/internal/GsonTypes.java:416",
+          "gson/src/main/java/com/google/gson/internal/bind/ArrayTypeAdapter.java:50",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:196",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:200",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:256",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:299",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:425",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:429",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:75",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:83",
+          "gson/src/main/java/com/google/gson/reflect/TypeToken.java:99"
+        ],
+        "missed": []
+      },
+      "graph": {
+        "sites": 26,
+        "hit": 26,
+        "precision": 1,
+        "recall": 0.963,
+        "falsePositives": [],
+        "missed": [
+          "gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java:447"
+        ]
+      }
+    }
+  ],
+  "limitations": [
+    "truth-sets-are-hand-verified-not-compiler-proven",
+    "grep-is-the-first-regex-a-person-types-not-the-best-possible-search",
+    "graph-recall-counts-resolved-call-edges-only"
+  ]
+}

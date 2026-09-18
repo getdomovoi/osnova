@@ -148,7 +148,7 @@ A call through an import the index cannot resolve, which is mostly a package out
 
 ## Grep versus the graph
 
-The reason to keep a call graph instead of running a text search is not speed. It is that the first regex a person types is wrong more often than it looks, and nobody notices. Five call-site sets on public checkouts were verified line by line after two independent agent runs and a manual review; the manifest is [`benchmarks/exactness/exactness-v1.json`](benchmarks/exactness/exactness-v1.json) and `scripts/exactness.mjs` reproduces the table from the pinned checkouts. Each cell shows sites found (precision / recall against the verified set).
+The reason to keep a call graph instead of running a text search is not speed. It is that the first regex a person types is wrong more often than it looks, and nobody notices. Nine call-site sets on public checkouts in five languages were verified line by line after two independent agent runs and a manual review; the manifest is [`benchmarks/exactness/exactness-v1.json`](benchmarks/exactness/exactness-v1.json) and `scripts/exactness.mjs` reproduces the table from the pinned checkouts. Each cell shows sites found (precision / recall against the verified set).
 
 | Corpus | Target | Verified sites | Text search | Resolved graph |
 |---|---|---:|---:|---:|
@@ -157,8 +157,12 @@ The reason to keep a call graph instead of running a text search is not speed. I
 | cobra | `Command.Root` depth 1 | 30 | 30 (1.00 / 1.00) | 28 (1.00 / 0.93) |
 | cobra | `Command.PersistentFlags` depth 1 | 12 | 13 (0.92 / 1.00) | 12 (1.00 / 1.00) |
 | humanizer | `Configurator.GetFormatter` depth 1 | 18 | 19 (0.74 / 0.78) | 18 (1.00 / 1.00) |
+| ripgrep | `Searcher.line_terminator` depth 1 | 12 | 32 (0.38 / 1.00) | 12 (1.00 / 1.00) |
+| ripgrep | `LineTerminator.as_byte` depth 1 | 26 | 26 (1.00 / 1.00) | 21 (1.00 / 0.81) |
+| gson | `JsonReader.beginObject` depth 1 | 10 | 29 (0.34 / 1.00) | 10 (1.00 / 1.00) |
+| gson | `TypeToken.getRawType` depth 1 | 27 | 43 (0.63 / 1.00) | 26 (1.00 / 0.96) |
 
-What the text search got wrong: a comment that mentioned the method, a Javadoc example, a definition line, and four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next). What the graph missed: a receiver that is reassigned later in the same function, and a receiver that comes out of a multi-value return, both left unresolved on purpose rather than guessed. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-17.json`](benchmarks/results/grep-vs-graph-2026-09-17.json).
+What the text search got wrong: a comment that mentioned the method, Javadoc examples, a definition line, four calls split across lines (`Configurator` on one line, `.GetFormatter(` on the next), and same-named methods on other types: `line_terminator` on three builders and on the `Matcher` trait, `beginObject` on `JsonWriter`, `getRawType` on `ParameterizedType` and as a static helper on `GsonTypes`. What the graph missed: a receiver that is reassigned later in the same function (cobra, gson), a receiver that comes out of a multi-value return, and in ripgrep five `as_byte` calls whose receiver is `self` inside the type's own `impl`, a struct field, or a value unwrapped from an `Option`, all left unresolved rather than guessed. The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-18.json`](benchmarks/results/grep-vs-graph-2026-09-18.json).
 
 ## In CI
 
