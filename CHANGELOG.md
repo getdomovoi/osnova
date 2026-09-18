@@ -10,6 +10,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
+- The test suite indexes into a temporary cache directory (`OSNOVA_CACHE_DIR` set in `vitest.config.ts`) instead of the user's default cache, where its temporary workspaces filled the workspace cap and evicted real repositories, which is why the session hook kept reporting a missing cache on this checkout.
 - The prompt hook seeds only from names the prompt spells as code (a backticked token, or an identifier with an inner capital, underscore or digit), matched exactly against indexed definitions, instead of a ranked text search over the whole prompt. A prose prompt that contains a word such as `load` or `within` no longer prints an unrelated definition of that name.
 
 ## 0.6.1 (2026-09-18)
