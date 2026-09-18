@@ -1,11 +1,11 @@
-import type { OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
-import { callersDetailed } from "./callers.js";
+import type { NameMatches, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import { callersDetailed, nameMatches } from "./callers.js";
 import { compareText } from "./impact.js";
 import { validRelativePath } from "../index/workspace.js";
 
 export interface PlumbClaim { readonly file: string; readonly line: number; }
 export type PlumbVerdict = "confirmed" | "name-only" | "no-call" | "not-indexed";
-export interface PlumbClaimResult { readonly claim: PlumbClaim; readonly verdict: PlumbVerdict; readonly edge?: OsnovaEdge | undefined; }
+export interface PlumbClaimResult { readonly claim: PlumbClaim; readonly verdict: PlumbVerdict; readonly edge?: OsnovaEdge | undefined; readonly nameMatches?: NameMatches | undefined; }
 export interface PlumbOptions { readonly direction?: "in" | "out" | undefined; readonly depth?: number | undefined; }
 export interface PlumbResult {
   readonly target: OsnovaSymbol;
@@ -79,7 +79,7 @@ export function plumb(index: OsnovaIndex, symbol: string, claims: readonly Plumb
     if (!index.files.has(claim.file)) return { claim, verdict: "not-indexed" };
     const nameMatch = (callsByFile.get(claim.file) ?? []).find((edge) => edge.line === claim.line &&
       (direction === "in" ? edge.toName === target.name : edge.fromSymbol === target.qualifiedName));
-    return nameMatch === undefined ? { claim, verdict: "no-call" } : { claim, verdict: "name-only", edge: nameMatch };
+    return nameMatch === undefined ? { claim, verdict: "no-call" } : { claim, verdict: "name-only", edge: nameMatch, nameMatches: nameMatches(index, nameMatch) };
   });
   const claimed = new Set(unique.map((claim) => `${claim.file}:${claim.line}`));
   const missing = [...resolvedBySite.entries()].filter(([key]) => !claimed.has(key)).map(([, edge]) => edge)

@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "measured": "2026-09-17T22:33:58.621Z",
+  "osnova": "cbdfa3f794484419fb8f90299f5716068bf5f910",
+  "manifest": "exactness-v1",
+  "cases": [
+    {
+      "id": "click-context-invoke",
+      "corpus": "click",
+      "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+      "symbol": "src/click/core.py#Context.invoke",
+      "depth": 2,
+      "truth": 13,
+      "grep": {
+        "pattern": "\\.invoke\\(",
+        "sites": 12,
+        "hit": 11,
+        "precision": 0.917,
+        "recall": 0.846,
+        "falsePositives": [
+          "src/click/decorators.py:67"
+        ],
+        "missed": [
+          "src/click/core.py:2039",
+          "src/click/core.py:2092"
+        ]
+      },
+      "graph": {
+        "sites": 12,
+        "hit": 12,
+        "precision": 1,
+        "recall": 0.923,
+        "falsePositives": [],
+        "missed": [
+          "src/click/core.py:2091"
+        ]
+      }
+    },
+    {
+      "id": "pyright-getChildNodes",
+      "corpus": "pyright",
+      "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+      "symbol": "packages/pyright-internal/src/parser/parseTreeUtils.ts#getChildNodes",
+      "depth": 2,
+      "truth": 28,
+      "grep": {
+        "pattern": "getChildNodes\\(",
+        "sites": 5,
+        "hit": 4,
+        "precision": 0.8,
+        "recall": 0.143,
+        "falsePositives": [
+          "packages/pyright-internal/src/parser/parseTreeUtils.ts:6"
+        ],
+        "missed": [
+          "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:154",
+          "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:2111",
+          "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:98",
+          "packages/pyright-internal/src/analyzer/parseTreeWalker.ts:676",
+          "packages/pyright-internal/src/analyzer/testWalker.ts:23",
+          "packages/pyright-internal/src/commands/dumpFileDebugInfoCommand.ts:102",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:189",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:190",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:308",
+          "packages/pyright-internal/src/common/languageInfoUtils.ts:495",
+          "packages/pyright-internal/src/common/textEditTracker.ts:363",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1319",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1345",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1388",
+          "packages/pyright-internal/src/languageService/completionProvider.ts:1849",
+          "packages/pyright-internal/src/languageService/definitionProvider.ts:338",
+          "packages/pyright-internal/src/languageService/documentHighlightProvider.ts:47",
+          "packages/pyright-internal/src/languageService/hoverProvider.ts:334",
+          "packages/pyright-internal/src/languageService/referencesProvider.ts:589",
+          "packages/pyright-internal/src/languageService/signatureHelpProvider.ts:113",
+          "packages/pyright-internal/src/languageService/signatureHelpProvider.ts:130",
+          "packages/pyright-internal/src/typeServer/typeServerConversionTypes.ts:133",
+          "packages/pyright-internal/src/typeServer/typeServerConversionUtils.ts:444",
+          "packages/pyright-internal/src/typeServer/typeServerConversionUtils.ts:610"
+        ]
+      },
+      "graph": {
+        "sites": 28,
+        "hit": 28,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    },
+    {
+      "id": "cobra-command-root",
+      "corpus": "cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "symbol": "command.go#Command.Root",
+      "depth": 1,
+      "truth": 30,
+      "grep": {
+        "pattern": "\\.Root\\(",
+        "sites": 30,
+        "hit": 30,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      },
+      "graph": {
+        "sites": 28,
+        "hit": 28,
+        "precision": 1,
+        "recall": 0.933,
+        "falsePositives": [],
+        "missed": [
+          "command.go:1091",
+          "completions.go:505"
+        ]
+      }
+    },
+    {
+      "id": "cobra-command-persistentflags",
+      "corpus": "cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "symbol": "command.go#Command.PersistentFlags",
+      "depth": 1,
+      "truth": 12,
+      "grep": {
+        "pattern": "\\.PersistentFlags\\(",
+        "sites": 13,
+        "hit": 12,
+        "precision": 0.923,
+        "recall": 1,
+        "falsePositives": [
+          "command.go:1896"
+        ],
+        "missed": []
+      },
+      "graph": {
+        "sites": 12,
+        "hit": 12,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    },
+    {
+      "id": "humanizer-configurator-getformatter",
+      "corpus": "humanizer",
+      "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b",
+      "symbol": "src/Humanizer/Configuration/Configurator.cs#Configurator.GetFormatter",
+      "depth": 1,
+      "truth": 18,
+      "grep": {
+        "pattern": "GetFormatter\\(",
+        "sites": 19,
+        "hit": 14,
+        "precision": 0.737,
+        "recall": 0.778,
+        "falsePositives": [
+          "src/Humanizer/Configuration/Configurator.cs:62",
+          "src/Humanizer/DateHumanizeExtensions.cs:107",
+          "src/Humanizer/DateHumanizeExtensions.cs:142",
+          "src/Humanizer/DateHumanizeExtensions.cs:41",
+          "src/Humanizer/DateHumanizeExtensions.cs:74"
+        ],
+        "missed": [
+          "src/Humanizer/DateHumanizeExtensions.cs:106",
+          "src/Humanizer/DateHumanizeExtensions.cs:141",
+          "src/Humanizer/DateHumanizeExtensions.cs:40",
+          "src/Humanizer/DateHumanizeExtensions.cs:73"
+        ]
+      },
+      "graph": {
+        "sites": 18,
+        "hit": 18,
+        "precision": 1,
+        "recall": 1,
+        "falsePositives": [],
+        "missed": []
+      }
+    }
+  ],
+  "limitations": [
+    "truth-sets-are-hand-verified-not-compiler-proven",
+    "grep-is-the-first-regex-a-person-types-not-the-best-possible-search",
+    "graph-recall-counts-resolved-call-edges-only"
+  ]
+}

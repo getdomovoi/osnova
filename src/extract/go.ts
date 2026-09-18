@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import { collectTypedBindings, goSpec } from "./typed-bindings.js";
 
 const GO_TYPE_NAMES = new Set([
   "bool", "byte", "complex64", "complex128", "error", "float32", "float64",
@@ -15,25 +16,23 @@ function receiverTypeName(node: Node): string | null {
   if (fieldDecl === undefined) return null;
   const typeNode = fieldDecl.childForFieldName("type") ?? childrenOf(fieldDecl)[childrenOf(fieldDecl).length - 1];
   if (typeNode === undefined) return null;
-  if (typeNode.type === "type_identifier") return typeNode.text;
-  if (typeNode.type === "pointer_type" || typeNode.type === "generic_type") {
-    const id = childrenOf(typeNode).find((c) => c.type === "type_identifier");
-    return id !== undefined ? id.text : null;
-  }
-  return null;
+  let current: Node | null = typeNode;
+  while (current !== null && (current.type === "pointer_type" || current.type === "generic_type" || current.type === "parenthesized_type")) current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
+  return current?.type === "type_identifier" ? current.text : null;
 }
 
 export const goAdapter: LanguageAdapter = {
   language: "go",
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
+    const bindings = collectTypedBindings(tree.rootNode, goSpec);
 
     const visit = (node: Node): void => {
       switch (node.type) {
         case "function_declaration": {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null) {
-            out.addDef(nameNode.text, "function", node);
+            out.addDef(nameNode.text, "function", node, undefined, undefined, undefined, undefined, bindings.returns(node), bindings.returnTuple(node), undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -45,8 +44,10 @@ export const goAdapter: LanguageAdapter = {
           const recv = receiverTypeName(node);
           if (nameNode !== null && recv !== null) {
             out.push(recv);
-            out.addDef(nameNode.text, "method", node);
+            out.addDef(nameNode.text, "method", node, undefined, "instance", undefined, undefined, bindings.returns(node), bindings.returnTuple(node), undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
+            out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
+            out.pop();
             out.pop();
           } else {
             for (const child of childrenOf(node)) visit(child);
@@ -65,7 +66,17 @@ export const goAdapter: LanguageAdapter = {
                   : typeNode.type === "interface_type"
                     ? "interface"
                     : "type";
-              out.addDef(nameNode.text, kind, spec);
+              const structBody = typeNode.type === "struct_type" ? childrenOf(typeNode).find((child) => child.type === "field_declaration_list") : undefined;
+              out.addDef(nameNode.text, kind, spec, undefined, undefined, undefined, undefined, undefined, undefined, structBody === undefined ? undefined : bindings.fieldTypes(childrenOf(structBody)), undefined, undefined, structBody === undefined ? undefined : bindings.elementTypes(childrenOf(structBody)), undefined, structBody === undefined ? undefined : bindings.valueTypes(childrenOf(structBody)));
+              if (typeNode.type === "interface_type") {
+                out.push(nameNode.text);
+                for (const member of childrenOf(typeNode)) {
+                  if (member.type !== "method_spec" && member.type !== "method_elem") continue;
+                  const methodName = member.childForFieldName("name");
+                  if (methodName !== null) out.addDef(methodName.text, "method", member, undefined, "instance", undefined, undefined, bindings.returns(member));
+                }
+                out.pop();
+              }
             }
           }
           return;
@@ -87,7 +98,7 @@ export const goAdapter: LanguageAdapter = {
             } else if (fn.type === "selector_expression") {
               const field = fn.childForFieldName("field");
               if (field !== null && !GO_TYPE_NAMES.has(field.text)) {
-                out.addEdge("calls", field.text, node);
+                out.addEdge("calls", field.text, node, bindings.at(fn, node));
               }
             } else if (fn.type === "parenthesized_expression") {
               const inner = childrenOf(fn)[0];

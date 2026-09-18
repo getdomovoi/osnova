@@ -16,6 +16,24 @@ const hits = (index: Awaited<ReturnType<typeof build>>, symbol: string, name = "
   [...index.outgoing(symbol).filter((edge) => edge.toName === name)].sort((a, b) => a.line - b.line).map((edge) => edge.toSymbol);
 
 describe("return-type receivers", () => {
+  it("requires imported overload declarations to agree on the return type", async () => {
+    const index = await build({
+      "lib.py": "from typing import overload\n\nclass Foo:\n    def hit(self):\n        pass\n\nclass Other:\n    def hit(self):\n        pass\n\n@overload\ndef pick(a: str) -> Foo: ...\n@overload\ndef pick(a: int) -> Other: ...\ndef pick(a) -> Foo:\n    return Foo()\n\n@overload\ndef same(a: str) -> Foo: ...\n@overload\ndef same(a: int) -> Foo: ...\ndef same(a) -> Foo:\n    return Foo()\n",
+      "a.py": "from lib import pick, same\n\ndef use():\n    pick('x').hit()\n    same('x').hit()\n",
+    });
+    expect(index.files.get("lib.py")?.symbols.filter((symbol) => symbol.name === "pick").map((symbol) => symbol.returns)).toEqual([{ kind: "local", name: "Foo" }, { kind: "local", name: "Other" }, { kind: "local", name: "Foo" }]);
+    expect(hits(index, "a.py#use")).toEqual([undefined, "lib.py#Foo.hit"]);
+  });
+
+  it("names the interface when a const shares its name, in return types and heritage", async () => {
+    const index = await build({
+      "a.ts": "export interface Foo { hit(): void }\nexport const Foo = make();\nfunction make(): any { return {}; }\nexport function build(): Foo { return Foo; }\nexport interface Bar extends Foo {}\nexport function bar(): Bar { return build(); }\nexport function use() {\n  build().hit();\n  bar().hit();\n}\n",
+    });
+    expect(index.symbols.get("a.ts#build")?.returns).toEqual({ kind: "local", name: "Foo" });
+    expect(index.files.get("a.ts")?.symbols.find((symbol) => symbol.name === "Bar")?.heritage).toEqual([{ kind: "local", name: "Foo" }]);
+    expect(hits(index, "a.ts#use")).toEqual(["a.ts#Foo.hit", "a.ts#Foo.hit"]);
+  });
+
   it("resolves calls on the result of an annotated function, local or imported, and on a stored result", async () => {
     const index = await build({
       "lib.ts": "export class Foo { hit() {} }\nexport function make(): Foo { return new Foo(); }\nexport function vague() { return new Foo(); }\nexport function maybe(): Foo | undefined { return undefined; }\nexport function later(): Promise<Foo> { return Promise.resolve(new Foo()); }\n",

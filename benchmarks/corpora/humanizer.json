@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "humanizer-v1",
+  "source": { "kind": "checkout", "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b", "repository": "https://github.com/Humanizr/Humanizer" },
+  "purpose": "resolution coverage only; no retrieval cases"
+}

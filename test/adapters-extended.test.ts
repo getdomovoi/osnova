@@ -75,6 +75,7 @@ describe("go adapter extended paths", () => {
     expect(symbolsOf("src/extra.go")).toEqual([
       "struct:src/extra.go#Pair",
       "interface:src/extra.go#Stringer",
+      "method:src/extra.go#Stringer.String",
       "function:src/extra.go#Reverse",
     ]);
     const imports = index.edges.filter(
