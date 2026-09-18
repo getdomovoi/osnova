@@ -67,7 +67,24 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const importOf = (name: string): Import | undefined => module.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
   // A type name becomes a local binding, or an import binding when the name (Rust) or its package
   // qualifier (Go) was imported.
-  const ownerForType = (type: string): ReceiverOwner | undefined => {
+  // A type parameter of an enclosing declaration names no type the index can hold.
+  const isTypeParameter = (name: string, site: Node | undefined): boolean => {
+    for (let current: Node | null = site ?? null; current !== null; current = current.parent) {
+      const parameters = childrenOf(current).find((child) => child.type === "type_parameters" || child.type === "type_parameter_list");
+      // A list the parser recovered from an error is not a declaration (a primary constructor can parse this way).
+      if (parameters === undefined || parameters.hasError) continue;
+      for (const parameter of childrenOf(parameters)) {
+        const declared = parameter.type === "type_parameter" || parameter.type === "type_parameter_declaration" || parameter.type === "constrained_type_parameter" || parameter.type === "type_identifier" || parameter.type === "identifier"
+          ? (parameter.childForFieldName("name") ?? parameter.childForFieldName("left") ?? (parameter.type === "type_identifier" || parameter.type === "identifier" ? parameter : childrenOf(parameter).find((child) => child.type === "type_identifier" || child.type === "identifier")))
+          : undefined;
+        if (declared?.text === name) return true;
+      }
+    }
+    return false;
+  };
+  const knownType = (type: string | undefined, site: Node): string | undefined => type !== undefined && isTypeParameter(type, site) ? undefined : type;
+  const ownerForType = (type: string, site?: Node): ReceiverOwner | undefined => {
+    if (site !== undefined && isTypeParameter(type, site)) return undefined;
     const dot = type.indexOf(".");
     if (dot >= 0) {
       const pkg = importOf(type.slice(0, dot));
@@ -187,10 +204,10 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       fnScopes.push(scope);
       for (const child of childrenOf(node)) {
         const parameter = spec.parameter(child);
-        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, spec.typeName(parameter.type));
+        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, knownType(spec.typeName(parameter.type), node));
         for (const nested of childrenOf(child)) {
           const inner = spec.parameter(nested);
-          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, spec.typeName(inner.type));
+          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, knownType(spec.typeName(inner.type), node));
         }
       }
     } else if (spec.scopeNodes.includes(node.type)) {
@@ -199,7 +216,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     scopes.set(node.id, scope);
     for (const item of spec.imports(node)) bind(module, item.local, -1, undefined, undefined, { source: item.source, name: item.name });
     for (const local of spec.local(node)) {
-      const declaredType = spec.typeName(local.type);
+      const declaredType = knownType(spec.typeName(local.type), node);
       const constructed = declaredType ?? spec.constructed(local.value);
       const produced = constructed === undefined && local.value !== null ? calleeOwner(local.value, scope, local.index) : undefined;
       bind(scope, local.name.text, node.startIndex, constructed, produced);
@@ -244,13 +261,13 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       if (type.type === "type_identifier" && type.text === "Self") return spec.memberKind(fn) === undefined ? undefined : { kind: "this" };
       const name = spec.typeName(type);
       if (name === undefined) return undefined;
-      const owner = ownerForType(name);
+      const owner = ownerForType(name, fn);
       return asReturn(owner);
     },
     returnTuple(fn) {
       const types = spec.returnTypes?.(fn);
       if (types === undefined || types.length < 2) return undefined;
-      return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name); return asReturn(owner) ?? null; });
+      return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name, fn); return asReturn(owner) ?? null; });
     },
     memberKind: (fn) => spec.memberKind(fn),
     unwrapped(fn) {
@@ -259,7 +276,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       if (inner === null) return undefined;
       if (inner.type === "type_identifier" && inner.text === "Self") return spec.memberKind(fn) === undefined ? undefined : { kind: "this" };
       const name = spec.typeName(inner);
-      const owner = name === undefined ? undefined : ownerForType(name);
+      const owner = name === undefined ? undefined : ownerForType(name, fn);
       return asReturn(owner);
     },
     fieldTypes: (members) => {
@@ -267,7 +284,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       for (const member of members) for (const field of spec.field?.(member) ?? []) {
         if (field.isStatic) continue;
         const name = spec.typeName(field.type);
-        const owner = name === undefined ? undefined : ownerForType(name);
+        const owner = name === undefined ? undefined : ownerForType(name, member);
         if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out[field.name] = owner;
       }
       return Object.keys(out).length === 0 ? undefined : out;
@@ -353,8 +370,13 @@ export const goSpec: TypedSpec = {
   },
   assigned: (node) => node.type === "assignment_statement" ? childrenOf(node.childForFieldName("left") ?? node).filter((child) => child.type === "identifier") : [],
   constructed: (value) => {
+    // `new(T)` and `&T{}` construct a T, keeping the package qualifier so a `pkg.T` binds through the import.
+    if (value?.type === "call_expression" && value.childForFieldName("function")?.text === "new") {
+      const argument = childrenOf(value.childForFieldName("arguments") ?? value).find((child) => child.isNamed);
+      return argument === undefined ? undefined : goSpec.typeName(argument);
+    }
     const literal = value?.type === "unary_expression" ? value.childForFieldName("operand") : value;
-    return literal?.type === "composite_literal" ? simpleType(literal.childForFieldName("type"), []) : undefined;
+    return literal?.type === "composite_literal" ? goSpec.typeName(literal.childForFieldName("type")) : undefined;
   },
   callee: (fn) => {
     if (fn.type === "identifier") return { object: null, name: fn.text };
@@ -395,7 +417,20 @@ export const rustSpec: TypedSpec = {
     const name = node.childForFieldName("pattern");
     return name?.type === "identifier" ? { name, type: node.childForFieldName("type") } : undefined;
   },
-  typeName: (node) => simpleType(node, ["reference_type"]),
+  // References, smart pointers and `dyn Trait` name the pointee: a call auto-derefs to it.
+  typeName: (node) => {
+    let current = node;
+    for (;;) {
+      if (current === null) return undefined;
+      if (current.type === "reference_type" || current.type === "dynamic_type" || current.type === "abstract_type") { current = current.childForFieldName("type") ?? current.childForFieldName("trait") ?? childrenOf(current).find((child) => child.isNamed && child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null; continue; }
+      if (current.type === "generic_type") {
+        const base = current.childForFieldName("type") ?? childrenOf(current)[0];
+        if (base !== undefined && base.type === "type_identifier" && ["Box", "Rc", "Arc"].includes(base.text)) { current = childrenOf(childrenOf(current).find((child) => child.type === "type_arguments") ?? current).find((child) => child.isNamed) ?? null; continue; }
+      }
+      break;
+    }
+    return current.type === "primitive_type" ? current.text : simpleType(current, []);
+  },
   returnType: (fn) => fn.childForFieldName("return_type"),
   receiver: (fn) => {
     if (fn.type !== "function_item" || !childrenOf(fn.childForFieldName("parameters") ?? fn).some((child) => child.type === "self_parameter")) return undefined;

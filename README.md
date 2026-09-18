@@ -118,27 +118,27 @@ A call site counts as resolved when the index ties it to one definition through 
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5022 | 1916 | 38.1% | 53.9% |
-| click | all | 5022 | 1916 | 38.1% | 53.9% |
-| cobra | go | 4374 | 1875 | 42.9% | 63.5% |
-| cobra | all | 4374 | 1875 | 42.9% | 63.5% |
-| gson | java | 23341 | 7495 | 32.1% | 36.2% |
-| gson | all | 23341 | 7495 | 32.1% | 36.2% |
-| humanizer | c_sharp | 28779 | 7628 | 26.5% | 39.5% |
-| humanizer | javascript | 927 | 132 | 14.2% | 37.7% |
-| humanizer | tsx | 120 | 14 | 11.7% | 17.5% |
+| click | python | 5022 | 1916 | 38.1% | 54.5% |
+| click | all | 5022 | 1916 | 38.1% | 54.5% |
+| cobra | go | 4374 | 1879 | 43.0% | 73.1% |
+| cobra | all | 4374 | 1879 | 43.0% | 73.1% |
+| gson | java | 23341 | 7495 | 32.1% | 36.8% |
+| gson | all | 23341 | 7495 | 32.1% | 36.8% |
+| humanizer | c_sharp | 28779 | 7628 | 26.5% | 41.2% |
+| humanizer | javascript | 927 | 132 | 14.2% | 39.4% |
+| humanizer | tsx | 120 | 14 | 11.7% | 18.2% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30510 | 7778 | 25.5% | 38.7% |
-| pyright | python | 11617 | 3320 | 28.6% | 64.9% |
-| pyright | typescript | 46803 | 26619 | 56.9% | 69.8% |
-| pyright | all | 58452 | 29939 | 51.2% | 69.2% |
-| ripgrep | rust | 13341 | 3915 | 29.3% | 34.8% |
-| ripgrep | all | 13355 | 3919 | 29.3% | 34.8% |
+| humanizer | all | 30510 | 7778 | 25.5% | 40.4% |
+| pyright | python | 11617 | 3320 | 28.6% | 65.3% |
+| pyright | typescript | 46810 | 26619 | 56.9% | 72.4% |
+| pyright | all | 58459 | 29939 | 51.2% | 71.5% |
+| ripgrep | rust | 13341 | 3926 | 29.4% | 39.1% |
+| ripgrep | all | 13355 | 3930 | 29.4% | 39.1% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
-| zod | typescript | 53219 | 20069 | 37.7% | 63.0% |
-| zod | all | 53398 | 20086 | 37.6% | 62.9% |
+| zod | typescript | 53234 | 20069 | 37.7% | 63.2% |
+| zod | all | 53413 | 20086 | 37.6% | 63.1% |
 
-A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
+A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework, and calls at the end of a field, element or return chain whose recorded type is a builtin (`string`, `Array`, `Map`, a Rust primitive, `Vec` or `Option`) or a type behind an unresolved import; a chain that ends on a type parameter stays unresolved, not external. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
 ## Grep versus the graph
 

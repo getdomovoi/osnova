@@ -611,6 +611,38 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           // Builtin collections have no indexed holder: `xs.filter(..)` keeps the element type, `map.values()`
           // yields the value or element type, and `map.get(k)` produces the value type.
           const PASS_THROUGH = new Set(["filter", "slice", "concat", "reverse", "sort", "toSorted", "toReversed", "values"]);
+          // Why a receiver chain stopped: it ended on a type no indexed file declares (external, like an
+          // unbound global) or on an import the index cannot follow. Unknown otherwise.
+          const terminalOfBinding = (file: string, binding: SymbolBinding): "external" | "unresolved-import" | undefined => {
+            const holderCard = files.get(file);
+            if (holderCard === undefined) return undefined;
+            if (binding.kind === "import") return resolveImportTarget(holderCard.language, file, binding.source, knownFiles, context) === undefined ? "unresolved-import" : undefined;
+            const family = languageFamily(holderCard.language);
+            if ((symbolsFor(file, binding) ?? []).length > 0) return undefined;
+            const name = binding.name.split(".").pop() ?? binding.name;
+            return (symbolsByName.get(name) ?? []).some((symbol) => languageFamily(files.get(symbol.file)?.language) === family) ? undefined : "external";
+          };
+          const terminalOf = (ref: ReceiverOwner, depth: number): "external" | "unresolved-import" | undefined => {
+            if (depth > 6) return undefined;
+            if (ref.kind === "local" || ref.kind === "import") return terminalOfBinding(fromFile, ref);
+            if (ref.kind === "super") return undefined;
+            if (ref.kind === "field" || (ref.kind === "element" && ref.of.kind === "field")) {
+              const inner = ref.kind === "field" ? ref : ref.of as Extract<ReceiverOwner, { kind: "field" }>;
+              const holder = holderOf(inner.of, depth + 1);
+              if (holder === undefined) return terminalOf(inner.of, depth + 1);
+              const tables: Array<"fieldTypes" | "elementTypes" | "valueTypes"> = ref.kind === "field" ? ["fieldTypes"] : ref.mode === "value" ? ["valueTypes"] : ref.mode === "either" ? ["valueTypes", "elementTypes"] : ["elementTypes"];
+              for (const table of tables) { const typed = fieldTypeOf(holder, inner.member, 0, new Set([holder.qualifiedName]), table); if (typed !== undefined) return terminalOfBinding(typed.file, typed.binding); }
+              return undefined;
+            }
+            const inner = ref.kind === "element" ? ref.of : ref;
+            if (inner.kind !== "return") return undefined;
+            const found = callablesOf(inner.of, depth);
+            if (found === undefined || found.callables === null || found.callables.length === 0) return inner.of.kind === "method" ? terminalOf(inner.of.owner, depth + 1) : inner.of.kind === "import" || inner.of.kind === "local" ? terminalOfBinding(fromFile, inner.of) : undefined;
+            const first = found.callables[0]!;
+            const select = ref.kind === "element" ? (ref.mode === "value" ? "values" : "elements") : selectOf(inner);
+            const returned = typeof select === "number" ? first.returnTuple?.[select] : first[select];
+            return returned === undefined || returned === null || returned.kind === "this" ? undefined : terminalOfBinding(first.file, returned);
+          };
           const holderOf = (ref: ReceiverOwner, depth: number): OsnovaSymbol | undefined => {
             if (depth > 6) return undefined;
             if (ref.kind === "element") {
@@ -666,12 +698,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           if (binding.owner.kind === "return") {
             owner = holderOf(binding.owner, 0); basis = "return";
-            if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           } else if (binding.owner.kind === "super") {
             owner = holderOf(binding.owner, 0);
           } else if (binding.owner.kind === "field" || binding.owner.kind === "element") {
             owner = holderOf(binding.owner, 0);
-            if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
+          }
+          if (owner === undefined && (binding.owner.kind === "return" || binding.owner.kind === "field" || binding.owner.kind === "element")) {
+            const terminal = rootImportUnresolved(binding.owner) ? "unresolved-import" : terminalOf(binding.owner, 0);
+            if (terminal === "unresolved-import") resolution = { status: "unresolved", reason: "import-target-unresolved" };
+            else if (terminal === "external") resolution = { status: "unresolved", reason: "unbound-global" };
           }
           else if (owner === undefined && card.language === "python" && binding.basis === "constructor") {
             owner = holderOfCallables(candidates.filter((symbol) => symbol.kind === "function" || symbol.kind === "method"), undefined, undefined);
@@ -689,7 +724,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           });
           if (owner !== undefined && candidates.length > 0) {
             resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis } };
-          } else if (resolution.status === "resolved" || reference.kind === "super" || (reference.kind === "local" && resolution.reason !== "unbound-global") || ((reference.kind === "return" || reference.kind === "field" || reference.kind === "element") && resolution.reason !== "import-target-unresolved")) {
+          } else if (resolution.status === "resolved" || reference.kind === "super" || (reference.kind === "local" && resolution.reason !== "unbound-global") || ((reference.kind === "return" || reference.kind === "field" || reference.kind === "element") && resolution.reason !== "import-target-unresolved" && resolution.reason !== "unbound-global")) {
             resolution = { status: "unresolved", reason: "receiver-unresolved" };
           }
         }
