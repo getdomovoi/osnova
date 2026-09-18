@@ -6,6 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Added
 
+- `osnova setup --apply --skill` copies the shipped Claude Code skill (`integrations/claude-code/skills/osnova/SKILL.md`) to `~/.claude/skills/osnova/SKILL.md`. The skill states the order of work (`osnova_footing` first, `osnova_warp` for callers, `osnova_plumb` on any claimed list of call sites, `osnova_settle` before finishing) and the rules the trials taught (do not re-read a file the tool already quoted; no indexed callers is not proof of absence). Claude Code loads it only when the task matches its description: measured headless, never when the prompt names the MCP server, first in three of four runs when the prompt does not, at 14 percent more cost and one more perfect answer. A differing file is a conflict and is never overwritten.
 - `benchmarks/exactness/exactness-v1.json` gains four hand-verified call-site sets on ripgrep (`Searcher.line_terminator`, `LineTerminator.as_byte`) and gson (`JsonReader.beginObject`, `TypeToken.getRawType`), so the grep-versus-graph table covers Go, Rust and Java as well as Python and TypeScript; `benchmarks/results/grep-vs-graph-2026-09-18.json` records all nine on the released 0.6.0 code, including the two sets where the text search beats the graph on recall.
 
 ## 0.6.0 (2026-09-18)
