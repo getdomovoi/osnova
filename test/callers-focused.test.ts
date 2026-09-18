@@ -20,7 +20,7 @@ const hits: CallerEvidenceHit[] = Array.from({ length: 100 }, (_, index) => ({
   symbol: symbol(`caller${index}`, `caller-${index}.ts`), qualifiedName: `caller-${index}.ts#caller${index}`,
   file: `caller-${index}.ts`, line: 1, kind: "calls", depth: 1, resolved: true, edge: edge(index, true),
 }));
-const unresolved: UnresolvedCallerEdge[] = Array.from({ length: 100 }, (_, index) => ({ edge: edge(index, false), depth: 1 }));
+const unresolved: UnresolvedCallerEdge[] = Array.from({ length: 100 }, (_, index) => ({ edge: edge(index, false), depth: 1, nameMatches: { candidates: [], total: 0 } }));
 const result: CallersDetailedResult = { status: "found", scope: "indexed-graph", direction: "in", depth: 1, target, hits, unresolved };
 
 it("prioritizes confirmed relationships and reports exact caller omissions", () => {

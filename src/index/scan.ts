@@ -8,7 +8,7 @@ import { maximumIndexedFileSizeBytes } from "../types.js";
 import { IndexingError } from "./diagnostics.js";
 import { canonicalWorkspaceRoot } from "./workspace.js";
 
-const DEFAULT_SKIP_DIRS = new Set([
+export const DEFAULT_SKIP_DIRS = new Set([
   ".git",
   ".hg",
   ".svn",
@@ -151,7 +151,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
       }
       if (!entry.isFile()) continue;
       if (entry.name.startsWith(".")) continue;
-      if (ignored(rel)) continue;
+      if (entry.name !== "package.json" && ignored(rel)) continue;
       pending.push(fileGate(async () => {
         let stat;
         try { stat = await fs.stat(abs, { bigint: true }); } catch (error) { fail({ phase: "scan", path: rel, code: "stat-failed" }, error); return; }

@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "id": "exactness-v1",
+  "description": "Hand-verified call-site sets on pinned public checkouts, used to compare a naive text search with the resolved call graph. Each truth set was checked line by line after two independent agent runs and a manual review; the naive search is the regex a person types first.",
+  "cases": [
+    {
+      "id": "click-context-invoke",
+      "corpus": "click",
+      "symbol": "src/click/core.py#Context.invoke",
+      "depth": 2,
+      "scope": "src/click/",
+      "exclude": "^$",
+      "grep": "\\.invoke\\(",
+      "extensions": [
+        ".py"
+      ],
+      "truth": [
+        "src/click/core.py:1420",
+        "src/click/core.py:1566",
+        "src/click/core.py:2029",
+        "src/click/core.py:2038",
+        "src/click/core.py:2039",
+        "src/click/core.py:2057",
+        "src/click/core.py:2060",
+        "src/click/core.py:2069",
+        "src/click/core.py:2091",
+        "src/click/core.py:2092",
+        "src/click/core.py:934",
+        "src/click/decorators.py:119",
+        "src/click/decorators.py:93"
+      ]
+    },
+    {
+      "id": "pyright-getChildNodes",
+      "corpus": "pyright",
+      "symbol": "packages/pyright-internal/src/parser/parseTreeUtils.ts#getChildNodes",
+      "depth": 2,
+      "scope": "packages/pyright-internal/src/",
+      "exclude": "/tests/",
+      "grep": "getChildNodes\\(",
+      "extensions": [
+        ".ts"
+      ],
+      "truth": [
+        "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:119",
+        "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:154",
+        "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:2105",
+        "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:2111",
+        "packages/pyright-internal/src/analyzer/parseTreeUtils.ts:98",
+        "packages/pyright-internal/src/analyzer/parseTreeWalker.ts:676",
+        "packages/pyright-internal/src/analyzer/parseTreeWalker.ts:694",
+        "packages/pyright-internal/src/analyzer/testWalker.ts:23",
+        "packages/pyright-internal/src/commands/dumpFileDebugInfoCommand.ts:102",
+        "packages/pyright-internal/src/common/languageInfoUtils.ts:189",
+        "packages/pyright-internal/src/common/languageInfoUtils.ts:190",
+        "packages/pyright-internal/src/common/languageInfoUtils.ts:308",
+        "packages/pyright-internal/src/common/languageInfoUtils.ts:495",
+        "packages/pyright-internal/src/common/textEditTracker.ts:363",
+        "packages/pyright-internal/src/languageService/completionProvider.ts:1319",
+        "packages/pyright-internal/src/languageService/completionProvider.ts:1345",
+        "packages/pyright-internal/src/languageService/completionProvider.ts:1388",
+        "packages/pyright-internal/src/languageService/completionProvider.ts:1849",
+        "packages/pyright-internal/src/languageService/definitionProvider.ts:338",
+        "packages/pyright-internal/src/languageService/documentHighlightProvider.ts:47",
+        "packages/pyright-internal/src/languageService/hoverProvider.ts:334",
+        "packages/pyright-internal/src/languageService/referencesProvider.ts:589",
+        "packages/pyright-internal/src/languageService/signatureHelpProvider.ts:113",
+        "packages/pyright-internal/src/languageService/signatureHelpProvider.ts:130",
+        "packages/pyright-internal/src/typeServer/typeServerConversionTypes.ts:133",
+        "packages/pyright-internal/src/typeServer/typeServerConversionUtils.ts:444",
+        "packages/pyright-internal/src/typeServer/typeServerConversionUtils.ts:527",
+        "packages/pyright-internal/src/typeServer/typeServerConversionUtils.ts:610"
+      ]
+    },
+    {
+      "id": "cobra-command-root",
+      "corpus": "cobra",
+      "symbol": "command.go#Command.Root",
+      "depth": 1,
+      "scope": "",
+      "exclude": "_test\\.go$",
+      "grep": "\\.Root\\(",
+      "extensions": [
+        ".go"
+      ],
+      "truth": [
+        "active_help.go:50",
+        "bash_completions.go:467",
+        "bash_completions.go:486",
+        "bash_completions.go:547",
+        "bash_completions.go:576",
+        "bash_completions.go:663",
+        "command.go:1091",
+        "command.go:1276",
+        "command.go:1282",
+        "command.go:1294",
+        "command.go:1297",
+        "command.go:1918",
+        "command.go:354",
+        "command.go:894",
+        "completions.go:1019",
+        "completions.go:330",
+        "completions.go:331",
+        "completions.go:338",
+        "completions.go:505",
+        "completions.go:777",
+        "completions.go:827",
+        "completions.go:832",
+        "completions.go:864",
+        "completions.go:869",
+        "completions.go:871",
+        "completions.go:892",
+        "completions.go:896",
+        "completions.go:914",
+        "completions.go:919",
+        "completions.go:921"
+      ]
+    },
+    {
+      "id": "cobra-command-persistentflags",
+      "corpus": "cobra",
+      "symbol": "command.go#Command.PersistentFlags",
+      "depth": 1,
+      "scope": "",
+      "exclude": "_test\\.go$",
+      "grep": "\\.PersistentFlags\\(",
+      "extensions": [
+        ".go"
+      ],
+      "truth": [
+        "command.go:1703",
+        "command.go:1738",
+        "command.go:1807",
+        "command.go:1828",
+        "command.go:1857",
+        "command.go:1900",
+        "command.go:1918",
+        "command.go:1921",
+        "command.go:384",
+        "shell_completions.go:32",
+        "shell_completions.go:62",
+        "shell_completions.go:91"
+      ]
+    },
+    {
+      "id": "humanizer-configurator-getformatter",
+      "corpus": "humanizer",
+      "symbol": "Configurator.GetFormatter",
+      "depth": 1,
+      "scope": "src/Humanizer/",
+      "exclude": "^$",
+      "grep": "GetFormatter\\(",
+      "extensions": [
+        ".cs"
+      ],
+      "truth": [
+        "src/Humanizer/Bytes/ByteSize.cs:176",
+        "src/Humanizer/Bytes/ByteSize.cs:221",
+        "src/Humanizer/Bytes/ByteSize.cs:542",
+        "src/Humanizer/Bytes/ByteSize.cs:774",
+        "src/Humanizer/Bytes/ByteSizeExtensions.cs:515",
+        "src/Humanizer/Bytes/ByteSizeExtensions.cs:607",
+        "src/Humanizer/DateHumanizeExtensions.cs:106",
+        "src/Humanizer/DateHumanizeExtensions.cs:141",
+        "src/Humanizer/DateHumanizeExtensions.cs:40",
+        "src/Humanizer/DateHumanizeExtensions.cs:73",
+        "src/Humanizer/DateTimeHumanizeStrategy/DateTimeHumanizeAlgorithms.cs:173",
+        "src/Humanizer/DateTimeHumanizeStrategy/DateTimeHumanizeAlgorithms.cs:194",
+        "src/Humanizer/DateTimeHumanizeStrategy/DateTimeHumanizeAlgorithms.cs:99",
+        "src/Humanizer/TimeSpanHumanizeExtensions.cs:396",
+        "src/Humanizer/TimeSpanHumanizeExtensions.cs:686",
+        "src/Humanizer/TimeSpanHumanizeExtensions.cs:723",
+        "src/Humanizer/TimeSpanHumanizeExtensions.cs:928",
+        "src/Humanizer/TimeUnitToSymbolExtensions.cs:14"
+      ]
+    }
+  ]
+}

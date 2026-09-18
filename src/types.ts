@@ -56,6 +56,13 @@ export interface OsnovaSymbol {
   readonly heritage?: readonly SymbolBinding[] | undefined;
   readonly fields?: readonly string[] | undefined;
   readonly returns?: ReturnBinding | undefined;
+  readonly returnTuple?: readonly (ReturnBinding | null)[] | undefined;
+  readonly fieldTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly unwrapped?: ReturnBinding | undefined;
+  readonly elements?: ReturnBinding | undefined;
+  readonly elementTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly values?: ReturnBinding | undefined;
+  readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
 }
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
@@ -91,8 +98,8 @@ export type SymbolBinding =
   | { readonly kind: "import"; readonly source: string; readonly importedName: string }
   | { readonly kind: "local"; readonly name: string };
 
-export type Callee = SymbolBinding | { readonly kind: "method"; readonly owner: ReceiverOwner; readonly member: string; readonly mode: ReceiverMode };
-export type ReceiverOwner = SymbolBinding | { readonly kind: "return"; readonly of: Callee };
+export type Callee = SymbolBinding | { readonly kind: "method"; readonly owner: ReceiverOwner; readonly member: string; readonly mode?: ReceiverMode | undefined };
+export type ReceiverOwner = SymbolBinding | { readonly kind: "return"; readonly of: Callee; readonly index?: number | undefined; readonly unwrapped?: true | undefined } | { readonly kind: "super"; readonly of: SymbolBinding } | { readonly kind: "field"; readonly of: ReceiverOwner; readonly member: string } | { readonly kind: "element"; readonly of: ReceiverOwner; readonly mode?: "value" | "either" | undefined };
 
 export type ReturnBinding = SymbolBinding | { readonly kind: "this" };
 
@@ -252,9 +259,12 @@ export interface CallersOptions {
   readonly depth?: number | undefined;
 }
 
+export interface NameMatches { readonly candidates: readonly string[]; readonly total: number }
+
 export interface UnresolvedCallerEdge {
   readonly edge: OsnovaEdge;
   readonly depth: number;
+  readonly nameMatches: NameMatches;
 }
 
 export type CallersDetailedResult =

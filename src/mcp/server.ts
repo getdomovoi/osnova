@@ -5,7 +5,10 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { watch as fsWatch } from "node:fs";
+import type { FSWatcher } from "node:fs";
 import { refreshWorkspace, indexGeneration } from "../api.js";
+import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
@@ -144,19 +147,77 @@ const toolDefinitions = [
   },
 ] as const;
 
+export interface OsnovaMcpWatchOptions {
+  readonly debounceMs?: number;
+  readonly maxStaleMs?: number;
+}
+
 export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
+  readonly watch?: boolean | OsnovaMcpWatchOptions;
+}
+
+export interface OsnovaMcpStatus {
+  readonly watching: boolean;
+  readonly refreshes: number;
+  readonly pendingChanges: boolean;
 }
 
 export function createOsnovaMcpServer(
   workspace: string,
   options?: OsnovaMcpOptions,
-): { server: Server; refresh: () => Promise<OsnovaIndex> } {
+): { server: Server; refresh: () => Promise<OsnovaIndex>; status: () => OsnovaMcpStatus; close: () => void } {
   const cacheDir = resolveCacheDir(options?.cacheDir);
   const absRoot = path.resolve(workspace);
-  async function refresh(): Promise<OsnovaIndex> {
-    return refreshWorkspace(absRoot, { cacheDir, reuseMemory: true });
+  const watchOptions = options?.watch === true ? {} : options?.watch === false || options?.watch === undefined ? undefined : options.watch;
+  const debounceMs = watchOptions?.debounceMs ?? 200;
+  const maxStaleMs = watchOptions?.maxStaleMs ?? 30_000;
+  let latest: OsnovaIndex | undefined;
+  let inFlight: Promise<OsnovaIndex> | undefined;
+  let dirty = true;
+  let verifiedAt = 0;
+  let refreshes = 0;
+  // One refresh at a time; a change that arrives during a refresh marks the result stale again.
+  function refresh(): Promise<OsnovaIndex> {
+    if (inFlight !== undefined) return inFlight;
+    dirty = false;
+    inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true }).then((index) => {
+      latest = index; verifiedAt = Date.now(); refreshes += 1; return index;
+    }).finally(() => { inFlight = undefined; });
+    return inFlight;
   }
+  // With a watcher, a query reuses the last verified index while no change has been seen and the
+  // verification is recent; without one, every query verifies the working tree first.
+  function current(): Promise<OsnovaIndex> {
+    if (watcher !== undefined && latest !== undefined && !dirty && Date.now() - verifiedAt < maxStaleMs) return Promise.resolve(latest);
+    return refresh();
+  }
+  let watcher: FSWatcher | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  const cacheInside = path.relative(absRoot, path.resolve(cacheDir));
+  const ignoredChange = (file: string | null): boolean => {
+    if (file === null) return false;
+    const relative = file.split(path.sep).join("/");
+    if (cacheInside.length > 0 && !cacheInside.startsWith("..") && relative.startsWith(cacheInside.split(path.sep).join("/"))) return true;
+    return relative.split("/").some((segment) => DEFAULT_SKIP_DIRS.has(segment));
+  };
+  if (watchOptions !== undefined) {
+    try {
+      watcher = fsWatch(absRoot, { recursive: true, persistent: false }, (_event, file) => {
+        if (ignoredChange(file)) return;
+        dirty = true;
+        if (timer !== undefined) clearTimeout(timer);
+        timer = setTimeout(() => { timer = undefined; refresh().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
+        timer.unref();
+      });
+      watcher.on("error", (error) => { process.stderr.write(`osnova: watcher stopped: ${error.message}\n`); watcher?.close(); watcher = undefined; });
+    } catch (error) {
+      process.stderr.write(`osnova: watch unavailable, refreshing per query: ${error instanceof Error ? error.message : String(error)}\n`);
+      watcher = undefined;
+    }
+  }
+  const close = (): void => { if (timer !== undefined) clearTimeout(timer); watcher?.close(); watcher = undefined; };
+  const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty });
 
   const server = new Server(
     { name: "osnova", version: OSNOVA_VERSION },
@@ -169,7 +230,7 @@ export function createOsnovaMcpServer(
     const name = request.params.name;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
-      const index = await refresh();
+      const index = await current();
       const generation = `osnova generation ${indexGeneration(index).slice(0, mcpGenerationDigits)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
       switch (name) {
@@ -271,7 +332,7 @@ export function createOsnovaMcpServer(
     }
   });
 
-  return { server, refresh };
+  return { server, refresh, status, close };
 }
 
 function textResult(text: string, maxCodeUnits?: number): { content: Array<{ type: "text"; text: string }> } {
@@ -333,7 +394,8 @@ export async function runMcpStdio(
   workspace: string,
   options?: OsnovaMcpOptions,
 ): Promise<void> {
-  const { server } = createOsnovaMcpServer(workspace, options);
+  const { server, close } = createOsnovaMcpServer(workspace, options);
   const transport = new StdioServerTransport();
+  transport.onclose = close;
   await server.connect(transport);
 }

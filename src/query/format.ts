@@ -8,6 +8,7 @@ import type {
   SkeletonResult,
   OsnovaIndex,
   CallerEvidenceHit,
+  NameMatches,
   OsnovaEdge,
 } from "../types.js";
 import type { ImpactResult } from "./impact.js";
@@ -173,8 +174,8 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
   lines.push("This does not prove absence of callers or that deletion is safe.");
   if (result.unresolved.length > 0) {
     lines.push(`unresolved evidence (${result.unresolved.length}); not confirmed relationships`);
-    for (const { edge, depth } of result.unresolved) {
-      lines.push(...unresolvedCallerLines(edge, depth));
+    for (const { edge, depth, nameMatches } of result.unresolved) {
+      lines.push(...unresolvedCallerLines(edge, depth, nameMatches));
     }
   }
   return lines.join("\n");
@@ -184,7 +185,9 @@ function callerHitLines(hit: CallerEvidenceHit): string[] {
   const evidence = hit.edge.evidence;
   const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
     ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
-  const lines = [`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}; source ${hit.edge.fromFile}:${hit.edge.line}]`];
+  // The source suffix repeats the hit's own location for `in` results, so it is printed only when it differs.
+  const source = hit.file === hit.edge.fromFile && hit.line === hit.edge.line ? "" : `; source ${hit.edge.fromFile}:${hit.edge.line}`;
+  const lines = [`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}${source}]`];
   if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
     if (evidence.resolution.method === "receiver-hint") {
       const receiver = evidence.resolution.receiver;
@@ -195,10 +198,14 @@ function callerHitLines(hit: CallerEvidenceHit): string[] {
   return lines;
 }
 
-function unresolvedCallerLines(edge: OsnovaEdge, depth: number): string[] {
+function unresolvedCallerLines(edge: OsnovaEdge, depth: number, matches?: NameMatches): string[] {
   const lines = [`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`];
   if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "unresolved") {
     lines.push(`  reason: ${edge.evidence.resolution.reason}`);
+  }
+  if (matches !== undefined && matches.total > 0) {
+    const more = matches.total - matches.candidates.length;
+    lines.push(`  same-name symbols (${matches.total}, unverified): ${matches.candidates.join(", ")}${more > 0 ? ` and ${more} more` : ""}`);
   }
   if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous") {
     lines.push(`  ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`);
@@ -228,7 +235,7 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
     "This does not prove absence of callers or that deletion is safe.",
   ];
   const hitBlocks = result.hits.map(callerHitLines);
-  const unresolvedBlocks = result.unresolved.map(({ edge, depth }) => unresolvedCallerLines(edge, depth));
+  const unresolvedBlocks = result.unresolved.map(({ edge, depth, nameMatches }) => unresolvedCallerLines(edge, depth, nameMatches));
   const selectedHits: string[][] = [];
   const selectedUnresolved: string[][] = [];
   const footer = (): string => `omitted: ${hitBlocks.length - selectedHits.length} of ${hitBlocks.length} confirmed relationships; ${unresolvedBlocks.length - selectedUnresolved.length} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
@@ -328,7 +335,8 @@ export function formatPlumb(result: PlumbResult, symbol?: string): string {
   if (result.claims.length > 0) lines.push("claims:");
   for (const item of result.claims) {
     const other = item.edge === undefined ? "" : ` -> ${result.direction === "in" ? item.edge.fromSymbol || item.edge.fromFile : item.edge.toSymbol ?? item.edge.toName}`;
-    lines.push(`${item.verdict} ${item.claim.file}:${item.claim.line}${other}`);
+    const matches = item.nameMatches === undefined || item.nameMatches.total === 0 ? "" : ` (${item.nameMatches.total} same-name symbols: ${item.nameMatches.candidates.join(", ")}${item.nameMatches.total > item.nameMatches.candidates.length ? " and more" : ""})`;
+    lines.push(`${item.verdict} ${item.claim.file}:${item.claim.line}${other}${matches}`);
   }
   if (result.missing.length > 0) lines.push("missing:");
   for (const edge of result.missing) lines.push(`${edge.fromFile}:${edge.line} ${result.direction === "in" ? edge.fromSymbol || edge.fromFile : edge.toSymbol ?? edge.toName}`);
