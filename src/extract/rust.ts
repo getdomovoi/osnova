@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import type { ReExport } from "../types.js";
 import { collectTypedBindings, rustSpec } from "./typed-bindings.js";
 
 function lastSegment(text: string): string {
@@ -24,6 +25,7 @@ export const rustAdapter: LanguageAdapter = {
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
     const bindings = collectTypedBindings(tree.rootNode, rustSpec);
+    const reExports: ReExport[] = [];
 
     const visit = (node: Node): void => {
       switch (node.type) {
@@ -117,10 +119,20 @@ export const rustAdapter: LanguageAdapter = {
         }
         case "use_declaration": {
           const arg = childrenOf(node).find((c) => c.type !== "visibility_modifier");
-          if (arg !== undefined && arg.type !== "use_wildcard") {
-            out.addEdge("imports", arg.text, node);
-          } else if (arg !== undefined) {
-            out.addEdge("imports", arg.text, node);
+          if (arg !== undefined) out.addEdge("imports", arg.text, node);
+          // `pub use crate::searcher::Searcher;` at the crate root is how a crate names its public
+          // types, so a use of `grep_searcher::Searcher` from another crate follows it as a re-export.
+          if (node.parent?.type === "source_file" && childrenOf(node).some((c) => c.type === "visibility_modifier")) {
+            const line = node.startPosition.row + 1;
+            if (arg?.type === "use_wildcard") {
+              const source = arg.text.replace(/::\*$/, "");
+              if (source.length > 0) reExports.push({ kind: "star", source, line });
+            } else {
+              for (const item of rustSpec.imports(node)) {
+                if (item.local === "self") continue;
+                reExports.push({ kind: "named", exportedName: item.local, source: item.source, importedName: item.name, line });
+              }
+            }
           }
           return;
         }
@@ -130,7 +142,7 @@ export const rustAdapter: LanguageAdapter = {
       }
     };
     for (const child of childrenOf(tree.rootNode)) visit(child);
-    return { definitions: out.definitions, edges: out.edges };
+    return { definitions: out.definitions, edges: out.edges, reExports };
   },
 };
 
