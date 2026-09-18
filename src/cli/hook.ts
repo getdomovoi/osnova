@@ -1,12 +1,15 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import os from "node:os";
+import { promises as fs } from "node:fs";
 import { loadIndex, refreshWorkspace } from "../api.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { boundText } from "../query/budget.js";
 import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
+import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import type { CliIo } from "./cli.js";
 
 // Editor hooks: a session hook prints the tool contract, a prompt hook prints starting points for
@@ -14,7 +17,7 @@ import type { CliIo } from "./cli.js";
 // All read the hook payload from stdin, never touch repository files, and exit 0 on every failure
 // so a hook can never block a prompt. A repository with no cache yet is indexed in the background
 // from the session hook; the prompt and stop hooks answer only from an existing cache.
-export type HookEvent = "prompt" | "session" | "stop" | "install-preview";
+export type HookEvent = "prompt" | "session" | "stop" | "tool" | "install-preview";
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
@@ -30,6 +33,9 @@ export interface HookInput {
   readonly prompt?: string | undefined;
   readonly cwd?: string | undefined;
   readonly stopHookActive?: boolean | undefined;
+  readonly sessionId?: string | undefined;
+  readonly toolName?: string | undefined;
+  readonly toolInput?: Readonly<Record<string, unknown>> | undefined;
 }
 
 export const hookToolContract = [
@@ -55,6 +61,9 @@ export function parseHookInput(raw: string): HookInput {
     prompt: typeof record.prompt === "string" ? record.prompt : undefined,
     cwd: typeof record.cwd === "string" ? record.cwd : undefined,
     stopHookActive: typeof record.stop_hook_active === "boolean" ? record.stop_hook_active : undefined,
+    sessionId: typeof record.session_id === "string" ? record.session_id : undefined,
+    toolName: typeof record.tool_name === "string" ? record.tool_name : undefined,
+    toolInput: record.tool_input !== null && typeof record.tool_input === "object" && !Array.isArray(record.tool_input) ? (record.tool_input as Record<string, unknown>) : undefined,
   };
 }
 
@@ -78,7 +87,9 @@ export function hookSettingsObject(command: readonly string[], client: HookClien
   const suffix = client === "claude-code" ? "" : ` --client ${client}`;
   if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
   const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
-  return { hooks: { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] } };
+  const hooks: Record<string, unknown[]> = { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] };
+  if (client === "claude-code") hooks.PostToolUse = [{ matcher: "Grep|Bash", ...entry("tool", 10) }];
+  return { hooks };
 }
 
 export type HookClient = "claude-code" | "codex" | "cursor";
@@ -152,15 +163,34 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     } catch (error) { fail(error); }
     return;
   }
+  if (event === "tool") {
+    const name = grepName(input.toolName, input.toolInput);
+    if (name === null || input.sessionId === undefined) return;
+    try {
+      if (await nudgedBefore(input.sessionId, name)) return;
+      const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
+      if (cached === undefined) return;
+      const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
+      const text = formatGrepNudge(index, name);
+      if (text === null) return;
+      await rememberNudge(input.sessionId, name);
+      io.stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } }));
+    } catch (error) { fail(error); }
+    return;
+  }
   const prompt = (input.prompt ?? "").trim();
   if (prompt.length < minimumPromptLength || prompt.startsWith("/")) return;
   try {
     const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
     if (cached === undefined) return;
+    const terms = promptCodeNames(prompt);
+    if (terms.length === 0) return;
     const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
+    const seeds = symbolsNamed(index, terms, 8);
+    if (seeds.length === 0) return;
     const header = "[osnova] starting points for this prompt (indexed graph, exact file:line; osnova_footing for the full context, osnova_warp <symbol> for callers):";
     const available = hookPromptCodeUnits - header.length - 1;
-    const result = taskContext(index, { task: "understand", question: prompt, limit: 8, maxDepth: 1, maxCodeUnits: available, excerptLines: 1, measure: (partial) => formatStartingPoints(partial).length });
+    const result = taskContext(index, { task: "understand", question: prompt, symbols: seeds.map((symbol) => symbol.qualifiedName), maxDepth: 1, maxCodeUnits: available, excerptLines: 1, measure: (partial) => formatStartingPoints(partial).length });
     const text = formatStartingPoints(result);
     if (!text.startsWith("- ")) return;
     emitContext(io, client, `${header}\n${boundText(text, available)}`);
@@ -195,4 +225,86 @@ export function formatStopReason(result: ImpactResult): string {
   ];
   if (result.uncertainty.unresolvedEdges > 0) lines.push(`${result.uncertainty.unresolvedEdges} unresolved edges are not listed; a missing dependent is not proof of absence.`);
   return lines.join("\n");
+}
+
+// The names a prompt spells as code: a backticked token, or a bare identifier with an inner capital,
+// an underscore or a digit. Plain words never seed the prompt hook, so "load" or "within" in prose
+// cannot pull in an unrelated definition of that name.
+const identifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export function promptCodeNames(prompt: string): string[] {
+  const names = new Set<string>();
+  const consider = (token: string, quoted: boolean): void => {
+    const last = token.split(/[.#:/\\]/).filter((part) => part.length > 0).at(-1) ?? "";
+    const bare = last.replace(/\(.*$/, "");
+    if (bare.length < 3 || !identifierPattern.test(bare)) return;
+    if (quoted || /[A-Z]|_|\d/.test(bare.slice(1))) names.add(bare);
+  };
+  for (const match of prompt.matchAll(/`([^`\n]+)`/g)) consider(match[1]!.trim(), true);
+  for (const match of prompt.replace(/`[^`\n]+`/g, " ").matchAll(/[A-Za-z_][A-Za-z0-9_.#:/]*/g)) consider(match[0], false);
+  return [...names].sort();
+}
+
+function symbolsNamed(index: OsnovaIndex, names: readonly string[], limit: number): OsnovaSymbol[] {
+  const wanted = new Set(names);
+  const found: OsnovaSymbol[] = [];
+  for (const symbol of index.symbols.values()) {
+    if (!wanted.has(symbol.name) || !STARTING_POINT_KINDS.has(symbol.kind)) continue;
+    found.push(symbol);
+  }
+  found.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.span.startLine - b.span.startLine));
+  const perName = new Map<string, number>();
+  const kept: OsnovaSymbol[] = [];
+  for (const symbol of found) {
+    const seen = perName.get(symbol.name) ?? 0;
+    if (seen >= 4 || kept.length >= limit) continue;
+    perName.set(symbol.name, seen + 1);
+    kept.push(symbol);
+  }
+  return kept;
+}
+
+// The identifier a Grep call or a Bash grep/rg command searched for, when the pattern is one plain identifier.
+export function grepName(toolName: string | undefined, toolInput: Readonly<Record<string, unknown>> | undefined): string | null {
+  if (toolInput === undefined) return null;
+  let pattern: string | undefined;
+  if (toolName === "Grep" && typeof toolInput.pattern === "string") pattern = toolInput.pattern;
+  else if (toolName === "Bash" && typeof toolInput.command === "string") {
+    const match = /(?:^|[|;&]\s*)(?:rg|grep|git grep)\b((?:\s+-{1,2}[\w-]+(?:[= ]\S+)?)*)\s+("[^"]+"|'[^']+'|\S+)/.exec(toolInput.command);
+    if (match === null) return null;
+    pattern = match[2]!.replace(/^["']|["']$/g, "");
+  }
+  if (pattern === undefined) return null;
+  const bare = pattern.replace(/^\\b|\\b$/g, "").replace(/^\^|\$$/g, "");
+  return bare.length >= 3 && identifierPattern.test(bare) ? bare : null;
+}
+
+// One line, once per name per session: how many resolved call sites the index holds for what was just grepped.
+export function formatGrepNudge(index: OsnovaIndex, name: string): string | null {
+  const symbols = [...index.symbols.values()].filter((symbol) => symbol.name === name && STARTING_POINT_KINDS.has(symbol.kind));
+  if (symbols.length === 0) return null;
+  let resolved = 0, unresolved = 0;
+  const files = new Set<string>();
+  for (const symbol of symbols) {
+    for (const edge of index.incoming(symbol.qualifiedName)) {
+      if (edge.kind !== "calls") continue;
+      if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "resolved" && edge.toSymbol === symbol.qualifiedName) { resolved += 1; files.add(edge.fromFile); } else unresolved += 1;
+    }
+  }
+  if (resolved === 0) return null;
+  const target = symbols.length === 1 ? symbols[0]!.qualifiedName : `${name} (${symbols.length} definitions)`;
+  return `[osnova] ${target} is indexed: ${resolved} resolved call sites in ${files.size} files; osnova_warp ${symbols.length === 1 ? symbols[0]!.qualifiedName : name} lists them with exact file:line${unresolved > 0 ? ` and ${unresolved} unresolved same-name calls` : ""}.`;
+}
+
+function nudgeFile(sessionId: string): string {
+  return path.join(os.tmpdir(), "osnova-hook-nudges", `${sessionId.replace(/[^\w.-]/g, "_")}.json`);
+}
+async function nudgedBefore(sessionId: string, name: string): Promise<boolean> {
+  try { return (JSON.parse(await fs.readFile(nudgeFile(sessionId), "utf8")) as string[]).includes(name); } catch { return false; }
+}
+async function rememberNudge(sessionId: string, name: string): Promise<void> {
+  const file = nudgeFile(sessionId);
+  let names: string[] = [];
+  try { names = JSON.parse(await fs.readFile(file, "utf8")) as string[]; } catch { /* first nudge of the session */ }
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify([...new Set([...names, name])]));
 }

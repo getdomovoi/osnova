@@ -2,6 +2,16 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova hook tool`, a Claude Code `PostToolUse` hook on `Grep|Bash`: when the agent greps for one plain identifier that names an indexed definition with resolved callers, it adds one line with the count of resolved call sites and files and the `osnova_warp` call that lists them, once per name per session, and nothing otherwise. `osnova setup --apply --hooks` and `osnova hook install-preview` include the group for Claude Code.
+
+### Changed
+
+- The prompt hook seeds only from names the prompt spells as code (a backticked token, or an identifier with an inner capital, underscore or digit), matched exactly against indexed definitions, instead of a ranked text search over the whole prompt. A prose prompt that contains a word such as `load` or `within` no longer prints an unrelated definition of that name.
+
 ## 0.6.1 (2026-09-18)
 
 ### Added
