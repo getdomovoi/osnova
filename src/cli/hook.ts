@@ -115,9 +115,10 @@ function defaultBackgroundBuild(workspace: string, cacheDir: string | undefined)
   child.unref();
 }
 
-// The same context, shaped for the harness that asked: plain text for Claude Code, additionalContext for Codex.
-function emitContext(io: CliIo, client: HookClient, text: string): void {
-  if (client === "codex") { io.stdout(JSON.stringify({ additionalContext: text })); return; }
+// The same context, shaped for the harness that asked: plain text for Claude Code; for Codex the hook
+// output object it validates, `hookSpecificOutput` with the event name and `additionalContext`.
+function emitContext(io: CliIo, client: HookClient, event: "prompt" | "session", text: string): void {
+  if (client === "codex") { io.stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event === "prompt" ? "UserPromptSubmit" : "SessionStart", additionalContext: text } })); return; }
   io.stdout(text);
 }
 
@@ -143,11 +144,11 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
       if (cached === undefined) {
         (options.backgroundBuild ?? defaultBackgroundBuild)(workspace, options.cacheDir);
-        emitContext(io, client, boundText(`${hookToolContract}\nIndex: building in the background; starting points appear from the next prompt.`, hookSessionCodeUnits));
+        emitContext(io, client, "session", boundText(`${hookToolContract}\nIndex: building in the background; starting points appear from the next prompt.`, hookSessionCodeUnits));
         return;
       }
       const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
-      emitContext(io, client, boundText(`${hookToolContract}\nIndexed: ${index.files.size} files, ${index.symbols.size} symbols.`, hookSessionCodeUnits));
+      emitContext(io, client, "session", boundText(`${hookToolContract}\nIndexed: ${index.files.size} files, ${index.symbols.size} symbols.`, hookSessionCodeUnits));
     } catch (error) { fail(error); }
     return;
   }
@@ -196,7 +197,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     const result = taskContext(index, { task: "understand", question: prompt, symbols: seeds.map((symbol) => symbol.qualifiedName), maxDepth: 1, maxCodeUnits: available, excerptLines: 1, measure: (partial) => formatStartingPoints(partial).length });
     const text = formatStartingPoints(result);
     if (!text.startsWith("- ")) return;
-    emitContext(io, client, `${header}\n${boundText(text, available)}`);
+    emitContext(io, client, "prompt", `${header}\n${boundText(text, available)}`);
   } catch (error) { fail(error); }
 }
 
