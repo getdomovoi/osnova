@@ -77,6 +77,7 @@ describe("hooks for Codex and Cursor", () => {
   it("writes ~/.codex/hooks.json with additionalContext-shaped hooks and ~/.cursor/hooks.json with a stop follow-up", async () => {
     let c = capture();
     expect(await runCli(["setup", "--apply", "--hooks", "--client", "codex", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("open /hooks in Codex");
     const codex = JSON.parse(await fs.readFile(path.join(home, ".codex", "hooks.json"), "utf8"));
     expect(codex.hooks.UserPromptSubmit[0].hooks[0].command).toBe("osnova hook prompt --client codex");
     expect(codex.hooks.Stop[0].hooks[0].command).toBe("osnova hook stop --client codex");
