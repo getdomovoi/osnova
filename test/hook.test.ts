@@ -163,14 +163,33 @@ describe("osnova hook", () => {
       await runHook("stop", JSON.stringify({ cwd: root }), c.io, { cacheDir });
       const decision = JSON.parse(c.out.join("\n"));
       expect(decision.decision).toBe("block");
-      expect(decision.reason).toContain("use.ts#report");
+      expect(decision.reason).toContain("- use.ts: report:");
+      expect(decision.reason).toMatch(/dependents in 1 files/);
       expect(decision.reason.length).toBeLessThanOrEqual(1_536);
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, stop_hook_active: true }), c.io, { cacheDir });
       expect(c.out).toEqual([]);
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root }), c.io, { cacheDir, client: "cursor" });
-      expect(JSON.parse(c.out.join("\n")).followup_message).toContain("use.ts#report");
+      expect(JSON.parse(c.out.join("\n")).followup_message).toContain("- use.ts: report:");
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+});
+
+describe("stop reason layout", () => {
+  it("groups dependents by file, caps symbols per file, and counts the files that do not fit the budget", async () => {
+    const { formatStopReason } = await import("../src/cli/hook.js");
+    const symbol = (file: string, name: string, line: number) => ({ qualifiedName: `${file}#${name}`, name, kind: "function", file, span: { startLine: line, endLine: line, startColumn: 0, endColumn: 0 }, language: "typescript" }) as never;
+    const dependents = [];
+    for (let f = 0; f < 40; f += 1) for (let n = 0; n < 8; n += 1) dependents.push({ snapshot: "current" as const, symbol: symbol(`src/file${f}.ts`, `fn${n}`, n + 1), file: `src/file${f}.ts` });
+    dependents.push({ snapshot: "current" as const, symbol: null, file: "src/plain.ts" });
+    const result = { changes: [{ after: { symbol: symbol("src/core.ts", "core", 1) } }], dependents, uncertainty: { unresolvedEdges: 3 } } as never;
+    const text = formatStopReason(result, 1_536);
+    expect(text.length).toBeLessThanOrEqual(1_536);
+    expect(text).toContain("321 indexed dependents in 41 files");
+    expect(text).toMatch(/- src\/file0\.ts: fn0:1, fn1:2, fn2:3, fn3:4, fn4:5, fn5:6 and 2 more/);
+    expect(text).toMatch(/- \d+ more files with \d+ dependents omitted; osnova_settle lists them all\./);
+    expect(text).toContain("3 unresolved edges are not listed");
+    expect(text.split("\n").every((line) => !line.includes("output truncated"))).toBe(true);
   });
 });

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call-site resolution coverage on pinned checkouts",
   "osnova": {
-    "commit": "f65f53c69ef23deb1aa3f9b0b0cd3e304aaeff5b",
+    "commit": "24b477561eaaaf1cd493d5a4520f7d8dc42fa13e",
     "version": "0.6.1"
   },
   "corpora": [
@@ -455,7 +455,7 @@
       "corpus": "pyright-v1",
       "repository": "https://github.com/microsoft/pyright",
       "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
-      "generation": "154a464aa83392c018b5522905755fae63ae64d219a1c1c0e570287083d3ca8e",
+      "generation": "5a64b7d119a9bc79494d65a812e54ada76c41c97075d52e95138170f478cfe4e",
       "cacheRoundTrip": {
         "edges": 68340,
         "resolved": 30042
@@ -481,14 +481,14 @@
           "bound-symbol-missing": 1,
           "import-target-unresolved": 6323,
           "re-export-incomplete": 20,
-          "receiver-unresolved": 9624,
-          "unbound-global": 10627
+          "receiver-unresolved": 9616,
+          "unbound-global": 10635
         },
         "resolvedShare": 0.5139,
         "unresolvedImportCalls": 6323,
-        "unboundGlobalCalls": 10627,
+        "unboundGlobalCalls": 10635,
         "resolvedShareExcludingUnresolvedImports": 0.5762,
-        "resolvedShareExcludingExternal": 0.7237
+        "resolvedShareExcludingExternal": 0.7239
       },
       "languages": [
         {
@@ -549,14 +549,14 @@
             "binding-blocked": 702,
             "bound-symbol-missing": 1,
             "import-target-unresolved": 2240,
-            "receiver-unresolved": 966,
-            "unbound-global": 4382
+            "receiver-unresolved": 958,
+            "unbound-global": 4390
           },
           "resolvedShare": 0.2863,
           "unresolvedImportCalls": 2240,
-          "unboundGlobalCalls": 4382,
+          "unboundGlobalCalls": 4390,
           "resolvedShareExcludingUnresolvedImports": 0.3547,
-          "resolvedShareExcludingExternal": 0.6659
+          "resolvedShareExcludingExternal": 0.6669
         },
         {
           "language": "typescript",
@@ -600,7 +600,7 @@
       "corpus": "ripgrep-v1",
       "repository": "https://github.com/BurntSushi/ripgrep",
       "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
-      "generation": "3945e40db45b271b1d354dedb8fc57c58310139c9ee1d0e003bbb38f6eefe42d",
+      "generation": "b71da75b87138585e0fdae78a6d48e661971d75a5848b5658b9af2ecd30cacfd",
       "cacheRoundTrip": {
         "edges": 17301,
         "resolved": 5473
@@ -626,14 +626,14 @@
           "bound-symbol-missing": 2,
           "import-target-unresolved": 1607,
           "no-matching-symbol": 10,
-          "receiver-unresolved": 3857,
-          "unbound-global": 2229
+          "receiver-unresolved": 3759,
+          "unbound-global": 2327
         },
         "resolvedShare": 0.4095,
         "unresolvedImportCalls": 1607,
-        "unboundGlobalCalls": 2229,
+        "unboundGlobalCalls": 2327,
         "resolvedShareExcludingUnresolvedImports": 0.4655,
-        "resolvedShareExcludingExternal": 0.5744
+        "resolvedShareExcludingExternal": 0.5803
       },
       "languages": [
         {
@@ -714,14 +714,14 @@
           "byReason": {
             "bound-symbol-missing": 2,
             "import-target-unresolved": 1607,
-            "receiver-unresolved": 3857,
-            "unbound-global": 2229
+            "receiver-unresolved": 3759,
+            "unbound-global": 2327
           },
           "resolvedShare": 0.4096,
           "unresolvedImportCalls": 1607,
-          "unboundGlobalCalls": 2229,
+          "unboundGlobalCalls": 2327,
           "resolvedShareExcludingUnresolvedImports": 0.4657,
-          "resolvedShareExcludingExternal": 0.5748
+          "resolvedShareExcludingExternal": 0.5808
         }
       ],
       "limitations": [
@@ -736,7 +736,7 @@
       "corpus": "zod-v1",
       "repository": "https://github.com/colinhacks/zod",
       "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
-      "generation": "abb0886cb2b4dac3a2dd2d30f70cea249c32ccec1daee7b175accc25be0a7200",
+      "generation": "148cf98bd2456e15a89d73a778ad2f40879ec2ec4ca1e82539e48d023ed80c3a",
       "cacheRoundTrip": {
         "edges": 54862,
         "resolved": 20087
@@ -762,14 +762,14 @@
           "bound-symbol-missing": 349,
           "import-target-unresolved": 19837,
           "re-export-incomplete": 78,
-          "receiver-unresolved": 10647,
-          "unbound-global": 1979
+          "receiver-unresolved": 10518,
+          "unbound-global": 2108
         },
         "resolvedShare": 0.376,
         "unresolvedImportCalls": 19837,
-        "unboundGlobalCalls": 1979,
+        "unboundGlobalCalls": 2108,
         "resolvedShareExcludingUnresolvedImports": 0.5982,
-        "resolvedShareExcludingExternal": 0.6357
+        "resolvedShareExcludingExternal": 0.6383
       },
       "languages": [
         {
@@ -848,14 +848,14 @@
           "byReason": {
             "binding-blocked": 11,
             "import-target-unresolved": 55,
-            "receiver-unresolved": 55,
-            "unbound-global": 22
+            "receiver-unresolved": 54,
+            "unbound-global": 23
           },
           "resolvedShare": 0.0467,
           "unresolvedImportCalls": 55,
-          "unboundGlobalCalls": 22,
+          "unboundGlobalCalls": 23,
           "resolvedShareExcludingUnresolvedImports": 0.0737,
-          "resolvedShareExcludingExternal": 0.0959
+          "resolvedShareExcludingExternal": 0.0972
         },
         {
           "language": "typescript",
@@ -878,14 +878,14 @@
             "bound-symbol-missing": 349,
             "import-target-unresolved": 19770,
             "re-export-incomplete": 78,
-            "receiver-unresolved": 10587,
-            "unbound-global": 1955
+            "receiver-unresolved": 10459,
+            "unbound-global": 2083
           },
           "resolvedShare": 0.377,
           "unresolvedImportCalls": 19770,
-          "unboundGlobalCalls": 1955,
+          "unboundGlobalCalls": 2083,
           "resolvedShareExcludingUnresolvedImports": 0.5997,
-          "resolvedShareExcludingExternal": 0.6369
+          "resolvedShareExcludingExternal": 0.6395
         }
       ],
       "limitations": [

@@ -219,16 +219,33 @@ export function formatStartingPoints(result: TaskContextResult): string {
   return lines.join("\n");
 }
 
-// The stop reason the agent reads once: the changed symbols and who depends on them, as indexed.
-export function formatStopReason(result: ImpactResult): string {
+// The stop reason the agent reads once: the changed symbols and who depends on them, grouped by file so a
+// large diff still names every file inside the budget, with the omitted remainder counted, never clipped mid-line.
+export function formatStopReason(result: ImpactResult, maxCodeUnits = hookStopCodeUnits): string {
   const changed = result.changes.map((change) => change.after?.symbol.qualifiedName ?? change.before?.symbol.qualifiedName ?? "<unknown>");
   const dependents = result.dependents.filter((dependent) => dependent.snapshot === "current");
-  const lines = [
-    `[osnova settle] The uncommitted diff touches ${changed.length} indexed symbols; ${dependents.length} indexed dependents were not part of the change. Check each dependent still holds, then finish (this notice fires once).`,
-    ...dependents.map((dependent) => `- ${dependent.symbol?.qualifiedName ?? dependent.file} ${dependent.file}${dependent.symbol === null ? "" : `:${dependent.symbol.span.startLine}`}`),
-  ];
-  if (result.uncertainty.unresolvedEdges > 0) lines.push(`${result.uncertainty.unresolvedEdges} unresolved edges are not listed; a missing dependent is not proof of absence.`);
-  return lines.join("\n");
+  const byFile = new Map<string, string[]>();
+  for (const dependent of dependents) {
+    const list = byFile.get(dependent.file) ?? [];
+    if (dependent.symbol !== null) list.push(`${dependent.symbol.qualifiedName.slice(dependent.symbol.qualifiedName.indexOf("#") + 1)}:${dependent.symbol.span.startLine}`);
+    byFile.set(dependent.file, list);
+  }
+  const files = [...byFile.entries()].sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
+  const head = `[osnova settle] The uncommitted diff touches ${changed.length} indexed symbols; ${dependents.length} indexed dependents in ${files.length} files were not part of the change. Check each dependent still holds, then finish (this notice fires once).`;
+  const tail = result.uncertainty.unresolvedEdges > 0 ? `${result.uncertainty.unresolvedEdges} unresolved edges are not listed; a missing dependent is not proof of absence.` : "";
+  const lines: string[] = [];
+  let used = head.length + (tail.length > 0 ? tail.length + 1 : 0) + 1;
+  let listed = 0;
+  for (const [file, symbols] of files) {
+    const shown = symbols.slice(0, 6);
+    const line = `- ${file}${symbols.length === 0 ? " (file level)" : `: ${shown.join(", ")}${symbols.length > shown.length ? ` and ${symbols.length - shown.length} more` : ""}`}`;
+    const omittedLine = `- ${files.length - listed} more files with ${files.slice(listed).reduce((sum, [, list]) => sum + Math.max(1, list.length), 0)} dependents omitted; osnova_settle lists them all.`;
+    if (used + line.length + 1 + (listed + 1 < files.length ? omittedLine.length + 1 : 0) > maxCodeUnits) { lines.push(omittedLine); break; }
+    lines.push(line);
+    used += line.length + 1;
+    listed += 1;
+  }
+  return [head, ...lines, ...(tail.length > 0 ? [tail] : [])].join("\n");
 }
 
 // The names a prompt spells as code: a backticked token, or a bare identifier with an inner capital,
