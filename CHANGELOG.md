@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `benchmarks/exactness/exactness-v1.json` gains four hand-verified call-site sets on ripgrep (`Searcher.line_terminator`, `LineTerminator.as_byte`) and gson (`JsonReader.beginObject`, `TypeToken.getRawType`), so the grep-versus-graph table covers Go, Rust and Java as well as Python and TypeScript; `benchmarks/results/grep-vs-graph-2026-09-18.json` records all nine on the released 0.6.0 code, including the two sets where the text search beats the graph on recall.
+
 ## 0.6.0 (2026-09-18)
 
 ### Added
