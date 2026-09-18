@@ -62,7 +62,8 @@ export function parseHookInput(raw: string): HookInput {
 export function workspaceRootFor(dir: string): string {
   try {
     const top = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return top.length > 0 ? top : path.resolve(dir);
+    // git prints forward slashes everywhere; resolve() gives the platform's form.
+    return top.length > 0 ? path.resolve(top) : path.resolve(dir);
   } catch { return path.resolve(dir); }
 }
 
