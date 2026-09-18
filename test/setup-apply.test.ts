@@ -98,7 +98,7 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
     const target = path.join(home, ".config", "opencode", "plugins", "osnova.js");
     const text = await fs.readFile(target, "utf8");
     expect(text).toContain("experimental.chat.system.transform");
-    expect(c.out.join("\n")).toMatch(/plugin, create, .*plugins\/osnova\.js/);
+    expect(c.out.join("\n")).toMatch(/plugin, create, .*plugins[\\/]osnova\.js/);
     c = capture();
     expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
     expect(c.out.join("\n")).toContain("plugin, unchanged");
@@ -114,7 +114,7 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
     expect(await fs.readFile(path.join(home, ".config", "kilo", "plugins", "osnova.js"), "utf8")).toContain("chat.message");
   });
 
-  it("the OpenCode plugin appends starting points to the user message and the contract to the system prompt", async () => {
+  it.skipIf(process.platform === "win32")("the OpenCode plugin appends starting points to the user message and the contract to the system prompt", async () => {
     const fake = path.join(home, "fake-osnova.mjs");
     await fs.writeFile(fake, "let raw=''; process.stdin.on('data',(d)=>raw+=d); process.stdin.on('end',()=>{ const e=process.argv[3]; const p=JSON.parse(raw||'{}'); process.stdout.write(e==='session'?'CONTRACT':e==='prompt'?`POINTS for ${p.prompt}`:''); });\n");
     const wrapper = path.join(home, "osnova-bin.sh");
