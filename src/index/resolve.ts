@@ -9,6 +9,8 @@ const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind
 // Languages whose receiver hints name a type without an import binding; a type not declared in the
 // file may still be the single declaration of that name in the same language family.
 const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
+// Builtin type names a receiver annotation or literal can carry: never a holder the index could define.
+const BUILTIN_TYPES = new Set(["string", "number", "boolean", "bigint", "symbol", "Array", "Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Object", "Function", "str", "list", "dict", "set", "tuple", "int", "float", "bool", "bytes"]);
 const goPackages = new WeakMap<FileCard, string>();
 // The package clause separates an external _test package from the production package in one directory.
 function goPackageOf(card: FileCard): string {
@@ -451,6 +453,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           }
         } else if (reference.kind === "local") {
           candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, reference.name));
+          // A same-file function named like a builtin (`export function string()`) is not the type a receiver carries.
+          if (binding.kind === "member" && BUILTIN_TYPES.has(reference.name) && !candidates.some(isHolder)) candidates = [];
           resolution = { status: "resolved", method: "lexical-definition" };
           if (candidates.length === 0 && binding.kind === "member") {
             const family = languageFamily(card.language);
@@ -458,7 +462,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             // Languages without import bindings for types may take the single declaration of that name in the family.
             if (TYPED_FAMILY.has(card.language) && new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1) { candidates = holders; resolution = { status: "resolved", method: "unique-name" }; }
             // A type no indexed file declares is a builtin or a dependency type: external, like an unbound global.
-            else if (holders.length === 0 && !(symbolsByName.get(reference.name) ?? []).some((symbol) => languageFamily(files.get(symbol.file)?.language) === family)) resolution = { status: "unresolved", reason: "unbound-global" };
+            // A language builtin stays external when the only same-named symbols are not holders (zod's `string()`
+            // factory does not make a `string`-typed receiver resolvable).
+            else if (holders.length === 0 && (BUILTIN_TYPES.has(reference.name) || !(symbolsByName.get(reference.name) ?? []).some((symbol) => languageFamily(files.get(symbol.file)?.language) === family))) resolution = { status: "unresolved", reason: "unbound-global" };
           }
         }
         let owner: OsnovaSymbol | undefined;

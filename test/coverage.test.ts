@@ -85,7 +85,7 @@ describe("external chains", () => {
     try {
       const root = path.join(temporary, "ws"); await fs.mkdir(root, { recursive: true });
       await fs.writeFile(path.join(root, "b.py"), "def use(xs):\n    rv = []\n    rv.append(1)\n    \", \".join(xs)\n    {}.get(\"a\")\n    \"x\".strip()\n    s = {1}\n    s.add(2)\n    return len(xs)\n");
-      await fs.writeFile(path.join(root, "c.ts"), "export function use(xs: string[]) {\n  const out = [];\n  out.push(1);\n  `a${xs}`.trim();\n  /x/.test('y');\n}\n");
+      await fs.writeFile(path.join(root, "c.ts"), "export function string() { return 1; }\nexport function use(xs: string[], s: string) {\n  const out = [];\n  out.push(1);\n  `a${xs}`.trim();\n  /x/.test('y');\n  s.endsWith('z');\n}\n");
       await fs.mkdir(path.join(root, "src/main/java/a"), { recursive: true });
       await fs.writeFile(path.join(root, "src/main/java/a/Helper.java"), "package a;\n\npublic class Helper { void hi() {} }\n");
       await fs.writeFile(path.join(root, "src/main/java/a/App.java"), "package a;\n\npublic class App {\n  void f() {\n    new Helper();\n    throw new IllegalArgumentException(\"x\");\n  }\n  void g() {\n    new StringBuilder();\n  }\n}\n");
@@ -94,7 +94,7 @@ describe("external chains", () => {
       const index = await buildIndex(root, { cacheDir: path.join(temporary, "cache") });
       const reason = (symbol: string) => [...index.outgoing(symbol)].filter((edge) => edge.kind === "calls").sort((a, b) => a.line - b.line).map((edge) => `${edge.toName}:${edge.evidence?.source === "syntax" ? (edge.evidence.resolution.status === "resolved" ? edge.toSymbol : edge.evidence.resolution.status === "unresolved" ? edge.evidence.resolution.reason : "ambiguous") : "?"}`);
       expect(reason("b.py#use")).toEqual(["append:unbound-global", "join:unbound-global", "get:unbound-global", "strip:unbound-global", "add:unbound-global", "len:unbound-global"]);
-      expect(reason("c.ts#use")).toEqual(["push:unbound-global", "trim:unbound-global", "test:unbound-global"]);
+      expect(reason("c.ts#use")).toEqual(["push:unbound-global", "trim:unbound-global", "test:unbound-global", "endsWith:unbound-global"]);
       expect(reason("src/main/java/a/App.java#App.f")).toEqual(["Helper:src/main/java/a/Helper.java#Helper", "IllegalArgumentException:unbound-global"]);
       expect(reason("src/main/java/a/App.java#App.g")).toEqual(["StringBuilder:unbound-global"]);
       expect(reason("m.go#use")).toEqual(["len:unbound-global"]);
