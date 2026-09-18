@@ -24,6 +24,10 @@ export default tseslint.config(
     },
   },
   {
+    files: ["integrations/**/*.js"],
+    languageOptions: { globals: { process: "readonly", setTimeout: "readonly", clearTimeout: "readonly", Buffer: "readonly" } },
+  },
+  {
     files: ["scripts/**/*.mjs"],
     languageOptions: {
       globals: {

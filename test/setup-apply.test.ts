@@ -72,3 +72,63 @@ describe("doctor client version check", () => {
     expect(report.ok).toBe(true);
   });
 });
+
+describe("hooks for Codex and Cursor", () => {
+  it("writes ~/.codex/hooks.json with additionalContext-shaped hooks and ~/.cursor/hooks.json with a stop follow-up", async () => {
+    let c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--client", "codex", "--home", home], c.io)).toBe(0);
+    const codex = JSON.parse(await fs.readFile(path.join(home, ".codex", "hooks.json"), "utf8"));
+    expect(codex.hooks.UserPromptSubmit[0].hooks[0].command).toBe("osnova hook prompt --client codex");
+    expect(codex.hooks.Stop[0].hooks[0].command).toBe("osnova hook stop --client codex");
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--client", "cursor", "--home", home], c.io)).toBe(0);
+    const cursor = JSON.parse(await fs.readFile(path.join(home, ".cursor", "hooks.json"), "utf8"));
+    expect(cursor.version).toBe(1);
+    expect(cursor.hooks.stop).toEqual([{ command: "osnova hook stop --client cursor", timeout: 30 }]);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--client", "cursor", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("hooks, unchanged");
+  });
+});
+
+describe("plugins for OpenCode, Kilo and Pi", () => {
+  it("copies the shipped plugin or extension file once and refuses to overwrite a different one", async () => {
+    let c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
+    const target = path.join(home, ".config", "opencode", "plugins", "osnova.js");
+    const text = await fs.readFile(target, "utf8");
+    expect(text).toContain("experimental.chat.system.transform");
+    expect(c.out.join("\n")).toMatch(/plugin, create, .*plugins\/osnova\.js/);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("plugin, unchanged");
+    await fs.writeFile(target, "// mine\n");
+    c = capture();
+    await expect(runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).rejects.toThrow(/nothing was written/);
+    expect(await fs.readFile(target, "utf8")).toBe("// mine\n");
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "pi", "--plugin", "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(path.join(home, ".pi", "agent", "extensions", "osnova.ts"), "utf8")).toContain("before_agent_start");
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "kilo", "--plugin", "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(path.join(home, ".config", "kilo", "plugins", "osnova.js"), "utf8")).toContain("chat.message");
+  });
+
+  it("the OpenCode plugin appends starting points to the user message and the contract to the system prompt", async () => {
+    const fake = path.join(home, "fake-osnova.mjs");
+    await fs.writeFile(fake, "let raw=''; process.stdin.on('data',(d)=>raw+=d); process.stdin.on('end',()=>{ const e=process.argv[3]; const p=JSON.parse(raw||'{}'); process.stdout.write(e==='session'?'CONTRACT':e==='prompt'?`POINTS for ${p.prompt}`:''); });\n");
+    const wrapper = path.join(home, "osnova-bin.sh");
+    await fs.writeFile(wrapper, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 });
+    process.env.OSNOVA_BIN = wrapper;
+    try {
+      const { OsnovaPlugin } = await import("../integrations/opencode/osnova.js");
+      const hooks = await OsnovaPlugin({ directory: home, worktree: home });
+      const system: string[] = [];
+      await hooks["experimental.chat.system.transform"]({}, { system });
+      expect(system).toEqual(["CONTRACT"]);
+      const parts = [{ type: "text", text: "why is total wrong" }];
+      await hooks["chat.message"]({}, { message: {}, parts });
+      expect(parts[0]!.text).toBe("why is total wrong\n\nPOINTS for why is total wrong");
+    } finally { delete process.env.OSNOVA_BIN; }
+  });
+});

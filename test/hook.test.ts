@@ -40,6 +40,10 @@ describe("osnova hook", () => {
       c = capture(JSON.stringify({ prompt: "why does renderInvoice return the wrong total", cwd: path.join(temporary, "missing") }));
       expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out).toEqual([]);
+      c = capture(payload);
+      expect(await runCli(["hook", "prompt", "--client", "codex", "--cache-dir", cacheDir], c.io)).toBe(0);
+      const codex = JSON.parse(c.out.join("\n"));
+      expect(codex.additionalContext).toContain("billing.ts#renderInvoice");
       c = capture();
       expect(await runCli(["hook", "install-preview", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
       const snippet = JSON.parse(c.out.join("\n").split("\n").slice(1).join("\n"));
@@ -108,6 +112,9 @@ describe("osnova hook", () => {
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, stop_hook_active: true }), c.io, { cacheDir });
       expect(c.out).toEqual([]);
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root }), c.io, { cacheDir, client: "cursor" });
+      expect(JSON.parse(c.out.join("\n")).followup_message).toContain("use.ts#report");
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 });
