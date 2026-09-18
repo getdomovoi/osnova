@@ -1,1 +1,1 @@
-export const OSNOVA_VERSION = "0.6.0";
+export const OSNOVA_VERSION = "0.6.1";

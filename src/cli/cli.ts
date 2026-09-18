@@ -50,7 +50,7 @@ usage:
   osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
-  osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks] [--plugin] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
+  osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|install-preview> [--client <claude-code|codex|cursor>] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
 
@@ -359,22 +359,24 @@ export async function runCli(
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {
-      const parsed = parseArgs({ args: rest, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, plugin: { type: "boolean" }, instructions: { type: "string" } } });
+      const parsed = parseArgs({ args: rest, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" } } });
       const mode = parsed.values.apply === true ? "apply" : parsed.values.preview === true ? "preview" : undefined;
       if (mode === undefined) throw new Error("osnova setup requires --preview or --apply");
       const client = parsed.values.client;
       if (client !== undefined && !setupClients.some((candidate) => candidate.id === client)) {
         throw new Error(`osnova setup --client must be one of: ${setupClients.map((candidate) => candidate.id).join(", ")}`);
       }
-      if (client === undefined && parsed.values.instructions === undefined && parsed.values.hooks !== true) throw new Error("osnova setup needs --client <id>, --hooks, --plugin and/or --instructions <file>");
+      if (client === undefined && parsed.values.instructions === undefined && parsed.values.hooks !== true && parsed.values.skill !== true) throw new Error("osnova setup needs --client <id>, --hooks, --plugin, --skill and/or --instructions <file>");
       if (parsed.values.hooks === true && client !== undefined && !hookClients.includes(client as HookClient)) throw new Error(`osnova setup --hooks supports --client ${hookClients.join(", ")}`);
       const command = parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined;
-      const { planMcp, planHooks, planPlugin, planInstructions, applyChanges, pluginClients } = await import("../diagnostics/setup-apply.js");
+      const { planMcp, planHooks, planPlugin, planSkill, planInstructions, applyChanges, pluginClients } = await import("../diagnostics/setup-apply.js");
+      if (parsed.values.skill === true && client !== undefined && client !== "claude-code") throw new Error("osnova setup --skill supports --client claude-code");
       if (parsed.values.plugin === true && (client === undefined || !(pluginClients as readonly string[]).includes(client))) throw new Error(`osnova setup --plugin supports --client ${pluginClients.join(", ")}`);
       const planned = [];
       if (client !== undefined) planned.push(await planMcp(client as SetupClientId, { home: parsed.values.home, configPath: parsed.values.config, command }));
       if (parsed.values.hooks === true) planned.push(await planHooks({ home: parsed.values.home, command, client: (client ?? "claude-code") as HookClient }));
       if (parsed.values.plugin === true) planned.push(await planPlugin(client as PluginClient, { home: parsed.values.home }));
+      if (parsed.values.skill === true) planned.push(await planSkill({ home: parsed.values.home }));
       if (parsed.values.instructions !== undefined) planned.push(await planInstructions(parsed.values.instructions));
       if (mode === "preview") {
         io.stdout(planned.map((change) => [`osnova setup preview: ${change.kind === "mcp" ? client : change.kind}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")).join("\n\n"));
