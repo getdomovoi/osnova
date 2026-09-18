@@ -19,7 +19,7 @@ class TsExtractor {
 
   def(name: string, kind: Parameters<Extractor["addDef"]>[1], node: Node, sigNode?: Node): void {
     if (!IDENTIFIER_RE.test(name)) return;
-    this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined, undefined, undefined, kind === "function" ? this.bindings.unwrapped(sigNode ?? node) : undefined);
+    this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined, undefined, undefined, kind === "function" ? this.bindings.unwrapped(sigNode ?? node) : undefined, kind === "function" ? this.bindings.elements(sigNode ?? node) : undefined, undefined, kind === "function" ? this.bindings.values(sigNode ?? node) : undefined);
   }
 }
 
@@ -78,7 +78,7 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
 }
 
 function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node) => void): void {
-  ex.out.addDef(name, "class", node, undefined, undefined, ex.bindings.heritage(node), ex.bindings.ownFields(node), undefined, undefined, ex.bindings.fieldTypes(node));
+  ex.out.addDef(name, "class", node, undefined, undefined, ex.bindings.heritage(node), ex.bindings.ownFields(node), undefined, undefined, ex.bindings.fieldTypes(node), undefined, undefined, ex.bindings.elementTypes(node), undefined, ex.bindings.valueTypes(node));
   ex.pushFrame(name);
   for (const child of childrenOf(node)) {
     if (child.type === "class_body" || child.type === "declaration_list") {
@@ -87,7 +87,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
         if (member.type === "method_definition" || (fieldValue !== null && FUNCTION_VALUE_NODES.has(fieldValue.type))) {
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {
-            ex.out.addDef(methodName, "method", member, fieldValue ?? undefined, memberKindOf(member, false), undefined, undefined, ex.bindings.returns(fieldValue ?? member), undefined, undefined, ex.bindings.unwrapped(fieldValue ?? member));
+            ex.out.addDef(methodName, "method", member, fieldValue ?? undefined, memberKindOf(member, false), undefined, undefined, ex.bindings.returns(fieldValue ?? member), undefined, undefined, ex.bindings.unwrapped(fieldValue ?? member), ex.bindings.elements(fieldValue ?? member), undefined, ex.bindings.values(fieldValue ?? member));
             ex.pushFrame(methodName);
             for (const bodyPart of childrenOf(member)) visit(bodyPart);
             ex.popFrame();
@@ -161,9 +161,9 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
               if (member.type === "method_signature" || functionTyped) methods.push(member);
               else if (member.type === "property_signature") fields.push(methodName);
             }
-            ex.out.addDef(name, "interface", node, undefined, undefined, ex.bindings.heritage(node), fields, undefined, undefined, ex.bindings.fieldTypes(node));
+            ex.out.addDef(name, "interface", node, undefined, undefined, ex.bindings.heritage(node), fields, undefined, undefined, ex.bindings.fieldTypes(node), undefined, undefined, ex.bindings.elementTypes(node), undefined, ex.bindings.valueTypes(node));
             ex.pushFrame(name);
-            for (const member of methods) ex.out.addDef(member.childForFieldName("name")!.text, "method", member, undefined, "instance", undefined, undefined, ex.bindings.returns(member));
+            for (const member of methods) ex.out.addDef(member.childForFieldName("name")!.text, "method", member, undefined, "instance", undefined, undefined, ex.bindings.returns(member), undefined, undefined, undefined, ex.bindings.elements(member), undefined, ex.bindings.values(member));
             ex.popFrame();
           }
           return;
