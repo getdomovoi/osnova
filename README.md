@@ -120,8 +120,8 @@ A call site counts as resolved when the index ties it to one definition through 
 |---|---|---:|---:|---:|---:|
 | click | python | 5018 | 1913 | 38.1% | 53.3% |
 | click | all | 5018 | 1913 | 38.1% | 53.3% |
-| cobra | go | 4373 | 1843 | 42.1% | 61.7% |
-| cobra | all | 4373 | 1843 | 42.1% | 61.7% |
+| cobra | go | 4373 | 1861 | 42.6% | 62.9% |
+| cobra | all | 4373 | 1861 | 42.6% | 62.9% |
 | gson | java | 23340 | 7230 | 31.0% | 34.1% |
 | gson | all | 23340 | 7230 | 31.0% | 34.1% |
 | humanizer | c_sharp | 28771 | 7597 | 26.4% | 38.5% |
