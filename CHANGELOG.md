@@ -4,6 +4,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- `osnova hook prompt` and `osnova hook session`: Claude Code hooks that read the payload on stdin and print starting points for the prompt (definitions and relationships from `footing`, callable and holder kinds only, under 1,024 code units) and the tool contract at session start. Nothing is printed on a slash command, a prompt under twelve characters, or any failure, and the hook always exits 0. `osnova hook install-preview` prints the settings snippet. The CLI wrapper now carries a caller-supplied stdin reader through to commands.
+
 ### Changed
 
 - Python `X | None`, `None | X`, `Optional[X]`, `t.Optional[X]` and `Union[X, None]` name `X` in parameter, return, field and collection annotations, as TypeScript already strips `null` and `undefined`; a union of two or more real types names no receiver. Overloads that differ only by `| None` now agree, so `get_current_context()` in click binds its result and the `ctx.invoke` sites in `decorators.py` resolve (click 38.2% to 38.5%).
