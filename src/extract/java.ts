@@ -23,7 +23,7 @@ export const javaAdapter: LanguageAdapter = {
               : node.type === "enum_declaration"
                 ? "enum"
                 : "class";
-          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
@@ -37,7 +37,7 @@ export const javaAdapter: LanguageAdapter = {
             nameNode = childrenOf(node).find((c) => c.type === "identifier") ?? null;
           }
           if (nameNode !== null) {
-            out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node));
+            out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();

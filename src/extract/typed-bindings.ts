@@ -27,13 +27,23 @@ export interface TypedSpec {
   readonly bases?: ((classNode: Node) => readonly string[]) | undefined;
   readonly innerType?: ((type: Node) => Node | null) | undefined;
   readonly unwrapCalls?: readonly string[] | undefined;
+  // What a collection type holds: the element type of a slice, array, list or set, or the value type of a map.
+  readonly contents?: ((type: Node | null) => { element?: Node | null | undefined; value?: Node | null | undefined } | undefined) | undefined;
+  // Index access (`xs[i]`, `m[k]`) and the operand it indexes.
+  readonly subscript?: ((node: Node) => Node | null) | undefined;
+  // Loop variables and what they range over; a declared type wins over the source's contents.
+  readonly loop?: ((node: Node) => ReadonlyArray<{ name: Node; type: Node | null; source: Node | null; mode?: "value" | "either" | undefined }>) | undefined;
+  // An untyped first parameter of a lambda passed to one of these methods takes the receiver's element.
+  readonly lambdaParam?: ((lambda: Node) => Node | null) | undefined;
+  readonly callbackMethods?: readonly string[] | undefined;
 }
 
 interface Import { readonly source: string; readonly name: string }
-interface Declaration { readonly at: number; readonly type: string | undefined; readonly owner?: ReceiverOwner | undefined; readonly importOf?: Import | undefined }
+interface Contents { readonly element?: string | undefined; readonly value?: string | undefined }
+interface Declaration { readonly at: number; readonly type: string | undefined; readonly owner?: ReceiverOwner | undefined; readonly importOf?: Import | undefined; readonly contents?: Contents | undefined }
 // Declarations keep their source position so a call sees the binding in force where it occurs,
 // not the last one declared in the scope.
-interface Scope { readonly parent: Scope | null; readonly names: Map<string, Declaration[]>; readonly fn: boolean; receiver?: { name: string; type: string } | undefined; className?: string | undefined; fields?: Map<string, string | undefined> | undefined; staticFn?: boolean | undefined }
+interface Scope { readonly parent: Scope | null; readonly names: Map<string, Declaration[]>; readonly fn: boolean; receiver?: { name: string; type: string } | undefined; className?: string | undefined; fields?: Map<string, { type: string | undefined; contents?: Contents | undefined }> | undefined; staticFn?: boolean | undefined }
 
 export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
@@ -42,7 +52,11 @@ export interface TypedBindings {
   returnTuple: (fn: Node) => (ReturnBinding | null)[] | undefined;
   memberKind: (fn: Node) => MemberKind | undefined;
   unwrapped: (fn: Node) => ReturnBinding | undefined;
+  elements: (fn: Node) => ReturnBinding | undefined;
+  values: (fn: Node) => ReturnBinding | undefined;
   fieldTypes: (members: readonly Node[]) => Record<string, SymbolBinding> | undefined;
+  elementTypes: (members: readonly Node[]) => Record<string, SymbolBinding> | undefined;
+  valueTypes: (members: readonly Node[]) => Record<string, SymbolBinding> | undefined;
 }
 
 export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings {
@@ -52,9 +66,9 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const fnScopes: Scope[] = [];
 
   const nearestFunction = (scope: Scope): Scope => { let current = scope; while (!current.fn && current.parent !== null) current = current.parent; return current; };
-  const bind = (scope: Scope, name: string, at: number, type: string | undefined, owner?: ReceiverOwner, importOf?: Import): void => {
+  const bind = (scope: Scope, name: string, at: number, type: string | undefined, owner?: ReceiverOwner, importOf?: Import, contents?: Contents): void => {
     const list = scope.names.get(name) ?? [];
-    list.push({ at, type, owner, importOf });
+    list.push({ at, type, owner, importOf, contents });
     scope.names.set(name, list);
   };
   const declared = (scope: Scope, name: string, at: number): Declaration | undefined => {
@@ -81,6 +95,13 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       }
     }
     return false;
+  };
+  const contentsOfType = (type: Node | null, site: Node): Contents | undefined => {
+    const found = spec.contents?.(type);
+    if (found === undefined) return undefined;
+    const element = knownType(spec.typeName(found.element ?? null), site);
+    const value = knownType(spec.typeName(found.value ?? null), site);
+    return element === undefined && value === undefined ? undefined : { element, value };
   };
   const knownType = (type: string | undefined, site: Node): string | undefined => type !== undefined && isTypeParameter(type, site) ? undefined : type;
   const ownerForType = (type: string, site?: Node): ReceiverOwner | undefined => {
@@ -126,6 +147,10 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const owner = calleeOwner(callee.object, scope, index);
       return owner?.kind === "return" ? { ...owner, unwrapped: true } : undefined;
     }
+    if (callee.name === "get" && callee.object !== null && callee.path === undefined) {
+      const known = pick(knownContentsOf(callee.object, scope), "either");
+      if (known !== undefined) return ownerForType(known);
+    }
     let of: Callee | undefined;
     const at = value.startIndex;
     const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text) : callee.path !== undefined ? importOf(callee.path) : undefined;
@@ -152,13 +177,50 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const fieldOwner = (scope: Scope, name: string): ReceiverOwner | undefined => {
     const cls = classOf(scope);
     if (cls === undefined || cls.fields === undefined || !cls.fields.has(name)) return undefined;
-    const type = cls.fields.get(name);
+    const type = cls.fields.get(name)?.type;
     return type === undefined ? undefined : ownerForType(type);
+  };
+  const fieldContents = (scope: Scope, name: string): Contents | undefined => classOf(scope)?.fields?.get(name)?.contents;
+  const pick = (contents: Contents | undefined, mode: "value" | "either" | undefined): string | undefined =>
+    contents === undefined ? undefined : mode === "value" ? contents.value : mode === "either" ? contents.value ?? contents.element : contents.element;
+  const STRIP = new Set(["parenthesized_expression", "reference_expression", "unary_expression"]);
+  const strip = (node: Node): Node => { let current = node; while (STRIP.has(current.type)) { const inner = childrenOf(current).find((child) => child.isNamed); if (inner === undefined) break; current = inner; } return current; };
+  const PASS_THROUGH = new Set(["iter", "iter_mut", "into_iter", "cloned", "copied", "stream", "values", "sorted", "distinct", "Where", "OrderBy", "OrderByDescending", "Distinct", "ToList", "ToArray", "AsEnumerable", "Skip", "Take", "Reverse"]);
+  // The contents recorded for a collection expression in this file: a binding, a field of this, or a
+  // pass-through call (`xs.iter()`, `list.stream()`) on one of those.
+  const knownContentsOf = (object: Node, scope: Scope): Contents | undefined => {
+    object = strip(object);
+    if (object.type === "identifier") {
+      for (let current: Scope | null = scope; current !== null; current = current.parent) { const found = declared(current, object.text, object.startIndex); if (found !== undefined) return reassigned.get(current)?.has(object.text) ? undefined : found.contents; }
+      return fieldContents(scope, object.text);
+    }
+    if (["field_access", "member_access_expression", "selector_expression", "field_expression"].includes(object.type)) {
+      const inner = object.childForFieldName("object") ?? object.childForFieldName("expression") ?? object.childForFieldName("operand") ?? object.childForFieldName("value");
+      const field = object.childForFieldName("field") ?? object.childForFieldName("name");
+      return inner !== null && field !== null && spec.thisNodes?.includes(inner.type) ? fieldContents(scope, field.text) : undefined;
+    }
+    if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression") {
+      const fn = object.type === "method_invocation" ? object : object.childForFieldName("function");
+      const callee = fn === null ? undefined : spec.callee(fn);
+      return callee?.object !== null && callee?.object !== undefined && callee.path === undefined && PASS_THROUGH.has(callee.name) ? knownContentsOf(callee.object, scope) : undefined;
+    }
+    return undefined;
+  };
+  // The element (or value) of a collection expression: a binding with recorded contents, or an element owner
+  // over the receiver so resolution can consult the holder's tables.
+  const elementOf = (object: Node, scope: Scope, mode?: "value" | "either"): ReceiverOwner | undefined => {
+    object = strip(object);
+    const name = pick(knownContentsOf(object, scope), mode);
+    if (name !== undefined) return ownerForType(name);
+    const base = receiverOf(object, scope);
+    return base === undefined ? undefined : { kind: "element", of: base, ...(mode === undefined ? {} : { mode }) };
   };
   const receiverOf = (object: Node, scope: Scope): ReceiverOwner | undefined => {
     const at = object.startIndex;
     if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression" || object.type === "try_expression") return calleeOwner(object, scope);
     if (object.type === "parenthesized_expression") { const inner = childrenOf(object)[0]; return inner === undefined ? undefined : receiverOf(inner, scope); }
+    const indexed = spec.subscript?.(object);
+    if (indexed !== undefined && indexed !== null) return elementOf(indexed, scope, "either");
     if (spec.thisNodes?.includes(object.type)) {
       const cls = classOf(scope);
       return cls?.className === undefined || nearestFunction(scope).staticFn === true ? undefined : { kind: "local", name: cls.className };
@@ -196,19 +258,31 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const visit = (node: Node, outer: Scope): void => {
     let scope = outer;
     if (spec.classNodes?.includes(node.type)) {
-      const fields = new Map<string, string | undefined>();
-      for (const member of childrenOf(node.childForFieldName("body") ?? node)) for (const field of spec.field?.(member) ?? []) if (!field.isStatic) fields.set(field.name, spec.typeName(field.type));
+      const fields = new Map<string, { type: string | undefined; contents?: Contents | undefined }>();
+      for (const member of childrenOf(node.childForFieldName("body") ?? node)) for (const field of spec.field?.(member) ?? []) if (!field.isStatic) fields.set(field.name, { type: spec.typeName(field.type), contents: contentsOfType(field.type, member) });
       scope = { parent: outer, names: new Map(), fn: false, className: node.childForFieldName("name")?.text, fields };
     } else if (spec.functionNodes.includes(node.type)) {
       scope = { parent: outer, names: new Map(), fn: true, receiver: spec.receiver(node), staticFn: spec.isStatic?.(node) ?? false };
       fnScopes.push(scope);
       for (const child of childrenOf(node)) {
         const parameter = spec.parameter(child);
-        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, knownType(spec.typeName(parameter.type), node));
+        if (parameter !== undefined) bind(scope, parameter.name.text, node.startIndex, knownType(spec.typeName(parameter.type), node), undefined, undefined, contentsOfType(parameter.type, node));
         for (const nested of childrenOf(child)) {
           const inner = spec.parameter(nested);
-          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, knownType(spec.typeName(inner.type), node));
+          if (inner !== undefined) bind(scope, inner.name.text, node.startIndex, knownType(spec.typeName(inner.type), node), undefined, undefined, contentsOfType(inner.type, node));
         }
+      }
+      // `xs.forEach(x -> ..)`: an untyped first lambda parameter takes the element of the receiver.
+      const lambdaName = spec.lambdaParam?.(node);
+      let argumentsNode = node.parent;
+      if (argumentsNode?.type === "argument") argumentsNode = argumentsNode.parent;
+      const call = argumentsNode?.parent;
+      const callee = call === null || call === undefined ? undefined : spec.callee(call.type === "method_invocation" ? call : call.childForFieldName("function") ?? call);
+      const firstArgument = argumentsNode === null || argumentsNode === undefined ? undefined : childrenOf(argumentsNode).find((child) => child.isNamed);
+      const firstIs = firstArgument !== undefined && (firstArgument.id === node.id || (firstArgument.type === "argument" && childrenOf(firstArgument).some((child) => child.id === node.id)));
+      if (lambdaName !== null && lambdaName !== undefined && firstIs && callee?.object !== null && callee?.object !== undefined && callee.path === undefined && spec.callbackMethods?.includes(callee.name)) {
+        const owner = elementOf(callee.object, outer);
+        if (owner !== undefined) bind(scope, lambdaName.text, node.startIndex, undefined, owner);
       }
     } else if (spec.scopeNodes.includes(node.type)) {
       scope = { parent: outer, names: new Map(), fn: false };
@@ -219,7 +293,13 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const declaredType = knownType(spec.typeName(local.type), node);
       const constructed = declaredType ?? spec.constructed(local.value);
       const produced = constructed === undefined && local.value !== null ? calleeOwner(local.value, scope, local.index) : undefined;
-      bind(scope, local.name.text, node.startIndex, constructed, produced);
+      const indexed = constructed === undefined && produced === undefined && local.value !== null ? spec.subscript?.(strip(local.value)) : undefined;
+      bind(scope, local.name.text, node.startIndex, constructed, produced ?? (indexed === undefined || indexed === null ? undefined : elementOf(indexed, scope, "either")), undefined, contentsOfType(local.type, node));
+    }
+    for (const item of spec.loop?.(node) ?? []) {
+      const declaredType = knownType(spec.typeName(item.type), node);
+      if (declaredType !== undefined) bind(scope, item.name.text, node.startIndex, declaredType, undefined, undefined, contentsOfType(item.type, node));
+      else if (item.source !== null) { const owner = elementOf(item.source, scope, item.mode); if (owner !== undefined) bind(scope, item.name.text, node.startIndex, undefined, owner); }
     }
     for (const target of spec.assigned(node)) {
       const owner = declaringScope(scope, target.text);
@@ -231,6 +311,16 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   };
   visit(root, module);
 
+  const contentTable = (members: readonly Node[], which: "element" | "value"): Record<string, SymbolBinding> | undefined => {
+    const out: Record<string, SymbolBinding> = {};
+    for (const member of members) for (const field of spec.field?.(member) ?? []) {
+      if (field.isStatic) continue;
+      const type = contentsOfType(field.type, member)?.[which];
+      const owner = type === undefined ? undefined : asReturn(ownerForType(type, member));
+      if (owner !== undefined) out[field.name] = owner;
+    }
+    return Object.keys(out).length === 0 ? undefined : out;
+  };
   return {
     at(fn, site) {
       if (fn === null) return undefined;
@@ -279,6 +369,10 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const owner = name === undefined ? undefined : ownerForType(name, fn);
       return asReturn(owner);
     },
+    elements(fn) { const name = spec.contents?.(spec.returnType(fn))?.element; const type = knownType(spec.typeName(name ?? null), fn); return type === undefined ? undefined : asReturn(ownerForType(type, fn)); },
+    values(fn) { const name = spec.contents?.(spec.returnType(fn))?.value; const type = knownType(spec.typeName(name ?? null), fn); return type === undefined ? undefined : asReturn(ownerForType(type, fn)); },
+    elementTypes: (members) => contentTable(members, "element"),
+    valueTypes: (members) => contentTable(members, "value"),
     fieldTypes: (members) => {
       const out: Record<string, SymbolBinding> = {};
       for (const member of members) for (const field of spec.field?.(member) ?? []) {
@@ -314,6 +408,24 @@ const simpleType = (node: Node | null, wrappers: readonly string[]): string | un
 export const goSpec: TypedSpec = {
   functionNodes: ["function_declaration", "method_declaration", "func_literal"],
   scopeNodes: ["block", "if_statement", "for_statement"],
+  contents: (type) => {
+    let current = type;
+    while (current !== null && (current.type === "pointer_type" || current.type === "parenthesized_type")) current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
+    if (current === null) return undefined;
+    if (current.type === "slice_type" || current.type === "array_type") return { element: current.childForFieldName("element") };
+    if (current.type === "map_type") return { value: current.childForFieldName("value") };
+    return undefined;
+  },
+  subscript: (node) => node.type === "index_expression" ? node.childForFieldName("operand") : null,
+  loop: (node) => {
+    if (node.type !== "for_statement") return [];
+    const range = childrenOf(node).find((child) => child.type === "range_clause");
+    if (range === undefined) return [];
+    const names = childrenOf(range.childForFieldName("left") ?? range).filter((child) => child.type === "identifier");
+    const source = range.childForFieldName("right");
+    const second = names[1];
+    return second === undefined ? [] : [{ name: second, type: null, source, mode: "either" }];
+  },
   field: (node) => {
     if (node.type !== "field_declaration") return [];
     const type = node.childForFieldName("type");
@@ -397,6 +509,27 @@ export const goSpec: TypedSpec = {
 
 export const rustSpec: TypedSpec = {
   functionNodes: ["function_item", "closure_expression"],
+  contents: (type) => {
+    let current = type;
+    while (current !== null && current.type === "reference_type") current = current.childForFieldName("type") ?? childrenOf(current).find((child) => child.isNamed && child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null;
+    if (current === null) return undefined;
+    if (current.type === "slice_type" || current.type === "array_type") return { element: current.childForFieldName("element") ?? childrenOf(current).find((child) => child.isNamed) ?? null };
+    if (current.type !== "generic_type") return undefined;
+    const base = current.childForFieldName("type") ?? childrenOf(current)[0];
+    const name = base === undefined ? undefined : base.type === "type_identifier" ? base.text : base.type === "scoped_type_identifier" ? base.childForFieldName("name")?.text : undefined;
+    const arguments_ = childrenOf(childrenOf(current).find((child) => child.type === "type_arguments") ?? current).filter((child) => child.isNamed);
+    if (name !== undefined && ["Vec", "VecDeque", "HashSet", "BTreeSet", "LinkedList", "BinaryHeap"].includes(name)) return { element: arguments_[0] ?? null };
+    if (name !== undefined && ["HashMap", "BTreeMap"].includes(name)) return { value: arguments_[1] ?? null };
+    return undefined;
+  },
+  subscript: (node) => node.type === "index_expression" ? childrenOf(node).find((child) => child.isNamed) ?? null : null,
+  loop: (node) => {
+    if (node.type !== "for_expression") return [];
+    const pattern = node.childForFieldName("pattern");
+    return pattern?.type === "identifier" ? [{ name: pattern, type: null, source: node.childForFieldName("value") }] : [];
+  },
+  lambdaParam: (lambda) => { const parameters = lambda.childForFieldName("parameters"); const first = parameters === null ? undefined : childrenOf(parameters).find((child) => child.isNamed); return first?.type === "identifier" ? first : null; },
+  callbackMethods: ["map", "filter", "for_each", "any", "all", "find", "filter_map", "flat_map", "position", "take_while", "skip_while", "inspect", "max_by_key", "min_by_key", "sort_by_key", "retain", "partition", "find_map"],
   unwrapCalls: ["unwrap", "expect", "unwrap_or_default", "unwrap_unchecked"],
   innerType: (type) => {
     if (type.type !== "generic_type") return null;
@@ -492,6 +625,33 @@ const modifiersStatic = (node: Node): boolean => childrenOf(node).some((child) =
 
 export const javaSpec: TypedSpec = {
   functionNodes: ["method_declaration", "constructor_declaration", "lambda_expression"],
+  contents: (type) => {
+    if (type === null) return undefined;
+    if (type.type === "array_type") return { element: type.childForFieldName("element") };
+    if (type.type !== "generic_type") return undefined;
+    const base = childrenOf(type).find((child) => child.type === "type_identifier" || child.type === "scoped_type_identifier");
+    const name = base?.type === "scoped_type_identifier" ? base.childForFieldName("name")?.text : base?.text;
+    const arguments_ = childrenOf(childrenOf(type).find((child) => child.type === "type_arguments") ?? type).filter((child) => child.isNamed);
+    if (name !== undefined && ["List", "ArrayList", "LinkedList", "Collection", "Iterable", "Iterator", "Set", "HashSet", "LinkedHashSet", "TreeSet", "SortedSet", "Deque", "ArrayDeque", "Queue", "Stream", "Optional"].includes(name)) return { element: arguments_[0] ?? null };
+    if (name !== undefined && ["Map", "HashMap", "LinkedHashMap", "TreeMap", "SortedMap", "ConcurrentHashMap", "ConcurrentMap"].includes(name)) return { value: arguments_[1] ?? null };
+    return undefined;
+  },
+  subscript: (node) => node.type === "array_access" ? node.childForFieldName("array") : null,
+  loop: (node) => {
+    if (node.type !== "enhanced_for_statement") return [];
+    const name = node.childForFieldName("name");
+    const type = node.childForFieldName("type");
+    return name === null ? [] : [{ name, type: type?.text === "var" ? null : type, source: node.childForFieldName("value") }];
+  },
+  lambdaParam: (lambda) => {
+    if (lambda.type !== "lambda_expression") return null;
+    const parameters = lambda.childForFieldName("parameters");
+    if (parameters === null) return null;
+    if (parameters.type === "identifier") return parameters;
+    const first = childrenOf(parameters).find((child) => child.isNamed);
+    return first?.type === "identifier" ? first : null;
+  },
+  callbackMethods: ["forEach", "map", "filter", "anyMatch", "allMatch", "noneMatch", "removeIf", "sort", "flatMap", "mapToInt", "mapToLong", "mapToObj", "peek", "takeWhile", "dropWhile", "sorted", "min", "max", "reduce", "ifPresent", "orElseGet"],
   scopeNodes: ["block", "for_statement", "enhanced_for_statement", "if_statement", "try_statement", "catch_clause"],
   classNodes: ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"],
   thisNodes: ["this"],
@@ -548,7 +708,38 @@ export const javaSpec: TypedSpec = {
 
 export const csharpSpec: TypedSpec = {
   functionNodes: ["method_declaration", "constructor_declaration", "local_function_statement", "lambda_expression", "anonymous_method_expression"],
-  scopeNodes: ["block", "for_statement", "foreach_statement", "if_statement", "try_statement", "catch_clause", "using_statement"],
+  contents: (type) => {
+    let current = type;
+    while (current !== null && current.type === "nullable_type") current = childrenOf(current)[0] ?? null;
+    if (current === null) return undefined;
+    if (current.type === "array_type") return { element: current.childForFieldName("type") };
+    if (current.type === "qualified_name") current = current.childForFieldName("name");
+    if (current === null || current.type !== "generic_name") return undefined;
+    const name = childrenOf(current).find((child) => child.type === "identifier")?.text;
+    const arguments_ = childrenOf(childrenOf(current).find((child) => child.type === "type_argument_list") ?? current).filter((child) => child.isNamed);
+    if (name !== undefined && ["List", "IList", "IEnumerable", "ICollection", "IReadOnlyList", "IReadOnlyCollection", "HashSet", "ISet", "IReadOnlySet", "Queue", "Stack", "ImmutableArray", "ImmutableList", "ImmutableHashSet", "IImmutableList", "IImmutableSet", "Collection", "ObservableCollection", "LinkedList", "SortedSet", "Span", "ReadOnlySpan", "Memory", "ReadOnlyMemory", "IOrderedEnumerable", "IQueryable"].includes(name)) return { element: arguments_[0] ?? null };
+    if (name !== undefined && ["Dictionary", "IDictionary", "IReadOnlyDictionary", "ImmutableDictionary", "IImmutableDictionary", "ConcurrentDictionary", "SortedDictionary", "SortedList"].includes(name)) return { value: arguments_[1] ?? null };
+    return undefined;
+  },
+  subscript: (node) => node.type === "element_access_expression" ? node.childForFieldName("expression") : null,
+  loop: (node) => {
+    if (node.type !== "for_each_statement") return [];
+    const name = node.childForFieldName("left");
+    const type = node.childForFieldName("type");
+    return name?.type === "identifier" ? [{ name, type: type === null || type.type === "implicit_type" ? null : type, source: node.childForFieldName("right") }] : [];
+  },
+  lambdaParam: (lambda) => {
+    if (lambda.type !== "lambda_expression") return null;
+    const parameters = lambda.childForFieldName("parameters") ?? childrenOf(lambda).find((child) => child.type === "identifier" || child.type === "parameter_list") ?? null;
+    if (parameters === null) return null;
+    if (parameters.type === "identifier") return parameters;
+    const first = childrenOf(parameters).find((child) => child.isNamed);
+    if (first === undefined) return null;
+    if (first.type === "identifier") return first;
+    return first.type === "parameter" && first.childForFieldName("type") === null ? first.childForFieldName("name") : null;
+  },
+  callbackMethods: ["ForEach", "Where", "Select", "SelectMany", "Any", "All", "First", "FirstOrDefault", "Last", "LastOrDefault", "Single", "SingleOrDefault", "Count", "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending", "GroupBy", "TakeWhile", "SkipWhile", "Find", "FindAll", "FindIndex", "Exists", "RemoveAll", "Sum", "Max", "Min", "MaxBy", "MinBy", "ToDictionary", "ToLookup", "Aggregate", "Distinct", "DistinctBy", "TrueForAll", "ConvertAll"],
+  scopeNodes: ["block", "for_statement", "for_each_statement", "if_statement", "try_statement", "catch_clause", "using_statement"],
   classNodes: ["class_declaration", "struct_declaration", "record_declaration", "interface_declaration"],
   thisNodes: ["this_expression"],
   isStatic: modifiersStatic,

@@ -610,7 +610,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           // Builtin collections have no indexed holder: `xs.filter(..)` keeps the element type, `map.values()`
           // yields the value or element type, and `map.get(k)` produces the value type.
-          const PASS_THROUGH = new Set(["filter", "slice", "concat", "reverse", "sort", "toSorted", "toReversed", "values"]);
+          const PASS_THROUGH = new Set(["filter", "slice", "concat", "reverse", "sort", "toSorted", "toReversed", "values", "iter", "iter_mut", "into_iter", "cloned", "copied", "stream", "sorted", "distinct", "Where", "OrderBy", "OrderByDescending", "ThenBy", "Distinct", "ToList", "ToArray", "AsEnumerable", "Skip", "Take", "Reverse", "ToImmutableArray", "ToImmutableList"]);
           // Why a receiver chain stopped: it ended on a type no indexed file declares (external, like an
           // unbound global) or on an import the index cannot follow. Unknown otherwise.
           const terminalOfBinding = (file: string, binding: SymbolBinding): "external" | "unresolved-import" | undefined => {
@@ -684,7 +684,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter(isHolder) ?? null);
             const found = callablesOf(ref.of, depth);
             if (found !== undefined && found.callables !== null && found.callables.length > 0) return holderOfCallables(found.callables, found.holder, found.mode, selectOf(ref));
-            if (ref.of.kind === "method" && ref.of.member === "get" && ref.index === undefined && ref.unwrapped === undefined) return holderOf({ kind: "element", of: ref.of.owner, mode: "value" }, depth + 1);
+            if (ref.of.kind === "method" && ref.of.member === "get" && ref.index === undefined) return holderOf({ kind: "element", of: ref.of.owner, mode: "either" }, depth + 1);
             return undefined;
           };
           const rootImportUnresolved = (ref: ReceiverOwner | Callee, depth = 0): boolean => {
