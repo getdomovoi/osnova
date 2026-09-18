@@ -56,8 +56,12 @@ describe("osnova hook", () => {
       expect(snippet.hooks.UserPromptSubmit[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook prompt");
       expect(snippet.hooks.SessionStart[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook session");
       expect(snippet.hooks.Stop[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook stop");
-      expect(snippet.hooks.PostToolUse[0].matcher).toBe("Grep|Bash");
-      expect(snippet.hooks.PostToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook tool");
+      expect(snippet.hooks.PostToolUse).toBeUndefined();
+      c = capture();
+      expect(await runCli(["hook", "install-preview", "--nudge", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
+      const withNudge = JSON.parse(c.out.join("\n").split("\n").slice(1).join("\n"));
+      expect(withNudge.hooks.PostToolUse[0].matcher).toBe("Grep|Bash");
+      expect(withNudge.hooks.PostToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook tool");
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
