@@ -9,6 +9,7 @@ import { resolveCacheDir } from "../cache/cache.js";
 import { getParser } from "../grammar/loader.js";
 import { extensionLanguage, grammarFile, languageTier } from "../grammar/languages.js";
 import type { LanguageId } from "../types.js";
+import { pluginClients, pluginSource, pluginTarget, skillSource, skillTarget } from "./setup-apply.js";
 
 export interface DiagnosticCheck {
   readonly id: string;
@@ -80,6 +81,28 @@ export async function clientVersionChecks(home: string): Promise<DiagnosticCheck
       checks.push({ id: `client:${role}`, status: "warning", message: `${command} did not answer --version: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
+  return checks;
+}
+
+// The plugin and skill files osnova setup copies: present and identical to what this osnova ships, or
+// present and different (an older osnova, or a hand edit), which is what "setup --apply" refuses to overwrite.
+export async function integrationFileChecks(home: string): Promise<DiagnosticCheck[]> {
+  const entries = [
+    ...pluginClients.map((client) => ({ id: `plugin:${client}`, target: pluginTarget(client, home), source: pluginSource(client), fix: `osnova setup --apply --client ${client} --plugin` })),
+    { id: "skill:claude-code", target: skillTarget(home), source: skillSource(), fix: "osnova setup --apply --skill" },
+  ];
+  const checks: DiagnosticCheck[] = [];
+  const normalized = (text: string): string => text.replace(/\r\n/g, "\n");
+  for (const entry of entries) {
+    const installed = await readFile(entry.target, "utf8").catch(() => undefined);
+    if (installed === undefined) continue;
+    const shipped = await readFile(entry.source, "utf8").catch(() => undefined);
+    if (shipped === undefined) { checks.push({ id: entry.id, status: "warning", message: `${entry.target} is installed but this osnova ships no such file.` }); continue; }
+    checks.push(normalized(installed) === normalized(shipped)
+      ? { id: entry.id, status: "ok", message: `${entry.target} matches the file this osnova ships.` }
+      : { id: entry.id, status: "warning", message: `${entry.target} differs from the file this osnova ships; remove it and run ${entry.fix} to refresh it.` });
+  }
+  if (checks.length === 0) checks.push({ id: "integrations", status: "ok", message: "No osnova plugin or skill file is installed for OpenCode, Kilo, Pi or Claude Code." });
   return checks;
 }
 
@@ -181,7 +204,8 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     });
     checks.push({ id: `grammar:${language}`, status, message: status === "ok" ? "Packaged WASM loaded and parsed a synthetic snippet without syntax errors." : "WASM load or synthetic parse failed; check installed parser and grammar assets. No download attempted." });
   }
-  checks.push(...(await clientVersionChecks(path.resolve(options.home ?? os.homedir()))));
+  const home = path.resolve(options.home ?? os.homedir());
+  checks.push(...(await clientVersionChecks(home)), ...(await integrationFileChecks(home)));
   return {
     ok: checks.every((check) => check.status !== "error"), readOnly: true, checks, capabilities,
     fallback: "Other eligible text files receive file cards without structural extraction. Declaration files may be excluded; scan eligibility is separate from grammar availability.",

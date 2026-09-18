@@ -9,6 +9,8 @@ const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind
 // Languages whose receiver hints name a type without an import binding; a type not declared in the
 // file may still be the single declaration of that name in the same language family.
 const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
+// Builtin type names a receiver annotation or literal can carry: never a holder the index could define.
+const BUILTIN_TYPES = new Set(["string", "number", "boolean", "bigint", "symbol", "Array", "Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Object", "Function", "str", "list", "dict", "set", "tuple", "int", "float", "bool", "bytes"]);
 const goPackages = new WeakMap<FileCard, string>();
 // The package clause separates an external _test package from the production package in one directory.
 function goPackageOf(card: FileCard): string {
@@ -97,6 +99,8 @@ export interface WorkspaceContext {
   readonly pythonRoots: readonly PythonRoot[];
   readonly goModules: ReadonlyMap<string, string>;
   readonly cargoRoots: readonly string[];
+  /** Workspace crate name (hyphens as underscores, as a Rust path spells it) to the crate directory. */
+  readonly cargoPackages: ReadonlyMap<string, string>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -104,6 +108,7 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   const pythonRoots = new Map<string, PythonRoot>([["\0", { dir: "", manifest: "" }]]);
   const goModules = new Map<string, string>();
   const cargoRoots: string[] = [];
+  const cargoPackages = new Map<string, string>();
   for (const [file, card] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     const base = path.posix.basename(file);
     const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
@@ -120,13 +125,16 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       if (match?.[1] !== undefined) goModules.set(match[1], dir);
     } else if (base === "Cargo.toml") {
       cargoRoots.push(dir);
+      const packageSection = /^\s*\[package\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
+      const name = packageSection === undefined ? undefined : /^\s*name\s*=\s*"([^"]+)"/m.exec(packageSection)?.[1];
+      if (name !== undefined) cargoPackages.set(name.replace(/-/g, "_"), dir);
     } else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
       pythonRoots.set(`${dir}\0${dir}`, { dir, manifest: dir });
       const src = dir === "" ? "src" : `${dir}/src`;
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort() };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -230,7 +238,8 @@ function resolveGoPackage(spec: string, knownFiles: ReadonlySet<string>, context
 }
 
 // A Rust path resolves against the crate whose Cargo.toml is nearest above the file: crate:: from
-// its src directory, super:: and self:: from the module directory of the importing file. The
+// its src directory, super:: and self:: from the module directory of the importing file, and any
+// other head against the workspace crate of that package name. The
 // longest file prefix wins, so an inline module inside a file still lands on that file.
 function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): string | undefined {
   const segments = spec.split("::").filter((part) => part.length > 0);
@@ -251,7 +260,13 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
     while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
     start = dir;
     rest = segments.slice(index);
-  } else return undefined;
+  } else {
+    // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
+    const crate = context.cargoPackages.get(head);
+    if (crate === undefined) return undefined;
+    start = crate === "" ? "src" : `${crate}/src`;
+    rest = segments.slice(1);
+  }
   for (let take = rest.length; take >= 0; take -= 1) {
     const modulePath = path.posix.join(start, ...rest.slice(0, take));
     const candidates = take === 0 ? [`${modulePath}/lib.rs`, `${modulePath}/main.rs`, `${modulePath}/mod.rs`] : [`${modulePath}.rs`, `${modulePath}/mod.rs`];
@@ -438,6 +453,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           }
         } else if (reference.kind === "local") {
           candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, reference.name));
+          // A same-file function named like a builtin (`export function string()`) is not the type a receiver carries.
+          if (binding.kind === "member" && BUILTIN_TYPES.has(reference.name) && !candidates.some(isHolder)) candidates = [];
           resolution = { status: "resolved", method: "lexical-definition" };
           if (candidates.length === 0 && binding.kind === "member") {
             const family = languageFamily(card.language);
@@ -445,7 +462,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             // Languages without import bindings for types may take the single declaration of that name in the family.
             if (TYPED_FAMILY.has(card.language) && new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1) { candidates = holders; resolution = { status: "resolved", method: "unique-name" }; }
             // A type no indexed file declares is a builtin or a dependency type: external, like an unbound global.
-            else if (holders.length === 0 && !(symbolsByName.get(reference.name) ?? []).some((symbol) => languageFamily(files.get(symbol.file)?.language) === family)) resolution = { status: "unresolved", reason: "unbound-global" };
+            // A language builtin stays external when the only same-named symbols are not holders (zod's `string()`
+            // factory does not make a `string`-typed receiver resolvable).
+            else if (holders.length === 0 && (BUILTIN_TYPES.has(reference.name) || !(symbolsByName.get(reference.name) ?? []).some((symbol) => languageFamily(files.get(symbol.file)?.language) === family))) resolution = { status: "unresolved", reason: "unbound-global" };
           }
         }
         let owner: OsnovaSymbol | undefined;
@@ -754,7 +773,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const resolved = names.length === 1 ? preferred[0] : undefined;
       const resolution: EdgeResolution = names.length > 1
         ? { status: "ambiguous", candidates: names }
-        : resolved === undefined ? { status: "unresolved", reason: "no-matching-symbol" }
+        // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of
+        // the family defines is a builtin or a standard-library name: external, like an unbound global.
+        : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
           : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : imported.length > 0 ? "imported-file-name" : "unique-name" };
       edges.push(
         resolved === undefined
