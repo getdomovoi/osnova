@@ -264,14 +264,28 @@ function symbolsNamed(index: OsnovaIndex, names: readonly string[], limit: numbe
 }
 
 // The identifier a Grep call or a Bash grep/rg command searched for, when the pattern is one plain identifier.
+// Flags that take a separate value are skipped with their value, so `rg -t ts name` finds `name`, not `ts`.
+const valueFlags = /^-(?:[fgtmABCdE]|-(?:file|glob|iglob|type|type-not|max-count|max-depth|context|after-context|before-context|include|exclude|exclude-dir|color|colour|sort|sortr|threads|regexp))$/;
 export function grepName(toolName: string | undefined, toolInput: Readonly<Record<string, unknown>> | undefined): string | null {
   if (toolInput === undefined) return null;
   let pattern: string | undefined;
   if (toolName === "Grep" && typeof toolInput.pattern === "string") pattern = toolInput.pattern;
   else if (toolName === "Bash" && typeof toolInput.command === "string") {
-    const match = /(?:^|[|;&]\s*)(?:rg|grep|git grep)\b((?:\s+-{1,2}[\w-]+(?:[= ]\S+)?)*)\s+("[^"]+"|'[^']+'|\S+)/.exec(toolInput.command);
+    const match = /(?:^|[|;&]\s*)(?:rg|grep|git grep)\b(.*)$/m.exec(toolInput.command);
     if (match === null) return null;
-    pattern = match[2]!.replace(/^["']|["']$/g, "");
+    const words = match[1]!.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    for (let i = 0; i < words.length; i += 1) {
+      const word = words[i]!;
+      if (word === "--") { pattern = words[i + 1]; break; }
+      if (word.startsWith("-")) {
+        if (/^-e$|^--regexp$/.test(word)) { pattern = words[i + 1]; break; }
+        if (valueFlags.test(word)) i += 1;
+        continue;
+      }
+      pattern = word; break;
+    }
+    if (pattern === undefined) return null;
+    pattern = pattern.replace(/^["']|["']$/g, "");
   }
   if (pattern === undefined) return null;
   const bare = pattern.replace(/^\\b|\\b$/g, "").replace(/^\^|\$$/g, "");
