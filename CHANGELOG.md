@@ -10,6 +10,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Added
 
+- `scripts/coverage-corpora.mjs` loads every corpus back from the cache it just wrote, decodes the edges and re-measures coverage on the reloaded index, so a binding shape the serializer accepts but the validator rejects fails the measurement instead of a fresh MCP process. The record carries `cacheRoundTrip` per corpus. On the code before #42 the pyright corpus fails this check with `cache-read-failed`.
 - `osnova mcp --watch`: a recursive file watcher marks the index stale on change and refreshes after a short debounce, so a query reuses the last verified index instead of hashing the working tree first. A verification older than 30 seconds, a change seen since it, or an unavailable watcher falls back to the per-query refresh. Changes under ignored directories such as `node_modules` and the cache directory are skipped.
 - A composite GitHub Action (`action.yml`, backed by `scripts/settle-ci.sh`) that indexes the pull request base and head at the same path, runs `osnova settle`, writes the dependents of the changed symbols to the job summary and optionally posts them as a comment. The repository runs it on its own pull requests through `.github/workflows/settle.yml`.
 - The README shows `plumb` checking a claimed caller list on the pinned click checkout, with the verdict semantics spelled out.
