@@ -549,7 +549,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
             symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
           // Every declaration sharing the qualified name (overloads) must agree on the return binding.
-          const holderOfCallables = (found: OsnovaSymbol[] | null, receiver: OsnovaSymbol | undefined, mode: ReceiverMode | undefined, index?: number, unwrapped?: true): OsnovaSymbol | undefined => {
+          const holderOfCallables = (found: OsnovaSymbol[] | null, receiver: OsnovaSymbol | undefined, mode: ReceiverMode | undefined, select: number | "returns" | "unwrapped" | "elements" | "values" = "returns"): OsnovaSymbol | undefined => {
             if (found === null || found.length === 0) return undefined;
             // An export lookup keeps one symbol per qualified name; every overload declaration must still agree.
             const callables = [...new Map(found.map((symbol) => [symbol.qualifiedName, symbol])).values()].flatMap((symbol) =>
@@ -558,7 +558,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (callables.some((symbol) => symbol.qualifiedName !== first.qualifiedName)) return undefined;
             if (first.kind === "class" || first.kind === "interface") return card.language === "python" && receiver === undefined ? first : undefined;
             if (first.kind !== "function" && first.kind !== "method") return undefined;
-            const returnOf = (symbol: OsnovaSymbol): ReturnBinding | null | undefined => unwrapped === true ? symbol.unwrapped : index === undefined ? symbol.returns : symbol.returnTuple?.[index];
+            const returnOf = (symbol: OsnovaSymbol): ReturnBinding | null | undefined => typeof select === "number" ? symbol.returnTuple?.[select] : symbol[select];
             if (callables.some((symbol) => returnOf(symbol) === undefined || returnOf(symbol) === null || JSON.stringify(returnOf(symbol)) !== JSON.stringify(returnOf(first)))) return undefined;
             if (first.kind === "method") {
               if (callables.some((symbol) => symbol.memberKind === undefined || symbol.memberKind === "property" || symbol.memberKind === "unknown")) return undefined;
@@ -570,16 +570,16 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             return unique(symbolsFor(first.file, returns)?.filter(isHolder) ?? null);
           };
           // The declared type of a field, own declarations first, then the single-base heritage walk.
-          const fieldTypeOf = (holder: OsnovaSymbol, member: string, depth: number, visited: Set<string>): { file: string; binding: SymbolBinding } | undefined => {
+          const fieldTypeOf = (holder: OsnovaSymbol, member: string, depth: number, visited: Set<string>, table: "fieldTypes" | "elementTypes" | "valueTypes" = "fieldTypes"): { file: string; binding: SymbolBinding } | undefined => {
             const declarations = declarationsOf(holder);
-            const own = declarations.flatMap((declaration) => { const binding = declaration.fieldTypes?.[member]; return binding === undefined ? [] : [{ file: declaration.file, binding }]; });
+            const own = declarations.flatMap((declaration) => { const binding = declaration[table]?.[member]; return binding === undefined ? [] : [{ file: declaration.file, binding }]; });
             if (own.length > 0) return new Set(own.map((item) => JSON.stringify(item))).size === 1 ? own[0] : undefined;
             if (declarations.some((declaration) => declaration.fields?.includes(member)) || depth >= 8) return undefined;
             let result: { file: string; binding: SymbolBinding } | undefined;
             for (const base of declarations.flatMap((declaration) => declaration.heritage ?? [])) {
               const target = basesOf(holder, base)?.[0];
               if (target === undefined || visited.has(target.qualifiedName)) return undefined;
-              const found = fieldTypeOf(target, member, depth + 1, new Set([...visited, target.qualifiedName]));
+              const found = fieldTypeOf(target, member, depth + 1, new Set([...visited, target.qualifiedName]), table);
               if (found === undefined) continue;
               if (result !== undefined && JSON.stringify(result) !== JSON.stringify(found)) return undefined;
               result = found;
@@ -594,8 +594,48 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             const found = exported(target, ref.importedName);
             return found.incomplete ? [] : [...new Set(found.namespaces.map((space) => space.file))];
           };
+          const selectOf = (ref: { index?: number | undefined; unwrapped?: true | undefined }, elements = false): number | "returns" | "unwrapped" | "elements" | "values" =>
+            elements ? "elements" : ref.unwrapped === true ? "unwrapped" : ref.index === undefined ? "returns" : ref.index;
+          // The callables a return owner names: a bound function, or a member of a holder or namespace.
+          const callablesOf = (of: Callee, depth: number): { callables: OsnovaSymbol[] | null; holder: OsnovaSymbol | undefined; mode: ReceiverMode | undefined } | undefined => {
+            if (of.kind === "local" || of.kind === "import") return { callables: symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, holder: undefined, mode: undefined };
+            const holder = holderOf(of.owner, depth + 1);
+            if (holder === undefined) {
+              const spaces = namespaceFilesOf(of.owner);
+              if (spaces.length !== 1) return undefined;
+              const found = exported(spaces[0]!, of.member);
+              return found.incomplete ? undefined : { callables: [...found.symbols.values()].filter((symbol) => symbol.kind === "function" || symbol.kind === "method"), holder: undefined, mode: undefined };
+            }
+            return { callables: inherited(holder, 0, new Set([holder.qualifiedName]), of.member), holder, mode: of.mode };
+          };
+          // Builtin collections have no indexed holder: `xs.filter(..)` keeps the element type, `map.values()`
+          // yields the value or element type, and `map.get(k)` produces the value type.
+          const PASS_THROUGH = new Set(["filter", "slice", "concat", "reverse", "sort", "toSorted", "toReversed", "values"]);
           const holderOf = (ref: ReceiverOwner, depth: number): OsnovaSymbol | undefined => {
             if (depth > 6) return undefined;
+            if (ref.kind === "element") {
+              // The element (or value) of a collection: a field's or a return type's recorded element type.
+              const inner = ref.of;
+              const tables: Array<"elementTypes" | "valueTypes"> = ref.mode === "value" ? ["valueTypes"] : ref.mode === "either" ? ["valueTypes", "elementTypes"] : ["elementTypes"];
+              const selects: Array<"elements" | "values"> = ref.mode === "value" ? ["values"] : ref.mode === "either" ? ["values", "elements"] : ["elements"];
+              if (inner.kind === "field") {
+                const holder = holderOf(inner.of, depth + 1);
+                if (holder === undefined) return undefined;
+                for (const table of tables) {
+                  const typed = fieldTypeOf(holder, inner.member, 0, new Set([holder.qualifiedName]), table);
+                  if (typed !== undefined) return unique(symbolsFor(typed.file, typed.binding)?.filter(isHolder) ?? null);
+                }
+                return undefined;
+              }
+              if (inner.kind !== "return" || inner.unwrapped === true || inner.index !== undefined) return undefined;
+              const found = callablesOf(inner.of, depth);
+              if (found !== undefined && found.callables !== null && found.callables.length > 0) {
+                for (const select of selects) { const holder = holderOfCallables(found.callables, found.holder, found.mode, select); if (holder !== undefined) return holder; }
+                return undefined;
+              }
+              if (inner.of.kind === "method" && PASS_THROUGH.has(inner.of.member)) return holderOf({ kind: "element", of: inner.of.owner, mode: inner.of.member === "values" ? "either" : ref.mode }, depth + 1);
+              return undefined;
+            }
             if (ref.kind === "field") {
               const holder = holderOf(ref.of, depth + 1);
               const typed = holder === undefined ? undefined : fieldTypeOf(holder, ref.member, 0, new Set([holder.qualifiedName]));
@@ -610,24 +650,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               return heritage.length === 1 && base !== undefined ? basesOf(cls, base)?.[0] : undefined;
             }
             if (ref.kind !== "return") return unique(symbolsFor(fromFile, ref)?.filter(isHolder) ?? null);
-            const of: Callee = ref.of;
-            if (of.kind === "local" || of.kind === "import") return holderOfCallables(symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, undefined, undefined, ref.index, ref.unwrapped);
-            const holder = holderOf(of.owner, depth + 1);
-            if (holder === undefined) {
-              // A member of a namespace import (`ns.make()`), direct or forwarded by a barrel, is that module's export.
-              const spaces = namespaceFilesOf(of.owner);
-              if (spaces.length !== 1) return undefined;
-              const found = exported(spaces[0]!, of.member);
-              return found.incomplete ? undefined : holderOfCallables([...found.symbols.values()].filter((symbol) => symbol.kind === "function" || symbol.kind === "method"), undefined, undefined, ref.index, ref.unwrapped);
-            }
-            return holderOfCallables(inherited(holder, 0, new Set([holder.qualifiedName]), of.member), holder, of.mode, ref.index, ref.unwrapped);
+            const found = callablesOf(ref.of, depth);
+            if (found !== undefined && found.callables !== null && found.callables.length > 0) return holderOfCallables(found.callables, found.holder, found.mode, selectOf(ref));
+            if (ref.of.kind === "method" && ref.of.member === "get" && ref.index === undefined && ref.unwrapped === undefined) return holderOf({ kind: "element", of: ref.of.owner, mode: "value" }, depth + 1);
+            return undefined;
           };
           const rootImportUnresolved = (ref: ReceiverOwner | Callee, depth = 0): boolean => {
             if (depth > 8) return false;
             if (ref.kind === "import") return resolveImportTarget(card.language, fromFile, ref.source, knownFiles, context) === undefined;
             if (ref.kind === "return") return rootImportUnresolved(ref.of, depth + 1);
             if (ref.kind === "super") return false;
-            if (ref.kind === "field") return rootImportUnresolved(ref.of, depth + 1);
+            if (ref.kind === "field" || ref.kind === "element") return rootImportUnresolved(ref.of, depth + 1);
             if (ref.kind === "method") return rootImportUnresolved(ref.owner, depth + 1);
             return false;
           };
@@ -636,7 +669,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           } else if (binding.owner.kind === "super") {
             owner = holderOf(binding.owner, 0);
-          } else if (binding.owner.kind === "field") {
+          } else if (binding.owner.kind === "field" || binding.owner.kind === "element") {
             owner = holderOf(binding.owner, 0);
             if (owner === undefined && rootImportUnresolved(binding.owner)) resolution = { status: "unresolved", reason: "import-target-unresolved" };
           }
@@ -656,7 +689,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           });
           if (owner !== undefined && candidates.length > 0) {
             resolution = { status: "resolved", method: "receiver-hint", receiver: { classSymbol: owner.qualifiedName, mode: binding.mode, basis } };
-          } else if (resolution.status === "resolved" || reference.kind === "super" || (reference.kind === "local" && resolution.reason !== "unbound-global") || ((reference.kind === "return" || reference.kind === "field") && resolution.reason !== "import-target-unresolved")) {
+          } else if (resolution.status === "resolved" || reference.kind === "super" || (reference.kind === "local" && resolution.reason !== "unbound-global") || ((reference.kind === "return" || reference.kind === "field" || reference.kind === "element") && resolution.reason !== "import-target-unresolved")) {
             resolution = { status: "unresolved", reason: "receiver-unresolved" };
           }
         }

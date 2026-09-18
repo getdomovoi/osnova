@@ -9,7 +9,7 @@ interface Scope {
   parent: Scope | null;
   names: Map<string, EdgeBinding[]>;
   thisBinding?: { owner: SymbolBinding; mode: ReceiverMode; classScope?: Scope | undefined } | null | undefined;
-  fields?: Map<string, { typeName: string; site: Node }> | undefined;
+  fields?: Map<string, { typeName: string; site: Node; contents?: Contents | undefined }> | undefined;
   constructorFields?: Map<string, { typeName: string; site: Node }> | undefined;
   fieldWrites?: Map<string, number> | undefined;
   classScope?: Scope | undefined;
@@ -41,6 +41,45 @@ function annotationTypeName(annotation: Node | null): string | undefined {
     const members = childrenOf(inner).filter((child) => child.type !== "|" && !(child.type === "literal_type" && nullish.has(child.text)));
     return members.length === 1 ? annotationTypeName(members[0]!) : undefined;
   }
+  return undefined;
+}
+
+const ELEMENT_GENERICS = new Set(["Array", "ReadonlyArray", "Set", "ReadonlySet", "Iterable", "IterableIterator", "Generator"]);
+const VALUE_GENERICS = new Set(["Map", "ReadonlyMap", "WeakMap", "Record"]);
+const PYTHON_ELEMENT_GENERICS = new Set(["list", "List", "Sequence", "MutableSequence", "Iterable", "Iterator", "Collection", "set", "Set", "MutableSet", "frozenset", "FrozenSet", "deque", "Deque", "Generator"]);
+const PYTHON_VALUE_GENERICS = new Set(["dict", "Dict", "Mapping", "MutableMapping", "defaultdict", "DefaultDict", "OrderedDict"]);
+interface Contents { readonly element?: string | undefined; readonly value?: string | undefined }
+// What a collection annotation holds: Foo[] and Array<Foo> hold Foos as elements; Map<K, Foo> holds Foos as values.
+function contentTypeNames(annotation: Node | null): Contents | undefined {
+  if (annotation === null) return undefined;
+  const inner = annotation.type === "type_annotation" ? childrenOf(annotation).find((child) => child.type !== ":") ?? null : annotation;
+  if (inner === null) return undefined;
+  if (inner.type === "array_type") return { element: annotationTypeName(childrenOf(inner).find((child) => child.isNamed) ?? null) };
+  if (inner.type === "generic_type") {
+    const base = childrenOf(inner)[0];
+    if (base === undefined || base.type !== "type_identifier") return undefined;
+    const arguments_ = childrenOf(childrenOf(inner).find((child) => child.type === "type_arguments") ?? inner).filter((child) => child.isNamed);
+    if (ELEMENT_GENERICS.has(base.text)) return { element: annotationTypeName(arguments_[0] ?? null) };
+    if (VALUE_GENERICS.has(base.text)) return { value: annotationTypeName(arguments_[1] ?? null) };
+    return undefined;
+  }
+  if (inner.type === "parenthesized_type" || inner.type === "readonly_type") return contentTypeNames(childrenOf(inner).find((child) => child.isNamed) ?? null);
+  if (inner.type === "union_type") {
+    const members = childrenOf(inner).filter((child) => child.type !== "|" && !(child.type === "literal_type" && nullish.has(child.text)));
+    return members.length === 1 ? contentTypeNames(members[0]!) : undefined;
+  }
+  return undefined;
+}
+function pythonContentTypeNames(type: Node | null): Contents | undefined {
+  if (type === null) return undefined;
+  const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
+  if (inner === null || (inner.type !== "generic_type" && inner.type !== "subscript")) return undefined;
+  const base = childrenOf(inner)[0];
+  const baseName = base === undefined ? undefined : base.type === "identifier" ? base.text : base.type === "attribute" ? base.childForFieldName("attribute")?.text : undefined;
+  if (baseName === undefined) return undefined;
+  const arguments_ = inner.type === "subscript" ? childrenOf(inner).filter((child) => child.isNamed).slice(1) : childrenOf(childrenOf(inner).find((child) => child.type === "type_parameter") ?? inner).filter((child) => child.isNamed);
+  if (PYTHON_ELEMENT_GENERICS.has(baseName)) return { element: pythonTypeName(arguments_[0] ?? null) };
+  if (PYTHON_VALUE_GENERICS.has(baseName)) return { value: pythonTypeName(arguments_[1] ?? null) };
   return undefined;
 }
 
@@ -97,11 +136,13 @@ function patternNames(node: Node | null): string[] {
   return containers.has(node.type) ? childrenOf(node).flatMap(patternNames) : [];
 }
 
-function reassigns(body: Node, name: string): boolean {
+function reassigns(body: Node, name: string, except?: number): boolean {
   const stack: Node[] = [body];
   while (stack.length > 0) {
     const node = stack.pop()!;
-    if (["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression", "as_pattern", "global_statement", "nonlocal_statement",
+    // A block-scoped loop declaration (`for (const x of xs)`) declares, it does not reassign.
+    const declares = node.type === "for_in_statement" && node.childForFieldName("kind") !== null && node.childForFieldName("kind")?.type !== "var";
+    if (node.id !== except && !declares && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression", "as_pattern", "global_statement", "nonlocal_statement",
       "assignment_expression", "augmented_assignment_expression", "update_expression", "for_in_statement"].includes(node.type)) {
       const target = node.childForFieldName("left") ?? node.childForFieldName("name") ?? node.childForFieldName("alias") ?? node.childForFieldName("argument");
       if (target !== null && patternNames(unwrap(target) ?? target).includes(name)) return true;
@@ -131,6 +172,10 @@ export function collectBindings(root: Node, python: boolean): {
   returns: (node: Node) => ReturnBinding | undefined;
   ownFields: (node: Node) => string[];
   unwrapped: (node: Node) => ReturnBinding | undefined;
+  elements: (node: Node) => ReturnBinding | undefined;
+  values: (node: Node) => ReturnBinding | undefined;
+  elementTypes: (node: Node) => Record<string, SymbolBinding> | undefined;
+  valueTypes: (node: Node) => Record<string, SymbolBinding> | undefined;
   fieldTypes: (node: Node) => Record<string, SymbolBinding> | undefined;
   exportedNames: (name: string, parent: string) => readonly string[];
   reExports: readonly ReExport[];
@@ -146,6 +191,12 @@ export function collectBindings(root: Node, python: boolean): {
   const ambient = new Set<string>();
   const implicitReceivers: Array<{ node: Node; scope: Scope; parameter: string }> = [];
   const annotated: Array<{ scope: Scope; parameter: string; typeName: string; site: Node }> = [];
+  // Loop variables and callback parameters take the element type of the collection they range over.
+  const loops: Array<{ scope: Scope; name: string; source: Node; site: Node; mode?: "value" | "either" | undefined }> = [];
+  const contentsOf = new Map<EdgeBinding, { element?: SymbolBinding | undefined; value?: SymbolBinding | undefined }>();
+  // A local that aliases a member chain or an indexed element takes that owner.
+  const aliases: Array<{ scope: Scope; name: string; value: Node; site: Node }> = [];
+  const CALLBACK_METHODS = new Set(["forEach", "map", "filter", "some", "every", "find", "findIndex", "findLast", "findLastIndex", "flatMap"]);
   const memberWrites: Array<{ object: Node; member: string; scope: Scope }> = [];
   const mutations = new Map<object, Set<string>>();
   const initializers = new Map<EdgeBinding, { end: number; scope: Scope }>();
@@ -234,6 +285,17 @@ export function collectBindings(root: Node, python: boolean): {
       while (python && parent.kind === "class") parent = parent.parent ?? module;
       const inner: Scope = { kind: "function", owner, parent, names: new Map() };
       bindPattern(inner, node.childForFieldName("parameters") ?? node.childForFieldName("parameter"));
+      if (!python && (node.type === "arrow_function" || node.type === "function_expression" || node.type === "function") && node.parent?.type === "arguments" && childrenOf(node.parent)[0]?.id === node.id) {
+        const call = node.parent.parent;
+        const callee = call?.type === "call_expression" ? call.childForFieldName("function") : null;
+        const first = childrenOf(node.childForFieldName("parameters") ?? node).find((child) => child.isNamed);
+        const single = node.childForFieldName("parameter");
+        const name = single?.type === "identifier" ? single : first?.type === "required_parameter" && first.childForFieldName("type") === null ? first.childForFieldName("pattern") : null;
+        if (callee?.type === "member_expression" && CALLBACK_METHODS.has(callee.childForFieldName("property")?.text ?? "") && name?.type === "identifier") {
+          const object = callee.childForFieldName("object");
+          if (object !== null) loops.push({ scope: inner, name: name.text, source: object, site: node, mode: callee.childForFieldName("property")?.text === "forEach" ? "either" : undefined });
+        }
+      }
       if (outer.kind === "class" && ((python && node.type === "function_definition" && nameNode?.text === "__init__") ||
         (!python && node.type === "method_definition" && nameNode?.text === "constructor"))) outer.constructorScope = inner;
       if (!python && node.type !== "arrow_function") {
@@ -296,19 +358,19 @@ export function collectBindings(root: Node, python: boolean): {
       while (python && parent.kind === "class") parent = parent.parent ?? module;
       scope = { kind: "class", owner: join(outer.owner, name), parent, names: new Map(), thisBinding: null };
       if (!python) {
-        const fields = new Map<string, { typeName: string; site: Node }>();
+        const fields = new Map<string, { typeName: string; site: Node; contents?: Contents | undefined }>();
         for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
           if (FIELD_NODES.has(member.type) && !member.children.some((child) => child?.type === "static")) {
             const fieldName = fieldNameOf(member);
             const typeName = annotationTypeName(member.childForFieldName("type"));
-            if (fieldName?.type === "property_identifier" && typeName !== undefined) fields.set(fieldName.text, { typeName, site: node });
+            if (fieldName?.type === "property_identifier" && typeName !== undefined) fields.set(fieldName.text, { typeName, site: node, contents: contentTypeNames(member.childForFieldName("type")) });
           }
           if (member.type === "method_definition" && member.childForFieldName("name")?.text === "constructor") {
             for (const parameter of childrenOf(member.childForFieldName("parameters") ?? member)) {
               if (!parameter.children.some((child) => child?.type === "accessibility_modifier" || child?.type === "readonly" || child?.type === "override_modifier")) continue;
               const pattern = parameter.childForFieldName("pattern");
               const typeName = annotationTypeName(parameter.childForFieldName("type"));
-              if (pattern?.type === "identifier" && typeName !== undefined) fields.set(pattern.text, { typeName, site: node });
+              if (pattern?.type === "identifier" && typeName !== undefined) fields.set(pattern.text, { typeName, site: node, contents: contentTypeNames(parameter.childForFieldName("type")) });
             }
           }
         }
@@ -316,7 +378,7 @@ export function collectBindings(root: Node, python: boolean): {
       } else {
         // Class-body annotations (`conn: Conn`) and property return types (`def conn(self) -> Conn`) type Python fields.
         // Decisions that need bindings (the builtin property, typing.Self) wait until the walk has finished.
-        const fields = new Map<string, { typeName: string; site: Node }>();
+        const fields = new Map<string, { typeName: string; site: Node; contents?: Contents | undefined }>();
         const plainMethods = new Set<string>();
         for (const statement of childrenOf(node.childForFieldName("body") ?? node)) {
           const definition = statement.type === "decorated_definition" ? statement.childForFieldName("definition") : statement;
@@ -327,7 +389,7 @@ export function collectBindings(root: Node, python: boolean): {
           if (assignment?.type === "assignment") {
             const left = assignment.childForFieldName("left");
             const typeName = pythonTypeName(assignment.childForFieldName("type"));
-            if (left?.type === "identifier" && typeName !== undefined) fields.set(left.text, { typeName, site: node });
+            if (left?.type === "identifier" && typeName !== undefined) fields.set(left.text, { typeName, site: node, contents: pythonContentTypeNames(assignment.childForFieldName("type")) });
           }
           if (definition?.type === "function_definition" && isProperty && decorated[0] !== undefined) {
             const name = definition.childForFieldName("name")?.text;
@@ -446,12 +508,18 @@ export function collectBindings(root: Node, python: boolean): {
       if (binding.kind === "local" || binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(destination) });
       const typeName = (binding === localValue || constructions.get(binding)?.call === true) && target?.type === "identifier" ? annotationTypeName(node.childForFieldName("type")) : undefined;
       if (typeName !== undefined && target?.type === "identifier") annotated.push({ scope: destination, parameter: target.text, typeName, site: node });
+      const aliased = unwrap(value);
+      if (binding === localValue && typeName === undefined && target?.type === "identifier" && aliased !== null && (aliased.type === "member_expression" || aliased.type === "subscript_expression")) aliases.push({ scope: destination, name: target.text, value: aliased, site: node });
     }
     if (python && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression"].includes(node.type)) {
       const target = node.childForFieldName("left") ?? node.childForFieldName("name");
       recordMemberWrite(target, scope, node.type === "assignment" ? node.childForFieldName("right") : null);
       const binding = node.type === "assignment" && target?.type === "identifier" ? construction(node.childForFieldName("right"), node) ?? localValue : localValue;
       bindPattern(scope, target, binding);
+      const iterated = node.type === "for_statement" || node.type === "for_in_clause" ? node.childForFieldName("right") : null;
+      if (iterated !== null && target?.type === "identifier") loops.push({ scope, name: target.text, source: iterated, site: node });
+      const right = node.type === "assignment" ? unwrap(node.childForFieldName("right")) : null;
+      if (binding === localValue && node.childForFieldName("type") === null && target?.type === "identifier" && right !== null && (right.type === "attribute" || right.type === "subscript")) aliases.push({ scope, name: target.text, value: right, site: node });
       if (binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(scope) });
     }
     if (python && node.type === "as_pattern") bindPattern(scope, node.childForFieldName("alias"));
@@ -460,8 +528,10 @@ export function collectBindings(root: Node, python: boolean): {
     if (!python && node.type === "for_in_statement") {
       const kind = node.childForFieldName("kind");
       const left = node.childForFieldName("left");
+      const right = node.childForFieldName("right");
       if (kind !== null) bindPattern(kind.type === "var" ? nearestFunction(scope) : scope, left);
       else for (const name of patternNames(left)) writes.push({ scope, name });
+      if (kind !== null && kind.type !== "var" && left?.type === "identifier" && right !== null && node.childForFieldName("operator")?.text === "of") loops.push({ scope, name: left.text, source: right, site: node });
     }
     if (python && ["global_statement", "nonlocal_statement"].includes(node.type)) {
       for (const name of childrenOf(node).filter((child) => child.type === "identifier").map((child) => child.text)) {
@@ -577,7 +647,12 @@ export function collectBindings(root: Node, python: boolean): {
     const owner = ownerFor(entry.typeName, entry.site);
     if (owner === undefined) continue;
     if (reassigns(enclosingBody(entry.site, root), entry.parameter)) continue;
-    entry.scope.names.set(entry.parameter, [{ kind: "instance", owner, basis: "annotation" }]);
+    const binding: EdgeBinding = { kind: "instance", owner, basis: "annotation" };
+    entry.scope.names.set(entry.parameter, [binding]);
+    const contents = python ? pythonContentTypeNames(entry.site.childForFieldName("type")) : contentTypeNames(entry.site.childForFieldName("type"));
+    const element = contents?.element === undefined ? undefined : ownerFor(contents.element, entry.site);
+    const value = contents?.value === undefined ? undefined : ownerFor(contents.value, entry.site);
+    if (element !== undefined || value !== undefined) contentsOf.set(binding, { element, value });
   }
   const thisFor = (scope: Scope): Scope["thisBinding"] => {
     for (let current: Scope | null = scope; current !== null; current = current.parent) {
@@ -716,9 +791,18 @@ export function collectBindings(root: Node, python: boolean): {
           const chained = chainOwner(object, site, property.text);
           if (chained !== undefined) return { kind: "member", owner: chained, member: property.text, mode: "instance", basis: "annotation" };
         }
+        if (object !== null && object.type === (python ? "call" : "call_expression")) {
+          const fn = unwrap(object.childForFieldName("function"));
+          const known = fn !== null && (fn.type === "member_expression" || fn.type === "attribute") && fn.childForFieldName(python ? "attribute" : "property")?.text === "get" ? knownContents(fn.childForFieldName("object"), site, "value") : undefined;
+          if (known !== undefined) return { kind: "member", owner: known, member: property.text, mode: "instance", basis: "annotation" };
+        }
         if (object !== null && object.type === (python ? "call" : "call_expression") && (python ? symbolBinding(object.childForFieldName("function"), site) === undefined : true)) {
           const owner = returnOwner(calleeOf(object.childForFieldName("function"), site));
           return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: property.text, mode: "instance", basis: "return" };
+        }
+        if (object !== null && (object.type === "subscript_expression" || object.type === "subscript")) {
+          const owner = elementOwnerOf(object.childForFieldName(python ? "value" : "object"), site, "either");
+          return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: property.text, mode: "instance", basis: "annotation" };
         }
         const awaited = awaitedCall(object);
         if (awaited !== null) {
@@ -799,6 +883,18 @@ export function collectBindings(root: Node, python: boolean): {
     const name = annotationTypeName(argument);
     return name === undefined ? undefined : ownerFor(name, node);
   };
+  // What a returned collection holds: `(): Foo[]` and `-> list[Foo]` produce Foos, `(): Map<K, Foo>` holds Foos as values.
+  const returnedContents = (node: Node): { element?: ReturnBinding | undefined; value?: ReturnBinding | undefined } => {
+    if (node.children.some((child) => child?.type === "async") || node.type === "generator_function_declaration" || node.type === "generator_function" || node.children.some((child) => child?.type === "*")) return {};
+    const type = node.childForFieldName("return_type");
+    if (type === null) return {};
+    if (python) {
+      const body = node.childForFieldName("body");
+      if (body !== null && ownYield(body)) return {};
+    }
+    const contents = python ? pythonContentTypeNames(type) : contentTypeNames(type);
+    return { element: contents?.element === undefined ? undefined : ownerFor(contents.element, node), value: contents?.value === undefined ? undefined : ownerFor(contents.value, node) };
+  };
   // Python binds names in execution order: a module-level rebinding of `property` after the class
   // does not change a decorator evaluated before it.
   const moduleBindsBefore = (name: string, position: number): boolean => {
@@ -827,6 +923,74 @@ export function collectBindings(root: Node, python: boolean): {
     if (bound !== undefined && (!module.names.has("property") || moduleBindsBefore("property", pending.decorator.startIndex))) continue;
     pending.fields.set(pending.name, { typeName: isTypingSelf(pending.inner) ? THIS_TYPE : pending.inner.text, site: pending.decorator });
   }
+  const contentTable = (node: Node, which: "element" | "value"): Record<string, SymbolBinding> | undefined => {
+    const out: Record<string, SymbolBinding> = {};
+    const scope = scopes.get(node.id);
+    if (scope?.kind === "class") {
+      for (const [name, field] of scope.fields ?? []) {
+        const typeName = field.contents?.[which];
+        const owner = typeName === undefined ? undefined : ownerFor(typeName, field.site);
+        if (owner !== undefined) out[name] = owner;
+      }
+    } else if (!python && node.type === "interface_declaration") {
+      for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
+        if (member.type !== "property_signature") continue;
+        const name = member.childForFieldName("name");
+        const typeName = contentTypeNames(member.childForFieldName("type"))?.[which];
+        const owner = typeName === undefined ? undefined : ownerFor(typeName, node);
+        if (name?.type === "property_identifier" && owner !== undefined) out[name.text] = owner;
+      }
+    }
+    return Object.keys(out).length === 0 ? undefined : out;
+  };
+  // The element of an iterated expression: a collection binding with a recorded element, or the
+  // element of a field, call result or instance whose holder records one.
+  // A collection bound in this file with a recorded element or value type: `xs: Foo[]`, `m: Map<string, Foo>`.
+  const knownContents = (expression: Node | null, site: Node, mode?: "value" | "either"): SymbolBinding | undefined => {
+    expression = unwrap(expression);
+    if (expression?.type !== "identifier") return undefined;
+    const binding = normalize(lookup(expression.text, site));
+    const known = binding === undefined ? undefined : contentsOf.get(binding);
+    if (known === undefined || mutated(binding, "*")) return undefined;
+    return mode === "value" ? known.value : mode === "either" ? known.value ?? known.element : known.element;
+  };
+  const BUILTIN_PASS_THROUGH = new Set(["filter", "slice", "concat", "reverse", "sort", "toSorted", "toReversed"]);
+  const elementOwnerOf = (expression: Node | null, site: Node, mode?: "value" | "either"): ReceiverOwner | undefined => {
+    expression = unwrap(expression);
+    if (expression === null) return undefined;
+    if (expression.type === (python ? "call" : "call_expression")) {
+      const fn = unwrap(expression.childForFieldName("function"));
+      if (fn !== null && (fn.type === "member_expression" || fn.type === "attribute")) {
+        const member = fn.childForFieldName(python ? "attribute" : "property")?.text ?? "";
+        const known = member === "values" ? knownContents(fn.childForFieldName("object"), site, "either") : BUILTIN_PASS_THROUGH.has(member) ? knownContents(fn.childForFieldName("object"), site, mode) : undefined;
+        if (known !== undefined) return known;
+      }
+    }
+    if (expression.type === "identifier") {
+      const known = knownContents(expression, site, mode);
+      if (known !== undefined) return known;
+      const binding = normalize(lookup(expression.text, site));
+      return binding?.kind === "instance" && !mutated(binding, "*") ? { kind: "element", of: binding.owner, ...(mode === undefined ? {} : { mode }) } : undefined;
+    }
+    if (expression.type === (python ? "call" : "call_expression")) {
+      const owner = returnOwner(calleeOf(expression.childForFieldName("function"), site));
+      return owner === undefined ? undefined : { kind: "element", of: owner, ...(mode === undefined ? {} : { mode }) };
+    }
+    const owner = chainOwner(expression, site, "");
+    return owner === undefined ? undefined : { kind: "element", of: owner, ...(mode === undefined ? {} : { mode }) };
+  };
+  const flows: Array<{ kind: "loop"; item: (typeof loops)[number] } | { kind: "alias"; item: (typeof aliases)[number] }> = [
+    ...loops.map((item) => ({ kind: "loop" as const, item })), ...aliases.map((item) => ({ kind: "alias" as const, item }))].sort((a, b) => a.item.site.startIndex - b.item.site.startIndex);
+  for (const flow of flows) {
+    const { scope, name, site } = flow.item;
+    const current = scope.names.get(name);
+    if (current === undefined || current.length === 0 || !current.every((binding) => binding === localValue)) continue;
+    const owner = flow.kind === "loop" ? elementOwnerOf(flow.item.source, site, flow.item.mode)
+      : flow.item.value.type === "subscript_expression" || flow.item.value.type === "subscript" ? elementOwnerOf(flow.item.value.childForFieldName(python ? "value" : "object"), site, "either")
+      : chainOwner(flow.item.value, site, "");
+    if (owner === undefined || reassigns(enclosingBody(site, root), name, site.id)) continue;
+    scope.names.set(name, [{ kind: "instance", owner, basis: "annotation" }]);
+  }
   return {
     at,
     returns,
@@ -850,6 +1014,10 @@ export function collectBindings(root: Node, python: boolean): {
       return out;
     },
     unwrapped,
+    elements: (node) => returnedContents(node).element,
+    values: (node) => returnedContents(node).value,
+    elementTypes: (node) => contentTable(node, "element"),
+    valueTypes: (node) => contentTable(node, "value"),
     fieldTypes: (node) => {
       const out: Record<string, SymbolBinding> = {};
       const scope = scopes.get(node.id);

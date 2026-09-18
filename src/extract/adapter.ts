@@ -15,6 +15,10 @@ export interface RawDefinition {
   readonly returnTuple?: readonly (ReturnBinding | null)[] | undefined;
   readonly fieldTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly unwrapped?: ReturnBinding | undefined;
+  readonly elements?: ReturnBinding | undefined;
+  readonly elementTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly values?: ReturnBinding | undefined;
+  readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
 }
 
 export interface RawEdge {

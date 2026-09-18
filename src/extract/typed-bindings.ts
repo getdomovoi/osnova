@@ -245,12 +245,12 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const name = spec.typeName(type);
       if (name === undefined) return undefined;
       const owner = ownerForType(name);
-      return owner === undefined || owner.kind === "return" || owner.kind === "super" || owner.kind === "field" ? undefined : owner;
+      return asReturn(owner);
     },
     returnTuple(fn) {
       const types = spec.returnTypes?.(fn);
       if (types === undefined || types.length < 2) return undefined;
-      return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name); return owner === undefined || owner.kind === "return" || owner.kind === "super" || owner.kind === "field" ? null : owner; });
+      return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name); return asReturn(owner) ?? null; });
     },
     memberKind: (fn) => spec.memberKind(fn),
     unwrapped(fn) {
@@ -260,7 +260,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       if (inner.type === "type_identifier" && inner.text === "Self") return spec.memberKind(fn) === undefined ? undefined : { kind: "this" };
       const name = spec.typeName(inner);
       const owner = name === undefined ? undefined : ownerForType(name);
-      return owner === undefined || owner.kind === "return" || owner.kind === "super" || owner.kind === "field" ? undefined : owner;
+      return asReturn(owner);
     },
     fieldTypes: (members) => {
       const out: Record<string, SymbolBinding> = {};
@@ -285,6 +285,8 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
 
 // The base name of a type: wrappers such as pointers and references are stripped, and a generic
 // instantiation names its base (Vec<T> is a Vec, Wrapper<Foo> is a Wrapper).
+const asReturn = (owner: ReceiverOwner | undefined): SymbolBinding | undefined => owner !== undefined && (owner.kind === "local" || owner.kind === "import") ? owner : undefined;
+
 const simpleType = (node: Node | null, wrappers: readonly string[]): string | undefined => {
   let current = node;
   while (current !== null && wrappers.includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current).find((child) => child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null;
