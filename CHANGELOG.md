@@ -4,6 +4,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Fixed
+
+- A receiver chain nested deeper than eight owners (field and element chains such as `state.workspace.service.clone().getConfigOptions().executionEnvironments[0].extraPaths[0].toString()` in pyright) was written to `edges.json` but rejected by the cache validator on the next load, so every query in a fresh process failed with `cache-read-failed` while the process that built the index still answered. Extraction now caps owner nesting at twelve (the resolver follows six hops) and the validator accepts sixteen. Artifact extraction version moves to `structural-9.16` so affected caches rebuild.
+
 ### Added
 
 - `osnova mcp --watch`: a recursive file watcher marks the index stale on change and refreshes after a short debounce, so a query reuses the last verified index instead of hashing the working tree first. A verification older than 30 seconds, a change seen since it, or an unavailable watcher falls back to the per-query refresh. Changes under ignored directories such as `node_modules` and the cache directory are skipped.

@@ -102,7 +102,7 @@ function validSymbolBinding(value: unknown): boolean {
 
 function validOwner(value: unknown, depth = 0): boolean {
   if (validSymbolBinding(value)) return true;
-  if (typeof value !== "object" || value === null || depth > 8) return false;
+  if (typeof value !== "object" || value === null || depth > 16) return false;
   const owner = value as Record<string, unknown>;
   if (owner.kind === "super") return validSymbolBinding(owner.of);
   if (owner.kind === "field") return typeof owner.member === "string" && validOwner(owner.of, depth + 1);
