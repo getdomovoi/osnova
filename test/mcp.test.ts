@@ -262,7 +262,7 @@ describe("mcp stdio server", () => {
     const client = await connect();
     try {
       const text = await callTool(client, "osnova_warp", { symbol: "src/caller-target.ts#callerTarget" });
-      expect(text.length).toBeLessThanOrEqual(4_096);
+      expect(text.length).toBeLessThanOrEqual(2_048);
       expect(text).toMatch(/omitted: \d+ of 100 confirmed relationships/);
       expect(text).toContain("Use callersDetailed API for complete structured results");
       expect(text).not.toContain("[output truncated:");
