@@ -383,7 +383,7 @@ export async function runCli(
         return EXIT_OK;
       }
       const applied = await applyChanges(planned);
-      io.stdout(applied.map((change) => `osnova setup applied: ${change.kind === "mcp" ? client : change.kind}, ${change.written ? change.action : "unchanged"}, ${change.path}${change.backup === undefined ? "" : ` (backup ${change.backup})`}`).join("\n"));
+      io.stdout(applied.map((change) => `osnova setup applied: ${change.kind === "mcp" ? client : change.kind}, ${change.written ? change.action : "unchanged"}, ${change.path}${change.backup === undefined ? "" : ` (backup ${change.backup})`}${change.written && change.notice.length > 0 ? `\n  ${change.notice}` : ""}`).join("\n"));
       return EXIT_OK;
     }
     case "hook": {
