@@ -91,6 +91,26 @@ describe("hooks for Codex and Cursor", () => {
   });
 });
 
+describe("the Claude Code skill", () => {
+  it("copies SKILL.md once into ~/.claude/skills/osnova and refuses to overwrite a different one", async () => {
+    let c = capture();
+    expect(await runCli(["setup", "--apply", "--skill", "--home", home], c.io)).toBe(0);
+    const target = path.join(home, ".claude", "skills", "osnova", "SKILL.md");
+    const text = await fs.readFile(target, "utf8");
+    expect(text.startsWith("---\nname: osnova\n")).toBe(true);
+    expect(text).toContain("osnova_settle");
+    expect(c.out.join("\n")).toMatch(/skill, create, .*SKILL\.md/);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "claude-code", "--skill", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("skill, unchanged");
+    await fs.writeFile(target, "# mine\n");
+    c = capture();
+    await expect(runCli(["setup", "--apply", "--skill", "--home", home], c.io)).rejects.toThrow(/nothing was written/);
+    expect(await fs.readFile(target, "utf8")).toBe("# mine\n");
+    await expect(runCli(["setup", "--apply", "--client", "codex", "--skill", "--home", home], capture().io)).rejects.toThrow(/--skill supports --client claude-code/);
+  });
+});
+
 describe("plugins for OpenCode, Kilo and Pi", () => {
   it("copies the shipped plugin or extension file once and refuses to overwrite a different one", async () => {
     let c = capture();
