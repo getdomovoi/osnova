@@ -10,7 +10,7 @@ import type { HookClient } from "../cli/hook.js";
 // Applying a setup: every file change is planned first (path, action, diff), then written with a
 // timestamped backup of whatever was there. A conflict is never resolved by writing.
 export interface PlannedChange {
-  readonly kind: "mcp" | "hooks" | "instructions" | "plugin";
+  readonly kind: "mcp" | "hooks" | "instructions" | "plugin" | "skill";
   readonly path: string;
   readonly action: "create" | "append" | "unchanged" | "conflict";
   readonly diff: string;
@@ -98,6 +98,23 @@ export async function planPlugin(client: PluginClient, options: { home?: string 
   if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova ${client === "pi" ? "extension" : "plugin"}.` };
   if (existing !== null) return { kind: "plugin", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a plugin file. Remove it or compare by hand.` };
   return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN).` };
+}
+
+// The shipped Claude Code skill, copied once into ~/.claude/skills/osnova/; a differing file is a conflict.
+export function skillSource(): string {
+  return path.join(path.dirname(path.dirname(pluginSource("opencode"))), "claude-code", "skills", "osnova", "SKILL.md");
+}
+export function skillTarget(home: string): string {
+  return path.join(home, ".claude", "skills", "osnova", "SKILL.md");
+}
+export async function planSkill(options: { home?: string | undefined; source?: string | undefined }): Promise<PlannedChange> {
+  const home = path.resolve(options.home ?? os.homedir());
+  const target = skillTarget(home);
+  const source = await fs.readFile(options.source ?? skillSource(), "utf8");
+  const existing = await readOptional(target);
+  if (existing === source) return { kind: "skill", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova skill.` };
+  if (existing !== null) return { kind: "skill", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a skill file. Remove it or compare by hand.` };
+  return { kind: "skill", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: "Claude Code loads skills from ~/.claude/skills/ at start; the skill's description decides when it is used." };
 }
 
 // The instructions block for an AGENTS.md or CLAUDE.md, appended once between markers and never rewritten.
