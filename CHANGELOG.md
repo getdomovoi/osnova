@@ -2,6 +2,17 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova hook tool`, an opt-in Claude Code `PostToolUse` hook on `Grep|Bash` (`osnova setup --apply --hooks --nudge`, `osnova hook install-preview --nudge`): when the agent greps for one identifier or method name that names an indexed definition with resolved callers, it adds one line with the count of resolved call sites and files and the `osnova_warp` call that lists them, once per name per session, and nothing otherwise. Measured headless it fired as designed and did not change the model's tool use, so it stays out of the default hook set; the README states the numbers.
+
+### Changed
+
+- The test suite indexes into a temporary cache directory (`OSNOVA_CACHE_DIR` set in `vitest.config.ts`) instead of the user's default cache, where its temporary workspaces filled the workspace cap and evicted real repositories, which is why the session hook kept reporting a missing cache on this checkout.
+- The prompt hook seeds only from names the prompt spells as code (a backticked token, or an identifier with an inner capital, underscore or digit), matched exactly against indexed definitions, instead of a ranked text search over the whole prompt. A prose prompt that contains a word such as `load` or `within` no longer prints an unrelated definition of that name.
+
 ## 0.6.1 (2026-09-18)
 
 ### Added

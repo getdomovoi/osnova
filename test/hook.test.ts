@@ -30,6 +30,12 @@ describe("osnova hook", () => {
       c = capture(JSON.stringify({ prompt: "/clear", cwd: root }));
       expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out).toEqual([]);
+      c = capture(JSON.stringify({ prompt: "should we include more feedback within the unrelated harness", cwd: root }));
+      expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out).toEqual([]);
+      c = capture(JSON.stringify({ prompt: "what does `unrelated` return", cwd: root }));
+      expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out.join("\n")).toContain("other.ts#unrelated");
       c = capture(JSON.stringify({ prompt: "short", cwd: root }));
       expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out).toEqual([]);
@@ -50,6 +56,52 @@ describe("osnova hook", () => {
       expect(snippet.hooks.UserPromptSubmit[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook prompt");
       expect(snippet.hooks.SessionStart[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook session");
       expect(snippet.hooks.Stop[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook stop");
+      expect(snippet.hooks.PostToolUse).toBeUndefined();
+      c = capture();
+      expect(await runCli(["hook", "install-preview", "--nudge", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
+      const withNudge = JSON.parse(c.out.join("\n").split("\n").slice(1).join("\n"));
+      expect(withNudge.hooks.PostToolUse[0].matcher).toBe("Grep|Bash");
+      expect(withNudge.hooks.PostToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook tool");
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+
+  it("tool nudges once per session when a grep names an indexed symbol with resolved callers, and stays silent otherwise", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-"));
+    try {
+      const root = path.join(temporary, "ws"); await fs.mkdir(root);
+      await fs.writeFile(path.join(root, "billing.ts"), "export class Invoice { total(): number { return 1; } }\nexport function renderInvoice(i: Invoice) { return i.total(); }\n");
+      await fs.writeFile(path.join(root, "report.ts"), "import { renderInvoice, Invoice } from './billing.js';\nexport function report() { return renderInvoice(new Invoice()); }\nexport function unrelated() { return 2; }\n");
+      const cacheDir = path.join(temporary, "cache");
+      const { buildIndex } = await import("../src/index.js");
+      await buildIndex(root, { cacheDir });
+      const session = `osnova-test-${Date.now()}`;
+      const payload = (toolName: string, toolInput: Record<string, unknown>) => JSON.stringify({ session_id: session, cwd: root, tool_name: toolName, tool_input: toolInput });
+      let c = capture(payload("Grep", { pattern: "renderInvoice", path: root }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      const first = JSON.parse(c.out.join("\n"));
+      expect(first.hookSpecificOutput.hookEventName).toBe("PostToolUse");
+      expect(first.hookSpecificOutput.additionalContext).toContain("billing.ts#renderInvoice is indexed: 1 resolved call sites in 1 files");
+      c = capture(payload("Bash", { command: "grep -rn \"renderInvoice\" src" }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out).toEqual([]);
+      c = capture(payload("Bash", { command: "rg -n 'unrelated' ." }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out).toEqual([]);
+      c = capture(JSON.stringify({ session_id: `${session}-c`, cwd: root, tool_name: "Bash", tool_input: { command: "rg -n -t ts -e renderInvoice src" } }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out.join("\n")).toContain("billing.ts#renderInvoice is indexed");
+      c = capture(payload("Bash", { command: "rg -n 'unrelated' ." }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out).toEqual([]);
+      c = capture(JSON.stringify({ session_id: `${session}-d`, cwd: root, tool_name: "Bash", tool_input: { command: "grep -n \"\\.total(\" billing.ts" } }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out.join("\n")).toContain("billing.ts#Invoice.total is indexed: 1 resolved call sites");
+      c = capture(payload("Grep", { pattern: "render.*Invoice" }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out).toEqual([]);
+      c = capture(JSON.stringify({ session_id: `${session}-b`, cwd: root, tool_name: "Bash", tool_input: { command: "cat x | rg --type ts \\bInvoice\\b" } }));
+      expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out.join("\n")).toContain("billing.ts#Invoice is indexed");
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
@@ -77,7 +129,7 @@ describe("osnova hook", () => {
       expect(builds).toHaveLength(1);
       expect(c.out.join("\n")).toMatch(/Indexed: 2 files/);
       c = capture();
-      await runHook("prompt", JSON.stringify({ prompt: "why does report call total", cwd: path.join(root, "src") }), c.io, { cacheDir });
+      await runHook("prompt", JSON.stringify({ prompt: "why does `report` call total", cwd: path.join(root, "src") }), c.io, { cacheDir });
       expect(c.out.join("\n")).toContain("src/use.ts#report");
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
