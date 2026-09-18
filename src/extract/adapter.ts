@@ -12,6 +12,7 @@ export interface RawDefinition {
   readonly heritage?: readonly SymbolBinding[] | undefined;
   readonly fields?: readonly string[] | undefined;
   readonly returns?: ReturnBinding | undefined;
+  readonly returnTuple?: readonly (ReturnBinding | null)[] | undefined;
 }
 
 export interface RawEdge {
