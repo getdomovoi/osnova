@@ -114,6 +114,7 @@ export async function extractCard(
       ...(def.fields === undefined ? {} : { fields: def.fields }),
       ...(def.returns === undefined ? {} : { returns: def.returns }),
       ...(def.returnTuple === undefined ? {} : { returnTuple: def.returnTuple }),
+      ...(def.fieldTypes === undefined ? {} : { fieldTypes: def.fieldTypes }),
     };
   });
 

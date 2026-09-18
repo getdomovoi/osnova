@@ -45,7 +45,7 @@ export const rustAdapter: LanguageAdapter = {
         }
         case "struct_item": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addDef(nameNode.text, "struct", node);
+          if (nameNode !== null) out.addDef(nameNode.text, "struct", node, undefined, undefined, undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)));
           return;
         }
         case "enum_item": {

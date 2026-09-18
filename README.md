@@ -114,29 +114,29 @@ A typical agent turn with Osnova:
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, or the declared return type of the function or method that produced the value), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, the declared return type of the function or method that produced the value, or a field of any of those whose declared type the holder records, so `this.pool.conn.send()` follows two field types across files), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` and recorded in [`benchmarks/results/resolution-coverage-2026-09-17.json`](benchmarks/results/resolution-coverage-2026-09-17.json):
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5019 | 1913 | 38.1% | 53.7% |
-| click | all | 5019 | 1913 | 38.1% | 53.7% |
-| cobra | go | 4373 | 1861 | 42.6% | 62.9% |
-| cobra | all | 4373 | 1861 | 42.6% | 62.9% |
-| gson | java | 23340 | 7495 | 32.1% | 36.2% |
-| gson | all | 23340 | 7495 | 32.1% | 36.2% |
-| humanizer | c_sharp | 28773 | 7622 | 26.5% | 39.5% |
-| humanizer | javascript | 922 | 132 | 14.3% | 33.9% |
-| humanizer | tsx | 120 | 14 | 11.7% | 15.9% |
+| click | python | 5021 | 1914 | 38.1% | 53.8% |
+| click | all | 5021 | 1914 | 38.1% | 53.8% |
+| cobra | go | 4374 | 1875 | 42.9% | 63.5% |
+| cobra | all | 4374 | 1875 | 42.9% | 63.5% |
+| gson | java | 23341 | 7495 | 32.1% | 36.2% |
+| gson | all | 23341 | 7495 | 32.1% | 36.2% |
+| humanizer | c_sharp | 28779 | 7628 | 26.5% | 39.5% |
+| humanizer | javascript | 922 | 132 | 14.3% | 34.2% |
+| humanizer | tsx | 120 | 14 | 11.7% | 17.5% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30499 | 7772 | 25.5% | 38.6% |
-| pyright | python | 11614 | 3304 | 28.4% | 64.5% |
-| pyright | typescript | 46762 | 25477 | 54.5% | 66.8% |
-| pyright | all | 58408 | 28781 | 49.3% | 66.5% |
-| ripgrep | rust | 13333 | 3664 | 27.5% | 32.3% |
-| ripgrep | all | 13347 | 3668 | 27.5% | 32.3% |
-| zod | tsx | 150 | 7 | 4.7% | 8.5% |
-| zod | typescript | 53214 | 16184 | 30.4% | 50.5% |
-| zod | all | 53393 | 16201 | 30.3% | 50.4% |
+| humanizer | all | 30505 | 7778 | 25.5% | 38.6% |
+| pyright | python | 11615 | 3312 | 28.5% | 64.7% |
+| pyright | typescript | 46780 | 26433 | 56.5% | 69.3% |
+| pyright | all | 58427 | 29745 | 50.9% | 68.7% |
+| ripgrep | rust | 13341 | 3914 | 29.3% | 34.7% |
+| ripgrep | all | 13355 | 3918 | 29.3% | 34.7% |
+| zod | tsx | 150 | 7 | 4.7% | 9.2% |
+| zod | typescript | 53216 | 16189 | 30.4% | 50.8% |
+| zod | all | 53395 | 16206 | 30.3% | 50.7% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
