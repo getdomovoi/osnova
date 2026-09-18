@@ -8,7 +8,7 @@ import { maximumIndexedFileSizeBytes } from "../types.js";
 import { IndexingError } from "./diagnostics.js";
 import { canonicalWorkspaceRoot } from "./workspace.js";
 
-const DEFAULT_SKIP_DIRS = new Set([
+export const DEFAULT_SKIP_DIRS = new Set([
   ".git",
   ".hg",
   ".svn",

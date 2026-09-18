@@ -6,6 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Added
 
+- `osnova mcp --watch`: a recursive file watcher marks the index stale on change and refreshes after a short debounce, so a query reuses the last verified index instead of hashing the working tree first. A verification older than 30 seconds, a change seen since it, or an unavailable watcher falls back to the per-query refresh. Changes under ignored directories such as `node_modules` and the cache directory are skipped.
 - A composite GitHub Action (`action.yml`, backed by `scripts/settle-ci.sh`) that indexes the pull request base and head at the same path, runs `osnova settle`, writes the dependents of the changed symbols to the job summary and optionally posts them as a comment. The repository runs it on its own pull requests through `.github/workflows/settle.yml`.
 - The README shows `plumb` checking a claimed caller list on the pinned click checkout, with the verdict semantics spelled out.
 - `benchmarks/exactness/exactness-v1.json` pins five hand-verified call-site sets on public checkouts, and `scripts/exactness.mjs` compares the first regex a person would type against the resolved call graph on each; the README carries the measured table and `benchmarks/results/grep-vs-graph-2026-09-17.json` the record.
