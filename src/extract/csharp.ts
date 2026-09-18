@@ -28,7 +28,7 @@ export const csharpAdapter: LanguageAdapter = {
                 : node.type === "struct_declaration"
                   ? "struct"
                   : "class";
-          out.addDef(nameNode.text, kind, node);
+          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" ? bindings.heritage(node) : undefined);
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
