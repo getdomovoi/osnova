@@ -12,9 +12,10 @@ export interface TypedSpec {
   readonly parameter: (node: Node) => { name: Node; type: Node | null } | undefined;
   readonly typeName: (node: Node | null) => string | undefined;
   readonly returnType: (fn: Node) => Node | null;
+  readonly returnTypes?: ((fn: Node) => readonly (Node | null)[] | undefined) | undefined;
   readonly receiver: (fn: Node) => { name: string; type: string } | undefined;
   readonly memberKind: (fn: Node) => MemberKind | undefined;
-  readonly local: (node: Node) => ReadonlyArray<{ name: Node; type: Node | null; value: Node | null }>;
+  readonly local: (node: Node) => ReadonlyArray<{ name: Node; type: Node | null; value: Node | null; index?: number | undefined }>;
   readonly assigned: (node: Node) => readonly Node[];
   readonly constructed: (value: Node | null) => string | undefined;
   readonly callee: (fn: Node) => { object: Node | null; name: string; path?: string | undefined } | undefined;
@@ -36,6 +37,7 @@ export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
   heritage: (classNode: Node) => SymbolBinding[];
   returns: (fn: Node) => ReturnBinding | undefined;
+  returnTuple: (fn: Node) => (ReturnBinding | null)[] | undefined;
   memberKind: (fn: Node) => MemberKind | undefined;
 }
 
@@ -87,7 +89,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.names.has(name) || current.receiver?.name === name) return current;
     return nearestFunction(scope);
   };
-  const calleeOwner = (value: Node, scope: Scope): ReceiverOwner | undefined => {
+  const calleeOwner = (value: Node, scope: Scope, index?: number): ReceiverOwner | undefined => {
     if (value.type !== "call_expression" && value.type !== "method_invocation" && value.type !== "invocation_expression") return undefined;
     const fn = value.type === "method_invocation" ? value : value.childForFieldName("function");
     if (fn === null) return undefined;
@@ -113,7 +115,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       if (receiver === undefined) return undefined;
       of = { kind: "method", owner: receiver, member: callee.name, mode: "instance" };
     }
-    return { kind: "return", of };
+    return index === undefined ? { kind: "return", of } : { kind: "return", of, index };
   };
   const classOf = (scope: Scope): Scope | undefined => { for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.className !== undefined) return current; return undefined; };
   const fieldOwner = (scope: Scope, name: string): ReceiverOwner | undefined => {
@@ -182,7 +184,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     for (const local of spec.local(node)) {
       const declaredType = spec.typeName(local.type);
       const constructed = declaredType ?? spec.constructed(local.value);
-      const produced = constructed === undefined && local.value !== null ? calleeOwner(local.value, scope) : undefined;
+      const produced = constructed === undefined && local.value !== null ? calleeOwner(local.value, scope, local.index) : undefined;
       bind(scope, local.name.text, node.startIndex, constructed, produced);
     }
     for (const target of spec.assigned(node)) {
@@ -228,6 +230,11 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const owner = ownerForType(name);
       return owner === undefined || owner.kind === "return" || owner.kind === "super" ? undefined : owner;
     },
+    returnTuple(fn) {
+      const types = spec.returnTypes?.(fn);
+      if (types === undefined || types.length < 2) return undefined;
+      return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name); return owner === undefined || owner.kind === "return" || owner.kind === "super" ? null : owner; });
+    },
     memberKind: (fn) => spec.memberKind(fn),
     heritage: (classNode) => {
       const out: SymbolBinding[] = [];
@@ -240,9 +247,12 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   };
 }
 
+// The base name of a type: wrappers such as pointers and references are stripped, and a generic
+// instantiation names its base (Vec<T> is a Vec, Wrapper<Foo> is a Wrapper).
 const simpleType = (node: Node | null, wrappers: readonly string[]): string | undefined => {
   let current = node;
   while (current !== null && wrappers.includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current).find((child) => child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null;
+  if (current?.type === "generic_type") current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
   return current?.type === "type_identifier" ? current.text : undefined;
 };
 
@@ -258,9 +268,22 @@ export const goSpec: TypedSpec = {
     let current = node;
     while (current !== null && ["pointer_type", "parenthesized_type"].includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
     if (current?.type === "qualified_type") return current.text;
-    return simpleType(current, []);
+    return simpleType(current, ["generic_type"]);
   },
   returnType: (fn) => { const result = fn.childForFieldName("result"); return result === null || result.type === "parameter_list" ? null : result; },
+  returnTypes: (fn) => {
+    const result = fn.childForFieldName("result");
+    if (result === null || result.type !== "parameter_list") return undefined;
+    // A named or unnamed result list: one type per declaration, a declaration with several names repeats its type.
+    const types: (Node | null)[] = [];
+    for (const declaration of childrenOf(result)) {
+      if (declaration.type !== "parameter_declaration") continue;
+      const type = declaration.childForFieldName("type") ?? childrenOf(declaration).at(-1) ?? null;
+      const names = childrenOf(declaration).filter((child) => child.type === "identifier").length;
+      for (let i = 0; i < Math.max(1, names); i += 1) types.push(type);
+    }
+    return types;
+  },
   receiver: (fn) => {
     if (fn.type !== "method_declaration") return undefined;
     const declaration = childrenOf(fn.childForFieldName("receiver") ?? fn).find((child) => child.type === "parameter_declaration");
@@ -273,7 +296,10 @@ export const goSpec: TypedSpec = {
     if (node.type === "short_var_declaration") {
       const names = childrenOf(node.childForFieldName("left") ?? node).filter((child) => child.type === "identifier");
       const values = childrenOf(node.childForFieldName("right") ?? node);
-      return names.length === 1 && values.length === 1 && names[0] !== undefined ? [{ name: names[0], type: null, value: values[0] ?? null }] : names.map((name) => ({ name, type: null, value: null }));
+      if (names.length === 1 && values.length === 1 && names[0] !== undefined) return [{ name: names[0], type: null, value: values[0] ?? null }];
+      // a, b := f() takes each name from the matching position of f's result list.
+      if (names.length > 1 && values.length === 1 && values[0]?.type === "call_expression") return names.map((name, index) => ({ name, type: null, value: values[0] ?? null, index }));
+      return names.map((name, index) => ({ name, type: null, value: names.length === values.length ? values[index] ?? null : null }));
     }
     if (node.type === "var_spec") {
       const names = childrenOf(node).filter((child) => child.type === "identifier");
@@ -383,7 +409,7 @@ export const javaSpec: TypedSpec = {
     const name = node.childForFieldName("name") ?? childrenOf(node).find((child) => child.type === "identifier");
     return name !== undefined && name !== null ? { name, type: node.childForFieldName("type") } : undefined;
   },
-  typeName: (node) => node?.type === "type_identifier" ? node.text : undefined,
+  typeName: (node) => node?.type === "type_identifier" ? node.text : node?.type === "generic_type" ? (childrenOf(node).find((child) => child.type === "type_identifier")?.text) : node?.type === "array_type" ? undefined : undefined,
   returnType: (fn) => fn.type === "method_declaration" ? fn.childForFieldName("type") : null,
   receiver: () => undefined,
   memberKind: (fn) => fn.type === "method_declaration" ? (modifiersStatic(fn) ? "static" : "instance") : fn.type === "constructor_declaration" ? "static" : undefined,
@@ -439,7 +465,7 @@ export const csharpSpec: TypedSpec = {
     const name = node.childForFieldName("name");
     return name === null ? undefined : { name, type: node.childForFieldName("type") };
   },
-  typeName: (node) => node?.type === "identifier" ? node.text : node?.type === "nullable_type" ? csharpSpec.typeName(childrenOf(node)[0] ?? null) : undefined,
+  typeName: (node) => node?.type === "identifier" ? node.text : node?.type === "nullable_type" ? csharpSpec.typeName(childrenOf(node)[0] ?? null) : node?.type === "generic_name" ? childrenOf(node).find((child) => child.type === "identifier")?.text : undefined,
   returnType: (fn) => fn.type === "method_declaration" || fn.type === "local_function_statement" ? fn.childForFieldName("type") : null,
   receiver: () => undefined,
   memberKind: (fn) => fn.type === "method_declaration" ? (modifiersStatic(fn) ? "static" : "instance") : fn.type === "constructor_declaration" ? "static" : undefined,
