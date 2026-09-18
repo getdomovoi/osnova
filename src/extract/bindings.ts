@@ -881,10 +881,43 @@ export function collectBindings(root: Node, python: boolean): {
     if (binding?.kind !== "import" || !["typing", "typing_extensions"].includes(binding.source)) return false;
     return member === undefined ? binding.importedName === "Self" : member === "Self" && binding.importedName === "*";
   };
+  // Every own return statement of a body, nested functions and classes excluded; an expression-bodied arrow is one return.
+  const ownReturns = (body: Node | null): Node[] => {
+    if (body === null) return [];
+    if (!["statement_block", "block"].includes(body.type)) return [body];
+    const out: Node[] = [];
+    const walk = (node: Node): void => {
+      for (const child of childrenOf(node)) {
+        if (child.type === "return_statement") { out.push(child); continue; }
+        if (functions.has(child.type) || classes.has(child.type) || child.type === "class" || child.type === "class_expression") continue;
+        walk(child);
+      }
+    };
+    walk(body);
+    return out;
+  };
+  // Without an annotation, a function whose every return is `new Foo()` (or `Foo()` in Python) or `this` still names its result.
+  const inferredReturn = (node: Node): ReturnBinding | undefined => {
+    const returns = ownReturns(node.childForFieldName("body"));
+    if (returns.length === 0) return undefined;
+    let found: ReturnBinding | undefined;
+    for (const statement of returns) {
+      const value = statement.type === "return_statement" ? unwrap(childrenOf(statement).find((child) => child.isNamed && child.type !== "comment") ?? null) : unwrap(statement);
+      if (value === null) return undefined;
+      let binding: ReturnBinding | undefined;
+      if (!python && value.type === "this") { const receiver = thisFor(scopes.get(node.id) ?? module); binding = receiver === null || receiver === undefined ? undefined : { kind: "this" }; }
+      else if (value.type === (python ? "call" : "new_expression")) binding = symbolBinding(value.childForFieldName(python ? "function" : "constructor"), node);
+      if (binding === undefined) return undefined;
+      if (found !== undefined && JSON.stringify(found) !== JSON.stringify(binding)) return undefined;
+      found = binding;
+    }
+    return found;
+  };
   const returns = (node: Node): ReturnBinding | undefined => {
     if (python) {
       const type = node.childForFieldName("return_type");
-      if (type === null) return undefined;
+      if (node.children.some((child) => child?.type === "async")) return undefined;
+      if (type === null) { const body = node.childForFieldName("body"); return body !== null && ownYield(body) ? undefined : inferredReturn(node); }
       if (node.children.some((child) => child?.type === "async")) return undefined;
       const body = node.childForFieldName("body");
       if (body !== null && ownYield(body)) return undefined;
@@ -902,7 +935,7 @@ export function collectBindings(root: Node, python: boolean): {
       holder = fn;
     }
     const type = holder.childForFieldName("return_type");
-    if (type === null) return undefined;
+    if (type === null) return holder === node ? inferredReturn(node) : undefined;
     const inner = type.type === "type_annotation" ? childrenOf(type).find((child) => child.type !== ":") ?? null : type;
     if (inner?.type === "this_type") return { kind: "this" };
     const name = annotationTypeName(inner);
@@ -912,7 +945,8 @@ export function collectBindings(root: Node, python: boolean): {
   const unwrapped = (node: Node): ReturnBinding | undefined => {
     if (python) {
       const type = node.childForFieldName("return_type");
-      if (type === null || !node.children.some((child) => child?.type === "async")) return undefined;
+      if (!node.children.some((child) => child?.type === "async")) return undefined;
+      if (type === null) { const body = node.childForFieldName("body"); return body !== null && ownYield(body) ? undefined : inferredReturn(node); }
       const body = node.childForFieldName("body");
       if (body !== null && ownYield(body)) return undefined;
       const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
@@ -922,7 +956,8 @@ export function collectBindings(root: Node, python: boolean): {
     }
     if (node.type === "generator_function_declaration" || node.type === "generator_function" || node.children.some((child) => child?.type === "*")) return undefined;
     const type = node.childForFieldName("return_type");
-    const annotation = type === null ? null : type.type === "type_annotation" ? childrenOf(type).find((child) => child.type !== ":") ?? null : type;
+    if (type === null) return node.children.some((child) => child?.type === "async") ? inferredReturn(node) : undefined;
+    const annotation = type.type === "type_annotation" ? childrenOf(type).find((child) => child.type !== ":") ?? null : type;
     if (annotation?.type !== "generic_type") return undefined;
     const base = childrenOf(annotation)[0];
     if (base === undefined || base.type !== "type_identifier" || (base.text !== "Promise" && base.text !== "PromiseLike")) return undefined;
