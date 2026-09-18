@@ -767,7 +767,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const resolved = names.length === 1 ? preferred[0] : undefined;
       const resolution: EdgeResolution = names.length > 1
         ? { status: "ambiguous", candidates: names }
-        : resolved === undefined ? { status: "unresolved", reason: "no-matching-symbol" }
+        // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of
+        // the family defines is a builtin or a standard-library name: external, like an unbound global.
+        : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
           : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : imported.length > 0 ? "imported-file-name" : "unique-name" };
       edges.push(
         resolved === undefined

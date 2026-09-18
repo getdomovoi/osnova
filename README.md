@@ -124,27 +124,27 @@ A call site counts as resolved when the index ties it to one definition through 
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5022 | 1932 | 38.5% | 54.9% |
-| click | all | 5022 | 1932 | 38.5% | 54.9% |
-| cobra | go | 4374 | 1980 | 45.3% | 77.8% |
-| cobra | all | 4374 | 1980 | 45.3% | 77.8% |
-| gson | java | 23340 | 7643 | 32.7% | 37.9% |
-| gson | all | 23340 | 7643 | 32.7% | 37.9% |
-| humanizer | c_sharp | 28786 | 7648 | 26.6% | 41.7% |
-| humanizer | javascript | 927 | 132 | 14.2% | 39.3% |
-| humanizer | tsx | 120 | 14 | 11.7% | 18.2% |
+| click | python | 5022 | 1932 | 38.5% | 57.2% |
+| click | all | 5022 | 1932 | 38.5% | 57.2% |
+| cobra | go | 4374 | 1980 | 45.3% | 88.9% |
+| cobra | all | 4374 | 1980 | 45.3% | 88.9% |
+| gson | java | 23340 | 7643 | 32.7% | 51.2% |
+| gson | all | 23340 | 7643 | 32.7% | 51.2% |
+| humanizer | c_sharp | 28786 | 7648 | 26.6% | 51.3% |
+| humanizer | javascript | 927 | 132 | 14.2% | 47.7% |
+| humanizer | tsx | 120 | 14 | 11.7% | 19.7% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30517 | 7798 | 25.6% | 40.8% |
-| pyright | python | 11617 | 3326 | 28.6% | 65.4% |
-| pyright | typescript | 46810 | 26716 | 57.1% | 72.7% |
-| pyright | all | 58459 | 30042 | 51.4% | 71.8% |
-| ripgrep | rust | 13351 | 5469 | 41.0% | 51.5% |
-| ripgrep | all | 13365 | 5473 | 41.0% | 51.4% |
-| zod | tsx | 150 | 7 | 4.7% | 9.2% |
-| zod | typescript | 53234 | 20070 | 37.7% | 63.2% |
-| zod | all | 53413 | 20087 | 37.6% | 63.1% |
+| humanizer | all | 30517 | 7798 | 25.6% | 50.1% |
+| pyright | python | 11617 | 3326 | 28.6% | 66.6% |
+| pyright | typescript | 46812 | 26716 | 57.1% | 73.2% |
+| pyright | all | 58461 | 30042 | 51.4% | 72.4% |
+| ripgrep | rust | 13351 | 5469 | 41.0% | 57.5% |
+| ripgrep | all | 13365 | 5473 | 41.0% | 57.4% |
+| zod | tsx | 150 | 7 | 4.7% | 9.6% |
+| zod | typescript | 53237 | 20070 | 37.7% | 63.7% |
+| zod | all | 53416 | 20087 | 37.6% | 63.6% |
 
-A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework, and calls at the end of a field, element or return chain whose recorded type is a builtin (`string`, `Array`, `Map`, a Rust primitive, `Vec` or `Option`) or a type behind an unresolved import; a chain that ends on a type parameter stays unresolved, not external. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
+A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework, and calls at the end of a field, element or return chain whose recorded type is a builtin (`string`, `Array`, `Map`, a Rust primitive, `Vec` or `Option`) or a type behind an unresolved import; a chain that ends on a type parameter stays unresolved, not external, unless the parameter is bounded. A call on a literal or on a local assigned from one (`", ".join(..)`, `rv = []`, `` `a${b}`.trim() ``) is a call on `str`, `list`, `string` or `Array`, so it is external too, and in Go, Rust, Java and C#, which bind plain names without an import statement, a name that no indexed file of the language defines (`new IllegalArgumentException(..)`, `len(xs)`) is a builtin or a standard-library name and counts as external rather than as a name with no match. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
 ## Grep versus the graph
 
