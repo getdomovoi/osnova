@@ -2,7 +2,7 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
-## Unreleased
+## 0.6.0 (2026-09-18)
 
 ### Added
 
@@ -17,6 +17,8 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
+- Artifact extraction version moves to `structural-9.17`, so caches built by 0.5.0 are rebuilt with the Python `None` union handling and the constructor-literal return inference.
+- Measured hook latency on the pinned pyright checkout (7,653 files): the prompt hook answers in about 1.5 s from a warm cache (most of it verifying file hashes), the session hook in 0.4 s, the stop hook on a clean tree in 0.2 s, and the first build takes 6 s in the background. No shared warm process yet; the numbers did not call for one.
 - Python `X | None`, `None | X`, `Optional[X]`, `t.Optional[X]` and `Union[X, None]` name `X` in parameter, return, field and collection annotations, as TypeScript already strips `null` and `undefined`; a union of two or more real types names no receiver. Overloads that differ only by `| None` now agree, so `get_current_context()` in click binds its result and the `ctx.invoke` sites in `decorators.py` resolve (click 38.2% to 38.5%).
 - `eslint` ignores `.claude/**`, so the publish gate runs unaided next to agent-installed helpers, and `bin` points at `dist/bin.js` without the leading `./` that npm normalized with a warning.
 
