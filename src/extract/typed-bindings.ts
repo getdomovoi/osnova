@@ -25,6 +25,8 @@ export interface TypedSpec {
   readonly thisNodes?: readonly string[] | undefined;
   readonly isStatic?: ((fn: Node) => boolean) | undefined;
   readonly bases?: ((classNode: Node) => readonly string[]) | undefined;
+  readonly innerType?: ((type: Node) => Node | null) | undefined;
+  readonly unwrapCalls?: readonly string[] | undefined;
 }
 
 interface Import { readonly source: string; readonly name: string }
@@ -39,6 +41,7 @@ export interface TypedBindings {
   returns: (fn: Node) => ReturnBinding | undefined;
   returnTuple: (fn: Node) => (ReturnBinding | null)[] | undefined;
   memberKind: (fn: Node) => MemberKind | undefined;
+  unwrapped: (fn: Node) => ReturnBinding | undefined;
   fieldTypes: (members: readonly Node[]) => Record<string, SymbolBinding> | undefined;
 }
 
@@ -91,11 +94,21 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     return nearestFunction(scope);
   };
   const calleeOwner = (value: Node, scope: Scope, index?: number): ReceiverOwner | undefined => {
+    // `f()?` and `f().unwrap()` name the value inside the wrapper: the callee's unwrapped return type.
+    if (value.type === "try_expression") {
+      const inner = childrenOf(value).find((child) => child.isNamed);
+      const owner = inner === undefined ? undefined : calleeOwner(inner, scope, index);
+      return owner?.kind === "return" ? { ...owner, unwrapped: true } : undefined;
+    }
     if (value.type !== "call_expression" && value.type !== "method_invocation" && value.type !== "invocation_expression") return undefined;
     const fn = value.type === "method_invocation" ? value : value.childForFieldName("function");
     if (fn === null) return undefined;
     const callee = spec.callee(fn);
     if (callee === undefined) return undefined;
+    if (spec.unwrapCalls?.includes(callee.name) && callee.object !== null && callee.path === undefined) {
+      const owner = calleeOwner(callee.object, scope, index);
+      return owner?.kind === "return" ? { ...owner, unwrapped: true } : undefined;
+    }
     let of: Callee | undefined;
     const at = value.startIndex;
     const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text) : callee.path !== undefined ? importOf(callee.path) : undefined;
@@ -127,7 +140,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   };
   const receiverOf = (object: Node, scope: Scope): ReceiverOwner | undefined => {
     const at = object.startIndex;
-    if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression") return calleeOwner(object, scope);
+    if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression" || object.type === "try_expression") return calleeOwner(object, scope);
     if (object.type === "parenthesized_expression") { const inner = childrenOf(object)[0]; return inner === undefined ? undefined : receiverOf(inner, scope); }
     if (spec.thisNodes?.includes(object.type)) {
       const cls = classOf(scope);
@@ -240,6 +253,15 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name); return owner === undefined || owner.kind === "return" || owner.kind === "super" || owner.kind === "field" ? null : owner; });
     },
     memberKind: (fn) => spec.memberKind(fn),
+    unwrapped(fn) {
+      const type = spec.returnType(fn);
+      const inner = type === null ? null : spec.innerType?.(type) ?? null;
+      if (inner === null) return undefined;
+      if (inner.type === "type_identifier" && inner.text === "Self") return spec.memberKind(fn) === undefined ? undefined : { kind: "this" };
+      const name = spec.typeName(inner);
+      const owner = name === undefined ? undefined : ownerForType(name);
+      return owner === undefined || owner.kind === "return" || owner.kind === "super" || owner.kind === "field" ? undefined : owner;
+    },
     fieldTypes: (members) => {
       const out: Record<string, SymbolBinding> = {};
       for (const member of members) for (const field of spec.field?.(member) ?? []) {
@@ -351,6 +373,15 @@ export const goSpec: TypedSpec = {
 
 export const rustSpec: TypedSpec = {
   functionNodes: ["function_item", "closure_expression"],
+  unwrapCalls: ["unwrap", "expect", "unwrap_or_default", "unwrap_unchecked"],
+  innerType: (type) => {
+    if (type.type !== "generic_type") return null;
+    const base = type.childForFieldName("type") ?? childrenOf(type)[0];
+    const name = base === undefined ? undefined : base.type === "type_identifier" ? base.text : base.type === "scoped_type_identifier" ? base.childForFieldName("name")?.text : undefined;
+    if (name !== "Result" && name !== "Option") return null;
+    const arguments_ = childrenOf(type).find((child) => child.type === "type_arguments");
+    return arguments_ === undefined ? null : childrenOf(arguments_).find((child) => child.isNamed) ?? null;
+  },
   field: (node) => {
     if (node.type !== "field_declaration") return [];
     const name = node.childForFieldName("name")?.text;

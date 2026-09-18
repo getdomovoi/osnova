@@ -60,7 +60,7 @@ export class Extractor {
     this.stack.pop();
   }
 
-  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node, memberKind?: MemberKind, heritage?: readonly SymbolBinding[], fields?: readonly string[], returns?: ReturnBinding, returnTuple?: readonly (ReturnBinding | null)[], fieldTypes?: Readonly<Record<string, SymbolBinding>>): void {
+  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node, memberKind?: MemberKind, heritage?: readonly SymbolBinding[], fields?: readonly string[], returns?: ReturnBinding, returnTuple?: readonly (ReturnBinding | null)[], fieldTypes?: Readonly<Record<string, SymbolBinding>>, unwrapped?: ReturnBinding): void {
     const def: RawDefinition = {
       name,
       kind,
@@ -73,6 +73,7 @@ export class Extractor {
       ...(returns === undefined ? {} : { returns }),
       ...(returnTuple === undefined || returnTuple.length === 0 ? {} : { returnTuple }),
       ...(fieldTypes === undefined || Object.keys(fieldTypes).length === 0 ? {} : { fieldTypes }),
+      ...(unwrapped === undefined ? {} : { unwrapped }),
     };
     this.definitions.push(def);
   }

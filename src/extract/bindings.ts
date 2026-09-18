@@ -130,6 +130,7 @@ export function collectBindings(root: Node, python: boolean): {
   heritage: (node: Node) => SymbolBinding[];
   returns: (node: Node) => ReturnBinding | undefined;
   ownFields: (node: Node) => string[];
+  unwrapped: (node: Node) => ReturnBinding | undefined;
   fieldTypes: (node: Node) => Record<string, SymbolBinding> | undefined;
   exportedNames: (name: string, parent: string) => readonly string[];
   reExports: readonly ReExport[];
@@ -140,7 +141,7 @@ export function collectBindings(root: Node, python: boolean): {
   const exports = new Map<string, Map<string, number>>();
   const reExports: ReExport[] = [];
   const importLines = new Map<EdgeBinding, number>();
-  const constructions = new Map<EdgeBinding, { expression: Node; site: Node; call?: boolean }>();
+  const constructions = new Map<EdgeBinding, { expression: Node; site: Node; call?: boolean ; awaited?: boolean }>();
   const pendingProperties: Array<{ fields: Map<string, { typeName: string; site: Node }>; name: string; inner: Node; decorator: Node }> = [];
   const ambient = new Set<string>();
   const implicitReceivers: Array<{ node: Node; scope: Scope; parameter: string }> = [];
@@ -170,12 +171,15 @@ export function collectBindings(root: Node, python: boolean): {
   };
   const construction = (value: Node | null, site: Node): EdgeBinding | undefined => {
     value = unwrap(value);
-    if (value === null || !(value.type === (python ? "call" : "new_expression") || (!python && value.type === "call_expression"))) return undefined;
+    const awaited = value !== null && value.type === (python ? "await" : "await_expression");
+    if (awaited) value = unwrap(childrenOf(value!).find((child) => child.isNamed) ?? null);
+    if (value === null || !(value.type === (python ? "call" : "new_expression") || value.type === (python ? "call" : "call_expression"))) return undefined;
     const expression = value.childForFieldName(value.type === "new_expression" ? "constructor" : "function");
     if (expression === null) return undefined;
     const call = value.type !== "new_expression";
+    if (awaited && !call) return undefined;
     const binding: EdgeBinding = { kind: "instance", owner: { kind: "local", name: expression.text }, basis: call && !python ? "return" : "constructor" };
-    constructions.set(binding, { expression, site, call });
+    constructions.set(binding, { expression, site, call, awaited });
     return binding;
   };
   const classOf = (scope: Scope): Scope | null => {
@@ -615,18 +619,25 @@ export function collectBindings(root: Node, python: boolean): {
   };
   const ownerDepth = (owner: ReceiverOwner | Callee): number =>
     owner.kind === "return" ? 1 + ownerDepth(owner.of) : owner.kind === "method" ? 1 + ownerDepth(owner.owner) : 0;
-  const returnOwner = (callee: Callee | undefined): ReceiverOwner | undefined => {
+  const returnOwner = (callee: Callee | undefined, awaited = false): ReceiverOwner | undefined => {
     if (callee === undefined) return undefined;
-    const owner: ReceiverOwner = { kind: "return", of: callee };
+    const owner: ReceiverOwner = awaited ? { kind: "return", of: callee, unwrapped: true } : { kind: "return", of: callee };
     return ownerDepth(owner) > 12 ? undefined : owner;
+  };
+  // `await f()` names the value inside the promise: the callee's unwrapped return type.
+  const awaitedCall = (expression: Node | null): Node | null => {
+    expression = unwrap(expression);
+    if (expression === null || expression.type !== (python ? "await" : "await_expression")) return null;
+    const inner = unwrap(childrenOf(expression).find((child) => child.isNamed) ?? null);
+    return inner !== null && inner.type === (python ? "call" : "call_expression") ? inner : null;
   };
   const normalize = (binding: EdgeBinding | undefined): EdgeBinding | undefined => {
     const created = binding === undefined ? undefined : constructions.get(binding);
     if (created === undefined) return binding;
     const owner = symbolBinding(created.expression, created.site);
-    if (owner !== undefined && (!created.call || python)) return { kind: "instance", owner, basis: "constructor" };
+    if (owner !== undefined && (!created.call || (python && created.awaited !== true))) return { kind: "instance", owner, basis: "constructor" };
     if (!created.call) return { kind: "blocked", reason: "unknown-receiver" };
-    const produced = returnOwner(calleeOf(created.expression, created.site));
+    const produced = returnOwner(calleeOf(created.expression, created.site), created.awaited);
     return produced === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "instance", owner: produced, basis: "return" };
   };
   // The owner of a receiver expression: `this`/`self`, a bound instance, a call result, or a field of one of those.
@@ -646,6 +657,8 @@ export function collectBindings(root: Node, python: boolean): {
       const constructed = python ? symbolBinding(expression.childForFieldName("function"), site) : undefined;
       return constructed ?? returnOwner(calleeOf(expression.childForFieldName("function"), site));
     }
+    const awaited = awaitedCall(expression);
+    if (awaited !== null) return returnOwner(calleeOf(awaited.childForFieldName("function"), site), true);
     if (expression.type === "member_expression" || expression.type === "attribute") {
       const field = expression.childForFieldName(python ? "attribute" : "property")?.text;
       const base = field === undefined ? undefined : chainOwner(expression.childForFieldName("object"), site, field);
@@ -707,6 +720,11 @@ export function collectBindings(root: Node, python: boolean): {
           const owner = returnOwner(calleeOf(object.childForFieldName("function"), site));
           return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: property.text, mode: "instance", basis: "return" };
         }
+        const awaited = awaitedCall(object);
+        if (awaited !== null) {
+          const owner = returnOwner(calleeOf(awaited.childForFieldName("function"), site), true);
+          return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: property.text, mode: "instance", basis: "return" };
+        }
         const rawBinding = object?.type === "identifier" ? lookup(object.text, site) : construction(object, site);
         if (mutated(rawBinding, property.text)) return { kind: "blocked", reason: "unknown-receiver" };
         const binding = normalize(rawBinding);
@@ -755,6 +773,30 @@ export function collectBindings(root: Node, python: boolean): {
     const inner = type.type === "type_annotation" ? childrenOf(type).find((child) => child.type !== ":") ?? null : type;
     if (inner?.type === "this_type") return { kind: "this" };
     const name = annotationTypeName(inner);
+    return name === undefined ? undefined : ownerFor(name, node);
+  };
+  // The value type inside a wrapper: `Promise<Foo>` (or an async function's declared result in Python) is a Foo once awaited.
+  const unwrapped = (node: Node): ReturnBinding | undefined => {
+    if (python) {
+      const type = node.childForFieldName("return_type");
+      if (type === null || !node.children.some((child) => child?.type === "async")) return undefined;
+      const body = node.childForFieldName("body");
+      if (body !== null && ownYield(body)) return undefined;
+      const inner = type.type === "type" ? childrenOf(type)[0] ?? null : type;
+      if (inner !== null && (inner.type === "identifier" || inner.type === "attribute") && isTypingSelf(inner)) return classOf(scopes.get(node.id) ?? module) === null ? undefined : { kind: "this" };
+      const name = pythonTypeName(inner);
+      return name === undefined ? undefined : ownerFor(name, node);
+    }
+    if (node.type === "generator_function_declaration" || node.type === "generator_function" || node.children.some((child) => child?.type === "*")) return undefined;
+    const type = node.childForFieldName("return_type");
+    const annotation = type === null ? null : type.type === "type_annotation" ? childrenOf(type).find((child) => child.type !== ":") ?? null : type;
+    if (annotation?.type !== "generic_type") return undefined;
+    const base = childrenOf(annotation)[0];
+    if (base === undefined || base.type !== "type_identifier" || (base.text !== "Promise" && base.text !== "PromiseLike")) return undefined;
+    const argument = childrenOf(childrenOf(annotation).find((child) => child.type === "type_arguments") ?? annotation).find((child) => child.isNamed);
+    if (argument === undefined) return undefined;
+    if (argument.type === "this_type") return { kind: "this" };
+    const name = annotationTypeName(argument);
     return name === undefined ? undefined : ownerFor(name, node);
   };
   // Python binds names in execution order: a module-level rebinding of `property` after the class
@@ -807,6 +849,7 @@ export function collectBindings(root: Node, python: boolean): {
       }
       return out;
     },
+    unwrapped,
     fieldTypes: (node) => {
       const out: Record<string, SymbolBinding> = {};
       const scope = scopes.get(node.id);

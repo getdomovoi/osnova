@@ -19,7 +19,7 @@ class TsExtractor {
 
   def(name: string, kind: Parameters<Extractor["addDef"]>[1], node: Node, sigNode?: Node): void {
     if (!IDENTIFIER_RE.test(name)) return;
-    this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined);
+    this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined, undefined, undefined, kind === "function" ? this.bindings.unwrapped(sigNode ?? node) : undefined);
   }
 }
 
@@ -87,7 +87,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
         if (member.type === "method_definition" || (fieldValue !== null && FUNCTION_VALUE_NODES.has(fieldValue.type))) {
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {
-            ex.out.addDef(methodName, "method", member, fieldValue ?? undefined, memberKindOf(member, false), undefined, undefined, ex.bindings.returns(fieldValue ?? member));
+            ex.out.addDef(methodName, "method", member, fieldValue ?? undefined, memberKindOf(member, false), undefined, undefined, ex.bindings.returns(fieldValue ?? member), undefined, undefined, ex.bindings.unwrapped(fieldValue ?? member));
             ex.pushFrame(methodName);
             for (const bodyPart of childrenOf(member)) visit(bodyPart);
             ex.popFrame();
