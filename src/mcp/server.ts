@@ -24,6 +24,13 @@ import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
 
 const maximumMcpSkeletonCodeUnits = 4_096;
+// Sent on initialize; clients that honour MCP instructions place it in the system prompt, so every
+// harness with an MCP client gets the tool contract without a hook.
+export const mcpInstructions = [
+  "Osnova is a deterministic call graph of this repository with exact file:line, no type inference, no LLM. Use its tools before grep and file reads.",
+  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites.",
+  "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
+].join("\n");
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
@@ -221,7 +228,7 @@ export function createOsnovaMcpServer(
 
   const server = new Server(
     { name: "osnova", version: OSNOVA_VERSION },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, instructions: mcpInstructions },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));

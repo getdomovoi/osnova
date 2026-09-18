@@ -2,6 +2,22 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova hook prompt`, `osnova hook session` and `osnova hook stop`: Claude Code hooks that read the payload on stdin. `prompt` prints starting points for the prompt (definitions and relationships from `footing`, callable and holder kinds only, under 1,024 code units); `session` prints the tool contract and the index size; `stop` diffs the worktree against `HEAD` and, once per stop, returns a `block` decision whose reason lists the indexed dependents of the changed symbols (under 1,536 code units), so the agent checks them before it finishes (`OSNOVA_HOOK_SETTLE=off` disables it). A repository with no cache is indexed in the background by the session hook; the prompt and stop hooks answer only from an existing cache. Nothing is printed on a slash command, a prompt under twelve characters, or any failure, and every hook exits 0. `osnova hook install-preview` prints the settings snippet. The CLI wrapper now carries a caller-supplied stdin reader through to commands.
+- `osnova setup --apply` writes what `--preview` shows: the MCP entry for any client, `--hooks` for the three Claude Code hook groups in `~/.claude/settings.json` (added only when no group already runs that `osnova hook <event>`; other keys and the file's indent are kept), and `--instructions <file>` for a tool-contract block appended once between `<!-- osnova:start -->` and `<!-- osnova:end -->` markers. Every changed file is backed up first as `<file>.bak-osnova-<stamp>`, a second run reports `unchanged` and writes nothing, and one conflict stops the whole apply before any write.
+- The MCP server sends the tool contract as `instructions` on initialize, so every client that honours MCP instructions carries it in the system prompt without a hook.
+- `osnova hook --client codex` answers with `additionalContext` JSON and `--client cursor` answers the stop hook with a `followup_message`; `osnova setup --apply --hooks --client codex|cursor` writes `~/.codex/hooks.json` (session, prompt, stop) and `~/.cursor/hooks.json` (stop only, since Cursor's prompt hook cannot add context). `osnova setup --apply --plugin --client opencode|kilo|pi` copies the shipped `integrations/opencode/osnova.js` plugin or `integrations/pi/osnova.ts` extension into the client's plugin directory; both shell out to `osnova hook` for the contract and starting points (`OSNOVA_BIN` overrides the executable) and are never overwritten once present.
+- `osnova doctor` reads `~/.claude/settings.json` and `~/.claude.json`, runs `--version` on every osnova hook and MCP command they configure, and warns when one reports another version than the doctor itself (`client:hook`, `client:mcp` checks).
+- Hooks and `osnova mcp` without `--workspace` resolve the workspace to the git top level of the starting directory, so a client started in a subdirectory indexes the repository.
+
+### Changed
+
+- Python `X | None`, `None | X`, `Optional[X]`, `t.Optional[X]` and `Union[X, None]` name `X` in parameter, return, field and collection annotations, as TypeScript already strips `null` and `undefined`; a union of two or more real types names no receiver. Overloads that differ only by `| None` now agree, so `get_current_context()` in click binds its result and the `ctx.invoke` sites in `decorators.py` resolve (click 38.2% to 38.5%).
+- `eslint` ignores `.claude/**`, so the publish gate runs unaided next to agent-installed helpers, and `bin` points at `dist/bin.js` without the leading `./` that npm normalized with a warning.
+
 ## 0.5.0 (2026-09-18)
 
 ### Fixed

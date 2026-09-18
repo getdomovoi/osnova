@@ -26,7 +26,7 @@ export async function checkPackage(root) {
     targets.push(entry.import, entry.types);
   }
   for (const target of targets) {
-    assert(typeof target === "string" && target.startsWith("./dist/"), "Package target must be inside dist");
+    assert(typeof target === "string" && /^(\.\/)?dist\//.test(target), "Package target must be inside dist");
     const resolved = path.resolve(root, target);
     assert(!path.relative(path.join(root, "dist"), resolved).startsWith(".."), "Escaping package target");
     assert((await stat(resolved)).isFile(), `Missing artifact ${target}`);

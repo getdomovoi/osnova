@@ -1,6 +1,10 @@
 import { constants } from "node:fs";
-import { access, stat } from "node:fs/promises";
+import { access, readFile, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
+import { OSNOVA_VERSION } from "../version.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { getParser } from "../grammar/loader.js";
 import { extensionLanguage, grammarFile, languageTier } from "../grammar/languages.js";
@@ -32,6 +36,51 @@ export interface DoctorReport {
 
 export interface DoctorOptions {
   readonly cacheDir?: string | undefined;
+  /** Where client configs are read for the version check; defaults to the home directory. */
+  readonly home?: string | undefined;
+}
+
+const execFileAsync = promisify(execFile);
+
+// Every osnova command a Claude Code config runs (hooks in ~/.claude/settings.json, the MCP server in ~/.claude.json)
+// must report this version; a hook or server from another install would read caches this one writes.
+export async function clientVersionChecks(home: string): Promise<DiagnosticCheck[]> {
+  const commands = new Map<string, string[]>();
+  const note = (command: string, role: string): void => { const roles = commands.get(command) ?? []; if (!roles.includes(role)) roles.push(role); commands.set(command, roles); };
+  const read = async (file: string): Promise<unknown> => { try { return JSON.parse(await readFile(file, "utf8")); } catch { return undefined; } };
+  const settings = await read(path.join(home, ".claude", "settings.json")) as { hooks?: Record<string, unknown> } | undefined;
+  for (const groups of Object.values(settings?.hooks ?? {})) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) for (const hook of (group as { hooks?: unknown[] })?.hooks ?? []) {
+      const command = (hook as { command?: unknown })?.command;
+      if (typeof command === "string" && /osnova/.test(command) && /\bhook\b/.test(command)) note(command.replace(/\s+hook\b.*$/, ""), "hook");
+    }
+  }
+  const claude = await read(path.join(home, ".claude.json")) as { mcpServers?: Record<string, { command?: unknown; args?: unknown }> } | undefined;
+  const server = claude?.mcpServers?.osnova;
+  if (server !== undefined && typeof server.command === "string") {
+    const args = Array.isArray(server.args) ? server.args.filter((arg): arg is string => typeof arg === "string") : [];
+    const prefix = [server.command, ...args.slice(0, Math.max(0, args.indexOf("mcp")))];
+    note(prefix.map((part) => (/\s/.test(part) ? JSON.stringify(part) : part)).join(" "), "mcp");
+  }
+  if (commands.size === 0) return [{ id: "clients", status: "ok", message: "No Claude Code hook or MCP entry references osnova; nothing to compare." }];
+  const checks: DiagnosticCheck[] = [];
+  for (const [command, roles] of commands) {
+    const role = roles.join("+");
+    const parts = command.match(/"[^"]*"|\S+/g)?.map((part) => part.replace(/^"|"$/g, "")) ?? [];
+    const [executable, ...args] = parts;
+    if (executable === undefined) continue;
+    try {
+      const { stdout } = await execFileAsync(executable, [...args, "--version"], { encoding: "utf8", timeout: 5_000 });
+      const version = stdout.trim().split("\n").at(-1) ?? "";
+      checks.push(version === OSNOVA_VERSION
+        ? { id: `client:${role}`, status: "ok", message: `${command} reports ${version}, the same as this osnova.` }
+        : { id: `client:${role}`, status: "warning", message: `${command} reports ${version || "no version"}; this osnova is ${OSNOVA_VERSION}. Hooks, server and caches should come from one install.` });
+    } catch (error) {
+      checks.push({ id: `client:${role}`, status: "warning", message: `${command} did not answer --version: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  }
+  return checks;
 }
 
 export async function doctor(workspace: string, options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -132,6 +181,7 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     });
     checks.push({ id: `grammar:${language}`, status, message: status === "ok" ? "Packaged WASM loaded and parsed a synthetic snippet without syntax errors." : "WASM load or synthetic parse failed; check installed parser and grammar assets. No download attempted." });
   }
+  checks.push(...(await clientVersionChecks(path.resolve(options.home ?? os.homedir()))));
   return {
     ok: checks.every((check) => check.status !== "error"), readOnly: true, checks, capabilities,
     fallback: "Other eligible text files receive file cards without structural extraction. Declaration files may be excluded; scan eligibility is separate from grammar availability.",

@@ -59,6 +59,12 @@ OpenCode, in `~/.config/opencode/opencode.json`:
 { "mcp": { "osnova": { "type": "local", "command": ["osnova", "mcp"], "enabled": true } } }
 ```
 
+One command applies all of it for Claude Code: `osnova setup --apply --client claude-code --hooks` writes the MCP entry to `~/.claude.json` and the three hook groups to `~/.claude/settings.json`, backing up each file it changes as `<file>.bak-osnova-<stamp>`, and does nothing on a second run; `--preview` prints the same diffs without writing, and a conflicting entry stops the whole apply. `--instructions AGENTS.md` appends the tool contract once between `<!-- osnova:start -->` and `<!-- osnova:end -->` markers for clients without hooks. `osnova doctor` then checks that every configured hook and MCP command reports this osnova's version.
+
+Claude Code hooks, so the graph speaks first without a tool call: `osnova hook session` prints the tool contract and the index size when a session starts, and `osnova hook prompt` prints up to eight starting points (definitions and relationships the prompt names, exact `file:line`, under 1,024 code units) on every prompt. Both read the hook payload on stdin, never write to the repository, and print nothing on a slash command, a short prompt, or a failure. `osnova hook stop` runs when the agent is about to finish: it diffs the worktree against `HEAD` and, once, hands back the indexed dependents of the changed symbols so the agent checks them first. On a repository with no cache the session hook starts the build in the background and the other hooks stay quiet until it exists. The workspace is the git top level of the client's directory. `osnova hook install-preview` prints the settings snippet; paste it into `~/.claude/settings.json` yourself, since osnova never edits that file.
+
+Other harnesses get the same three levers by their own means. `osnova setup --apply --client codex --hooks` writes `~/.codex/hooks.json` with the same session, prompt and stop hooks (Codex reads `additionalContext` JSON). `--client cursor --hooks` writes `~/.cursor/hooks.json` with the stop hook as a follow-up message, since Cursor's prompt hook cannot add context. `--client opencode --plugin` and `--client kilo --plugin` copy the shipped plugin into the client's `plugins/` directory: it puts the contract into the system prompt and appends starting points to each user message by calling `osnova hook`. `--client pi --plugin` copies the shipped extension into `~/.pi/agent/extensions/`, which does the same through `before_agent_start`. Every MCP client also receives the contract as the server's `instructions` on initialize, so a client without hooks or plugins still sees it.
+
 Pi, through the `pi-mcp-adapter` extension, in `~/.pi/agent/mcp.json`:
 
 ```json
@@ -118,20 +124,20 @@ A call site counts as resolved when the index ties it to one definition through 
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5022 | 1916 | 38.1% | 54.5% |
-| click | all | 5022 | 1916 | 38.1% | 54.5% |
+| click | python | 5022 | 1932 | 38.5% | 54.9% |
+| click | all | 5022 | 1932 | 38.5% | 54.9% |
 | cobra | go | 4374 | 1931 | 44.1% | 75.3% |
 | cobra | all | 4374 | 1931 | 44.1% | 75.3% |
 | gson | java | 23341 | 7515 | 32.2% | 37.1% |
 | gson | all | 23341 | 7515 | 32.2% | 37.1% |
-| humanizer | c_sharp | 28783 | 7628 | 26.5% | 41.5% |
-| humanizer | javascript | 927 | 132 | 14.2% | 39.4% |
+| humanizer | c_sharp | 28782 | 7628 | 26.5% | 41.5% |
+| humanizer | javascript | 927 | 132 | 14.2% | 39.3% |
 | humanizer | tsx | 120 | 14 | 11.7% | 18.2% |
 | humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30514 | 7778 | 25.5% | 40.6% |
-| pyright | python | 11617 | 3320 | 28.6% | 65.3% |
+| humanizer | all | 30513 | 7778 | 25.5% | 40.6% |
+| pyright | python | 11617 | 3323 | 28.6% | 65.3% |
 | pyright | typescript | 46810 | 26619 | 56.9% | 72.4% |
-| pyright | all | 58459 | 29939 | 51.2% | 71.5% |
+| pyright | all | 58459 | 29942 | 51.2% | 71.5% |
 | ripgrep | rust | 13350 | 3952 | 29.6% | 39.7% |
 | ripgrep | all | 13364 | 3956 | 29.6% | 39.7% |
 | zod | tsx | 150 | 7 | 4.7% | 9.2% |
