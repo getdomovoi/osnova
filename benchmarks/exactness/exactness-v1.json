@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "exactness-v1",
-  "description": "Hand-verified call-site sets on pinned public checkouts, used to compare a naive text search with the resolved call graph. Each truth set was checked line by line after two independent agent runs and a manual review; the naive search is the regex a person types first.",
+  "description": "Hand-verified call-site sets on pinned public checkouts, used to compare a naive text search with the resolved call graph. Each truth set was checked line by line after two independent agent runs and a manual review; the naive search is the regex a person types first. The truth is the static receiver type at the call site, so a call through a declared JsonReader counts even when a subclass overrides the method.",
   "cases": [
     {
       "id": "click-context-invoke",
@@ -172,6 +172,137 @@
         "src/Humanizer/TimeSpanHumanizeExtensions.cs:723",
         "src/Humanizer/TimeSpanHumanizeExtensions.cs:928",
         "src/Humanizer/TimeUnitToSymbolExtensions.cs:14"
+      ]
+    },
+    {
+      "id": "ripgrep-searcher-line-terminator",
+      "corpus": "ripgrep",
+      "depth": 1,
+      "scope": "crates/",
+      "exclude": "/tests/|testutil",
+      "extensions": [
+        ".rs"
+      ],
+      "symbol": "crates/searcher/src/searcher/mod.rs#Searcher.line_terminator",
+      "grep": "\\.line_terminator\\(",
+      "truth": [
+        "crates/printer/src/standard.rs:1039",
+        "crates/printer/src/standard.rs:1065",
+        "crates/printer/src/standard.rs:1116",
+        "crates/printer/src/standard.rs:1196",
+        "crates/printer/src/standard.rs:1430",
+        "crates/printer/src/standard.rs:1528",
+        "crates/printer/src/standard.rs:1586",
+        "crates/printer/src/standard.rs:977",
+        "crates/printer/src/summary.rs:613",
+        "crates/printer/src/util.rs:540",
+        "crates/searcher/src/searcher/mod.rs:901",
+        "crates/searcher/src/searcher/mod.rs:910"
+      ]
+    },
+    {
+      "id": "ripgrep-lineterminator-as-byte",
+      "corpus": "ripgrep",
+      "depth": 1,
+      "scope": "crates/",
+      "exclude": "/tests/|testutil",
+      "extensions": [
+        ".rs"
+      ],
+      "symbol": "crates/matcher/src/lib.rs#LineTerminator.as_byte",
+      "grep": "\\.as_byte\\(",
+      "truth": [
+        "crates/matcher/src/lib.rs:264",
+        "crates/printer/src/standard.rs:1039",
+        "crates/printer/src/standard.rs:1065",
+        "crates/printer/src/standard.rs:1116",
+        "crates/printer/src/standard.rs:977",
+        "crates/regex/src/config.rs:354",
+        "crates/regex/src/strip.rs:47",
+        "crates/searcher/src/searcher/core.rs:200",
+        "crates/searcher/src/searcher/core.rs:255",
+        "crates/searcher/src/searcher/core.rs:261",
+        "crates/searcher/src/searcher/core.rs:287",
+        "crates/searcher/src/searcher/core.rs:318",
+        "crates/searcher/src/searcher/core.rs:335",
+        "crates/searcher/src/searcher/core.rs:459",
+        "crates/searcher/src/searcher/core.rs:494",
+        "crates/searcher/src/searcher/core.rs:508",
+        "crates/searcher/src/searcher/core.rs:667",
+        "crates/searcher/src/searcher/core.rs:691",
+        "crates/searcher/src/searcher/core.rs:703",
+        "crates/searcher/src/searcher/glue.rs:222",
+        "crates/searcher/src/searcher/glue.rs:272",
+        "crates/searcher/src/searcher/glue.rs:287",
+        "crates/searcher/src/searcher/mod.rs:221",
+        "crates/searcher/src/searcher/mod.rs:910",
+        "crates/searcher/src/sink.rs:393",
+        "crates/searcher/src/sink.rs:472"
+      ]
+    },
+    {
+      "id": "gson-jsonreader-beginobject",
+      "corpus": "gson",
+      "depth": 1,
+      "scope": "gson/src/main/",
+      "exclude": "^$",
+      "extensions": [
+        ".java"
+      ],
+      "symbol": "gson/src/main/java/com/google/gson/stream/JsonReader.java#JsonReader.beginObject",
+      "grep": "\\.beginObject\\(",
+      "truth": [
+        "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:121",
+        "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:172",
+        "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:213",
+        "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:296",
+        "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:347",
+        "gson/src/main/java/com/google/gson/internal/bind/JsonElementTypeAdapter.java:50",
+        "gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java:200",
+        "gson/src/main/java/com/google/gson/internal/bind/ObjectTypeAdapter.java:83",
+        "gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java:534",
+        "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:868"
+      ]
+    },
+    {
+      "id": "gson-typetoken-getrawtype",
+      "corpus": "gson",
+      "depth": 1,
+      "scope": "gson/src/main/",
+      "exclude": "^$",
+      "extensions": [
+        ".java"
+      ],
+      "symbol": "gson/src/main/java/com/google/gson/reflect/TypeToken.java#TypeToken.getRawType",
+      "grep": "\\.getRawType\\(",
+      "truth": [
+        "gson/src/main/java/com/google/gson/Gson.java:1104",
+        "gson/src/main/java/com/google/gson/Gson.java:1110",
+        "gson/src/main/java/com/google/gson/internal/ConstructorConstructor.java:105",
+        "gson/src/main/java/com/google/gson/internal/Excluder.java:112",
+        "gson/src/main/java/com/google/gson/internal/bind/CollectionTypeAdapterFactory.java:45",
+        "gson/src/main/java/com/google/gson/internal/bind/DefaultDateTypeAdapter.java:69",
+        "gson/src/main/java/com/google/gson/internal/bind/EnumTypeAdapter.java:40",
+        "gson/src/main/java/com/google/gson/internal/bind/JavaTimeTypeAdapters.java:397",
+        "gson/src/main/java/com/google/gson/internal/bind/JsonAdapterAnnotationTypeAdapterFactory.java:121",
+        "gson/src/main/java/com/google/gson/internal/bind/JsonAdapterAnnotationTypeAdapterFactory.java:183",
+        "gson/src/main/java/com/google/gson/internal/bind/JsonAdapterAnnotationTypeAdapterFactory.java:78",
+        "gson/src/main/java/com/google/gson/internal/bind/MapTypeAdapterFactory.java:129",
+        "gson/src/main/java/com/google/gson/internal/bind/NumberTypeAdapter.java:49",
+        "gson/src/main/java/com/google/gson/internal/bind/ObjectTypeAdapter.java:57",
+        "gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java:111",
+        "gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java:190",
+        "gson/src/main/java/com/google/gson/internal/bind/ReflectiveTypeAdapterFactory.java:447",
+        "gson/src/main/java/com/google/gson/internal/bind/TreeTypeAdapter.java:140",
+        "gson/src/main/java/com/google/gson/internal/bind/TreeTypeAdapter.java:182",
+        "gson/src/main/java/com/google/gson/internal/bind/TreeTypeAdapter.java:183",
+        "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:1010",
+        "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:1027",
+        "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:1051",
+        "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:1078",
+        "gson/src/main/java/com/google/gson/internal/sql/SqlDateTypeAdapter.java:46",
+        "gson/src/main/java/com/google/gson/internal/sql/SqlTimeTypeAdapter.java:47",
+        "gson/src/main/java/com/google/gson/internal/sql/SqlTimestampTypeAdapter.java:36"
       ]
     }
   ]
