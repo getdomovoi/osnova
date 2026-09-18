@@ -104,6 +104,8 @@ export interface HookOptions {
   readonly command?: readonly string[] | undefined;
   /** Include the opt-in PostToolUse grep nudge in the install preview. */
   readonly nudge?: boolean | undefined;
+  /** How long the session hook waits for a background build of a cold repository before answering without starting points (default 3,000 ms). */
+  readonly sessionWaitMs?: number | undefined;
   /** How to start a background build; defaults to this executable. Tests pass a no-op. */
   readonly backgroundBuild?: ((workspace: string, cacheDir: string | undefined) => void) | undefined;
 }
@@ -141,11 +143,19 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
   const fail = (error: unknown): void => io.stderr(`osnova hook: ${error instanceof Error ? error.message : String(error)}`);
   if (event === "session") {
     try {
-      const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
+      let cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
       if (cached === undefined) {
         (options.backgroundBuild ?? defaultBackgroundBuild)(workspace, options.cacheDir);
-        emitContext(io, client, "session", boundText(`${hookToolContract}\nIndex: building in the background; starting points appear from the next prompt.`, hookSessionCodeUnits));
-        return;
+        // A small repository builds in well under the wait, so its first prompt already has starting points.
+        const deadline = Date.now() + (options.sessionWaitMs ?? 3_000);
+        while (cached === undefined && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
+        }
+        if (cached === undefined) {
+          emitContext(io, client, "session", boundText(`${hookToolContract}\nIndex: building in the background; starting points appear from the next prompt.`, hookSessionCodeUnits));
+          return;
+        }
       }
       const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
       emitContext(io, client, "session", boundText(`${hookToolContract}\nIndexed: ${index.files.size} files, ${index.symbols.size} symbols.`, hookSessionCodeUnits));
