@@ -1,0 +1,134 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { runCli } from "../src/cli/cli.js";
+import { doctor } from "../src/diagnostics/doctor.js";
+
+let home: string;
+beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-apply-")); });
+afterEach(async () => { await fs.rm(home, { recursive: true, force: true }); });
+function capture() { const out: string[] = []; return { out, io: { stdout: (t: string) => out.push(t), stderr: (t: string) => out.push(`ERR ${t}`) } }; }
+
+describe("osnova setup --apply", () => {
+  it("writes the MCP entry, the three hooks and the instructions block once, with backups, and is idempotent", async () => {
+    await fs.mkdir(path.join(home, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(home, ".claude", "settings.json"), '{\n  "hooks": {\n    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node other.js", "timeout": 5 }] }]\n  },\n  "theme": "dark"\n}\n');
+    const agents = path.join(home, "AGENTS.md"); await fs.writeFile(agents, "# Project\n\nRules.\n");
+    let c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "claude-code", "--hooks", "--instructions", agents, "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    const report = c.out.join("\n");
+    expect(report).toMatch(/applied: claude-code, create, .*\.claude\.json/);
+    expect(report).toMatch(/applied: hooks, append, .*settings\.json \(backup .*settings\.json\.bak-osnova-/);
+    expect(report).toMatch(/applied: instructions, append, .*AGENTS\.md \(backup /);
+    const settings = JSON.parse(await fs.readFile(path.join(home, ".claude", "settings.json"), "utf8"));
+    expect(settings.theme).toBe("dark");
+    expect(settings.hooks.UserPromptSubmit).toHaveLength(2);
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toBe("node other.js");
+    expect(settings.hooks.UserPromptSubmit[1].hooks[0].command).toBe("osnova hook prompt");
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("osnova hook session");
+    expect(settings.hooks.Stop[0].hooks[0]).toEqual({ type: "command", command: "osnova hook stop", timeout: 30 });
+    const claude = JSON.parse(await fs.readFile(path.join(home, ".claude.json"), "utf8"));
+    expect(claude.mcpServers.osnova).toEqual({ command: "osnova", args: ["mcp"] });
+    const text = await fs.readFile(agents, "utf8");
+    expect(text.startsWith("# Project\n\nRules.\n\n<!-- osnova:start -->")).toBe(true);
+    expect(text).toContain("osnova_footing");
+    expect(text.trimEnd().endsWith("<!-- osnova:end -->")).toBe(true);
+    const backups = (await fs.readdir(path.join(home, ".claude"))).filter((name) => name.includes(".bak-osnova-"));
+    expect(backups).toHaveLength(1);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "claude-code", "--hooks", "--instructions", agents, "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    expect(c.out.join("\n")).toMatch(/claude-code, unchanged[\s\S]*hooks, unchanged[\s\S]*instructions, unchanged/);
+    expect((await fs.readdir(path.join(home, ".claude"))).filter((name) => name.includes(".bak-osnova-"))).toHaveLength(1);
+    expect(await fs.readFile(agents, "utf8")).toBe(text);
+    c = capture();
+    expect(await runCli(["setup", "--preview", "--hooks", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("hooks, unchanged");
+  });
+
+  it("refuses to write when the MCP entry conflicts, and writes nothing else either", async () => {
+    await fs.writeFile(path.join(home, ".claude.json"), '{ "mcpServers": { "osnova": { "command": "elsewhere", "args": ["mcp"] } } }\n');
+    const c = capture();
+    await expect(runCli(["setup", "--apply", "--client", "claude-code", "--hooks", "--home", home], c.io)).rejects.toThrow(/conflicts with the proposal; nothing was written/);
+    await expect(fs.access(path.join(home, ".claude", "settings.json"))).rejects.toThrow();
+  });
+});
+
+describe("doctor client version check", () => {
+  it("warns when a configured hook or MCP command reports another version, ok when it matches", async () => {
+    const { OSNOVA_VERSION } = await import("../src/version.js");
+    const same = path.join(home, "same.js"); await fs.writeFile(same, `console.log(${JSON.stringify(OSNOVA_VERSION)});\n`);
+    const other = path.join(home, "other.js"); await fs.writeFile(other, "console.log('0.0.1');\n");
+    await fs.mkdir(path.join(home, ".claude"), { recursive: true });
+    const node = process.execPath;
+    await fs.writeFile(path.join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: `${JSON.stringify(node)} ${JSON.stringify(other)} hook prompt` }] }] } }));
+    await fs.writeFile(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { osnova: { command: node, args: [same, "mcp", "--watch"] } } }));
+    const report = await doctor(home, { cacheDir: path.join(home, "cache"), home });
+    const hook = report.checks.find((check) => check.id === "client:hook");
+    const mcp = report.checks.find((check) => check.id === "client:mcp");
+    expect(hook?.status).toBe("warning");
+    expect(hook?.message).toContain("0.0.1");
+    expect(mcp?.status).toBe("ok");
+    expect(report.ok).toBe(true);
+  });
+});
+
+describe("hooks for Codex and Cursor", () => {
+  it("writes ~/.codex/hooks.json with additionalContext-shaped hooks and ~/.cursor/hooks.json with a stop follow-up", async () => {
+    let c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--client", "codex", "--home", home], c.io)).toBe(0);
+    const codex = JSON.parse(await fs.readFile(path.join(home, ".codex", "hooks.json"), "utf8"));
+    expect(codex.hooks.UserPromptSubmit[0].hooks[0].command).toBe("osnova hook prompt --client codex");
+    expect(codex.hooks.Stop[0].hooks[0].command).toBe("osnova hook stop --client codex");
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--client", "cursor", "--home", home], c.io)).toBe(0);
+    const cursor = JSON.parse(await fs.readFile(path.join(home, ".cursor", "hooks.json"), "utf8"));
+    expect(cursor.version).toBe(1);
+    expect(cursor.hooks.stop).toEqual([{ command: "osnova hook stop --client cursor", timeout: 30 }]);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--client", "cursor", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("hooks, unchanged");
+  });
+});
+
+describe("plugins for OpenCode, Kilo and Pi", () => {
+  it("copies the shipped plugin or extension file once and refuses to overwrite a different one", async () => {
+    let c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
+    const target = path.join(home, ".config", "opencode", "plugins", "osnova.js");
+    const text = await fs.readFile(target, "utf8");
+    expect(text).toContain("experimental.chat.system.transform");
+    expect(c.out.join("\n")).toMatch(/plugin, create, .*plugins[\\/]osnova\.js/);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("plugin, unchanged");
+    await fs.writeFile(target, "// mine\n");
+    c = capture();
+    await expect(runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).rejects.toThrow(/nothing was written/);
+    expect(await fs.readFile(target, "utf8")).toBe("// mine\n");
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "pi", "--plugin", "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(path.join(home, ".pi", "agent", "extensions", "osnova.ts"), "utf8")).toContain("before_agent_start");
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--client", "kilo", "--plugin", "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(path.join(home, ".config", "kilo", "plugins", "osnova.js"), "utf8")).toContain("chat.message");
+  });
+
+  it.skipIf(process.platform === "win32")("the OpenCode plugin appends starting points to the user message and the contract to the system prompt", async () => {
+    const fake = path.join(home, "fake-osnova.mjs");
+    await fs.writeFile(fake, "let raw=''; process.stdin.on('data',(d)=>raw+=d); process.stdin.on('end',()=>{ const e=process.argv[3]; const p=JSON.parse(raw||'{}'); process.stdout.write(e==='session'?'CONTRACT':e==='prompt'?`POINTS for ${p.prompt}`:''); });\n");
+    const wrapper = path.join(home, "osnova-bin.sh");
+    await fs.writeFile(wrapper, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 });
+    process.env.OSNOVA_BIN = wrapper;
+    try {
+      const { OsnovaPlugin } = await import("../integrations/opencode/osnova.js");
+      const hooks = await OsnovaPlugin({ directory: home, worktree: home });
+      const system: string[] = [];
+      await hooks["experimental.chat.system.transform"]({}, { system });
+      expect(system).toEqual(["CONTRACT"]);
+      const parts = [{ type: "text", text: "why is total wrong" }];
+      await hooks["chat.message"]({}, { message: {}, parts });
+      expect(parts[0]!.text).toBe("why is total wrong\n\nPOINTS for why is total wrong");
+    } finally { delete process.env.OSNOVA_BIN; }
+  });
+});

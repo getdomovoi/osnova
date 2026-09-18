@@ -235,10 +235,10 @@ describe("receiver identity", () => {
     expect(edges.filter((edge) => edge.toName === "run").map((edge) => edge.toSymbol)).toEqual(expect.arrayContaining(["a.js#A.run", undefined]));
   });
 
-  it("does not infer a class from a factory call or a reassigned instance, but does from an annotation", async () => {
+  it("infers a class from a factory whose every return is a constructor, not from a reassigned instance, and from an annotation", async () => {
     const index = await build({ "a.ts": "export class A { send() {} }\nfunction factory() { return new A(); }\nexport function caller(value: A) {\n  value.send();\n  const x = factory();\n  x.send();\n  let y = new A();\n  y = value;\n  y.send();\n}\n" });
     const sends = index.outgoing("a.ts#caller").filter((edge) => edge.toName === "send").sort((a, b) => a.line - b.line);
-    expect(sends.map((edge) => edge.toSymbol)).toEqual(["a.ts#A.send", undefined, undefined]);
+    expect(sends.map((edge) => edge.toSymbol)).toEqual(["a.ts#A.send", "a.ts#A.send", undefined]);
   });
 
   it("resolves an immediate constructor receiver", async () => {
