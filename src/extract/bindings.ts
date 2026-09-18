@@ -605,6 +605,12 @@ export function collectBindings(root: Node, python: boolean): {
         const object = unwrap(expression.childForFieldName("object"));
         const property = expression.childForFieldName(python ? "attribute" : "property");
         if (property === null) return { kind: "blocked", reason: "unknown-receiver" };
+        // super.m() (TypeScript) and super().m() (Python) name the parent class of the enclosing class.
+        const superCall = python && object?.type === "call" && object.childForFieldName("function")?.text === "super" && lookup("super", site) === undefined;
+        if (object?.type === "super" || superCall) {
+          const owner = python ? classOf(scopes.get(site.id) ?? module) : thisFor(scopes.get(site.id) ?? module)?.classScope ?? null;
+          return owner === null || owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner: { kind: "super", of: { kind: "local", name: owner.owner } }, member: property.text, mode: "instance", basis: "lexical" };
+        }
         if (object?.type === "this") {
           const receiver = thisFor(scopes.get(site.id) ?? module);
           return receiver === null || receiver === undefined || mutated(receiver, property.text) ? { kind: "blocked", reason: "unknown-receiver" }
