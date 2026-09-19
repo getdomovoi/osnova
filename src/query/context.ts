@@ -6,7 +6,15 @@ const STOPWORDS = new Set([
   "at", "by", "from", "it", "its", "be", "can", "was", "were", "will", "not",
 ]);
 
-export function tokenize(text: string): string[] {
+const OTHER = 0, UPPER = 1, LOWER = 2, DIGIT = 3;
+const ASCII_CLASS = new Uint8Array(128);
+for (let code = 0; code < 128; code += 1) {
+  ASCII_CLASS[code] = code >= 65 && code <= 90 ? UPPER : code >= 97 && code <= 122 ? LOWER : code >= 48 && code <= 57 ? DIGIT : OTHER;
+}
+
+// Splits a camel hump, lowercases, and keeps runs of letters and digits. A character outside ASCII can lowercase
+// into letters (`İ` becomes `i` and a combining dot), so text that holds one falls back to the regular expressions.
+function tokenizeUnicode(text: string): string[] {
   const camelSplit = text.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").replace(/([a-z0-9])([A-Z])/g, "$1 $2");
   const raw = camelSplit.toLowerCase().split(/[^a-z0-9]+/);
   const out: string[] = [];
@@ -15,6 +23,43 @@ export function tokenize(text: string): string[] {
     if (STOPWORDS.has(token)) continue;
     out.push(token);
   }
+  return out;
+}
+
+export function tokenize(text: string): string[] {
+  const out: string[] = [];
+  const end = text.length;
+  let start = -1;
+  let previous = OTHER;
+  const take = (from: number, to: number): void => {
+    const length = to - from;
+    if (length < 2 || length > 64) return;
+    const token = text.slice(from, to).toLowerCase();
+    if (STOPWORDS.has(token)) return;
+    out.push(token);
+  };
+  for (let i = 0; i < end; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 128) return tokenizeUnicode(text);
+    const current = ASCII_CLASS[code] ?? OTHER;
+    if (current === OTHER) {
+      if (start >= 0) { take(start, i); start = -1; }
+      previous = OTHER;
+      continue;
+    }
+    if (start < 0) { start = i; previous = current; continue; }
+    let split = false;
+    if (current === UPPER) {
+      if (previous === LOWER || previous === DIGIT) split = true;
+      else if (previous === UPPER) {
+        const next = i + 1 < end ? text.charCodeAt(i + 1) : 128;
+        if (next < 128 && ASCII_CLASS[next] === LOWER) split = true;
+      }
+    }
+    if (split) { take(start, i); start = i; }
+    previous = current;
+  }
+  if (start >= 0) take(start, end);
   return out;
 }
 
