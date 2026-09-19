@@ -171,6 +171,8 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     return item !== undefined && item.name !== "*" ? { kind: "import", source: item.source, importedName: item.name } : { kind: "local", name: type };
   };
   const pathOwner = (head: string, site?: Node): ReceiverOwner | undefined => {
+    // `crate::logger::Logger::init()` and `std::env::current_dir()`: a multi-segment path binds like a path type.
+    if (head.includes("::")) return ownerForType(head, undefined, site);
     const item = importOf(head, site);
     if (item === undefined) return { kind: "local", name: head };
     return item.name === "*" ? undefined : { kind: "import", source: item.source, importedName: item.name };
@@ -738,7 +740,8 @@ export const rustSpec: TypedSpec = {
       const path = fn.childForFieldName("path");
       const name = fn.childForFieldName("name");
       if (name === null || path === null) return undefined;
-      const head = path.type === "identifier" ? path.text : undefined;
+      // `Type::f()` names its head; `crate::a::Type::f()` and `std::env::f()` keep the whole path so the owner binds through it.
+      const head = path.type === "identifier" || (path.type === "scoped_identifier" && /^\w+(::\w+)*$/.test(path.text)) || path.type === "crate" || path.type === "self" || path.type === "super" ? path.text : undefined;
       return head === undefined ? undefined : { object: null, name: name.text, path: head };
     }
     if (fn.type !== "field_expression") return undefined;
