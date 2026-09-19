@@ -268,6 +268,8 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
     while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
     start = dir;
     rest = segments.slice(index);
+    // `self::inner::X` with no file for `inner` names an inline module of this file.
+    if (dir === (base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""))) && rest.length > 0 && !knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))) return fromFile;
   } else {
     // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
     const crate = context.cargoPackages.get(head);

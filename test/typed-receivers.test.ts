@@ -246,7 +246,10 @@ describe("Rust workspace crates and inline modules", () => {
         "",
       ].join("\n"),
       "crates/core/src/other.rs": "#[cfg(test)]\nmod tests {\n    use grep_printer::ColorSpecs;\n    fn t() { let m = ColorSpecs::new(); m.paint(); }\n}\n",
+      "crates/core/src/own.rs": "pub struct Own;\nimpl Own { pub fn new() -> Own { Own } pub fn go(&self) {} }\nmod inner { pub struct Deep; impl Deep { pub fn dig(&self) {} } }\n#[cfg(test)]\nmod tests {\n    use super::{Own, inner::Deep};\n    use super::super::decoy::ColorSpecs;\n    fn t(d: &Deep, c: &ColorSpecs) { let o = Own::new(); o.go(); d.dig(); c.paint(); }\n}\n",
     });
+    const inOwn = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/src/own.rs" && edge.line === 8).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
+    expect(inOwn).toEqual(["dig=crates/core/src/own.rs#Deep.dig", "go=crates/core/src/own.rs#Own.go", "new=crates/core/src/own.rs#Own.new", "paint=crates/core/src/decoy.rs#ColorSpecs.paint"]);
     expect(calls(index, "crates/core/src/main.rs#make", "new")).toEqual(["crates/printer/src/color.rs#ColorSpecs.new"]);
     expect(calls(index, "crates/core/src/main.rs#draw", "paint")).toEqual(["crates/printer/src/color.rs#ColorSpecs.paint", "crates/printer/src/color.rs#ColorSpecs.paint"]);
     const inTests = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/src/other.rs" && edge.line === 4).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
