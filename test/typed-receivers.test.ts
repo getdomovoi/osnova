@@ -257,6 +257,22 @@ describe("Rust workspace crates and inline modules", () => {
   });
 });
 
+describe("Rust enum variants", () => {
+  it("indexes a tuple variant as a static member of its enum, so a constructor call resolves and chains", async () => {
+    const index = await build({
+      "Cargo.toml": "[package]\nname = 'x'\n",
+      "src/lib.rs": "pub mod kind;\nuse crate::kind::Kind;\nfn mk() -> Kind { Kind::Io(3) }\nfn chained() -> u8 { Kind::Io(3).code() }\nfn unit() -> Kind { Kind::Plain }\n",
+      "src/kind.rs": "pub enum Kind { Io(u8), Plain, Named { n: u8 } }\nimpl Kind { pub fn code(&self) -> u8 { 0 } }\n",
+    });
+    expect(index.symbols.get("src/kind.rs#Kind.Io")?.kind).toBe("method");
+    expect(index.symbols.get("src/kind.rs#Kind.Io")?.memberKind).toBe("static");
+    expect(index.symbols.has("src/kind.rs#Kind.Plain")).toBe(false);
+    expect(index.symbols.has("src/kind.rs#Kind.Named")).toBe(false);
+    expect(calls(index, "src/lib.rs#mk", "Io")).toEqual(["src/kind.rs#Kind.Io"]);
+    expect(calls(index, "src/lib.rs#chained", "code")).toEqual(["src/kind.rs#Kind.code"]);
+  });
+});
+
 describe("bounded type parameters", () => {
   it("calls on a bounded type parameter, an impl Trait or dyn Trait parameter resolve to the trait or interface method", async () => {
     const index = await build({
