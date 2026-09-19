@@ -61,6 +61,8 @@ try {
   for (const h of H.rows) { const b = bmap.get(h.key); if (!b) continue; if ((b.target?.symbol ?? null) !== (h.target?.symbol ?? null) || b.status !== h.status) changed.push({ key: h.key, context: H.context[h.key], before: b, after: h }); }
   console.log(`edges base ${B.rows.length} head ${H.rows.length}; files base ${B.files.length} head ${H.files.length}; changed ${changed.length}; build+index ${((Date.now() - t0) / 1000).toFixed(0)}s`);
   const onlyB = B.files.filter((f) => !H.files.includes(f)), onlyH = H.files.filter((f) => !B.files.includes(f)); if (onlyB.length || onlyH.length) console.log("files only in base:", onlyB.slice(0, 5), "only in head:", onlyH.slice(0, 5));
+  const hkeys = new Set(H.rows.map((r) => r.key)); const edgesOnlyB = B.rows.filter((r) => !hkeys.has(r.key)), edgesOnlyH = H.rows.filter((r) => !bmap.has(r.key));
+  if (edgesOnlyB.length || edgesOnlyH.length) console.log(`edges only in base ${edgesOnlyB.length}, only in head ${edgesOnlyH.length}:`, edgesOnlyB.slice(0, 3).map((r) => r.key), edgesOnlyH.slice(0, 3).map((r) => r.key));
   const sample = changed.slice(0, limit);
   if (dry || !process.env.TYPESAFE_API_KEY) { for (const c of sample) console.log(`${c.key}: ${c.before.target?.symbol ?? c.before.status + "/" + c.before.reason} -> ${c.after.target?.symbol ?? c.after.status + "/" + c.after.reason}`); if (!dry) console.log("TYPESAFE_API_KEY not set; stopping before Jev."); process.exit(0); }
   const judged = []; let usage = { input_tokens: 0, output_tokens: 0 }; const t1 = Date.now();
