@@ -357,3 +357,23 @@ describe("aliases of a method", () => {
     expect(calls(index, "use.ts#go", "read")).toEqual([undefined, undefined]);
   });
 });
+
+describe("a constant initialised by a call", () => {
+  it("takes the return type of that call, so a later call on the constant resolves", async () => {
+    const index = await build({
+      "types.ts": "export class ZodString {\n  parse(v: string): string { return v; }\n}\nexport function string(): ZodString { return new ZodString(); }\n",
+      "use.ts": "import { string } from './types.js';\nexport function go() {\n  const schema = string();\n  schema.parse('x');\n}\nexport function later() {\n  const s = string();\n  return s.parse('y');\n}\n",
+    });
+    expect(calls(index, "use.ts#go", "parse")).toEqual(["types.ts#ZodString.parse"]);
+    expect(calls(index, "use.ts#later", "parse")).toEqual(["types.ts#ZodString.parse"]);
+  });
+
+  it("keeps no type when the initialiser has no known return or the name is reassigned", async () => {
+    const index = await build({
+      "types.ts": "export class ZodString {\n  parse(v: string): string { return v; }\n}\nexport function string(): ZodString { return new ZodString(); }\nexport function opaque() { return unknownThing(); }\n",
+      "use.ts": "import { string, opaque } from './types.js';\nexport function noReturn() {\n  const a = opaque();\n  a.parse('x');\n}\nexport function reassigned(flag: boolean) {\n  let b = string();\n  b = somethingElse();\n  b.parse('x');\n}\n",
+    });
+    expect(calls(index, "use.ts#noReturn", "parse")).toEqual([undefined]);
+    expect(calls(index, "use.ts#reassigned", "parse")).toEqual([undefined]);
+  });
+});
