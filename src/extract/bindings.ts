@@ -80,6 +80,12 @@ const VALUE_GENERICS = new Set(["Map", "ReadonlyMap", "WeakMap", "Record"]);
 // Language containers a file constructs with `new` without declaring them. Each name is also a builtin type at
 // resolution, so a call on one of them classifies as external rather than as an unknown receiver.
 const BUILTIN_CONSTRUCTORS = new Set(["Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Array", "Object", "Function"]);
+// `new Map()` names the container it builds; anything else stays untyped, so a field keeps its unknown receiver.
+function builtinConstructorName(value: Node | null): string | undefined {
+  if (value === null || value.type !== "new_expression") return undefined;
+  const constructor = value.childForFieldName("constructor");
+  return constructor?.type === "identifier" && BUILTIN_CONSTRUCTORS.has(constructor.text) ? constructor.text : undefined;
+}
 const PYTHON_ELEMENT_GENERICS = new Set(["list", "List", "Sequence", "MutableSequence", "Iterable", "Iterator", "Collection", "set", "Set", "MutableSet", "frozenset", "FrozenSet", "deque", "Deque", "Generator"]);
 const PYTHON_VALUE_GENERICS = new Set(["dict", "Dict", "Mapping", "MutableMapping", "defaultdict", "DefaultDict", "OrderedDict"]);
 interface Contents { readonly element?: string | undefined; readonly value?: string | undefined }
@@ -436,7 +442,8 @@ export function collectBindings(root: Node, python: boolean): {
         for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
           if (FIELD_NODES.has(member.type) && !member.children.some((child) => child?.type === "static")) {
             const fieldName = fieldNameOf(member);
-            const typeName = annotationTypeName(member.childForFieldName("type"));
+            // An annotation types the field first; failing that, a `new Map()` initialiser names the builtin container it holds.
+            const typeName = annotationTypeName(member.childForFieldName("type")) ?? builtinConstructorName(member.childForFieldName("value"));
             if (fieldName?.type === "property_identifier" && typeName !== undefined) fields.set(fieldName.text, { typeName, site: node, contents: contentTypeNames(member.childForFieldName("type")) });
           }
           if (member.type === "method_definition" && member.childForFieldName("name")?.text === "constructor") {
