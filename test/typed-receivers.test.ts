@@ -377,3 +377,28 @@ describe("a constant initialised by a call", () => {
     expect(calls(index, "use.ts#reassigned", "parse")).toEqual([undefined]);
   });
 });
+
+describe("a variable constructed from a builtin container", () => {
+  const reasonOf = (index: Awaited<ReturnType<typeof build>>, symbol: string, name: string) =>
+    [...index.outgoing(symbol).filter((edge) => edge.kind === "calls" && edge.toName === name)]
+      .sort((a, b) => a.line - b.line)
+      .map((edge) => (edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined))
+      .map((resolution) => (resolution?.status === "unresolved" ? resolution.reason : resolution?.status));
+
+  it("classifies a call on it as external, like an array literal already is", async () => {
+    const index = await build({
+      "use.ts": "export function go() {\n  const seen = new Set<string>();\n  seen.add('x');\n  const byId = new Map<string, number>();\n  byId.get('x');\n  const rows: number[] = [];\n  rows.forEach((r) => r);\n}\n",
+    });
+    expect(reasonOf(index, "use.ts#go", "add")).toEqual(["unbound-global"]);
+    expect(reasonOf(index, "use.ts#go", "get")).toEqual(["unbound-global"]);
+    expect(reasonOf(index, "use.ts#go", "forEach")).toEqual(["unbound-global"]);
+  });
+
+  it("lets a class the file defines win over the builtin name", async () => {
+    const index = await build({
+      "map.ts": "export class Map {\n  get(key: string): string { return key; }\n}\n",
+      "use.ts": "import { Map } from './map.js';\nexport function go() {\n  const byId = new Map();\n  byId.get('x');\n}\n",
+    });
+    expect(calls(index, "use.ts#go", "get")).toEqual(["map.ts#Map.get"]);
+  });
+});

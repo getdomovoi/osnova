@@ -77,6 +77,9 @@ function annotationTypeName(annotation: Node | null): string | undefined {
 
 const ELEMENT_GENERICS = new Set(["Array", "ReadonlyArray", "Set", "ReadonlySet", "Iterable", "IterableIterator", "Generator"]);
 const VALUE_GENERICS = new Set(["Map", "ReadonlyMap", "WeakMap", "Record"]);
+// Language containers a file constructs with `new` without declaring them. Each name is also a builtin type at
+// resolution, so a call on one of them classifies as external rather than as an unknown receiver.
+const BUILTIN_CONSTRUCTORS = new Set(["Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Array", "Object", "Function"]);
 const PYTHON_ELEMENT_GENERICS = new Set(["list", "List", "Sequence", "MutableSequence", "Iterable", "Iterator", "Collection", "set", "Set", "MutableSet", "frozenset", "FrozenSet", "deque", "Deque", "Generator"]);
 const PYTHON_VALUE_GENERICS = new Set(["dict", "Dict", "Mapping", "MutableMapping", "defaultdict", "DefaultDict", "OrderedDict"]);
 interface Contents { readonly element?: string | undefined; readonly value?: string | undefined }
@@ -786,6 +789,10 @@ export function collectBindings(root: Node, python: boolean): {
     if (created === undefined) return binding;
     const owner = symbolBinding(created.expression, created.site);
     if (owner !== undefined && (!created.call || (python && created.awaited !== true))) return { kind: "instance", owner, basis: "constructor" };
+    // `new Map()` where the file binds no `Map` builds a language container, not a type this repository holds,
+    // so a call on it is external like an array literal. A file that binds the name itself already won above.
+    if (!created.call && created.expression.type === "identifier" && BUILTIN_CONSTRUCTORS.has(created.expression.text))
+      return { kind: "instance", owner: { kind: "local", name: created.expression.text }, basis: "constructor" };
     if (!created.call) return { kind: "blocked", reason: "unknown-receiver" };
     const produced = returnOwner(calleeOf(created.expression, created.site), created.awaited);
     return produced === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "instance", owner: produced, basis: "return" };
