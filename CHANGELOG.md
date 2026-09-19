@@ -4,6 +4,15 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Fixed
+
+- A Rust `self.field` whose declared type is not a struct parameter is a field owner again, so `self.globs[i].is_only_dir()` and a closure over `self.globs.iter()` resolve through the holder's element tables. 0.6.2 took the impl-argument path for every `self.field` and lost ten ripgrep sites while gaining twenty-eight, which the coverage total showed as +18.
+
+### Added
+
+- `scripts/resolution-levers.mjs`: samples the locally unresolved call edges of one or more corpora, asks a System One model which missing piece of information would resolve each one, and ranks the levers by estimated call sites. Review aid only.
+- `scripts/resolution-diff.mjs` lists every call edge whose resolution changed between two osnova refs on one corpus, the per-edge check behind the fix above; with `TYPESAFE_API_KEY` set it also asks a System One model which target each disputed call invokes, as a review aid only.
+
 ### Changed
 
 - `osnova setup --apply --hooks --client codex` says in its notice that Codex skips new hooks until they are trusted in `/hooks`; the README and reference say the same. `osnova setup --apply` now prints each written change's notice under its line, as `--preview` already did. Codex records trust per hook hash, so the three osnova entries run only after that step, and osnova cannot trust them on the user's behalf.
