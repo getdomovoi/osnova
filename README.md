@@ -138,8 +138,8 @@ A call site counts as resolved when the index ties it to one definition through 
 | pyright | python | 11617 | 3326 | 28.6% | 66.7% |
 | pyright | typescript | 46812 | 26716 | 57.1% | 73.2% |
 | pyright | all | 58461 | 30042 | 51.4% | 72.4% |
-| ripgrep | rust | 13351 | 5469 | 41.0% | 58.1% |
-| ripgrep | all | 13365 | 5473 | 41.0% | 58.0% |
+| ripgrep | rust | 13366 | 5647 | 42.3% | 65.4% |
+| ripgrep | all | 13380 | 5651 | 42.2% | 65.3% |
 | zod | tsx | 150 | 7 | 4.7% | 9.7% |
 | zod | typescript | 53237 | 20070 | 37.7% | 63.9% |
 | zod | all | 53416 | 20087 | 37.6% | 63.8% |
