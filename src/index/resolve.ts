@@ -103,6 +103,8 @@ export interface WorkspaceContext {
   readonly cargoPackages: ReadonlyMap<string, string>;
   /** Crate root file to the aliases its `pub extern crate x as y;` and `pub use x as y;` lines give other crates. */
   readonly crateAliases: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Crate directory to its source directory when a `[lib]` or `[[bin]]` `path` moves the root out of `src`. */
+  readonly cargoSrc: ReadonlyMap<string, string>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -112,6 +114,7 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   const cargoRoots: string[] = [];
   const cargoPackages = new Map<string, string>();
   const crateAliases = new Map<string, Map<string, string>>();
+  const cargoSrc = new Map<string, string>();
   for (const [file, card] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     if (card.language === "rust" && /^(lib|main)\.rs$/.test(path.posix.basename(file))) {
       const aliases = new Map<string, string>();
@@ -136,13 +139,16 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       const packageSection = /^\s*\[package\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
       const name = packageSection === undefined ? undefined : /^\s*name\s*=\s*"([^"]+)"/m.exec(packageSection)?.[1];
       if (name !== undefined) cargoPackages.set(name.replace(/-/g, "_"), dir);
+      const target = /^\s*\[(?:lib|\[bin\])\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
+      const rootPath = target === undefined ? undefined : /^\s*path\s*=\s*"([^"]+)"/m.exec(target)?.[1];
+      if (rootPath !== undefined) { const srcDir = path.posix.dirname(path.posix.join(dir, rootPath)); cargoSrc.set(dir, srcDir === "." ? "" : srcDir); }
     } else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
       pythonRoots.set(`${dir}\0${dir}`, { dir, manifest: dir });
       const src = dir === "" ? "src" : `${dir}/src`;
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -254,27 +260,34 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
   const head = segments[0];
   if (head === undefined) return undefined;
   const fromDir = path.posix.dirname(fromFile) === "." ? "" : path.posix.dirname(fromFile);
+  const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
+  const ownCrate = (): string | undefined => context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
+  const base = path.posix.basename(fromFile);
+  const ownDir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
   let start: string;
   let rest: string[];
   if (head === "crate") {
-    const crate = context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
+    const crate = ownCrate();
     if (crate === undefined) return undefined;
-    start = crate === "" ? "src" : `${crate}/src`;
+    start = srcOf(crate);
     rest = segments.slice(1);
+  } else if (context.cargoPackages.get(head) === undefined && head !== "self" && head !== "super" && (knownFiles.has(path.posix.join(ownDir, `${head}.rs`)) || knownFiles.has(path.posix.join(ownDir, head, "mod.rs")))) {
+    // `flags::parse::lookup()` with `mod flags;` in this file: a sibling module named without `self::`.
+    start = ownDir;
+    rest = segments;
   } else if (head === "self" || head === "super") {
-    const base = path.posix.basename(fromFile);
-    let dir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
+    let dir = ownDir;
     let index = 0;
     while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
     start = dir;
     rest = segments.slice(index);
-    // `self::inner::X` with no file for `inner` names an inline module of this file.
-    if (dir === (base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""))) && rest.length > 0 && !knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))) return fromFile;
+    // `self` alone is this file; `self::inner::X` with no file for `inner` names an inline module of this file.
+    if (dir === ownDir && (rest.length === 0 || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return fromFile;
   } else {
     // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
     const crate = context.cargoPackages.get(head);
     if (crate === undefined) return undefined;
-    start = crate === "" ? "src" : `${crate}/src`;
+    start = srcOf(crate);
     rest = segments.slice(1);
     // A facade crate names another crate under an alias (`pub extern crate grep_printer as printer;`), so
     // `grep::printer::X` continues from the aliased crate's root. Each hop consumes a segment, so it ends.
@@ -282,7 +295,7 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
       const next = rest[0] === undefined ? undefined : context.crateAliases.get(`${start}/lib.rs`)?.get(rest[0]);
       const aliased = next === undefined ? undefined : context.cargoPackages.get(next);
       if (aliased === undefined) break;
-      start = aliased === "" ? "src" : `${aliased}/src`;
+      start = srcOf(aliased);
       rest = rest.slice(1);
     }
   }
