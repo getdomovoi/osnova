@@ -5,7 +5,7 @@
 
 # Osnova
 
-**A deterministic code map for AI coding agents.** Osnova indexes a repository into a symbol and call graph with tree-sitter, then serves it to any MCP client or from the command line. Same input, same output, byte for byte. No embeddings, no network, no telemetry.
+**A deterministic code map for AI coding agents.** Osnova indexes a repository into a symbol and call graph with tree-sitter, then serves it to any MCP client or from the command line. Same input, same output, byte for byte. No embeddings, no telemetry, and no network connection unless you type `osnova update-check`.
 
 *Osnova* is the Slavic word for base or foundation. That is the job: give an agent solid ground to stand on before it edits code.
 
@@ -18,7 +18,7 @@ npx -y @getdomovoi/osnova mcp --workspace /path/to/repo
 - **Exact answers.** Every hit carries a `file:line` span, a source hash and an index generation. An agent can cite it and you can check it.
 - **Deterministic by design.** Incremental refresh produces the same bytes as a full rebuild. Paths, symbols and edges are sorted before they are written. Runs are reproducible.
 - **Honest about limits.** Results state what was omitted and why. Partial indexes say so on every response. Absence of a caller never claims deletion is safe.
-- **Local and read-only.** One cache directory, no writes inside your repository, no per-agent files to keep in sync, no network access, no usage reporting.
+- **Local and read-only.** One cache directory, no writes inside your repository, no per-agent files to keep in sync, no usage reporting. Indexing and every query run offline. The one command that opens a network connection is `osnova update-check`, which asks the npm registry for the latest version and runs only when you type it.
 - **Refreshes as you type.** Query commands hash the working tree first and apply only what changed, uncommitted edits included.
 - **Nineteen languages.** Deep adapters for TypeScript, JavaScript, Python, Go, Rust, Java and C#. A generic tier for C, C++, Ruby, PHP, Kotlin, Swift, Scala, Dart, Elixir, OCaml, Zig and Bash. Grammars ship as WASM, so there is nothing to compile.
 

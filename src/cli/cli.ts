@@ -53,6 +53,7 @@ usage:
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
+  osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
 queries refresh the index first so answers describe current disk state.`;
 
@@ -351,6 +352,13 @@ export async function runCli(
       const report = resolutionCoverage(index);
       io.stdout(parsed.values.json === true ? jsonOutput(report, "coverage") : formatCoverage(report));
       return EXIT_OK;
+    }
+    case "update-check": {
+      const parsed = parseArgs({ args: rest, options: { json: { type: "boolean" } } });
+      const { updateCheck, formatUpdateCheck } = await import("./update-check.js");
+      const result = await updateCheck();
+      io.stdout(parsed.values.json === true ? jsonOutput(result, "update-check") : formatUpdateCheck(result));
+      return result.outdated ? EXIT_STALE : EXIT_OK;
     }
     case "doctor": {
       const parsed = parseArgs({ args: rest, options: { workspace: { type: "string" }, "cache-dir": { type: "string" } } });
