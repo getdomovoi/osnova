@@ -267,9 +267,11 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const field = object.childForFieldName("field") ?? object.childForFieldName("name");
       if (inner === null || field === null || (field.type !== "identifier" && field.type !== "field_identifier")) return undefined;
       if (spec.thisNodes?.includes(inner.type)) { const own = fieldOwner(scope, field.text); if (own !== undefined) return own; }
+      // Only a field whose declared type is a struct parameter takes this path (the impl's argument and its
+      // bounds); a plain field stays a field owner so resolution consults the holder's element and value tables.
       if (inner.type === "self" && spec.implField !== undefined) {
         const found = spec.implField(object, field.text);
-        const name = found === undefined ? undefined : found.parameter !== undefined ? knownType(found.parameter.name, found.parameter.at) : knownType(spec.typeName(found.type), object);
+        const name = found?.parameter === undefined ? undefined : knownType(found.parameter.name, found.parameter.at);
         if (name !== undefined) return ownerForType(name);
       }
       // A field of a bound receiver: the holder's declared field type is looked up at resolution time.
