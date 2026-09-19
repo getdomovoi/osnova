@@ -377,3 +377,44 @@ describe("a constant initialised by a call", () => {
     expect(calls(index, "use.ts#reassigned", "parse")).toEqual([undefined]);
   });
 });
+
+describe("a variable constructed from a builtin container", () => {
+  const reasonOf = (index: Awaited<ReturnType<typeof build>>, symbol: string, name: string) =>
+    [...index.outgoing(symbol).filter((edge) => edge.kind === "calls" && edge.toName === name)]
+      .sort((a, b) => a.line - b.line)
+      .map((edge) => (edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined))
+      .map((resolution) => (resolution?.status === "unresolved" ? resolution.reason : resolution?.status));
+
+  it("classifies a call on it as external, like an array literal already is", async () => {
+    const index = await build({
+      "use.ts": "export function go() {\n  const seen = new Set<string>();\n  seen.add('x');\n  const byId = new Map<string, number>();\n  byId.get('x');\n  const rows: number[] = [];\n  rows.forEach((r) => r);\n}\n",
+    });
+    expect(reasonOf(index, "use.ts#go", "add")).toEqual(["unbound-global"]);
+    expect(reasonOf(index, "use.ts#go", "get")).toEqual(["unbound-global"]);
+    expect(reasonOf(index, "use.ts#go", "forEach")).toEqual(["unbound-global"]);
+  });
+
+  it("classifies a call on a field initialised from a builtin container as external", async () => {
+    const index = await build({
+      "store.ts": "export class Store {\n  private byId = new Map<string, number>();\n  private seen = new Set<string>();\n  read(id: string) {\n    this.byId.get(id);\n    this.seen.add(id);\n  }\n}\n",
+    });
+    expect(reasonOf(index, "store.ts#Store.read", "get")).toEqual(["unbound-global"]);
+    expect(reasonOf(index, "store.ts#Store.read", "add")).toEqual(["unbound-global"]);
+  });
+
+  it("lets an annotation win over a builtin initialiser on the same field", async () => {
+    const index = await build({
+      "cache.ts": "export class Cache {\n  get(key: string): string { return key; }\n}\n",
+      "store.ts": "import { Cache } from './cache.js';\nexport class Store {\n  private inner: Cache = new Map() as unknown as Cache;\n  read(id: string) {\n    this.inner.get(id);\n  }\n}\n",
+    });
+    expect(calls(index, "store.ts#Store.read", "get")).toEqual(["cache.ts#Cache.get"]);
+  });
+
+  it("lets a class the file defines win over the builtin name", async () => {
+    const index = await build({
+      "map.ts": "export class Map {\n  get(key: string): string { return key; }\n}\n",
+      "use.ts": "import { Map } from './map.js';\nexport function go() {\n  const byId = new Map();\n  byId.get('x');\n}\n",
+    });
+    expect(calls(index, "use.ts#go", "get")).toEqual(["map.ts#Map.get"]);
+  });
+});
