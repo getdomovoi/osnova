@@ -86,7 +86,19 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     for (const item of list) if (item.at <= at && (best === undefined || item.at >= best.at)) best = item;
     return best;
   };
-  const importOf = (name: string): Import | undefined => module.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
+  // The import a name binds at a site: the innermost enclosing scope that imported it wins, so a `use`
+  // inside an inline module (Rust `mod tests { use grep_regex::RegexMatcher; }`) serves that module.
+  const scopeAt = (site: Node | undefined): Scope => {
+    for (let current: Node | null = site ?? null; current !== null; current = current.parent) { const found = scopes.get(current.id); if (found !== undefined) return found; }
+    return module;
+  };
+  const importOf = (name: string, site?: Node): Import | undefined => {
+    for (let current: Scope | null = scopeAt(site); current !== null; current = current.parent) {
+      const found = current.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
   // A type name becomes a local binding, or an import binding when the name (Rust) or its package
   // qualifier (Go) was imported.
   // A type parameter of an enclosing declaration names no type the index can hold, unless it is bounded
@@ -144,20 +156,20 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     if (sep >= 0) {
       // `grep::printer::ColorSpecs`: the path is the import source, spelled through a `use` alias of its head when one exists.
       const head = type.slice(0, type.indexOf("::"));
-      const item = importOf(head);
+      const item = importOf(head, site);
       const source = item === undefined || item.name === "*" ? type.slice(0, sep) : `${item.source}::${item.name}${type.slice(head.length, sep)}`;
       return { kind: "import", source, importedName: type.slice(sep + 2) };
     }
     const dot = type.indexOf(".");
     if (dot >= 0) {
-      const pkg = importOf(type.slice(0, dot));
+      const pkg = importOf(type.slice(0, dot), site);
       return pkg === undefined || pkg.name !== "*" ? undefined : { kind: "import", source: pkg.source, importedName: type.slice(dot + 1) };
     }
-    const item = importOf(type);
+    const item = importOf(type, site);
     return item !== undefined && item.name !== "*" ? { kind: "import", source: item.source, importedName: item.name } : { kind: "local", name: type };
   };
-  const pathOwner = (head: string): ReceiverOwner | undefined => {
-    const item = importOf(head);
+  const pathOwner = (head: string, site?: Node): ReceiverOwner | undefined => {
+    const item = importOf(head, site);
     if (item === undefined) return { kind: "local", name: head };
     return item.name === "*" ? undefined : { kind: "import", source: item.source, importedName: item.name };
   };
@@ -190,7 +202,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     }
     let of: Callee | undefined;
     const at = value.startIndex;
-    const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text) : callee.path !== undefined ? importOf(callee.path) : undefined;
+    const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text, value) : callee.path !== undefined ? importOf(callee.path, value) : undefined;
     if (pkg?.name === "*") of = { kind: "import", source: pkg.source, importedName: callee.name };
     else if (pkg !== undefined && callee.path !== undefined && /^[a-z_]/.test(callee.path)) of = { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
     else if (callee.object === null && callee.path === undefined) {
@@ -201,7 +213,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
         : { kind: "local", name: callee.name };
     }
     else if (callee.object?.type === "identifier" && classLike(callee.object.text, scope, at)) { const owner = ownerForType(callee.object.text); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
-    else if (callee.path !== undefined) { const owner = pathOwner(callee.path); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
+    else if (callee.path !== undefined) { const owner = pathOwner(callee.path, value); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
     else {
       if (callee.object === null) return undefined;
       const receiver = receiverOf(callee.object, scope);
@@ -386,16 +398,16 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const callee = spec.callee(fn);
       if (callee === undefined) return undefined;
       if (callee.path !== undefined) {
-        const pkg = importOf(callee.path);
+        const pkg = importOf(callee.path, site);
         if (pkg?.name === "*") return { kind: "import", source: pkg.source, importedName: callee.name };
         if (pkg !== undefined && /^[a-z_]/.test(callee.path)) return { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
-        const owner = pathOwner(callee.path);
+        const owner = pathOwner(callee.path, site);
         return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" };
       }
       if (callee.object === null) return undefined;
       const scope = scopes.get(site.id) ?? module;
       if (callee.object.type === "identifier") {
-        const pkg = importOf(callee.object.text);
+        const pkg = importOf(callee.object.text, site);
         if (pkg?.name === "*" && receiverOf(callee.object, scope) === undefined && !scopeBinds(scope, callee.object.text, callee.object.startIndex)) return { kind: "import", source: pkg.source, importedName: callee.name };
         if (classLike(callee.object.text, scope, callee.object.startIndex)) { const owner = ownerForType(callee.object.text); return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" }; }
       }

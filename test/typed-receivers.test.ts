@@ -235,16 +235,22 @@ describe("Rust workspace crates and inline modules", () => {
       "crates/grep/Cargo.toml": "[package]\nname = \"grep\"\nversion = \"0.1.0\"\n",
       "crates/grep/src/lib.rs": "pub extern crate grep_printer as printer;\n",
       "crates/core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\n",
+      "crates/core/src/decoy.rs": "pub struct ColorSpecs;\nimpl ColorSpecs { pub fn new() -> ColorSpecs { ColorSpecs } pub fn paint(&self) {} }\n",
       "crates/core/src/main.rs": [
+        "mod decoy;",
         "use grep::printer::ColorSpecs;",
         "struct Args { colors: grep::printer::ColorSpecs }",
         "fn make() -> ColorSpecs { ColorSpecs::new() }",
         "fn draw(c: &ColorSpecs, a: &Args) { c.paint(); a.colors.paint(); }",
+        "mod other;",
         "",
       ].join("\n"),
+      "crates/core/src/other.rs": "#[cfg(test)]\nmod tests {\n    use grep_printer::ColorSpecs;\n    fn t() { let m = ColorSpecs::new(); m.paint(); }\n}\n",
     });
     expect(calls(index, "crates/core/src/main.rs#make", "new")).toEqual(["crates/printer/src/color.rs#ColorSpecs.new"]);
     expect(calls(index, "crates/core/src/main.rs#draw", "paint")).toEqual(["crates/printer/src/color.rs#ColorSpecs.paint", "crates/printer/src/color.rs#ColorSpecs.paint"]);
+    const inTests = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/src/other.rs" && edge.line === 4).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
+    expect(inTests).toEqual(["new=crates/printer/src/color.rs#ColorSpecs.new", "paint=crates/printer/src/color.rs#ColorSpecs.paint"]);
   });
 });
 
