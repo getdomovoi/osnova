@@ -257,6 +257,31 @@ describe("Rust workspace crates and inline modules", () => {
   });
 });
 
+describe("Rust module paths in calls", () => {
+  it("resolves module-function paths, sibling modules, super and self paths, and a crate whose root is not under src", async () => {
+    const index = await build({
+      "Cargo.toml": "[workspace]\nmembers = [\"crates/core\", \"crates/util\"]\n",
+      "crates/util/Cargo.toml": "[package]\nname = \"util\"\nversion = \"0.1.0\"\n",
+      "crates/util/src/lib.rs": "mod wtr;\npub use crate::wtr::stdout;\n",
+      "crates/util/src/wtr.rs": "pub fn stdout() -> u8 { 0 }\n",
+      "crates/core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"core\"\npath = \"main.rs\"\n",
+      "crates/core/main.rs": "mod flags;\nmod logger;\nuse crate::flags::{self, render};\nfn main() { flags::parse::lookup(); crate::logger::Logger::init(); util::stdout(); flags::Kind::of(); render(); }\n",
+      "crates/core/logger.rs": "pub struct Logger;\nimpl Logger { pub fn init() {} }\n",
+      "crates/core/flags/mod.rs": "pub mod parse;\npub fn render() {}\npub struct Kind;\nimpl Kind { pub fn of() {} }\nfn here() { self::parse::lookup(); }\n",
+      "crates/core/flags/parse.rs": "pub fn lookup() { super::render(); }\nfn peek() {}\n#[cfg(test)]\nmod tests {\n    fn t() { super::peek(); super::super::render(); }\n}\n",
+    });
+    expect(calls(index, "crates/core/main.rs#main", "lookup")).toEqual(["crates/core/flags/parse.rs#lookup"]);
+    expect(calls(index, "crates/core/main.rs#main", "init")).toEqual(["crates/core/logger.rs#Logger.init"]);
+    expect(calls(index, "crates/core/main.rs#main", "stdout")).toEqual(["crates/util/src/wtr.rs#stdout"]);
+    expect(calls(index, "crates/core/main.rs#main", "of")).toEqual(["crates/core/flags/mod.rs#Kind.of"]);
+    expect(calls(index, "crates/core/main.rs#main", "render")).toEqual(["crates/core/flags/mod.rs#render"]);
+    expect(calls(index, "crates/core/flags/mod.rs#here", "lookup")).toEqual(["crates/core/flags/parse.rs#lookup"]);
+    expect(calls(index, "crates/core/flags/parse.rs#lookup", "render")).toEqual(["crates/core/flags/mod.rs#render"]);
+    const inTests = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/flags/parse.rs" && edge.line === 5).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
+    expect(inTests).toEqual(["peek=crates/core/flags/parse.rs#peek", "render=crates/core/flags/mod.rs#render"]);
+  });
+});
+
 describe("Rust enum variants", () => {
   it("indexes a tuple variant as a static member of its enum, so a constructor call resolves and chains", async () => {
     const index = await build({

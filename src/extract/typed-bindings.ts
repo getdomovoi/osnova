@@ -184,6 +184,30 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     for (let current: Scope | null = scope; current !== null && current !== module; current = current.parent) if (declared(current, name, at) !== undefined || current.receiver?.name === name) return true;
     return false;
   };
+  // Inside an inline module `super` names the enclosing module, which is this file for one level: such a
+  // path binds nothing here (null), so lookup continues to the file's own definition or import. Deeper
+  // supers drop one segment per enclosing module and the rest is spelled from self.
+  const relativeSource = (source: string, node: Node): string | null => {
+    let modDepth = 0;
+    for (let current: Node | null = node.parent; current !== null; current = current.parent) if (current.type === "mod_item") modDepth += 1;
+    if (modDepth === 0 || !/^(self|super)(::|$)/.test(source)) return source;
+    const segments = source.split("::");
+    let drop = 0;
+    while (drop < modDepth && drop < segments.length && segments[drop] === "super") drop += 1;
+    if (segments[0] === "self" || (drop > 0 && drop === segments.length) || (drop > 0 && drop < modDepth)) return null;
+    return ["self", ...segments.slice(drop)].join("::");
+  };
+  // `flags::parse::lookup()`, `super::render()`, `grep::cli::stdout()`: a path whose last segment is lowercase
+  // names a module, so the call is a function of that module (an import), spelled through the head's `use` when
+  // one exists. Null means the module is this file: the name resolves locally.
+  const modulePathSource = (path: string, site: Node): { source: string } | null | undefined => {
+    if (!/(^|::)[a-z_][a-z0-9_]*$/.test(path)) return undefined;
+    const head = path.slice(0, path.indexOf("::") >= 0 ? path.indexOf("::") : path.length);
+    const item = importOf(head, site);
+    if (item !== undefined && item.name !== "*") return { source: `${item.source}::${item.name}${path.slice(head.length)}` };
+    const source = relativeSource(path, site);
+    return source === null ? null : { source };
+  };
   const calleeOwner = (value: Node, scope: Scope, index?: number): ReceiverOwner | undefined => {
     // `f()?` and `f().unwrap()` name the value inside the wrapper: the callee's unwrapped return type.
     if (value.type === "try_expression") {
@@ -207,8 +231,9 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     let of: Callee | undefined;
     const at = value.startIndex;
     const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text, value) : callee.path !== undefined ? importOf(callee.path, value) : undefined;
+    const modulePath = callee.path === undefined ? undefined : modulePathSource(callee.path, value);
     if (pkg?.name === "*") of = { kind: "import", source: pkg.source, importedName: callee.name };
-    else if (pkg !== undefined && callee.path !== undefined && /^[a-z_]/.test(callee.path)) of = { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
+    else if (modulePath !== undefined) of = modulePath === null ? { kind: "local", name: callee.name } : { kind: "import", source: modulePath.source, importedName: callee.name };
     else if (callee.object === null && callee.path === undefined) {
       // An unqualified call inside a class body is a call on this (or the class) in Java and C#.
       const cls = classOf(scope);
@@ -358,18 +383,9 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     // Inside an inline module `super` names the enclosing module, which is this file for one level: such a
     // `use super::X` binds nothing here, so lookup continues to the file's own definition or import of X.
     // Deeper supers drop one segment per enclosing module.
-    let modDepth = 0;
-    for (let current: Node | null = node.parent; current !== null; current = current.parent) if (current.type === "mod_item") modDepth += 1;
     for (const item of spec.imports(node)) {
-      let source = item.source;
-      if (modDepth > 0 && /^(self|super)(::|$)/.test(source)) {
-        const segments = source.split("::");
-        let drop = 0;
-        while (drop < modDepth && drop < segments.length && segments[drop] === "super") drop += 1;
-        if (segments[0] === "self" || (drop > 0 && drop === segments.length)) continue;
-        if (drop > 0 && drop < modDepth) continue;
-        source = ["self", ...segments.slice(drop)].join("::");
-      }
+      const source = relativeSource(item.source, node);
+      if (source === null) continue;
       bind(scope, item.local, scope === module ? -1 : node.startIndex, undefined, undefined, { source, name: item.name });
     }
     for (const local of spec.local(node)) {
@@ -420,7 +436,9 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       if (callee.path !== undefined) {
         const pkg = importOf(callee.path, site);
         if (pkg?.name === "*") return { kind: "import", source: pkg.source, importedName: callee.name };
-        if (pkg !== undefined && /^[a-z_]/.test(callee.path)) return { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
+        const modulePath = modulePathSource(callee.path, site);
+        if (modulePath === null) return { kind: "local", name: callee.name };
+        if (modulePath !== undefined) return { kind: "import", source: modulePath.source, importedName: callee.name };
         const owner = pathOwner(callee.path, site);
         return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" };
       }
@@ -756,6 +774,8 @@ export const rustSpec: TypedSpec = {
     const out: Array<{ local: string; source: string; name: string }> = [];
     const item = (source: string, entry: Node): void => {
       if (entry.type === "identifier") out.push({ local: entry.text, source, name: entry.text });
+      // `use crate::hyperlink::{self, X}` binds the module itself under its own name.
+      else if (entry.type === "self" && source.includes("::")) { const at = source.lastIndexOf("::"); out.push({ local: source.slice(at + 2), source: source.slice(0, at), name: source.slice(at + 2) }); }
       else if (entry.type === "use_as_clause") { const path = entry.childForFieldName("path"); const alias = entry.childForFieldName("alias"); if (path !== null && alias !== null) { const segments = path.text.split("::"); out.push({ local: alias.text, source: [source, ...segments.slice(0, -1)].filter((part) => part.length > 0).join("::"), name: segments[segments.length - 1] ?? path.text }); } }
       else if (entry.type === "scoped_identifier") { const name = entry.childForFieldName("name")?.text; const path = entry.childForFieldName("path")?.text; if (name !== undefined) out.push({ local: name, source: [source, path].filter((part) => part !== undefined && part.length > 0).join("::"), name }); }
       else if (entry.type === "scoped_use_list") { const path = entry.childForFieldName("path")?.text; for (const child of childrenOf(entry.childForFieldName("list") ?? entry)) item([source, path].filter((part) => part !== undefined && part.length > 0).join("::"), child); }
