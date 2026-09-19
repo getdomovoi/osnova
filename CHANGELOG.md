@@ -10,6 +10,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Added
 
+- A call on a construction expression takes the constructed type as its receiver: `new GsonBuilder().create()` and `new TypeToken<T>() {}.getType()` in Java, `new Server().Start()` in C#, `new(T).M()` and `&T{}.M()` in Go, `T {}.m()` in Rust, and every hop of a chain that starts there. gson gains 830 resolved call sites (32.7% to 36.2%, 51.2% to 56.7% excluding externals) with no site lost; Humanizer gains 6; the other corpora are unchanged. Extraction version `structural-9.19`.
 - `scripts/resolution-levers.mjs`: samples the locally unresolved call edges of one or more corpora, asks a System One model which missing piece of information would resolve each one, and ranks the levers by estimated call sites. Review aid only.
 - `scripts/resolution-diff.mjs` lists every call edge whose resolution changed between two osnova refs on one corpus, the per-edge check behind the fix above; with `TYPESAFE_API_KEY` set it also asks a System One model which target each disputed call invokes, as a review aid only.
 
