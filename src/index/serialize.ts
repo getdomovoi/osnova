@@ -14,8 +14,10 @@ import type {
   IndexDiagnostic,
   ReExport,
   MemberKind,
+  Callee,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
+import { validOwner } from "./edgeStore.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
 import type { EdgeSource } from "./indexImpl.js";
 import { serializeEdges, deserializeEdges } from "./edgeStore.js";
@@ -33,7 +35,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.22.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.23.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 class ExtractionVersionError extends Error {}
@@ -63,6 +65,7 @@ interface SerializedSymbol {
   readonly fields?: readonly string[] | undefined;
   readonly returns?: ReturnBinding | undefined;
   readonly returnTuple?: readonly (ReturnBinding | null)[] | undefined;
+  readonly aliasOf?: Callee | undefined;
   readonly fieldTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly unwrapped?: ReturnBinding | undefined;
   readonly elements?: ReturnBinding | undefined;
@@ -142,6 +145,7 @@ export function serializeSections(
         ...(symbol.fields === undefined ? {} : { fields: symbol.fields }),
         ...(symbol.returns === undefined ? {} : { returns: symbol.returns }),
         ...(symbol.returnTuple === undefined ? {} : { returnTuple: symbol.returnTuple }),
+        ...(symbol.aliasOf === undefined ? {} : { aliasOf: symbol.aliasOf }),
         ...(symbol.fieldTypes === undefined ? {} : { fieldTypes: symbol.fieldTypes }),
         ...(symbol.unwrapped === undefined ? {} : { unwrapped: symbol.unwrapped }),
         ...(symbol.elements === undefined ? {} : { elements: symbol.elements }),
@@ -268,6 +272,7 @@ function deserializeParsedArtifact(
         throw new Error("osnova: corrupt heritage metadata");
       }
       if (symbol.fields !== undefined && (!Array.isArray(symbol.fields) || !symbol.fields.every((item: unknown) => typeof item === "string"))) throw new Error("osnova: corrupt field metadata");
+      const validCallee = (item: unknown): boolean => { const value = item as { kind?: unknown; member?: unknown; mode?: unknown; owner?: unknown }; if (typeof value !== "object" || value === null) return false; if (value.kind === "local" || value.kind === "import") return validOwner(value); return value.kind === "method" && typeof value.member === "string" && (value.mode === undefined || value.mode === "instance" || value.mode === "class") && validOwner(value.owner); };
       const validReturn = (item: unknown): boolean => { const value = item as { kind?: unknown; name?: unknown; source?: unknown; importedName?: unknown }; return typeof value === "object" && value !== null && (value.kind === "this" || (value.kind === "local" && typeof value.name === "string") || (value.kind === "import" && typeof value.source === "string" && typeof value.importedName === "string")); };
       if (symbol.returns !== undefined && !validReturn(symbol.returns)) throw new Error("osnova: corrupt return metadata");
       if (symbol.unwrapped !== undefined && !validReturn(symbol.unwrapped)) throw new Error("osnova: corrupt return metadata");
@@ -276,6 +281,7 @@ function deserializeParsedArtifact(
       if (symbol.valueTypes !== undefined && (typeof symbol.valueTypes !== "object" || symbol.valueTypes === null || Array.isArray(symbol.valueTypes) || !Object.values(symbol.valueTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.elementTypes !== undefined && (typeof symbol.elementTypes !== "object" || symbol.elementTypes === null || Array.isArray(symbol.elementTypes) || !Object.values(symbol.elementTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.returnTuple !== undefined && (!Array.isArray(symbol.returnTuple) || !symbol.returnTuple.every((item: unknown) => item === null || validReturn(item)))) throw new Error("osnova: corrupt return metadata");
+      if (symbol.aliasOf !== undefined && !validCallee(symbol.aliasOf)) throw new Error("osnova: corrupt alias metadata");
       if (symbol.fieldTypes !== undefined && (typeof symbol.fieldTypes !== "object" || symbol.fieldTypes === null || Array.isArray(symbol.fieldTypes) || !Object.values(symbol.fieldTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       const span: SourceSpan = {
         startLine: symbol.span.s,
@@ -297,6 +303,7 @@ function deserializeParsedArtifact(
         ...(symbol.fields === undefined ? {} : { fields: symbol.fields }),
         ...(symbol.returns === undefined ? {} : { returns: symbol.returns }),
         ...(symbol.returnTuple === undefined ? {} : { returnTuple: symbol.returnTuple }),
+        ...(symbol.aliasOf === undefined ? {} : { aliasOf: symbol.aliasOf }),
         ...(symbol.fieldTypes === undefined ? {} : { fieldTypes: symbol.fieldTypes }),
         ...(symbol.unwrapped === undefined ? {} : { unwrapped: symbol.unwrapped }),
         ...(symbol.elements === undefined ? {} : { elements: symbol.elements }),
