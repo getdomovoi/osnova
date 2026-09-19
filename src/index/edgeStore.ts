@@ -100,7 +100,7 @@ function validSymbolBinding(value: unknown): boolean {
     (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string");
 }
 
-function validOwner(value: unknown, depth = 0): boolean {
+export function validOwner(value: unknown, depth = 0): boolean {
   if (validSymbolBinding(value)) return true;
   if (typeof value !== "object" || value === null || depth > 16) return false;
   const owner = value as Record<string, unknown>;

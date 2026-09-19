@@ -338,3 +338,22 @@ describe("bounded type parameters", () => {
     expect(calls(index, "App/A.cs#A.H", "Run")).toEqual([undefined]);
   });
 });
+
+describe("aliases of a method", () => {
+  it("gives a constant that aliases a method the return type of that method, so a call on its result chains", async () => {
+    const index = await build({
+      "types.ts": "export class ZodString {\n  static create(): ZodString { return new ZodString(); }\n  optional(): ZodString { return this; }\n}\nexport class Other {\n  optional(): Other { return this; }\n}\nconst stringType = ZodString.create;\nconst otherType = new Other().optional;\nexport { stringType as string, otherType };\n",
+      "use.ts": "import * as z from './types.js';\nexport function go() {\n  z.string().optional();\n  z.otherType().optional();\n}\n",
+    });
+    expect(index.symbols.get("types.ts#stringType")?.aliasOf).toEqual({ kind: "method", owner: { kind: "local", name: "ZodString" }, member: "create", mode: "class" });
+    expect(calls(index, "use.ts#go", "optional")).toEqual(["types.ts#ZodString.optional", "types.ts#Other.optional"]);
+  });
+
+  it("leaves a constant alone when the aliased name is a field or names no member", async () => {
+    const index = await build({
+      "types.ts": "export class Box {\n  static size = 1;\n  read(): Box { return this; }\n}\nconst sized = Box.size;\nconst missing = Box.absent;\nexport { sized, missing };\n",
+      "use.ts": "import { sized, missing } from './types.js';\nexport function go() {\n  sized().read();\n  missing().read();\n}\n",
+    });
+    expect(calls(index, "use.ts#go", "read")).toEqual([undefined, undefined]);
+  });
+});

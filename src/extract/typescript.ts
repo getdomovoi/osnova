@@ -19,7 +19,7 @@ class TsExtractor {
 
   def(name: string, kind: Parameters<Extractor["addDef"]>[1], node: Node, sigNode?: Node): void {
     if (!IDENTIFIER_RE.test(name)) return;
-    this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined, undefined, undefined, kind === "function" ? this.bindings.unwrapped(sigNode ?? node) : undefined, kind === "function" ? this.bindings.elements(sigNode ?? node) : undefined, undefined, kind === "function" ? this.bindings.values(sigNode ?? node) : undefined);
+    this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined, undefined, undefined, kind === "function" ? this.bindings.unwrapped(sigNode ?? node) : undefined, kind === "function" ? this.bindings.elements(sigNode ?? node) : undefined, undefined, kind === "function" ? this.bindings.values(sigNode ?? node) : undefined, undefined, kind === "constant" ? this.bindings.aliasCallee(node) : undefined);
   }
 }
 

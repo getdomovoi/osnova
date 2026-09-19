@@ -213,6 +213,7 @@ function reassigns(body: Node, name: string, except?: number): boolean {
 
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
+  aliasCallee: (node: Node) => Callee | undefined;
   heritage: (node: Node) => SymbolBinding[];
   returns: (node: Node) => ReturnBinding | undefined;
   ownFields: (node: Node) => string[];
@@ -1119,8 +1120,18 @@ export function collectBindings(root: Node, python: boolean): {
     if (owner === undefined || reassigns(enclosingBody(site, root), name, site.id)) continue;
     scope.names.set(name, [{ kind: "instance", owner, basis: "annotation" }]);
   }
+  // `const create = Thing.make` names a callable, not a value: the alias carries that method, so the
+  // resolver can take its return type and a call on the result chains. A reassigned name keeps no alias.
+  const aliasCallee = (node: Node): Callee | undefined => {
+    const target = node.childForFieldName("name");
+    const value = unwrap(node.childForFieldName("value"));
+    if (target?.type !== "identifier" || value === null || !["member_expression", "attribute"].includes(value.type)) return undefined;
+    if (reassigns(enclosingBody(node, root), target.text, node.id)) return undefined;
+    return calleeOf(value, node);
+  };
   return {
     at,
+    aliasCallee,
     returns,
     heritage: (node) => {
       const out: SymbolBinding[] = [];

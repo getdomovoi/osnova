@@ -647,9 +647,33 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           const selectOf = (ref: { index?: number | undefined; unwrapped?: true | undefined }, elements = false): number | "returns" | "unwrapped" | "elements" | "values" =>
             elements ? "elements" : ref.unwrapped === true ? "unwrapped" : ref.index === undefined ? "returns" : ref.index;
+          // `const create = Thing.make` is a callable under another name. The alias is recorded where the
+          // constant is declared, so its owner resolves against that file rather than the calling one.
+          const aliasCallablesOf = (symbol: OsnovaSymbol, depth: number): { callables: OsnovaSymbol[]; mode: ReceiverMode | undefined } | undefined => {
+            const alias = symbol.aliasOf;
+            if (alias === undefined || depth > 4) return undefined;
+            if (alias.kind === "local" || alias.kind === "import") {
+              const found = symbolsFor(symbol.file, alias) ?? [];
+              return found.length === 0 ? undefined : { callables: found, mode: undefined };
+            }
+            if (alias.owner.kind !== "local" && alias.owner.kind !== "import") return undefined;
+            const holder = unique(symbolsFor(symbol.file, alias.owner)?.filter(isHolder) ?? null);
+            if (holder === undefined) return undefined;
+            const found = inherited(holder, 0, new Set([holder.qualifiedName]), alias.member);
+            return found === null || found.length === 0 ? undefined : { callables: found, mode: alias.mode };
+          };
           // The callables a return owner names: a bound function, or a member of a holder or namespace.
           const callablesOf = (of: Callee, depth: number): { callables: OsnovaSymbol[] | null; holder: OsnovaSymbol | undefined; mode: ReceiverMode | undefined } | undefined => {
-            if (of.kind === "local" || of.kind === "import") return { callables: symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, holder: undefined, mode: undefined };
+            if (of.kind === "local" || of.kind === "import") {
+              const callable = (symbol: OsnovaSymbol): boolean => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method";
+              const found = symbolsFor(fromFile, of);
+              const direct = found?.filter(callable) ?? null;
+              if (direct !== null && direct.length === 0 && found?.length === 1) {
+                const aliased = aliasCallablesOf(found[0]!, depth);
+                if (aliased !== undefined) return { callables: aliased.callables.filter(callable), holder: undefined, mode: aliased.mode };
+              }
+              return { callables: direct, holder: undefined, mode: undefined };
+            }
             const holder = holderOf(of.owner, depth + 1);
             if (holder === undefined) {
               const spaces = namespaceFilesOf(of.owner);

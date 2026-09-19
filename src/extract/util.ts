@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { makeSpan, makeSignature } from "./adapter.js";
 import type { RawDefinition, RawEdge } from "./adapter.js";
-import type { EdgeBinding, EdgeKind, MemberKind, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
+import type { Callee, EdgeBinding, EdgeKind, MemberKind, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
 
 export type VisitResult = boolean | void;
 
@@ -60,7 +60,7 @@ export class Extractor {
     this.stack.pop();
   }
 
-  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node, memberKind?: MemberKind, heritage?: readonly SymbolBinding[], fields?: readonly string[], returns?: ReturnBinding, returnTuple?: readonly (ReturnBinding | null)[], fieldTypes?: Readonly<Record<string, SymbolBinding>>, unwrapped?: ReturnBinding, elements?: ReturnBinding, elementTypes?: Readonly<Record<string, SymbolBinding>>, values?: ReturnBinding, valueTypes?: Readonly<Record<string, SymbolBinding>>): void {
+  addDef(name: string, kind: SymbolKind, node: Node, signatureNode?: Node, memberKind?: MemberKind, heritage?: readonly SymbolBinding[], fields?: readonly string[], returns?: ReturnBinding, returnTuple?: readonly (ReturnBinding | null)[], fieldTypes?: Readonly<Record<string, SymbolBinding>>, unwrapped?: ReturnBinding, elements?: ReturnBinding, elementTypes?: Readonly<Record<string, SymbolBinding>>, values?: ReturnBinding, valueTypes?: Readonly<Record<string, SymbolBinding>>, aliasOf?: Callee): void {
     const def: RawDefinition = {
       name,
       kind,
@@ -70,6 +70,7 @@ export class Extractor {
       ...(memberKind === undefined ? {} : { memberKind }),
       ...(heritage === undefined || heritage.length === 0 ? {} : { heritage }),
       ...(fields === undefined || fields.length === 0 ? {} : { fields }),
+      ...(aliasOf === undefined ? {} : { aliasOf }),
       ...(returns === undefined ? {} : { returns }),
       ...(returnTuple === undefined || returnTuple.length === 0 ? {} : { returnTuple }),
       ...(fieldTypes === undefined || Object.keys(fieldTypes).length === 0 ? {} : { fieldTypes }),
