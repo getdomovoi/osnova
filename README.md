@@ -131,18 +131,19 @@ A call site counts as resolved when the index ties it to one definition through 
 | gson | java | 23382 | 8473 | 36.2% | 56.7% |
 | gson | all | 23382 | 8473 | 36.2% | 56.7% |
 | humanizer | c_sharp | 28786 | 7654 | 26.6% | 52.4% |
-| humanizer | javascript | 927 | 132 | 14.2% | 47.6% |
-| humanizer | tsx | 120 | 14 | 11.7% | 19.7% |
-| humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30517 | 7804 | 25.6% | 51.1% |
+| humanizer | javascript | 927 | 132 | 14.2% | 55.5% |
+| humanizer | tsx | 120 | 14 | 11.7% | 23.3% |
+| humanizer | typescript | 684 | 4 | 0.6% | 1.3% |
+| humanizer | all | 30517 | 7804 | 25.6% | 51.3% |
 | pyright | python | 11617 | 3326 | 28.6% | 66.7% |
-| pyright | typescript | 46812 | 26716 | 57.1% | 73.2% |
-| pyright | all | 58461 | 30042 | 51.4% | 72.4% |
+| pyright | typescript | 46812 | 26716 | 57.1% | 74.4% |
+| pyright | all | 58461 | 30042 | 51.4% | 73.4% |
 | ripgrep | rust | 13371 | 6117 | 45.8% | 71.7% |
 | ripgrep | all | 13385 | 6121 | 45.7% | 71.6% |
-| zod | tsx | 150 | 7 | 4.7% | 9.7% |
-| zod | typescript | 53237 | 20070 | 37.7% | 63.9% |
-| zod | all | 53416 | 20087 | 37.6% | 63.8% |
+| zod | javascript | 29 | 10 | 34.5% | 83.3% |
+| zod | tsx | 150 | 7 | 4.7% | 10.1% |
+| zod | typescript | 53238 | 20070 | 37.7% | 67.7% |
+| zod | all | 53417 | 20087 | 37.6% | 67.6% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework, and calls at the end of a field, element or return chain whose recorded type is a builtin (`string`, `Array`, `Map`, a Rust primitive, `Vec` or `Option`) or a type behind an unresolved import; a chain that ends on a type parameter stays unresolved, not external, unless the parameter is bounded. A call on a literal or on a local assigned from one (`", ".join(..)`, `rv = []`, `` `a${b}`.trim() ``) is a call on `str`, `list`, `string` or `Array`, so it is external too, and in Go, Rust, Java and C#, which bind plain names without an import statement, a name that no indexed file of the language defines (`new IllegalArgumentException(..)`, `len(xs)`) is a builtin or a standard-library name and counts as external rather than as a name with no match. A receiver whose annotation names a language builtin (`string`, `Array`, `str`, `list`) stays external even when the repository defines a function of that name, as zod does with its `string()` factory; a class or interface of that name still wins. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 
