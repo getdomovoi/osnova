@@ -52,7 +52,18 @@ export const rustAdapter: LanguageAdapter = {
         }
         case "enum_item": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addDef(nameNode.text, "enum", node);
+          if (nameNode !== null) {
+            out.addDef(nameNode.text, "enum", node);
+            // A tuple variant (`Kind::Io(err)`) is called like a static constructor that returns the enum,
+            // so it is indexed as one; unit and struct variants are never called.
+            out.push(nameNode.text);
+            for (const variant of childrenOf(node.childForFieldName("body") ?? node)) {
+              if (variant.type !== "enum_variant") continue;
+              const variantName = variant.childForFieldName("name");
+              if (variantName !== null && childrenOf(variant).some((child) => child.type === "ordered_field_declaration_list")) out.addDef(variantName.text, "method", variant, undefined, "static", undefined, undefined, { kind: "local", name: nameNode.text });
+            }
+            out.pop();
+          }
           return;
         }
         case "trait_item": {

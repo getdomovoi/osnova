@@ -2,6 +2,28 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## 0.6.3 (2026-09-18)
+
+### Fixed
+
+- A Rust `self.field` whose declared type is not a struct parameter is a field owner again, so `self.globs[i].is_only_dir()` and a closure over `self.globs.iter()` resolve through the holder's element tables. 0.6.2 took the impl-argument path for every `self.field` and lost ten ripgrep sites while gaining twenty-eight, which the coverage total showed as +18.
+
+### Added
+
+- A call on a construction expression takes the constructed type as its receiver: `new GsonBuilder().create()` and `new TypeToken<T>() {}.getType()` in Java, `new Server().Start()` in C#, `new(T).M()` and `&T{}.M()` in Go, `T {}.m()` in Rust, and every hop of a chain that starts there. gson gains 830 resolved call sites (32.7% to 36.2%, 51.2% to 56.7% excluding externals) with no site lost; Humanizer gains 6; the other corpora are unchanged. Extraction version `structural-9.19`.
+- Rust paths through a facade crate resolve: `pub extern crate grep_printer as printer;` (or `pub use grep_printer as printer;`) in a crate root lets `grep::printer::ColorSpecs` continue from the aliased workspace crate. A field or parameter typed by a full path (`colors: grep::printer::ColorSpecs`, `std::path::PathBuf`) binds through that path, so a standard-library path type now counts as external instead of an unidentified receiver.
+- A `use` inside an inline Rust module binds the names that module uses: `mod tests { use grep_regex::RegexMatcher; }` no longer loses `RegexMatcher::new(..)` to a same-named type elsewhere, and `use super::X` there names the file itself. ripgrep gains 178 resolved call sites (41.0% to 42.3%, 58.1% to 65.4% excluding externals) with no site lost; the other corpora are unchanged.
+- A Rust tuple variant (`Kind::Io(err)`) is indexed as a static member of its enum, so the constructor call resolves and a chain on it continues. A plain call (`Ok(x)`, `Some(x)`, `drop(x)`) never takes an impl method or a variant by name alone; the prelude owns those names.
+- Rust module paths in calls resolve through the module: `flags::parse::lookup()` beside `mod flags;`, `super::render()` from a child module, `self::parse::lookup()`, `grep::cli::stdout()` through a facade, `use crate::hyperlink::{self, X}` binding the module name, and a crate whose `[[bin]]` or `[lib]` `path` keeps its root outside `src`. A path call the crate does not define (`std::io::stdout()`, `hir::Class::Bytes(cls)`) is external now instead of a same-named function matched by luck. ripgrep: 42.3% to 45.7% resolved, 65.4% to 71.6% excluding externals; per edge, 559 gained, 27 moved to the right definition, 89 dropped a wrong or lucky match (16 of those were right: a local alias of a method, `let (or, and) = (GramQuery::or, GramQuery::and)`). Extraction version `structural-9.21`.
+- A call rooted at a global object the file never binds (`console.log(x)`, `Object.keys(x)`, `JSON.stringify(x)`, `Math.floor(n)`, `Object.prototype.hasOwnProperty.call(..)`) counts as external, beside plain calls to unbound names, instead of reading as a receiver the syntax could not identify. A file that binds the name itself, by import or by its own class, still wins. 2388 call sites move across the three JavaScript and TypeScript corpora with no edge gained, lost or retargeted: zod 63.9% to 67.7% excluding externals, pyright 73.2% to 74.4%, Humanizer 47.6% to 55.5% on its JavaScript. Extraction version `structural-9.22`.
+- A module constant declared as an alias of a method (`const stringType = ZodString.create`) names a callable, not a value. The declaration records the method it holds, and a call on the constant's result now takes that method's return type, so the chain continues. The alias resolves against the file that declares it, not the calling file. A constant whose aliased name is a field, or names no member, keeps no alias. 1096 call sites gained on zod with none lost or retargeted, 39.8% of its TypeScript resolved against 37.7%, and 71.4% excluding externals against 67.7%. The other six corpora are unchanged. Extraction version `structural-9.23`.
+- `scripts/resolution-levers.mjs`: samples the locally unresolved call edges of one or more corpora, asks a System One model which missing piece of information would resolve each one, and ranks the levers by estimated call sites. Review aid only.
+- `scripts/resolution-diff.mjs` lists every call edge whose resolution changed between two osnova refs on one corpus, the per-edge check behind the fix above; with `TYPESAFE_API_KEY` set it also asks a System One model which target each disputed call invokes, as a review aid only.
+
+### Changed
+
+- `osnova setup --apply --hooks --client codex` says in its notice that Codex skips new hooks until they are trusted in `/hooks`; the README and reference say the same. `osnova setup --apply` now prints each written change's notice under its line, as `--preview` already did. Codex records trust per hook hash, so the three osnova entries run only after that step, and osnova cannot trust them on the user's behalf.
+
 ## 0.6.2 (2026-09-18)
 
 ### Added

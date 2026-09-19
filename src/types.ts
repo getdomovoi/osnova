@@ -57,6 +57,7 @@ export interface OsnovaSymbol {
   readonly fields?: readonly string[] | undefined;
   readonly returns?: ReturnBinding | undefined;
   readonly returnTuple?: readonly (ReturnBinding | null)[] | undefined;
+  readonly aliasOf?: Callee | undefined;
   readonly fieldTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly unwrapped?: ReturnBinding | undefined;
   readonly elements?: ReturnBinding | undefined;
