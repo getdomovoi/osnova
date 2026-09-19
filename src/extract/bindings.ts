@@ -815,6 +815,24 @@ export function collectBindings(root: Node, python: boolean): {
     }
     return undefined;
   };
+  // Standard built-in namespace objects and host globals whose members are called as `X.m()`. A call rooted
+  // at one of these names no definition in this repository, so it is external like a plain call to an unbound
+  // name. The file binding the name itself (an import, a class, a local) always wins over this list.
+  const GLOBAL_OBJECTS = new Set([
+    "JSON", "Math", "Reflect", "Object", "Array", "String", "Number", "Boolean", "Symbol", "BigInt", "Promise",
+    "Date", "RegExp", "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "Proxy", "Error", "Intl", "Atomics",
+    "ArrayBuffer", "SharedArrayBuffer", "DataView", "console", "process", "globalThis", "performance", "crypto",
+    "Buffer", "URL", "URLSearchParams", "TextEncoder", "TextDecoder", "Number", "Function",
+  ]);
+  const rootedAtGlobal = (expression: Node | null, site: Node): boolean => {
+    let head: Node | null = unwrap(expression);
+    for (let hop = 0; head !== null && hop < 32; hop += 1) {
+      if (head.type !== "member_expression" && head.type !== "subscript_expression") break;
+      head = unwrap(head.childForFieldName("object"));
+    }
+    return head !== null && head.type === "identifier" && GLOBAL_OBJECTS.has(head.text) &&
+      lookup(head.text, site) === undefined && !ambient.has(head.text);
+  };
   const at = (expression: Node | null, site: Node): EdgeBinding | undefined => {
       expression = unwrap(expression);
       if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: ambient.has(expression.text) ? "unsupported" : "unbound" };
@@ -891,6 +909,7 @@ export function collectBindings(root: Node, python: boolean): {
           if (binding.kind === "instance") return { kind: "member", owner: binding.owner, member: property.text, mode: "instance", basis: binding.basis };
           if (binding.kind === "local" || binding.kind === "import") return { kind: "member", owner: binding, member: property.text, mode: "class", basis: "class-reference" };
         }
+        if (!python && rootedAtGlobal(object, site)) return { kind: "blocked", reason: "unbound" };
         return { kind: "blocked", reason: "unknown-receiver" };
       }
       return { kind: "blocked", reason: "unsupported" };
