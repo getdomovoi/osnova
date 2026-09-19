@@ -252,6 +252,9 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     const at = object.startIndex;
     if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression" || object.type === "try_expression") return calleeOwner(object, scope);
     if (object.type === "parenthesized_expression") { const inner = childrenOf(object)[0]; return inner === undefined ? undefined : receiverOf(inner, scope); }
+    // `new X().m()`: the constructed type is the receiver, with no local in between.
+    const constructed = spec.constructed(object);
+    if (constructed !== undefined) return ownerForType(constructed);
     const indexed = spec.subscript?.(object);
     if (indexed !== undefined && indexed !== null) return elementOf(indexed, scope, "either");
     if (spec.thisNodes?.includes(object.type)) {

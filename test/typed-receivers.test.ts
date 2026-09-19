@@ -91,13 +91,14 @@ describe("Java and C# receivers", () => {
   it("binds Java parameters, locals, fields, this, static class access and imports", async () => {
     const index = await build({
       "src/main/java/a/b/Server.java": "package a.b;\n\npublic class Server {\n  public void start() {}\n  public static Server create() { return new Server(); }\n  public Server self() { return this; }\n}\n",
-      "src/main/java/a/App.java": "package a;\n\nimport a.b.Server;\n\npublic class App {\n  private Server field;\n  private static int count;\n  private Server make() { return new Server(); }\n  void run(Server s, Object o) {\n    s.start();\n    Server t = new Server();\n    t.start();\n    var u = make();\n    u.start();\n    this.field.start();\n    field.start();\n    Server.create().start();\n    Server.create();\n    make().self().start();\n    o.start();\n    this.run(s, o);\n    Server w = null;\n    w = other();\n    w.start();\n  }\n}\n",
+      "src/main/java/a/App.java": "package a;\n\nimport a.b.Server;\n\npublic class App {\n  private Server field;\n  private static int count;\n  private Server make() { return new Server(); }\n  void run(Server s, Object o) {\n    s.start();\n    Server t = new Server();\n    t.start();\n    var u = make();\n    u.start();\n    this.field.start();\n    field.start();\n    Server.create().start();\n    Server.create();\n    make().self().start();\n    o.start();\n    this.run(s, o);\n    Server w = null;\n    w = other();\n    w.start();\n    new Server().start();\n    new Server().self().start();\n  }\n}\n",
     });
     expect(index.symbols.get("src/main/java/a/b/Server.java#Server.create")?.memberKind).toBe("static");
     expect(index.symbols.get("src/main/java/a/App.java#App.make")?.returns).toEqual({ kind: "import", source: "a.b.Server", importedName: "Server" });
     expect(calls(index, "src/main/java/a/App.java#App.run", "start")).toEqual([
       "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start",
       "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", undefined, "src/main/java/a/b/Server.java#Server.start",
+      "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start",
     ]);
     expect(calls(index, "src/main/java/a/App.java#App.run", "create")).toEqual(["src/main/java/a/b/Server.java#Server.create", "src/main/java/a/b/Server.java#Server.create"]);
     expect(calls(index, "src/main/java/a/App.java#App.run", "run")).toEqual(["src/main/java/a/App.java#App.run"]);
@@ -106,11 +107,11 @@ describe("Java and C# receivers", () => {
   it("binds C# parameters, locals, fields, properties, this and static class access through unique names", async () => {
     const index = await build({
       "Lib/Server.cs": "namespace Lib {\n  public class Server {\n    public void Start() {}\n    public static Server Create() { return new Server(); }\n  }\n}\n",
-      "App/Runner.cs": "using Lib;\n\nnamespace App {\n  public class Runner {\n    private Server field;\n    public Server Prop { get; set; }\n    private static Server Make() { return new Server(); }\n    public void Run(Server s, object o) {\n      s.Start();\n      Server t = new Server();\n      t.Start();\n      var u = Make();\n      u.Start();\n      this.field.Start();\n      field.Start();\n      Prop.Start();\n      Server.Create().Start();\n      o.Start();\n      s = null;\n      s.Start();\n    }\n  }\n}\n",
+      "App/Runner.cs": "using Lib;\n\nnamespace App {\n  public class Runner {\n    private Server field;\n    public Server Prop { get; set; }\n    private static Server Make() { return new Server(); }\n    public void Run(Server s, object o) {\n      s.Start();\n      Server t = new Server();\n      t.Start();\n      var u = Make();\n      u.Start();\n      this.field.Start();\n      field.Start();\n      Prop.Start();\n      Server.Create().Start();\n      o.Start();\n      s = null;\n      s.Start();\n      new Server().Start();\n    }\n  }\n}\n",
     });
     expect(index.symbols.get("Lib/Server.cs#Server.Create")?.memberKind).toBe("static");
     expect(calls(index, "App/Runner.cs#Runner.Run", "Start")).toEqual([
-      "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", undefined, "Lib/Server.cs#Server.Start",
+      "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", undefined, "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start",
     ]);
     expect(calls(index, "App/Runner.cs#Runner.Run", "Create")).toEqual(["Lib/Server.cs#Server.Create"]);
   });
