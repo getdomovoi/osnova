@@ -311,10 +311,27 @@ export interface ResolutionInput {
   readonly root: string;
   readonly files: ReadonlyMap<string, FileCard>;
   readonly rawEdges: ReadonlyMap<string, readonly RawEdgeItem[]>;
+  readonly reuse?: EdgeReuse;
+}
+
+export interface EdgeReuse {
+  readonly resolve: ReadonlySet<string>;
+  readonly edges: readonly OsnovaEdge[];
+}
+
+function groupEdgesByFile(edges: readonly OsnovaEdge[]): Map<string, OsnovaEdge[]> {
+  const out = new Map<string, OsnovaEdge[]>();
+  for (const edge of edges) {
+    const list = out.get(edge.fromFile);
+    if (list === undefined) out.set(edge.fromFile, [edge]);
+    else list.push(edge);
+  }
+  return out;
 }
 
 export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
-  const { files, rawEdges } = input;
+  const { files, rawEdges, reuse } = input;
+  const reusable = reuse === undefined ? undefined : groupEdgesByFile(reuse.edges);
 
   const symbolsByName = new Map<string, OsnovaSymbol[]>();
   const allSymbols: OsnovaSymbol[] = [];
@@ -430,6 +447,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   }
   const importTargetsByFile = new Map<string, string[]>();
   for (const fromFile of [...rawEdges.keys()].sort()) {
+    if (reuse !== undefined && !reuse.resolve.has(fromFile)) continue;
     const raws = rawEdges.get(fromFile);
     const card = files.get(fromFile);
     if (raws === undefined || card === undefined) continue;
@@ -444,6 +462,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
 
   const edges: OsnovaEdge[] = [];
   for (const fromFile of [...rawEdges.keys()].sort()) {
+    if (reusable !== undefined && reuse !== undefined && !reuse.resolve.has(fromFile)) {
+      for (const edge of reusable.get(fromFile) ?? []) edges.push(edge);
+      continue;
+    }
     const raws = rawEdges.get(fromFile);
     const card = files.get(fromFile);
     if (raws === undefined || card === undefined) continue;

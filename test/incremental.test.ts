@@ -154,3 +154,43 @@ describe("incremental equals full", () => {
     }
   });
 });
+
+describe("partial re-resolution", () => {
+  const edgeLines = (index: OsnovaIndex): string => index.edges.map((edge) => JSON.stringify(edge)).join("\n");
+
+  it("matches a full rebuild when an edit changes only a body", async () => {
+    const dir = copyFixture();
+    try {
+      const index = await buildIndex(dir);
+      const file = path.join(dir, "src/util.ts");
+      fs.writeFileSync(file, `${fs.readFileSync(file, "utf8")}\n// trailing note\n`);
+
+      const report = await freshness(index, dir);
+      expect(report.changed).toEqual(["src/util.ts"]);
+
+      const refreshed = await applyChanges(index, dir, report.changed);
+      expect(edgeLines(refreshed)).toBe(edgeLines(await buildIndex(dir)));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches a full rebuild when an edit removes a symbol other files call", async () => {
+    const dir = copyFixture();
+    try {
+      const index = await buildIndex(dir);
+      expect(index.edges.some((edge) => edge.toSymbol === "src/util.ts#compute")).toBe(true);
+
+      const file = path.join(dir, "src/util.ts");
+      fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("export function compute", "function compute"));
+
+      const report = await freshness(index, dir);
+      expect(report.changed).toEqual(["src/util.ts"]);
+
+      const refreshed = await applyChanges(index, dir, report.changed);
+      expect(edgeLines(refreshed)).toBe(edgeLines(await buildIndex(dir)));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

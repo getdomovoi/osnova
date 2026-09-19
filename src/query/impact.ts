@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
 import type { FileCard, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import { knownIndexGeneration, rememberIndexGeneration } from "../index/generation.js";
+import { serializeArtifact } from "../index/serialize.js";
 
 export interface IndexReceipt {
   readonly generation: string;
@@ -63,30 +64,13 @@ export function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => compareText(a, b))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 const receipts = new WeakMap<OsnovaIndex, IndexReceipt>();
 
 export function indexReceipt(index: OsnovaIndex): IndexReceipt {
   const memoized = receipts.get(index);
   if (memoized !== undefined) return memoized;
-  const hash = createHash("sha256");
-  hash.update(canonical({ root: index.root, schema: "query-receipt-v1" }));
-  for (const [path, file] of [...index.files].sort(([a], [b]) => compareText(a, b))) {
-    hash.update(canonical({ path, hash: file.hash, language: file.language, diagnostics: file.diagnostics ?? [], reExports: file.reExports ?? [] }));
-  }
-  for (const [name, symbol] of [...index.symbols].sort(([a], [b]) => compareText(a, b))) hash.update(canonical({ name, symbol }));
-  for (const edge of index.edges.map(canonical).sort(compareText)) hash.update(edge);
-  const diagnostics = [...(index.diagnostics ?? [])].map(canonical).sort(compareText);
-  hash.update(canonical(diagnostics));
-  const receipt: IndexReceipt = { generation: hash.digest("hex"), basis: "indexed-content-sha256", files: index.files.size, diagnostics: diagnostics.length };
+  const generation = knownIndexGeneration(index) ?? rememberIndexGeneration(index, serializeArtifact(index));
+  const receipt: IndexReceipt = { generation, basis: "indexed-content-sha256", files: index.files.size, diagnostics: (index.diagnostics ?? []).length };
   receipts.set(index, receipt);
   return receipt;
 }
