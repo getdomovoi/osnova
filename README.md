@@ -120,7 +120,7 @@ A typical agent turn with Osnova:
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, the declared return type of the function or method that produced the value (or, without an annotation, the constructor it returns on every path), a field of any of those whose declared type the holder records, so `this.pool.conn.send()` follows two field types across files, or the value inside a wrapper: `await f()` on a `Promise<Foo>` return type, and Rust `f()?`, `f().unwrap()` and `f().expect(..)` on `Result<Foo, E>` and `Option<Foo>`; and the element or value of a collection whose annotation names it: `for (const x of xs)`, `xs.forEach((x) => ..)`, `xs[0]`, `map.get(k)`, `map.values()` over `Foo[]`, `Set<Foo>`, `Map<K, Foo>`, `list[Foo]` and `dict[K, Foo]`, including fields and return types in other files, and a local that aliases a member chain), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` (which also reloads each index from its cache and checks the edge count and resolved count match) and recorded in [`benchmarks/results/resolution-coverage-2026-09-18.json`](benchmarks/results/resolution-coverage-2026-09-18.json):
+A call site counts as resolved when the index ties it to one definition through evidence it can name: an import binding (relative paths, and bare specifiers that name a workspace package through its `package.json` name and `exports`, or a Python package under a manifest directory or its `src` layout), a lexical definition in the same file, a re-export chain it followed, or a receiver it could identify (`this`, a constructor site, a class reference, an annotated parameter, field or local, a field assigned once in the constructor, the declared return type of the function or method that produced the value (or, without an annotation, the constructor it returns on every path), a field of any of those whose declared type the holder records, so `this.pool.conn.send()` follows two field types across files, or the value inside a wrapper: `await f()` on a `Promise<Foo>` return type, and Rust `f()?`, `f().unwrap()` and `f().expect(..)` on `Result<Foo, E>` and `Option<Foo>`; and the element or value of a collection whose annotation names it: `for (const x of xs)`, `xs.forEach((x) => ..)`, `xs[0]`, `map.get(k)`, `map.values()` over `Foo[]`, `Set<Foo>`, `Map<K, Foo>`, `list[Foo]` and `dict[K, Foo]`, including fields and return types in other files, and a local that aliases a member chain), and a TypeScript namespace member reached through the namespace name, including members inherited through declared `extends` clauses and Python base classes when every base in the chain is identified and agrees. `implements` clauses are not followed. Everything else stays unresolved with a reason, and every answer from Osnova says so. Go, Rust, Java and C# receivers come from typed parameters, typed locals, constructor literals, declared return types, struct fields, `this`, `self` and the method receiver; Go package imports resolve through `go.mod`, Rust paths through the crate root, Java imports through the package path, and a type declared exactly once in the language family is found without an import. These are the shares on the pinned checkouts (three retrieval corpora plus four coverage-only corpora under `benchmarks/corpora/`), measured by `scripts/coverage-corpora.mjs` (which also reloads each index from its cache and checks the edge count and resolved count match) and recorded in [`benchmarks/results/resolution-coverage-2026-09-18a.json`](benchmarks/results/resolution-coverage-2026-09-18a.json):
 
 | Corpus | Language | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
@@ -128,21 +128,22 @@ A call site counts as resolved when the index ties it to one definition through 
 | click | all | 5022 | 1932 | 38.5% | 57.2% |
 | cobra | go | 4374 | 1980 | 45.3% | 88.9% |
 | cobra | all | 4374 | 1980 | 45.3% | 88.9% |
-| gson | java | 23340 | 7643 | 32.7% | 51.2% |
-| gson | all | 23340 | 7643 | 32.7% | 51.2% |
-| humanizer | c_sharp | 28786 | 7648 | 26.6% | 51.3% |
-| humanizer | javascript | 927 | 132 | 14.2% | 47.7% |
-| humanizer | tsx | 120 | 14 | 11.7% | 19.7% |
-| humanizer | typescript | 684 | 4 | 0.6% | 1.2% |
-| humanizer | all | 30517 | 7798 | 25.6% | 50.1% |
+| gson | java | 23382 | 8473 | 36.2% | 56.7% |
+| gson | all | 23382 | 8473 | 36.2% | 56.7% |
+| humanizer | c_sharp | 28786 | 7654 | 26.6% | 52.4% |
+| humanizer | javascript | 927 | 132 | 14.2% | 55.5% |
+| humanizer | tsx | 120 | 14 | 11.7% | 23.3% |
+| humanizer | typescript | 684 | 4 | 0.6% | 1.3% |
+| humanizer | all | 30517 | 7804 | 25.6% | 51.3% |
 | pyright | python | 11617 | 3326 | 28.6% | 66.7% |
-| pyright | typescript | 46812 | 26716 | 57.1% | 73.2% |
-| pyright | all | 58461 | 30042 | 51.4% | 72.4% |
-| ripgrep | rust | 13351 | 5469 | 41.0% | 58.1% |
-| ripgrep | all | 13365 | 5473 | 41.0% | 58.0% |
-| zod | tsx | 150 | 7 | 4.7% | 9.7% |
-| zod | typescript | 53237 | 20070 | 37.7% | 63.9% |
-| zod | all | 53416 | 20087 | 37.6% | 63.8% |
+| pyright | typescript | 46812 | 26716 | 57.1% | 74.4% |
+| pyright | all | 58461 | 30042 | 51.4% | 73.4% |
+| ripgrep | rust | 13371 | 6117 | 45.8% | 71.7% |
+| ripgrep | all | 13385 | 6121 | 45.7% | 71.6% |
+| zod | javascript | 29 | 10 | 34.5% | 83.3% |
+| zod | tsx | 150 | 7 | 4.7% | 10.1% |
+| zod | typescript | 53238 | 21166 | 39.8% | 71.4% |
+| zod | all | 53417 | 21183 | 39.7% | 71.3% |
 
 A call through an import the index cannot resolve, which is mostly a package outside the repository, and a call to a name with no binding in the file, which is a builtin or a global such as `len`, `Error` or `new Map()`, can never resolve locally, so the last column leaves both out of the denominator. That includes calls on values those imports produce, such as `expect(x).toBe(y)` from a test framework, and calls at the end of a field, element or return chain whose recorded type is a builtin (`string`, `Array`, `Map`, a Rust primitive, `Vec` or `Option`) or a type behind an unresolved import; a chain that ends on a type parameter stays unresolved, not external, unless the parameter is bounded. A call on a literal or on a local assigned from one (`", ".join(..)`, `rv = []`, `` `a${b}`.trim() ``) is a call on `str`, `list`, `string` or `Array`, so it is external too, and in Go, Rust, Java and C#, which bind plain names without an import statement, a name that no indexed file of the language defines (`new IllegalArgumentException(..)`, `len(xs)`) is a builtin or a standard-library name and counts as external rather than as a name with no match. A receiver whose annotation names a language builtin (`string`, `Array`, `str`, `list`) stays external even when the repository defines a function of that name, as zod does with its `string()` factory; a class or interface of that name still wins. `osnova coverage` prints both shares and the counts behind them. The unresolved remainder is mostly method calls on objects the syntax does not identify. `osnova coverage` reports these numbers for your own repository, per language and per reason, and `osnova_plumb` checks any list of call sites against the index so a claimed caller list can be verified before it is trusted.
 

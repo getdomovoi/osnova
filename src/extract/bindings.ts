@@ -213,6 +213,7 @@ function reassigns(body: Node, name: string, except?: number): boolean {
 
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
+  aliasCallee: (node: Node) => Callee | undefined;
   heritage: (node: Node) => SymbolBinding[];
   returns: (node: Node) => ReturnBinding | undefined;
   ownFields: (node: Node) => string[];
@@ -815,6 +816,24 @@ export function collectBindings(root: Node, python: boolean): {
     }
     return undefined;
   };
+  // Standard built-in namespace objects and host globals whose members are called as `X.m()`. A call rooted
+  // at one of these names no definition in this repository, so it is external like a plain call to an unbound
+  // name. The file binding the name itself (an import, a class, a local) always wins over this list.
+  const GLOBAL_OBJECTS = new Set([
+    "JSON", "Math", "Reflect", "Object", "Array", "String", "Number", "Boolean", "Symbol", "BigInt", "Promise",
+    "Date", "RegExp", "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "Proxy", "Error", "Intl", "Atomics",
+    "ArrayBuffer", "SharedArrayBuffer", "DataView", "console", "process", "globalThis", "performance", "crypto",
+    "Buffer", "URL", "URLSearchParams", "TextEncoder", "TextDecoder", "Number", "Function",
+  ]);
+  const rootedAtGlobal = (expression: Node | null, site: Node): boolean => {
+    let head: Node | null = unwrap(expression);
+    for (let hop = 0; head !== null && hop < 32; hop += 1) {
+      if (head.type !== "member_expression" && head.type !== "subscript_expression") break;
+      head = unwrap(head.childForFieldName("object"));
+    }
+    return head !== null && head.type === "identifier" && GLOBAL_OBJECTS.has(head.text) &&
+      lookup(head.text, site) === undefined && !ambient.has(head.text);
+  };
   const at = (expression: Node | null, site: Node): EdgeBinding | undefined => {
       expression = unwrap(expression);
       if (expression?.type === "identifier") return normalize(lookup(expression.text, site)) ?? { kind: "blocked", reason: ambient.has(expression.text) ? "unsupported" : "unbound" };
@@ -891,6 +910,7 @@ export function collectBindings(root: Node, python: boolean): {
           if (binding.kind === "instance") return { kind: "member", owner: binding.owner, member: property.text, mode: "instance", basis: binding.basis };
           if (binding.kind === "local" || binding.kind === "import") return { kind: "member", owner: binding, member: property.text, mode: "class", basis: "class-reference" };
         }
+        if (!python && rootedAtGlobal(object, site)) return { kind: "blocked", reason: "unbound" };
         return { kind: "blocked", reason: "unknown-receiver" };
       }
       return { kind: "blocked", reason: "unsupported" };
@@ -1100,8 +1120,18 @@ export function collectBindings(root: Node, python: boolean): {
     if (owner === undefined || reassigns(enclosingBody(site, root), name, site.id)) continue;
     scope.names.set(name, [{ kind: "instance", owner, basis: "annotation" }]);
   }
+  // `const create = Thing.make` names a callable, not a value: the alias carries that method, so the
+  // resolver can take its return type and a call on the result chains. A reassigned name keeps no alias.
+  const aliasCallee = (node: Node): Callee | undefined => {
+    const target = node.childForFieldName("name");
+    const value = unwrap(node.childForFieldName("value"));
+    if (target?.type !== "identifier" || value === null || !["member_expression", "attribute"].includes(value.type)) return undefined;
+    if (reassigns(enclosingBody(node, root), target.text, node.id)) return undefined;
+    return calleeOf(value, node);
+  };
   return {
     at,
+    aliasCallee,
     returns,
     heritage: (node) => {
       const out: SymbolBinding[] = [];

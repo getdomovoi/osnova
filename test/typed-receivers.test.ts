@@ -91,13 +91,14 @@ describe("Java and C# receivers", () => {
   it("binds Java parameters, locals, fields, this, static class access and imports", async () => {
     const index = await build({
       "src/main/java/a/b/Server.java": "package a.b;\n\npublic class Server {\n  public void start() {}\n  public static Server create() { return new Server(); }\n  public Server self() { return this; }\n}\n",
-      "src/main/java/a/App.java": "package a;\n\nimport a.b.Server;\n\npublic class App {\n  private Server field;\n  private static int count;\n  private Server make() { return new Server(); }\n  void run(Server s, Object o) {\n    s.start();\n    Server t = new Server();\n    t.start();\n    var u = make();\n    u.start();\n    this.field.start();\n    field.start();\n    Server.create().start();\n    Server.create();\n    make().self().start();\n    o.start();\n    this.run(s, o);\n    Server w = null;\n    w = other();\n    w.start();\n  }\n}\n",
+      "src/main/java/a/App.java": "package a;\n\nimport a.b.Server;\n\npublic class App {\n  private Server field;\n  private static int count;\n  private Server make() { return new Server(); }\n  void run(Server s, Object o) {\n    s.start();\n    Server t = new Server();\n    t.start();\n    var u = make();\n    u.start();\n    this.field.start();\n    field.start();\n    Server.create().start();\n    Server.create();\n    make().self().start();\n    o.start();\n    this.run(s, o);\n    Server w = null;\n    w = other();\n    w.start();\n    new Server().start();\n    new Server().self().start();\n  }\n}\n",
     });
     expect(index.symbols.get("src/main/java/a/b/Server.java#Server.create")?.memberKind).toBe("static");
     expect(index.symbols.get("src/main/java/a/App.java#App.make")?.returns).toEqual({ kind: "import", source: "a.b.Server", importedName: "Server" });
     expect(calls(index, "src/main/java/a/App.java#App.run", "start")).toEqual([
       "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start",
       "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start", undefined, "src/main/java/a/b/Server.java#Server.start",
+      "src/main/java/a/b/Server.java#Server.start", "src/main/java/a/b/Server.java#Server.start",
     ]);
     expect(calls(index, "src/main/java/a/App.java#App.run", "create")).toEqual(["src/main/java/a/b/Server.java#Server.create", "src/main/java/a/b/Server.java#Server.create"]);
     expect(calls(index, "src/main/java/a/App.java#App.run", "run")).toEqual(["src/main/java/a/App.java#App.run"]);
@@ -106,11 +107,11 @@ describe("Java and C# receivers", () => {
   it("binds C# parameters, locals, fields, properties, this and static class access through unique names", async () => {
     const index = await build({
       "Lib/Server.cs": "namespace Lib {\n  public class Server {\n    public void Start() {}\n    public static Server Create() { return new Server(); }\n  }\n}\n",
-      "App/Runner.cs": "using Lib;\n\nnamespace App {\n  public class Runner {\n    private Server field;\n    public Server Prop { get; set; }\n    private static Server Make() { return new Server(); }\n    public void Run(Server s, object o) {\n      s.Start();\n      Server t = new Server();\n      t.Start();\n      var u = Make();\n      u.Start();\n      this.field.Start();\n      field.Start();\n      Prop.Start();\n      Server.Create().Start();\n      o.Start();\n      s = null;\n      s.Start();\n    }\n  }\n}\n",
+      "App/Runner.cs": "using Lib;\n\nnamespace App {\n  public class Runner {\n    private Server field;\n    public Server Prop { get; set; }\n    private static Server Make() { return new Server(); }\n    public void Run(Server s, object o) {\n      s.Start();\n      Server t = new Server();\n      t.Start();\n      var u = Make();\n      u.Start();\n      this.field.Start();\n      field.Start();\n      Prop.Start();\n      Server.Create().Start();\n      o.Start();\n      s = null;\n      s.Start();\n      new Server().Start();\n    }\n  }\n}\n",
     });
     expect(index.symbols.get("Lib/Server.cs#Server.Create")?.memberKind).toBe("static");
     expect(calls(index, "App/Runner.cs#Runner.Run", "Start")).toEqual([
-      "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", undefined, "Lib/Server.cs#Server.Start",
+      "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start", undefined, "Lib/Server.cs#Server.Start", "Lib/Server.cs#Server.Start",
     ]);
     expect(calls(index, "App/Runner.cs#Runner.Run", "Create")).toEqual(["Lib/Server.cs#Server.Create"]);
   });
@@ -224,6 +225,77 @@ describe("Rust workspace crates and inline modules", () => {
     expect(calls(index, "crates/searcher/src/lib.rs#check", "byte")).toEqual(["crates/searcher/src/lib.rs#SinkMatch.byte"]);
     expect(calls(index, "crates/searcher/src/lib.rs#check", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
   });
+
+  it("follows a facade crate's pub extern crate alias to the aliased workspace crate", async () => {
+    const index = await build({
+      "Cargo.toml": "[workspace]\nmembers = [\"crates/printer\", \"crates/grep\", \"crates/core\"]\n",
+      "crates/printer/Cargo.toml": "[package]\nname = \"grep-printer\"\nversion = \"0.1.0\"\n",
+      "crates/printer/src/lib.rs": "mod color;\npub use crate::color::ColorSpecs;\n",
+      "crates/printer/src/color.rs": "pub struct ColorSpecs;\nimpl ColorSpecs { pub fn new() -> ColorSpecs { ColorSpecs } pub fn paint(&self) {} }\n",
+      "crates/grep/Cargo.toml": "[package]\nname = \"grep\"\nversion = \"0.1.0\"\n",
+      "crates/grep/src/lib.rs": "pub extern crate grep_printer as printer;\n",
+      "crates/core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\n",
+      "crates/core/src/decoy.rs": "pub struct ColorSpecs;\nimpl ColorSpecs { pub fn new() -> ColorSpecs { ColorSpecs } pub fn paint(&self) {} }\n",
+      "crates/core/src/main.rs": [
+        "mod decoy;",
+        "use grep::printer::ColorSpecs;",
+        "struct Args { colors: grep::printer::ColorSpecs }",
+        "fn make() -> ColorSpecs { ColorSpecs::new() }",
+        "fn draw(c: &ColorSpecs, a: &Args) { c.paint(); a.colors.paint(); }",
+        "mod other;",
+        "",
+      ].join("\n"),
+      "crates/core/src/other.rs": "#[cfg(test)]\nmod tests {\n    use grep_printer::ColorSpecs;\n    fn t() { let m = ColorSpecs::new(); m.paint(); }\n}\n",
+      "crates/core/src/own.rs": "pub struct Own;\nimpl Own { pub fn new() -> Own { Own } pub fn go(&self) {} }\nmod inner { pub struct Deep; impl Deep { pub fn dig(&self) {} } }\n#[cfg(test)]\nmod tests {\n    use super::{Own, inner::Deep};\n    use super::super::decoy::ColorSpecs;\n    fn t(d: &Deep, c: &ColorSpecs) { let o = Own::new(); o.go(); d.dig(); c.paint(); }\n}\n",
+    });
+    const inOwn = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/src/own.rs" && edge.line === 8).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
+    expect(inOwn).toEqual(["dig=crates/core/src/own.rs#Deep.dig", "go=crates/core/src/own.rs#Own.go", "new=crates/core/src/own.rs#Own.new", "paint=crates/core/src/decoy.rs#ColorSpecs.paint"]);
+    expect(calls(index, "crates/core/src/main.rs#make", "new")).toEqual(["crates/printer/src/color.rs#ColorSpecs.new"]);
+    expect(calls(index, "crates/core/src/main.rs#draw", "paint")).toEqual(["crates/printer/src/color.rs#ColorSpecs.paint", "crates/printer/src/color.rs#ColorSpecs.paint"]);
+    const inTests = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/src/other.rs" && edge.line === 4).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
+    expect(inTests).toEqual(["new=crates/printer/src/color.rs#ColorSpecs.new", "paint=crates/printer/src/color.rs#ColorSpecs.paint"]);
+  });
+});
+
+describe("Rust module paths in calls", () => {
+  it("resolves module-function paths, sibling modules, super and self paths, and a crate whose root is not under src", async () => {
+    const index = await build({
+      "Cargo.toml": "[workspace]\nmembers = [\"crates/core\", \"crates/util\"]\n",
+      "crates/util/Cargo.toml": "[package]\nname = \"util\"\nversion = \"0.1.0\"\n",
+      "crates/util/src/lib.rs": "mod wtr;\npub use crate::wtr::stdout;\n",
+      "crates/util/src/wtr.rs": "pub fn stdout() -> u8 { 0 }\n",
+      "crates/core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"core\"\npath = \"main.rs\"\n",
+      "crates/core/main.rs": "mod flags;\nmod logger;\nuse crate::flags::{self, render};\nfn main() { flags::parse::lookup(); crate::logger::Logger::init(); util::stdout(); flags::Kind::of(); render(); }\n",
+      "crates/core/logger.rs": "pub struct Logger;\nimpl Logger { pub fn init() {} }\n",
+      "crates/core/flags/mod.rs": "pub mod parse;\npub fn render() {}\npub struct Kind;\nimpl Kind { pub fn of() {} }\nfn here() { self::parse::lookup(); }\n",
+      "crates/core/flags/parse.rs": "pub fn lookup() { super::render(); }\nfn peek() {}\n#[cfg(test)]\nmod tests {\n    fn t() { super::peek(); super::super::render(); }\n}\n",
+    });
+    expect(calls(index, "crates/core/main.rs#main", "lookup")).toEqual(["crates/core/flags/parse.rs#lookup"]);
+    expect(calls(index, "crates/core/main.rs#main", "init")).toEqual(["crates/core/logger.rs#Logger.init"]);
+    expect(calls(index, "crates/core/main.rs#main", "stdout")).toEqual(["crates/util/src/wtr.rs#stdout"]);
+    expect(calls(index, "crates/core/main.rs#main", "of")).toEqual(["crates/core/flags/mod.rs#Kind.of"]);
+    expect(calls(index, "crates/core/main.rs#main", "render")).toEqual(["crates/core/flags/mod.rs#render"]);
+    expect(calls(index, "crates/core/flags/mod.rs#here", "lookup")).toEqual(["crates/core/flags/parse.rs#lookup"]);
+    expect(calls(index, "crates/core/flags/parse.rs#lookup", "render")).toEqual(["crates/core/flags/mod.rs#render"]);
+    const inTests = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/flags/parse.rs" && edge.line === 5).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
+    expect(inTests).toEqual(["peek=crates/core/flags/parse.rs#peek", "render=crates/core/flags/mod.rs#render"]);
+  });
+});
+
+describe("Rust enum variants", () => {
+  it("indexes a tuple variant as a static member of its enum, so a constructor call resolves and chains", async () => {
+    const index = await build({
+      "Cargo.toml": "[package]\nname = 'x'\n",
+      "src/lib.rs": "pub mod kind;\nuse crate::kind::Kind;\nfn mk() -> Kind { Kind::Io(3) }\nfn chained() -> u8 { Kind::Io(3).code() }\nfn unit() -> Kind { Kind::Plain }\n",
+      "src/kind.rs": "pub enum Kind { Io(u8), Plain, Named { n: u8 } }\nimpl Kind { pub fn code(&self) -> u8 { 0 } }\n",
+    });
+    expect(index.symbols.get("src/kind.rs#Kind.Io")?.kind).toBe("method");
+    expect(index.symbols.get("src/kind.rs#Kind.Io")?.memberKind).toBe("static");
+    expect(index.symbols.has("src/kind.rs#Kind.Plain")).toBe(false);
+    expect(index.symbols.has("src/kind.rs#Kind.Named")).toBe(false);
+    expect(calls(index, "src/lib.rs#mk", "Io")).toEqual(["src/kind.rs#Kind.Io"]);
+    expect(calls(index, "src/lib.rs#chained", "code")).toEqual(["src/kind.rs#Kind.code"]);
+  });
 });
 
 describe("bounded type parameters", () => {
@@ -264,5 +336,44 @@ describe("bounded type parameters", () => {
     expect(calls(index, "App/A.cs#A.F", "Run")).toEqual(["Lib/Runner.cs#IRunner.Run"]);
     expect(calls(index, "App/A.cs#A.G", "Run")).toEqual(["Lib/Runner.cs#IRunner.Run"]);
     expect(calls(index, "App/A.cs#A.H", "Run")).toEqual([undefined]);
+  });
+});
+
+describe("aliases of a method", () => {
+  it("gives a constant that aliases a method the return type of that method, so a call on its result chains", async () => {
+    const index = await build({
+      "types.ts": "export class ZodString {\n  static create(): ZodString { return new ZodString(); }\n  optional(): ZodString { return this; }\n}\nexport class Other {\n  optional(): Other { return this; }\n}\nconst stringType = ZodString.create;\nconst otherType = new Other().optional;\nexport { stringType as string, otherType };\n",
+      "use.ts": "import * as z from './types.js';\nexport function go() {\n  z.string().optional();\n  z.otherType().optional();\n}\n",
+    });
+    expect(index.symbols.get("types.ts#stringType")?.aliasOf).toEqual({ kind: "method", owner: { kind: "local", name: "ZodString" }, member: "create", mode: "class" });
+    expect(calls(index, "use.ts#go", "optional")).toEqual(["types.ts#ZodString.optional", "types.ts#Other.optional"]);
+  });
+
+  it("leaves a constant alone when the aliased name is a field or names no member", async () => {
+    const index = await build({
+      "types.ts": "export class Box {\n  static size = 1;\n  read(): Box { return this; }\n}\nconst sized = Box.size;\nconst missing = Box.absent;\nexport { sized, missing };\n",
+      "use.ts": "import { sized, missing } from './types.js';\nexport function go() {\n  sized().read();\n  missing().read();\n}\n",
+    });
+    expect(calls(index, "use.ts#go", "read")).toEqual([undefined, undefined]);
+  });
+});
+
+describe("a constant initialised by a call", () => {
+  it("takes the return type of that call, so a later call on the constant resolves", async () => {
+    const index = await build({
+      "types.ts": "export class ZodString {\n  parse(v: string): string { return v; }\n}\nexport function string(): ZodString { return new ZodString(); }\n",
+      "use.ts": "import { string } from './types.js';\nexport function go() {\n  const schema = string();\n  schema.parse('x');\n}\nexport function later() {\n  const s = string();\n  return s.parse('y');\n}\n",
+    });
+    expect(calls(index, "use.ts#go", "parse")).toEqual(["types.ts#ZodString.parse"]);
+    expect(calls(index, "use.ts#later", "parse")).toEqual(["types.ts#ZodString.parse"]);
+  });
+
+  it("keeps no type when the initialiser has no known return or the name is reassigned", async () => {
+    const index = await build({
+      "types.ts": "export class ZodString {\n  parse(v: string): string { return v; }\n}\nexport function string(): ZodString { return new ZodString(); }\nexport function opaque() { return unknownThing(); }\n",
+      "use.ts": "import { string, opaque } from './types.js';\nexport function noReturn() {\n  const a = opaque();\n  a.parse('x');\n}\nexport function reassigned(flag: boolean) {\n  let b = string();\n  b = somethingElse();\n  b.parse('x');\n}\n",
+    });
+    expect(calls(index, "use.ts#noReturn", "parse")).toEqual([undefined]);
+    expect(calls(index, "use.ts#reassigned", "parse")).toEqual([undefined]);
   });
 });
