@@ -101,6 +101,10 @@ export interface WorkspaceContext {
   readonly cargoRoots: readonly string[];
   /** Workspace crate name (hyphens as underscores, as a Rust path spells it) to the crate directory. */
   readonly cargoPackages: ReadonlyMap<string, string>;
+  /** Crate root file to the aliases its `pub extern crate x as y;` and `pub use x as y;` lines give other crates. */
+  readonly crateAliases: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Crate directory to its source directory when a `[lib]` or `[[bin]]` `path` moves the root out of `src`. */
+  readonly cargoSrc: ReadonlyMap<string, string>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -109,7 +113,14 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   const goModules = new Map<string, string>();
   const cargoRoots: string[] = [];
   const cargoPackages = new Map<string, string>();
+  const crateAliases = new Map<string, Map<string, string>>();
+  const cargoSrc = new Map<string, string>();
   for (const [file, card] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+    if (card.language === "rust" && /^(lib|main)\.rs$/.test(path.posix.basename(file))) {
+      const aliases = new Map<string, string>();
+      for (const match of card.text.matchAll(/^\s*pub(?:\([^)]*\))?\s+(?:extern\s+crate|use)\s+(\w+)\s+as\s+(\w+)\s*;/gm)) if (match[1] !== undefined && match[2] !== undefined) aliases.set(match[2], match[1]);
+      if (aliases.size > 0) crateAliases.set(file, aliases);
+    }
     const base = path.posix.basename(file);
     const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
     if (base === "package.json") {
@@ -128,13 +139,16 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       const packageSection = /^\s*\[package\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
       const name = packageSection === undefined ? undefined : /^\s*name\s*=\s*"([^"]+)"/m.exec(packageSection)?.[1];
       if (name !== undefined) cargoPackages.set(name.replace(/-/g, "_"), dir);
+      const target = /^\s*\[(?:lib|\[bin\])\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
+      const rootPath = target === undefined ? undefined : /^\s*path\s*=\s*"([^"]+)"/m.exec(target)?.[1];
+      if (rootPath !== undefined) { const srcDir = path.posix.dirname(path.posix.join(dir, rootPath)); cargoSrc.set(dir, srcDir === "." ? "" : srcDir); }
     } else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
       pythonRoots.set(`${dir}\0${dir}`, { dir, manifest: dir });
       const src = dir === "" ? "src" : `${dir}/src`;
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -246,26 +260,44 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
   const head = segments[0];
   if (head === undefined) return undefined;
   const fromDir = path.posix.dirname(fromFile) === "." ? "" : path.posix.dirname(fromFile);
+  const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
+  const ownCrate = (): string | undefined => context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
+  const base = path.posix.basename(fromFile);
+  const ownDir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
   let start: string;
   let rest: string[];
   if (head === "crate") {
-    const crate = context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
+    const crate = ownCrate();
     if (crate === undefined) return undefined;
-    start = crate === "" ? "src" : `${crate}/src`;
+    start = srcOf(crate);
     rest = segments.slice(1);
+  } else if (context.cargoPackages.get(head) === undefined && head !== "self" && head !== "super" && (knownFiles.has(path.posix.join(ownDir, `${head}.rs`)) || knownFiles.has(path.posix.join(ownDir, head, "mod.rs")))) {
+    // `flags::parse::lookup()` with `mod flags;` in this file: a sibling module named without `self::`.
+    start = ownDir;
+    rest = segments;
   } else if (head === "self" || head === "super") {
-    const base = path.posix.basename(fromFile);
-    let dir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
+    let dir = ownDir;
     let index = 0;
     while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
     start = dir;
     rest = segments.slice(index);
+    // `self` alone is this file; `self::inner::X` with no file for `inner` names an inline module of this file.
+    if (dir === ownDir && (rest.length === 0 || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return fromFile;
   } else {
     // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
     const crate = context.cargoPackages.get(head);
     if (crate === undefined) return undefined;
-    start = crate === "" ? "src" : `${crate}/src`;
+    start = srcOf(crate);
     rest = segments.slice(1);
+    // A facade crate names another crate under an alias (`pub extern crate grep_printer as printer;`), so
+    // `grep::printer::X` continues from the aliased crate's root. Each hop consumes a segment, so it ends.
+    for (let hop = 0; hop < segments.length; hop += 1) {
+      const next = rest[0] === undefined ? undefined : context.crateAliases.get(`${start}/lib.rs`)?.get(rest[0]);
+      const aliased = next === undefined ? undefined : context.cargoPackages.get(next);
+      if (aliased === undefined) break;
+      start = srcOf(aliased);
+      rest = rest.slice(1);
+    }
   }
   for (let take = rest.length; take >= 0; take -= 1) {
     const modulePath = path.posix.join(start, ...rest.slice(0, take));
@@ -615,9 +647,33 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           };
           const selectOf = (ref: { index?: number | undefined; unwrapped?: true | undefined }, elements = false): number | "returns" | "unwrapped" | "elements" | "values" =>
             elements ? "elements" : ref.unwrapped === true ? "unwrapped" : ref.index === undefined ? "returns" : ref.index;
+          // `const create = Thing.make` is a callable under another name. The alias is recorded where the
+          // constant is declared, so its owner resolves against that file rather than the calling one.
+          const aliasCallablesOf = (symbol: OsnovaSymbol, depth: number): { callables: OsnovaSymbol[]; mode: ReceiverMode | undefined } | undefined => {
+            const alias = symbol.aliasOf;
+            if (alias === undefined || depth > 4) return undefined;
+            if (alias.kind === "local" || alias.kind === "import") {
+              const found = symbolsFor(symbol.file, alias) ?? [];
+              return found.length === 0 ? undefined : { callables: found, mode: undefined };
+            }
+            if (alias.owner.kind !== "local" && alias.owner.kind !== "import") return undefined;
+            const holder = unique(symbolsFor(symbol.file, alias.owner)?.filter(isHolder) ?? null);
+            if (holder === undefined) return undefined;
+            const found = inherited(holder, 0, new Set([holder.qualifiedName]), alias.member);
+            return found === null || found.length === 0 ? undefined : { callables: found, mode: alias.mode };
+          };
           // The callables a return owner names: a bound function, or a member of a holder or namespace.
           const callablesOf = (of: Callee, depth: number): { callables: OsnovaSymbol[] | null; holder: OsnovaSymbol | undefined; mode: ReceiverMode | undefined } | undefined => {
-            if (of.kind === "local" || of.kind === "import") return { callables: symbolsFor(fromFile, of)?.filter((symbol) => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method") ?? null, holder: undefined, mode: undefined };
+            if (of.kind === "local" || of.kind === "import") {
+              const callable = (symbol: OsnovaSymbol): boolean => isHolder(symbol) || symbol.kind === "function" || symbol.kind === "method";
+              const found = symbolsFor(fromFile, of);
+              const direct = found?.filter(callable) ?? null;
+              if (direct !== null && direct.length === 0 && found?.length === 1) {
+                const aliased = aliasCallablesOf(found[0]!, depth);
+                if (aliased !== undefined) return { callables: aliased.callables.filter(callable), holder: undefined, mode: aliased.mode };
+              }
+              return { callables: direct, holder: undefined, mode: undefined };
+            }
             const holder = holderOf(of.owner, depth + 1);
             if (holder === undefined) {
               const spaces = namespaceFilesOf(of.owner);
@@ -764,8 +820,20 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const lookupName = raw.toName.includes(".")
         ? (raw.toName.split(".").pop() ?? raw.toName)
         : raw.toName;
+      // A plain Rust name never names an impl method or a variant: `Ok(x)` is the prelude's, not `ParseResult::Ok`,
+      // however unique that is. A function nested in a function or method (`fn imp` inside `fn is_readable_stdin`) still counts.
+      const memberOfHolder = (symbol: OsnovaSymbol): boolean => {
+        const own = files.get(symbol.file)?.symbols ?? [];
+        const parts = symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).split(".");
+        for (let take = parts.length - 1; take > 0; take -= 1) {
+          const parent = own.find((other) => other.qualifiedName === `${symbol.file}#${parts.slice(0, take).join(".")}`);
+          if (parent !== undefined) return isHolder(parent);
+        }
+        return false;
+      };
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
-        languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language));
+        languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
+        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)));
       const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
       const preferred = sameFile.length > 0 ? sameFile : imported.length > 0 ? imported : candidates;

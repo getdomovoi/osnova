@@ -86,7 +86,19 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     for (const item of list) if (item.at <= at && (best === undefined || item.at >= best.at)) best = item;
     return best;
   };
-  const importOf = (name: string): Import | undefined => module.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
+  // The import a name binds at a site: the innermost enclosing scope that imported it wins, so a `use`
+  // inside an inline module (Rust `mod tests { use grep_regex::RegexMatcher; }`) serves that module.
+  const scopeAt = (site: Node | undefined): Scope => {
+    for (let current: Node | null = site ?? null; current !== null; current = current.parent) { const found = scopes.get(current.id); if (found !== undefined) return found; }
+    return module;
+  };
+  const importOf = (name: string, site?: Node): Import | undefined => {
+    for (let current: Scope | null = scopeAt(site); current !== null; current = current.parent) {
+      const found = current.names.get(name)?.find((item) => item.importOf !== undefined)?.importOf;
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
   // A type name becomes a local binding, or an import binding when the name (Rust) or its package
   // qualifier (Go) was imported.
   // A type parameter of an enclosing declaration names no type the index can hold, unless it is bounded
@@ -135,21 +147,33 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     const inner = type === null ? null : spec.innerType?.(type) ?? null;
     return inner === null ? undefined : knownType(spec.typeName(inner), site);
   };
-  const ownerForType = (type: string, site?: Node): ReceiverOwner | undefined => {
+  // `site` also asks whether the name is a type parameter of an enclosing declaration; `from` only picks the
+  // scope whose imports bind the name (a use inside an inline module), and defaults to the site.
+  const ownerForType = (type: string, site?: Node, from: Node | undefined = site): ReceiverOwner | undefined => {
     if (site !== undefined) {
       const parameter = typeParameterOf(type, site);
-      if (parameter.declared) return parameter.bound === undefined ? undefined : ownerForType(parameter.bound);
+      if (parameter.declared) return parameter.bound === undefined ? undefined : ownerForType(parameter.bound, undefined, from);
+    }
+    const sep = type.lastIndexOf("::");
+    if (sep >= 0) {
+      // `grep::printer::ColorSpecs`: the path is the import source, spelled through a `use` alias of its head when one exists.
+      const head = type.slice(0, type.indexOf("::"));
+      const item = importOf(head, from);
+      const source = item === undefined || item.name === "*" ? type.slice(0, sep) : `${item.source}::${item.name}${type.slice(head.length, sep)}`;
+      return { kind: "import", source, importedName: type.slice(sep + 2) };
     }
     const dot = type.indexOf(".");
     if (dot >= 0) {
-      const pkg = importOf(type.slice(0, dot));
+      const pkg = importOf(type.slice(0, dot), from);
       return pkg === undefined || pkg.name !== "*" ? undefined : { kind: "import", source: pkg.source, importedName: type.slice(dot + 1) };
     }
-    const item = importOf(type);
+    const item = importOf(type, from);
     return item !== undefined && item.name !== "*" ? { kind: "import", source: item.source, importedName: item.name } : { kind: "local", name: type };
   };
-  const pathOwner = (head: string): ReceiverOwner | undefined => {
-    const item = importOf(head);
+  const pathOwner = (head: string, site?: Node): ReceiverOwner | undefined => {
+    // `crate::logger::Logger::init()` and `std::env::current_dir()`: a multi-segment path binds like a path type.
+    if (head.includes("::")) return ownerForType(head, undefined, site);
+    const item = importOf(head, site);
     if (item === undefined) return { kind: "local", name: head };
     return item.name === "*" ? undefined : { kind: "import", source: item.source, importedName: item.name };
   };
@@ -159,6 +183,30 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const scopeBinds = (scope: Scope, name: string, at: number): boolean => {
     for (let current: Scope | null = scope; current !== null && current !== module; current = current.parent) if (declared(current, name, at) !== undefined || current.receiver?.name === name) return true;
     return false;
+  };
+  // Inside an inline module `super` names the enclosing module, which is this file for one level: such a
+  // path binds nothing here (null), so lookup continues to the file's own definition or import. Deeper
+  // supers drop one segment per enclosing module and the rest is spelled from self.
+  const relativeSource = (source: string, node: Node): string | null => {
+    let modDepth = 0;
+    for (let current: Node | null = node.parent; current !== null; current = current.parent) if (current.type === "mod_item") modDepth += 1;
+    if (modDepth === 0 || !/^(self|super)(::|$)/.test(source)) return source;
+    const segments = source.split("::");
+    let drop = 0;
+    while (drop < modDepth && drop < segments.length && segments[drop] === "super") drop += 1;
+    if (segments[0] === "self" || (drop > 0 && drop === segments.length) || (drop > 0 && drop < modDepth)) return null;
+    return ["self", ...segments.slice(drop)].join("::");
+  };
+  // `flags::parse::lookup()`, `super::render()`, `grep::cli::stdout()`: a path whose last segment is lowercase
+  // names a module, so the call is a function of that module (an import), spelled through the head's `use` when
+  // one exists. Null means the module is this file: the name resolves locally.
+  const modulePathSource = (path: string, site: Node): { source: string } | null | undefined => {
+    if (!/(^|::)[a-z_][a-z0-9_]*$/.test(path)) return undefined;
+    const head = path.slice(0, path.indexOf("::") >= 0 ? path.indexOf("::") : path.length);
+    const item = importOf(head, site);
+    if (item !== undefined && item.name !== "*") return { source: `${item.source}::${item.name}${path.slice(head.length)}` };
+    const source = relativeSource(path, site);
+    return source === null ? null : { source };
   };
   const calleeOwner = (value: Node, scope: Scope, index?: number): ReceiverOwner | undefined => {
     // `f()?` and `f().unwrap()` name the value inside the wrapper: the callee's unwrapped return type.
@@ -178,13 +226,14 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     }
     if (callee.name === "get" && callee.object !== null && callee.path === undefined) {
       const known = pick(knownContentsOf(callee.object, scope), "either");
-      if (known !== undefined) return ownerForType(known);
+      if (known !== undefined) return ownerForType(known, undefined, value);
     }
     let of: Callee | undefined;
     const at = value.startIndex;
-    const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text) : callee.path !== undefined ? importOf(callee.path) : undefined;
+    const pkg = callee.object?.type === "identifier" && !scopeBinds(scope, callee.object.text, at) ? importOf(callee.object.text, value) : callee.path !== undefined ? importOf(callee.path, value) : undefined;
+    const modulePath = callee.path === undefined ? undefined : modulePathSource(callee.path, value);
     if (pkg?.name === "*") of = { kind: "import", source: pkg.source, importedName: callee.name };
-    else if (pkg !== undefined && callee.path !== undefined && /^[a-z_]/.test(callee.path)) of = { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
+    else if (modulePath !== undefined) of = modulePath === null ? { kind: "local", name: callee.name } : { kind: "import", source: modulePath.source, importedName: callee.name };
     else if (callee.object === null && callee.path === undefined) {
       // An unqualified call inside a class body is a call on this (or the class) in Java and C#.
       const cls = classOf(scope);
@@ -192,8 +241,8 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
         ? { kind: "method", owner: { kind: "local", name: cls.className }, member: callee.name }
         : { kind: "local", name: callee.name };
     }
-    else if (callee.object?.type === "identifier" && classLike(callee.object.text, scope, at)) { const owner = ownerForType(callee.object.text); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
-    else if (callee.path !== undefined) { const owner = pathOwner(callee.path); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
+    else if (callee.object?.type === "identifier" && classLike(callee.object.text, scope, at)) { const owner = ownerForType(callee.object.text, undefined, value); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
+    else if (callee.path !== undefined) { const owner = pathOwner(callee.path, value); if (owner === undefined) return undefined; of = { kind: "method", owner, member: callee.name, mode: "class" }; }
     else {
       if (callee.object === null) return undefined;
       const receiver = receiverOf(callee.object, scope);
@@ -203,11 +252,11 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     return bounded(index === undefined ? { kind: "return", of } : { kind: "return", of, index });
   };
   const classOf = (scope: Scope): Scope | undefined => { for (let current: Scope | null = scope; current !== null; current = current.parent) if (current.className !== undefined) return current; return undefined; };
-  const fieldOwner = (scope: Scope, name: string): ReceiverOwner | undefined => {
+  const fieldOwner = (scope: Scope, name: string, from?: Node): ReceiverOwner | undefined => {
     const cls = classOf(scope);
     if (cls === undefined || cls.fields === undefined || !cls.fields.has(name)) return undefined;
     const type = cls.fields.get(name)?.type;
-    return type === undefined ? undefined : ownerForType(type);
+    return type === undefined ? undefined : ownerForType(type, undefined, from);
   };
   const fieldContents = (scope: Scope, name: string): Contents | undefined => classOf(scope)?.fields?.get(name)?.contents;
   const pick = (contents: Contents | undefined, mode: "value" | "either" | undefined): string | undefined =>
@@ -244,7 +293,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   const elementOf = (object: Node, scope: Scope, mode?: "value" | "either"): ReceiverOwner | undefined => {
     object = strip(object);
     const name = pick(knownContentsOf(object, scope), mode);
-    if (name !== undefined) return ownerForType(name);
+    if (name !== undefined) return ownerForType(name, undefined, object);
     const base = receiverOf(object, scope);
     return base === undefined ? undefined : bounded({ kind: "element", of: base, ...(mode === undefined ? {} : { mode }) });
   };
@@ -252,6 +301,9 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     const at = object.startIndex;
     if (object.type === "call_expression" || object.type === "method_invocation" || object.type === "invocation_expression" || object.type === "try_expression") return calleeOwner(object, scope);
     if (object.type === "parenthesized_expression") { const inner = childrenOf(object)[0]; return inner === undefined ? undefined : receiverOf(inner, scope); }
+    // `new X().m()`: the constructed type is the receiver, with no local in between.
+    const constructed = spec.constructed(object);
+    if (constructed !== undefined) return ownerForType(constructed, undefined, object);
     const indexed = spec.subscript?.(object);
     if (indexed !== undefined && indexed !== null) return elementOf(indexed, scope, "either");
     if (spec.thisNodes?.includes(object.type)) {
@@ -267,10 +319,12 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const field = object.childForFieldName("field") ?? object.childForFieldName("name");
       if (inner === null || field === null || (field.type !== "identifier" && field.type !== "field_identifier")) return undefined;
       if (spec.thisNodes?.includes(inner.type)) { const own = fieldOwner(scope, field.text); if (own !== undefined) return own; }
+      // Only a field whose declared type is a struct parameter takes this path (the impl's argument and its
+      // bounds); a plain field stays a field owner so resolution consults the holder's element and value tables.
       if (inner.type === "self" && spec.implField !== undefined) {
         const found = spec.implField(object, field.text);
-        const name = found === undefined ? undefined : found.parameter !== undefined ? knownType(found.parameter.name, found.parameter.at) : knownType(spec.typeName(found.type), object);
-        if (name !== undefined) return ownerForType(name);
+        const name = found?.parameter === undefined ? undefined : knownType(found.parameter.name, found.parameter.at);
+        if (name !== undefined) return ownerForType(name, undefined, object);
       }
       // A field of a bound receiver: the holder's declared field type is looked up at resolution time.
       const base = receiverOf(inner, scope);
@@ -280,15 +334,15 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     // Walk outward: a closure inside a method still sees the method's receiver (`self`, `s`), and a
     // closer binding of the same name shadows it.
     for (let current: Scope | null = scope; current !== null; current = current.parent) {
-      if (current.receiver !== undefined && (object.type === "self" || current.receiver.name === object.text)) return ownerForType(current.receiver.type);
+      if (current.receiver !== undefined && (object.type === "self" || current.receiver.name === object.text)) return ownerForType(current.receiver.type, undefined, object);
       if (object.type === "self") continue;
       const found = declared(current, object.text, at);
       if (found === undefined) continue;
       if (found.owner !== undefined) return found.owner;
       if (found.importOf !== undefined) return undefined;
-      return found.type === undefined ? undefined : ownerForType(found.type);
+      return found.type === undefined ? undefined : ownerForType(found.type, undefined, object);
     }
-    return object.type === "self" ? undefined : fieldOwner(scope, object.text);
+    return object.type === "self" ? undefined : fieldOwner(scope, object.text, object);
   };
 
   const visit = (node: Node, outer: Scope): void => {
@@ -326,7 +380,14 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     scopes.set(node.id, scope);
     // An import inside an inline module (Rust `mod tests { use super::X; }`) binds there, so it never
     // shadows the file's own import or definition of that name.
-    for (const item of spec.imports(node)) bind(scope, item.local, scope === module ? -1 : node.startIndex, undefined, undefined, { source: item.source, name: item.name });
+    // Inside an inline module `super` names the enclosing module, which is this file for one level: such a
+    // `use super::X` binds nothing here, so lookup continues to the file's own definition or import of X.
+    // Deeper supers drop one segment per enclosing module.
+    for (const item of spec.imports(node)) {
+      const source = relativeSource(item.source, node);
+      if (source === null) continue;
+      bind(scope, item.local, scope === module ? -1 : node.startIndex, undefined, undefined, { source, name: item.name });
+    }
     for (const local of spec.local(node)) {
       const declaredType = knownType(spec.typeName(local.type), node);
       const constructed = declaredType ?? spec.constructed(local.value);
@@ -373,18 +434,20 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const callee = spec.callee(fn);
       if (callee === undefined) return undefined;
       if (callee.path !== undefined) {
-        const pkg = importOf(callee.path);
+        const pkg = importOf(callee.path, site);
         if (pkg?.name === "*") return { kind: "import", source: pkg.source, importedName: callee.name };
-        if (pkg !== undefined && /^[a-z_]/.test(callee.path)) return { kind: "import", source: `${pkg.source}::${pkg.name}`, importedName: callee.name };
-        const owner = pathOwner(callee.path);
+        const modulePath = modulePathSource(callee.path, site);
+        if (modulePath === null) return { kind: "local", name: callee.name };
+        if (modulePath !== undefined) return { kind: "import", source: modulePath.source, importedName: callee.name };
+        const owner = pathOwner(callee.path, site);
         return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" };
       }
       if (callee.object === null) return undefined;
       const scope = scopes.get(site.id) ?? module;
       if (callee.object.type === "identifier") {
-        const pkg = importOf(callee.object.text);
+        const pkg = importOf(callee.object.text, site);
         if (pkg?.name === "*" && receiverOf(callee.object, scope) === undefined && !scopeBinds(scope, callee.object.text, callee.object.startIndex)) return { kind: "import", source: pkg.source, importedName: callee.name };
-        if (classLike(callee.object.text, scope, callee.object.startIndex)) { const owner = ownerForType(callee.object.text); return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" }; }
+        if (classLike(callee.object.text, scope, callee.object.startIndex)) { const owner = ownerForType(callee.object.text, undefined, site); return owner === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "member", owner, member: callee.name, mode: "class", basis: "class-reference" }; }
       }
       const owner = receiverOf(callee.object, scope);
       if (owner === undefined) return { kind: "blocked", reason: "unknown-receiver" };
@@ -432,7 +495,7 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     heritage: (classNode) => {
       const out: SymbolBinding[] = [];
       for (const base of spec.bases?.(classNode) ?? []) {
-        const owner = ownerForType(base);
+        const owner = ownerForType(base, undefined, classNode);
         if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out.push(owner);
       }
       return out;
@@ -448,7 +511,8 @@ const simpleType = (node: Node | null, wrappers: readonly string[]): string | un
   let current = node;
   while (current !== null && wrappers.includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current).find((child) => child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null;
   if (current?.type === "generic_type") current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
-  return current?.type === "type_identifier" ? current.text : undefined;
+  // A Rust path type (`grep::printer::ColorSpecs`) keeps its path; ownerForType binds it as an import.
+  return current?.type === "type_identifier" || current?.type === "scoped_type_identifier" ? current.text : undefined;
 };
 
 export const goSpec: TypedSpec = {
@@ -694,7 +758,8 @@ export const rustSpec: TypedSpec = {
       const path = fn.childForFieldName("path");
       const name = fn.childForFieldName("name");
       if (name === null || path === null) return undefined;
-      const head = path.type === "identifier" ? path.text : undefined;
+      // `Type::f()` names its head; `crate::a::Type::f()` and `std::env::f()` keep the whole path so the owner binds through it.
+      const head = path.type === "identifier" || (path.type === "scoped_identifier" && /^\w+(::\w+)*$/.test(path.text)) || path.type === "crate" || path.type === "self" || path.type === "super" ? path.text : undefined;
       return head === undefined ? undefined : { object: null, name: name.text, path: head };
     }
     if (fn.type !== "field_expression") return undefined;
@@ -709,6 +774,8 @@ export const rustSpec: TypedSpec = {
     const out: Array<{ local: string; source: string; name: string }> = [];
     const item = (source: string, entry: Node): void => {
       if (entry.type === "identifier") out.push({ local: entry.text, source, name: entry.text });
+      // `use crate::hyperlink::{self, X}` binds the module itself under its own name.
+      else if (entry.type === "self" && source.includes("::")) { const at = source.lastIndexOf("::"); out.push({ local: source.slice(at + 2), source: source.slice(0, at), name: source.slice(at + 2) }); }
       else if (entry.type === "use_as_clause") { const path = entry.childForFieldName("path"); const alias = entry.childForFieldName("alias"); if (path !== null && alias !== null) { const segments = path.text.split("::"); out.push({ local: alias.text, source: [source, ...segments.slice(0, -1)].filter((part) => part.length > 0).join("::"), name: segments[segments.length - 1] ?? path.text }); } }
       else if (entry.type === "scoped_identifier") { const name = entry.childForFieldName("name")?.text; const path = entry.childForFieldName("path")?.text; if (name !== undefined) out.push({ local: name, source: [source, path].filter((part) => part !== undefined && part.length > 0).join("::"), name }); }
       else if (entry.type === "scoped_use_list") { const path = entry.childForFieldName("path")?.text; for (const child of childrenOf(entry.childForFieldName("list") ?? entry)) item([source, path].filter((part) => part !== undefined && part.length > 0).join("::"), child); }
