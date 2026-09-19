@@ -783,8 +783,20 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const lookupName = raw.toName.includes(".")
         ? (raw.toName.split(".").pop() ?? raw.toName)
         : raw.toName;
+      // A plain Rust name never names an impl method or a variant: `Ok(x)` is the prelude's, not `ParseResult::Ok`,
+      // however unique that is. A function nested in a function or method (`fn imp` inside `fn is_readable_stdin`) still counts.
+      const memberOfHolder = (symbol: OsnovaSymbol): boolean => {
+        const own = files.get(symbol.file)?.symbols ?? [];
+        const parts = symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).split(".");
+        for (let take = parts.length - 1; take > 0; take -= 1) {
+          const parent = own.find((other) => other.qualifiedName === `${symbol.file}#${parts.slice(0, take).join(".")}`);
+          if (parent !== undefined) return isHolder(parent);
+        }
+        return false;
+      };
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
-        languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language));
+        languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
+        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)));
       const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
       const preferred = sameFile.length > 0 ? sameFile : imported.length > 0 ? imported : candidates;
