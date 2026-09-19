@@ -80,6 +80,36 @@ describe("external chains", () => {
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
+  it("calls rooted at an unbound global object are external, unless the file binds that name", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-global-recv-"));
+    try {
+      const root = path.join(temporary, "ws"); await fs.mkdir(root);
+      await fs.writeFile(path.join(root, "a.ts"), [
+        "export function use(x: unknown) {",
+        "  console.log(x);",
+        "  Object.keys(x as object);",
+        "  JSON.stringify(x);",
+        "  Math.floor(1.5);",
+        "  Object.prototype.hasOwnProperty.call(x, 'a');",
+        "  Promise.resolve(x).then(() => {});",
+        "}",
+        "",
+      ].join("\n"));
+      // A file that binds the name itself keeps its own meaning: neither of these is the global.
+      await fs.writeFile(path.join(root, "b.ts"), "import { Math } from './mine.js';\nclass JSON { static stringify() {} }\nexport function use(x: unknown) {\n  Math.floor(1.5);\n  JSON.stringify(x);\n}\n");
+      await fs.writeFile(path.join(root, "mine.ts"), "export class Math { static floor(n: number) { return n; } }\n");
+      await fs.writeFile(path.join(root, "c.py"), "import math\n\ndef use():\n    math.floor(1.5)\n");
+      const index = await buildIndex(root, { cacheDir: path.join(temporary, "cache") });
+      const reason = (symbol: string) => [...index.outgoing(symbol)].filter((edge) => edge.kind === "calls").sort((a, b) => a.line - b.line)
+        .map((edge) => { const r = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined; return `${edge.toName}:${r?.status === "resolved" ? edge.toSymbol : r?.status === "unresolved" ? r.reason : r?.status}`; });
+      expect(reason("a.ts#use")).toEqual([
+        "log:unbound-global", "keys:unbound-global", "stringify:unbound-global", "floor:unbound-global", "call:unbound-global", "resolve:unbound-global", "then:receiver-unresolved",
+      ]);
+      expect(reason("b.ts#use")).toEqual(["floor:mine.ts#Math.floor", "stringify:b.ts#JSON.stringify"]);
+      expect(reason("c.py#use")).toEqual(["floor:import-target-unresolved"]);
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+
   it("Python and TypeScript literal receivers, and typed-language names no file defines, classify as external", async () => {
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-coverage-"));
     try {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// usage: node scripts/resolution-diff.mjs --base <ref> --head <ref> --corpus <path> [--limit N] [--dry] [--out file.json]
+// usage: node scripts/resolution-diff.mjs --base <ref> --head <ref> --corpus <path> [--limit N] [--only lost|gained|moved] [--dry] [--out file.json]
 // Builds osnova at two git refs (worktrees under the temporary directory, node_modules linked from this checkout),
 // indexes one corpus with each, and lists every call edge whose resolution changed: the regression check the
 // per-corpus totals hide (a commit can gain 28 sites and lose 10 and still read as +18). Without a TypeSafe key,
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2); const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
-const base = opt("--base"), head = opt("--head"), corpus = path.resolve(opt("--corpus")); const limit = Number(opt("--limit", "40")); const dry = args.includes("--dry"); const out = opt("--out");
+const base = opt("--base"), head = opt("--head"), corpus = path.resolve(opt("--corpus")); const limit = Number(opt("--limit", "40")); const dry = args.includes("--dry"); const out = opt("--out"); const only = opt("--only");
 if (!base || !head || !corpus) throw new Error("need --base --head --corpus");
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-jev-"));
 // Cleanup on every exit, including a closed stdout pipe, so no worktree registration outlives the run.
@@ -58,10 +58,18 @@ try {
   const B = dumpEdges(bDir, "base"), H = dumpEdges(hDir, "head");
   const bmap = new Map(B.rows.map((r) => [r.key, r]));
   const changed = [];
-  for (const h of H.rows) { const b = bmap.get(h.key); if (!b) continue; if ((b.target?.symbol ?? null) !== (h.target?.symbol ?? null) || b.status !== h.status) changed.push({ key: h.key, context: H.context[h.key], before: b, after: h }); }
+  // A reason-only change moves no target, but it is exactly what a classification change does, so it counts.
+  for (const h of H.rows) { const b = bmap.get(h.key); if (!b) continue; if ((b.target?.symbol ?? null) !== (h.target?.symbol ?? null) || b.status !== h.status || b.reason !== h.reason) changed.push({ key: h.key, context: H.context[h.key], before: b, after: h }); }
   console.log(`edges base ${B.rows.length} head ${H.rows.length}; files base ${B.files.length} head ${H.files.length}; changed ${changed.length}; build+index ${((Date.now() - t0) / 1000).toFixed(0)}s`);
   const onlyB = B.files.filter((f) => !H.files.includes(f)), onlyH = H.files.filter((f) => !B.files.includes(f)); if (onlyB.length || onlyH.length) console.log("files only in base:", onlyB.slice(0, 5), "only in head:", onlyH.slice(0, 5));
-  const sample = changed.slice(0, limit);
+  const hkeys = new Set(H.rows.map((r) => r.key)); const edgesOnlyB = B.rows.filter((r) => !hkeys.has(r.key)), edgesOnlyH = H.rows.filter((r) => !bmap.has(r.key));
+  if (edgesOnlyB.length || edgesOnlyH.length) console.log(`edges only in base ${edgesOnlyB.length}, only in head ${edgesOnlyH.length}:`, edgesOnlyB.slice(0, 3).map((r) => r.key), edgesOnlyH.slice(0, 3).map((r) => r.key));
+  // lost: a target before and none after; gained: the reverse; moved: a different target on each side.
+  const kindOf = (c) => (c.before.target && !c.after.target ? "lost" : !c.before.target && c.after.target ? "gained" : c.before.target && c.after.target ? "moved" : "reclassified");
+  const counts = { lost: 0, gained: 0, moved: 0, reclassified: 0 }; for (const c of changed) counts[kindOf(c)] += 1;
+  console.log(`lost ${counts.lost} gained ${counts.gained} moved ${counts.moved} reclassified ${counts.reclassified}`);
+  if (counts.reclassified > 0) { const by = new Map(); for (const c of changed) if (kindOf(c) === "reclassified") { const k = `${c.before.status}/${c.before.reason} -> ${c.after.status}/${c.after.reason}`; by.set(k, (by.get(k) ?? 0) + 1); } for (const [k, n] of [...by].sort((a, b) => b[1] - a[1])) console.log(`  ${n} ${k}`); }
+  const sample = (only ? changed.filter((c) => kindOf(c) === only) : changed).slice(0, limit);
   if (dry || !process.env.TYPESAFE_API_KEY) { for (const c of sample) console.log(`${c.key}: ${c.before.target?.symbol ?? c.before.status + "/" + c.before.reason} -> ${c.after.target?.symbol ?? c.after.status + "/" + c.after.reason}`); if (!dry) console.log("TYPESAFE_API_KEY not set; stopping before Jev."); process.exit(0); }
   const judged = []; let usage = { input_tokens: 0, output_tokens: 0 }; const t1 = Date.now();
   for (let i = 0; i < sample.length; i += 8) { const result = await judge(sample.slice(i, i + 8)); judged.push(...result.judged); usage = { input_tokens: usage.input_tokens + result.usage.input_tokens, output_tokens: usage.output_tokens + result.usage.output_tokens }; }
