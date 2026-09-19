@@ -140,6 +140,14 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       const parameter = typeParameterOf(type, site);
       if (parameter.declared) return parameter.bound === undefined ? undefined : ownerForType(parameter.bound);
     }
+    const sep = type.lastIndexOf("::");
+    if (sep >= 0) {
+      // `grep::printer::ColorSpecs`: the path is the import source, spelled through a `use` alias of its head when one exists.
+      const head = type.slice(0, type.indexOf("::"));
+      const item = importOf(head);
+      const source = item === undefined || item.name === "*" ? type.slice(0, sep) : `${item.source}::${item.name}${type.slice(head.length, sep)}`;
+      return { kind: "import", source, importedName: type.slice(sep + 2) };
+    }
     const dot = type.indexOf(".");
     if (dot >= 0) {
       const pkg = importOf(type.slice(0, dot));
@@ -453,7 +461,8 @@ const simpleType = (node: Node | null, wrappers: readonly string[]): string | un
   let current = node;
   while (current !== null && wrappers.includes(current.type)) current = current.childForFieldName("type") ?? childrenOf(current).find((child) => child.type !== "mutable_specifier" && child.type !== "lifetime") ?? null;
   if (current?.type === "generic_type") current = current.childForFieldName("type") ?? childrenOf(current)[0] ?? null;
-  return current?.type === "type_identifier" ? current.text : undefined;
+  // A Rust path type (`grep::printer::ColorSpecs`) keeps its path; ownerForType binds it as an import.
+  return current?.type === "type_identifier" || current?.type === "scoped_type_identifier" ? current.text : undefined;
 };
 
 export const goSpec: TypedSpec = {

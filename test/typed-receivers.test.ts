@@ -225,6 +225,27 @@ describe("Rust workspace crates and inline modules", () => {
     expect(calls(index, "crates/searcher/src/lib.rs#check", "byte")).toEqual(["crates/searcher/src/lib.rs#SinkMatch.byte"]);
     expect(calls(index, "crates/searcher/src/lib.rs#check", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
   });
+
+  it("follows a facade crate's pub extern crate alias to the aliased workspace crate", async () => {
+    const index = await build({
+      "Cargo.toml": "[workspace]\nmembers = [\"crates/printer\", \"crates/grep\", \"crates/core\"]\n",
+      "crates/printer/Cargo.toml": "[package]\nname = \"grep-printer\"\nversion = \"0.1.0\"\n",
+      "crates/printer/src/lib.rs": "mod color;\npub use crate::color::ColorSpecs;\n",
+      "crates/printer/src/color.rs": "pub struct ColorSpecs;\nimpl ColorSpecs { pub fn new() -> ColorSpecs { ColorSpecs } pub fn paint(&self) {} }\n",
+      "crates/grep/Cargo.toml": "[package]\nname = \"grep\"\nversion = \"0.1.0\"\n",
+      "crates/grep/src/lib.rs": "pub extern crate grep_printer as printer;\n",
+      "crates/core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\n",
+      "crates/core/src/main.rs": [
+        "use grep::printer::ColorSpecs;",
+        "struct Args { colors: grep::printer::ColorSpecs }",
+        "fn make() -> ColorSpecs { ColorSpecs::new() }",
+        "fn draw(c: &ColorSpecs, a: &Args) { c.paint(); a.colors.paint(); }",
+        "",
+      ].join("\n"),
+    });
+    expect(calls(index, "crates/core/src/main.rs#make", "new")).toEqual(["crates/printer/src/color.rs#ColorSpecs.new"]);
+    expect(calls(index, "crates/core/src/main.rs#draw", "paint")).toEqual(["crates/printer/src/color.rs#ColorSpecs.paint", "crates/printer/src/color.rs#ColorSpecs.paint"]);
+  });
 });
 
 describe("bounded type parameters", () => {
