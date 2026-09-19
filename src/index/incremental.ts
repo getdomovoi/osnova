@@ -3,6 +3,8 @@ import type { FreshnessReport, OsnovaIndex } from "../types.js";
 import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
+import type { EdgeReuse } from "./resolve.js";
+import type { FileCard } from "../types.js";
 import { scanFiles, sameFileMetadata, sha256Hex } from "./scan.js";
 import type { FileMetadata, ScanResult } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
@@ -95,6 +97,38 @@ export async function applyChanges(
   return applyFreshnessReport(index, root, paths, inspection.report);
 }
 
+const CROSS_FILE_TEXT = /(?:\.d\.ts|\.go|\.rs|package\.json|go\.mod|Cargo\.toml)$/;
+
+function crossFileShape(card: FileCard, raws: readonly RawEdgeItem[]): string {
+  const routes = raws
+    .filter((raw) => raw.kind === "imports")
+    .map((raw) => `${raw.kind} ${raw.toName}`)
+    .sort();
+  return JSON.stringify([card.symbols, card.reExports, routes]);
+}
+
+function reusableEdges(
+  index: OsnovaIndex,
+  before: ReadonlyMap<string, FileCard>,
+  beforeEdges: ReadonlyMap<string, readonly RawEdgeItem[]>,
+  after: ReadonlyMap<string, FileCard>,
+  afterEdges: ReadonlyMap<string, readonly RawEdgeItem[]>,
+  touched: readonly string[],
+  report: FreshnessReport,
+): EdgeReuse | undefined {
+  if (report.added.length > 0 || report.deleted.length > 0) return undefined;
+  for (const file of touched) {
+    if (CROSS_FILE_TEXT.test(file)) return undefined;
+    const old = before.get(file);
+    const fresh = after.get(file);
+    if (old === undefined || fresh === undefined) return undefined;
+    if (crossFileShape(old, beforeEdges.get(file) ?? []) !== crossFileShape(fresh, afterEdges.get(file) ?? [])) {
+      return undefined;
+    }
+  }
+  return { resolve: new Set(touched), edges: index.edges };
+}
+
 export async function applyFreshnessReport(
   index: OsnovaIndex,
   root: string,
@@ -107,6 +141,8 @@ export async function applyFreshnessReport(
       `osnova: index belongs to ${index.root}, not ${absRoot}; rebuild with buildIndex(${JSON.stringify(absRoot)})`,
     );
   }
+  const before = new Map(index.files);
+  const beforeEdges = rawEdgesFromIndex(index);
   const files = new Map(index.files);
   const rawEdges = rawEdgesFromIndex(index);
   const requested = [...paths].map((file) => workspaceRelativePath(absRoot, root, file));
@@ -135,5 +171,7 @@ export async function applyFreshnessReport(
     else rawEdges.delete(relPath);
   }
 
-  return bindIndexCache(finalizeIndex(absRoot, files, rawEdges), indexCacheDirectory(index));
+  const touched = normalized.filter((file) => report.changed.includes(file));
+  const reuse = reusableEdges(index, before, beforeEdges, files, rawEdges, touched, report);
+  return bindIndexCache(finalizeIndex(absRoot, files, rawEdges, reuse), indexCacheDirectory(index));
 }

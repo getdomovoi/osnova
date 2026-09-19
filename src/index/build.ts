@@ -20,6 +20,7 @@ import { withCacheLock } from "../cache/lock.js";
 import { saveArtifact, serializeArtifact } from "./serialize.js";
 import { saveVerification } from "./verification.js";
 import { resolveEdges } from "./resolve.js";
+import type { EdgeReuse } from "./resolve.js";
 import { scanFiles, sha256Hex, sourceText } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
@@ -142,8 +143,9 @@ export function finalizeIndex(
   root: string,
   files: Map<string, FileCard>,
   rawEdges: ReadonlyMap<string, readonly RawEdgeItem[]>,
+  reuse?: EdgeReuse,
 ): OsnovaIndexImpl {
-  const edges = resolveEdges({ root, files, rawEdges });
+  const edges = resolveEdges({ root, files, rawEdges, ...(reuse === undefined ? {} : { reuse }) });
   return new OsnovaIndexImpl(root, files, edges);
 }
 
