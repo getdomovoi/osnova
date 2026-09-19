@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call-site resolution coverage on pinned checkouts",
   "osnova": {
-    "commit": "b3178867757dde933926b20d7c29b7da131444da",
+    "commit": "293cfa61ef8329c922800ed541e65a062329b1f2",
     "version": "0.6.2"
   },
   "corpora": [
@@ -10,7 +10,7 @@
       "corpus": "humanizer-v1",
       "repository": "https://github.com/Humanizr/Humanizer",
       "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b",
-      "generation": "f469aa40ab09a6abd07ae92f7eb6dfaf10122612cab796d5d47e811d9a0e348f",
+      "generation": "a4d04cef715aa5f2332267649d9cdddb332d1185ea3f98a971d7001e02d8acd7",
       "cacheRoundTrip": {
         "edges": 31307,
         "resolved": 7804
@@ -178,7 +178,7 @@
       "corpus": "click-v1",
       "repository": "https://github.com/pallets/click",
       "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
-      "generation": "d7f785987985b27dc5c602fefb82dd901855d10a05e93d7e2c1d2b5ed16f7754",
+      "generation": "b2e77f6a663270cedeec1f2a27fc84823ebb8dfa7b82dc5966ec9c1ff6be8581",
       "cacheRoundTrip": {
         "edges": 7361,
         "resolved": 1932
@@ -273,7 +273,7 @@
       "corpus": "cobra-v1",
       "repository": "https://github.com/spf13/cobra",
       "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
-      "generation": "64c13e435faa18e4aa622bb35c0f99847b90cf48f0390e80902309ccee5b6dfa",
+      "generation": "15bf12ee9991d669d3dd7ce0cf036275807c40216a63283b152562f19a9a2684",
       "cacheRoundTrip": {
         "edges": 4564,
         "resolved": 1980
@@ -364,7 +364,7 @@
       "corpus": "gson-v1",
       "repository": "https://github.com/google/gson",
       "revision": "854c8255b625cf1e13c701a83ea9ccb4caaa576a",
-      "generation": "b86c1c5de2e198d58dd4e2f524b395fae2e29006b305c6b9f71c40837153dcd3",
+      "generation": "d6b49b125bcaaeb533f80eea2056c411600abef5c7f459eb423b3daa7ab2878c",
       "cacheRoundTrip": {
         "edges": 26056,
         "resolved": 8473
@@ -455,7 +455,7 @@
       "corpus": "pyright-v1",
       "repository": "https://github.com/microsoft/pyright",
       "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
-      "generation": "28d33b4e29ce7847d7cd004adc9c17603d1716b945dd970c962b4bb57ce4c11b",
+      "generation": "9e21c0b8ec1827a5f0db7bfc982fbcd71b04737d0d8137919eab99eb558fcc4b",
       "cacheRoundTrip": {
         "edges": 68340,
         "resolved": 30042
@@ -600,42 +600,44 @@
       "corpus": "ripgrep-v1",
       "repository": "https://github.com/BurntSushi/ripgrep",
       "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
-      "generation": "b44e40b034a826460110d43564f5b39371587e127575944946e8694c21b7b77a",
+      "generation": "523794887a69c2952034d8145bfb5553d166b58a8898cb077d9cd5cbac1a8533",
       "cacheRoundTrip": {
-        "edges": 17316,
-        "resolved": 5651
+        "edges": 17321,
+        "resolved": 6121
       },
       "total": {
         "language": "all",
         "files": 225,
-        "symbols": 3516,
-        "calls": 13380,
-        "resolved": 5651,
-        "ambiguous": 187,
-        "unresolved": 7542,
+        "symbols": 3623,
+        "calls": 13385,
+        "resolved": 6121,
+        "ambiguous": 15,
+        "unresolved": 7249,
         "imports": 399,
-        "importsResolved": 150,
+        "importsResolved": 181,
         "byMethod": {
-          "import-binding": 1,
-          "imported-file-name": 14,
-          "re-export-binding": 2,
-          "receiver-hint": 3997,
-          "same-file-name": 1011,
-          "unique-name": 626
+          "import-binding": 29,
+          "imported-file-name": 567,
+          "lexical-definition": 4,
+          "re-export-binding": 25,
+          "receiver-hint": 4551,
+          "same-file-name": 915,
+          "unique-name": 30
         },
         "byReason": {
-          "bound-symbol-missing": 1,
-          "import-target-unresolved": 2476,
+          "bound-symbol-missing": 2,
+          "import-target-unresolved": 2582,
           "no-matching-symbol": 10,
+          "re-export-cycle": 2,
           "re-export-incomplete": 2,
-          "receiver-unresolved": 2801,
-          "unbound-global": 2252
+          "receiver-unresolved": 2395,
+          "unbound-global": 2256
         },
-        "resolvedShare": 0.4223,
-        "unresolvedImportCalls": 2476,
-        "unboundGlobalCalls": 2252,
-        "resolvedShareExcludingUnresolvedImports": 0.5183,
-        "resolvedShareExcludingExternal": 0.6531
+        "resolvedShare": 0.4573,
+        "unresolvedImportCalls": 2582,
+        "unboundGlobalCalls": 2256,
+        "resolvedShareExcludingUnresolvedImports": 0.5666,
+        "resolvedShareExcludingExternal": 0.7162
       },
       "languages": [
         {
@@ -699,33 +701,35 @@
         {
           "language": "rust",
           "files": 110,
-          "symbols": 3514,
-          "calls": 13366,
-          "resolved": 5647,
-          "ambiguous": 187,
-          "unresolved": 7532,
+          "symbols": 3621,
+          "calls": 13371,
+          "resolved": 6117,
+          "ambiguous": 15,
+          "unresolved": 7239,
           "imports": 399,
-          "importsResolved": 150,
+          "importsResolved": 181,
           "byMethod": {
-            "import-binding": 1,
-            "imported-file-name": 14,
-            "re-export-binding": 2,
-            "receiver-hint": 3997,
-            "same-file-name": 1007,
-            "unique-name": 626
+            "import-binding": 29,
+            "imported-file-name": 567,
+            "lexical-definition": 4,
+            "re-export-binding": 25,
+            "receiver-hint": 4551,
+            "same-file-name": 911,
+            "unique-name": 30
           },
           "byReason": {
-            "bound-symbol-missing": 1,
-            "import-target-unresolved": 2476,
+            "bound-symbol-missing": 2,
+            "import-target-unresolved": 2582,
+            "re-export-cycle": 2,
             "re-export-incomplete": 2,
-            "receiver-unresolved": 2801,
-            "unbound-global": 2252
+            "receiver-unresolved": 2395,
+            "unbound-global": 2256
           },
-          "resolvedShare": 0.4225,
-          "unresolvedImportCalls": 2476,
-          "unboundGlobalCalls": 2252,
-          "resolvedShareExcludingUnresolvedImports": 0.5185,
-          "resolvedShareExcludingExternal": 0.6537
+          "resolvedShare": 0.4575,
+          "unresolvedImportCalls": 2582,
+          "unboundGlobalCalls": 2256,
+          "resolvedShareExcludingUnresolvedImports": 0.567,
+          "resolvedShareExcludingExternal": 0.7169
         }
       ],
       "limitations": [
@@ -740,7 +744,7 @@
       "corpus": "zod-v1",
       "repository": "https://github.com/colinhacks/zod",
       "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
-      "generation": "1e486a10930f003c3c1043e494a5e116d070cd6ffd07e51fe0a91bde1e157ec3",
+      "generation": "6eb18940348ef9459484f185b4b49251f9acc5fbdd604a969148c695a48a2c6e",
       "cacheRoundTrip": {
         "edges": 54862,
         "resolved": 20087
