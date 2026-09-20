@@ -554,8 +554,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           const owners = candidates.filter(isHolder);
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
           const membersOf = (holder: OsnovaSymbol, member: string = binding.member): OsnovaSymbol[] => {
+            const callableKinds: readonly string[] = holder.kind === "module"
+              ? ["method", "function", "constant"]
+              : ["method", "function"];
             const own = (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
-              (symbol.kind === "method" || symbol.kind === "function") && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
+              callableKinds.includes(symbol.kind) && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
             if (own.length > 0 || !TYPED_FAMILY.has(card.language)) return own;
             // Go methods and Rust impl blocks may sit in another file of the same package or crate.
             const family = languageFamily(card.language);
@@ -811,7 +814,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           }
           const members: OsnovaSymbol[] = owner === undefined ? [] : inherited(owner, 0, new Set([owner.qualifiedName])) ?? [];
           // A namespace function behaves like a static member: reachable through the namespace name, never through an instance.
-          const effectiveKind = (symbol: OsnovaSymbol) => symbol.kind === "function" ? "static" : symbol.memberKind;
+          // A namespace constant holding a function behaves like a namespace function: reachable
+          // through the namespace name, never through an instance.
+          const effectiveKind = (symbol: OsnovaSymbol) =>
+            symbol.kind === "function" || (owner?.kind === "module" && symbol.kind === "constant") ? "static" : symbol.memberKind;
           const kinds = new Set(members.map(effectiveKind));
           candidates = kinds.size > 1 ? [] : members.filter((symbol) => {
             const kind = effectiveKind(symbol);
