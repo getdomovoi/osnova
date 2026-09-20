@@ -106,6 +106,18 @@ export async function getParser(language: LanguageId): Promise<Parser> {
   return pending;
 }
 
+export function discardParser(language: LanguageId): void {
+  const pending = parserCache.get(language);
+  if (pending === undefined) return;
+  parserCache.delete(language);
+  void pending.then(
+    (parser) => {
+      parser.delete();
+    },
+    () => undefined,
+  );
+}
+
 export async function probeGrammars(): Promise<void> {
   await getParser("typescript");
 }
