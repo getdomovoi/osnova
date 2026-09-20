@@ -668,8 +668,11 @@ export function collectBindings(root: Node, python: boolean): {
       if (scope.names.has("*")) return { kind: "blocked", reason: "unsupported" };
       const bindings = scope.names.get(name);
       if (bindings !== undefined) {
-        if (bindings.length !== 1) return { kind: "blocked", reason: "ambiguous" };
-        const binding = bindings[0];
+        // TypeScript declaration merging gives one name an explicit declaration and a value whose type
+        // only an inference engine could recover. The declaration is the one the source states outright.
+        const declared = bindings.length === 1 ? bindings : bindings.filter((candidate) => candidate?.kind === "local");
+        if (declared.length !== 1) return { kind: "blocked", reason: "ambiguous" };
+        const binding = declared[0];
         const initializer = binding === undefined ? undefined : initializers.get(binding);
         if (initializer !== undefined && site.startIndex < initializer.end &&
           nearestFunction(scopes.get(site.id) ?? module) === initializer.scope) return localValue;
