@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { getParser } from "../grammar/loader.js";
+import { discardParser, getParser } from "../grammar/loader.js";
 import { languageForPath } from "../grammar/languages.js";
 import { adapterFor } from "../extract/adapters.js";
 import { localJoin } from "../extract/util.js";
@@ -92,6 +92,7 @@ export async function extractCard(
       diagnostics.push({ phase: "parse", path: relPath, code: "empty-parse" });
     }
   } catch {
+    discardParser(language);
     definitions = [];
     rawEdges = [];
     reExports = [];
