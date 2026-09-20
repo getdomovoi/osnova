@@ -2,6 +2,16 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova update-check` asks the npm registry whether a newer version of osnova is published. It runs only when a person types it: there is no automatic notifier, no schedule and no check on startup, because a tool that reads a private source tree should not report its version and address to a registry without being asked. The command sends one GET to `registry.npmjs.org` with no body and no query string, reports no repository data, and times out after 5 seconds. A failure prints a message instead of throwing. Exit code 1 marks a stale version so a script can act on it, and `--json` gives machine readable output. The two README lines that claimed no network access now name this one command, so the statement stays true.
+
+### Fixed
+
+- A parser is discarded after an extraction failure, so one unparseable file no longer empties every later file of the same language. A tree-sitter parser that throws mid-parse leaves its WASM instance in a state where every later parse on that instance throws too, and parsers are cached per language and shared across the whole build. On a repository with 13 shell scripts, all 13 reported `extraction-failed` and the language indexed 0 symbols and 0 calls, although only 8 of them fail to parse on their own. The same repository now indexes 2 symbols and 123 calls, and the diagnostics name the 8 files that really fail instead of all 13. The underlying parse failure is a grammar defect rather than an osnova defect: a bash `case` statement throws `resolved is not a function` from inside the WASM parse call with tree-sitter-wasms 0.1.13 and web-tree-sitter 0.25.10. A sweep of the other 11 generic-tier languages found no other language affected. A file that fails to parse keeps its full text, so text search still reaches it; only its symbols and call edges are lost.
+
 ## 0.6.3 (2026-09-18)
 
 ### Fixed
