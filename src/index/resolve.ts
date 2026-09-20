@@ -353,6 +353,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     incomplete: boolean;
     cycle: boolean;
   }
+  // A TypeScript declaration can merge a type and a value under one name. Both are exported, so the
+  // export map keys on kind as well: keyed on the qualified name alone, whichever came first would
+  // hide the other, and a call to the value would find only the type.
+  const exportKey = (symbol: OsnovaSymbol): string => `${symbol.qualifiedName}\u0000${symbol.kind}`;
   const exportCache = new Map<string, ExportResult>();
   const exported = (file: string, name: string): ExportResult => {
     const key = JSON.stringify([file, name]);
@@ -375,7 +379,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const pkg = goPackageOf(card);
         for (const [file, other] of files) {
           if (other.language !== "go" || path.posix.dirname(file) !== dir || goPackageOf(other) !== pkg) continue;
-          for (const symbol of other.symbols) if (symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")) result.symbols.set(symbol.qualifiedName, symbol);
+          for (const symbol of other.symbols) if (symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")) result.symbols.set(exportKey(symbol), symbol);
         }
         return;
       }
@@ -397,9 +401,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const next = direct.length > 0 || named.length > 0 || spaces.length > 0 ? named
         : currentName === "default" ? [] : links.filter((link) => link.kind === "star");
       for (const symbol of direct) {
-        if (!result.symbols.has(symbol.qualifiedName)) {
-          result.symbols.set(symbol.qualifiedName, symbol);
-          result.routes.set(symbol.qualifiedName, via);
+        if (!result.symbols.has(exportKey(symbol))) {
+          result.symbols.set(exportKey(symbol), symbol);
+          if (!result.routes.has(symbol.qualifiedName)) result.routes.set(symbol.qualifiedName, via);
         }
       }
       active.add(state);
