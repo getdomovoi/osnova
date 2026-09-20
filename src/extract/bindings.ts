@@ -174,8 +174,17 @@ export function memberKindOf(node: Node, python: boolean, decoratorTexts?: reado
   return "unknown";
 }
 
+const CASTS = new Set(["as_expression", "satisfies_expression", "type_assertion"]);
+
 function unwrap(node: Node | null): Node | null {
-  while (node !== null && ["parenthesized_expression", "non_null_expression"].includes(node.type)) node = childrenOf(node)[0] ?? null;
+  const original = node;
+  let casts = 0;
+  while (node !== null && (CASTS.has(node.type) || ["parenthesized_expression", "non_null_expression"].includes(node.type))) {
+    // `x as T` keeps the runtime value of `x`, so the cast is transparent. A chain such as `x as unknown as T`
+    // is written to change the type, so the inner expression no longer stands for what the code treats it as.
+    if (CASTS.has(node.type) && (casts += 1) > 1) return original;
+    node = childrenOf(node)[0] ?? null;
+  }
   return node;
 }
 
