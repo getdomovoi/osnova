@@ -66,17 +66,17 @@ Each confirmed line names the caller, its lines and the evidence that tied the c
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name; everything else stays unresolved with a reason. These are the shares on the pinned checkouts under `benchmarks/corpora/`, recorded in [`benchmarks/results/resolution-coverage-2026-09-18a.json`](benchmarks/results/resolution-coverage-2026-09-18a.json); the last column leaves out calls through packages outside the repository and calls to builtins, which can never resolve locally, and the [reference](docs/reference.md#resolution-coverage-and-claim-checking) defines every column.
+A call site counts as resolved when the index ties it to one definition through evidence it can name; everything else stays unresolved with a reason. These are the shares on the pinned checkouts under `benchmarks/corpora/`, recorded in [`benchmarks/results/resolution-coverage-2026-09-21.json`](benchmarks/results/resolution-coverage-2026-09-21.json); the last column leaves out calls through packages outside the repository and calls to builtins, which can never resolve locally, and the [reference](docs/reference.md#resolution-coverage-and-claim-checking) defines every column.
 
 | Corpus | Languages | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | all | 5022 | 1932 | 38.5% | 57.2% |
+| click | all | 5488 | 2118 | 38.6% | 59.7% |
 | cobra | all | 4374 | 1980 | 45.3% | 88.9% |
 | gson | all | 23382 | 8473 | 36.2% | 56.7% |
 | humanizer | all | 30517 | 7804 | 25.6% | 51.3% |
-| pyright | all | 58461 | 30042 | 51.4% | 73.4% |
-| ripgrep | all | 13385 | 6121 | 45.7% | 71.6% |
-| zod | all | 53417 | 21183 | 39.7% | 71.3% |
+| pyright | all | 58462 | 30057 | 51.4% | 74.5% |
+| ripgrep | all | 13387 | 6121 | 45.7% | 71.6% |
+| zod | all | 53417 | 21679 | 40.6% | 73.4% |
 
 Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 
@@ -96,7 +96,7 @@ The reason to keep a call graph instead of running a text search is not speed. I
 | gson | `JsonReader.beginObject` depth 1 | 10 | 29 (0.34 / 1.00) | 10 (1.00 / 1.00) |
 | gson | `TypeToken.getRawType` depth 1 | 27 | 43 (0.63 / 1.00) | 27 (1.00 / 1.00) |
 
-The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-18.json`](benchmarks/results/grep-vs-graph-2026-09-18.json).
+The graph never returned a site that was not a call of the target. The record is [`benchmarks/results/grep-vs-graph-2026-09-21.json`](benchmarks/results/grep-vs-graph-2026-09-21.json).
 
 ## The ten tools
 
