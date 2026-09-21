@@ -70,6 +70,7 @@ export const pythonAdapter: LanguageAdapter = {
                       ? (inner.childForFieldName("attribute")?.text ?? null)
                       : null;
               if (name !== null && name.length > 0) out.addEdge("references", name, deco);
+              if (inner.type === "call") for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
             }
           }
           return;
