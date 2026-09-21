@@ -19,6 +19,7 @@ import { resolveCacheDir, workspaceLockPath } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
 import { saveArtifact, serializeArtifact } from "./serialize.js";
 import { saveVerification } from "./verification.js";
+import { knownIndexGeneration } from "./generation.js";
 import { resolveEdges } from "./resolve.js";
 import type { EdgeReuse } from "./resolve.js";
 import { scanFiles, sha256Hex, sourceText } from "./scan.js";
@@ -162,7 +163,7 @@ export async function buildIndex(root: string, options?: WorkspaceOptions): Prom
       if (isStale(inspection.report)) continue;
       options?.onProgress?.({ phase: "save", done: 0, total: 0 });
       await saveArtifact(index, canonicalCache, options);
-      await saveVerification(canonicalCache, absRoot, sha256Hex(serializeArtifact(index)), inspection.metadata);
+      await saveVerification(canonicalCache, absRoot, knownIndexGeneration(index) ?? sha256Hex(serializeArtifact(index)), inspection.metadata);
       return index;
     }
     throw new IndexingError({ phase: "scan", path: absRoot, code: "workspace-changing" });
