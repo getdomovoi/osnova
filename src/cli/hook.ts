@@ -13,8 +13,10 @@ import type { ImpactResult } from "../query/impact.js";
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import type { CliIo } from "./cli.js";
 
-// Editor hooks: a session hook prints the tool contract, a prompt hook prints starting points for
-// the prompt, a stop hook hands the agent the dependents of its uncommitted diff before it finishes.
+// Editor hooks: a session hook prints the index size and one pointer to the tools (the MCP server's
+// `instructions` carry the contract; `--full-contract` restates it for a harness without MCP), a prompt
+// hook prints starting points for the prompt, a stop hook hands the agent the dependents of its
+// uncommitted diff before it finishes.
 // All read the hook payload from stdin, never touch repository files, and exit 0 on every failure
 // so a hook can never block a prompt. A repository with no cache yet is indexed in the background
 // from the session hook; the prompt and stop hooks answer only from an existing cache.
@@ -56,6 +58,11 @@ export const hookToolContract = [
   "- osnova_plumb: check a claimed list of call sites against the index.",
   "An answer that says a symbol has no indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
+
+const hookSessionPointer = "use the osnova_* MCP tools (osnova_footing first) before grep and file reads.";
+export function formatSessionContext(status: string, fullContract: boolean): string {
+  return fullContract ? `${hookToolContract}\n${status}` : `[osnova] ${status.replace(/\.$/, "")}; ${hookSessionPointer}`;
+}
 
 export function parseHookInput(raw: string): HookInput {
   if (raw.trim().length === 0) return {};
@@ -110,6 +117,8 @@ export interface HookOptions {
   readonly command?: readonly string[] | undefined;
   /** Include the opt-in PostToolUse grep nudge in the install preview. */
   readonly nudge?: boolean | undefined;
+  /** Session: restate the whole tool contract instead of one pointer to the tools. */
+  readonly fullContract?: boolean | undefined;
   /** How long the session hook waits for a background build of a cold repository before answering without starting points (default 3,000 ms). */
   readonly sessionWaitMs?: number | undefined;
   /** How to start a background build; defaults to this executable. Tests pass a no-op. */
@@ -173,12 +182,12 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
           cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
         }
         if (cached === undefined) {
-          emitContext(io, client, "session", boundText(`${hookToolContract}\nIndex: building in the background; starting points appear from the next prompt.`, hookSessionCodeUnits));
+          emitContext(io, client, "session", boundText(formatSessionContext("Index: building in the background; starting points appear from the next prompt.", options.fullContract === true), hookSessionCodeUnits));
           return;
         }
       }
       const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
-      emitContext(io, client, "session", boundText(`${hookToolContract}\nIndexed: ${index.files.size} files, ${index.symbols.size} symbols.`, hookSessionCodeUnits));
+      emitContext(io, client, "session", boundText(formatSessionContext(`Indexed: ${index.files.size} files, ${index.symbols.size} symbols.`, options.fullContract === true), hookSessionCodeUnits));
     } catch (error) { fail(error); }
     return;
   }
