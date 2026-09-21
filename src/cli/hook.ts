@@ -231,28 +231,29 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     if (seeds.length === 0) return;
     const header = "[osnova] starting points for this prompt (indexed graph, exact file:line; osnova_footing for the full context, osnova_warp <symbol> for callers):";
     const available = hookPromptCodeUnits - header.length - 1;
-    const result = taskContext(index, { task: "understand", question: prompt, symbols: seeds.map((symbol) => symbol.qualifiedName), maxDepth: 1, maxCodeUnits: available, excerptLines: 1, measure: (partial) => formatStartingPoints(partial).length });
-    const text = formatStartingPoints(result);
+    const seedNames = new Set(seeds.map((symbol) => symbol.qualifiedName));
+    const result = taskContext(index, { task: "understand", question: prompt, symbols: [...seedNames], maxDepth: 1, maxCodeUnits: available, excerptLines: 1, measure: (partial) => formatStartingPoints(partial, seedNames).length });
+    const text = formatStartingPoints(result, seedNames);
     if (!text.startsWith("- ")) return;
     emitContext(io, client, "prompt", `${header}\n${boundText(text, available)}`);
   } catch (error) { fail(error); }
 }
 
-// One line per definition and per relationship: enough to name where to look, small enough for every prompt.
+// One line per named definition, then the count of what the graph holds beyond them. Relationships are not
+// printed: the callees are visible in the body the agent reads next, and callers belong to osnova_warp.
 const STARTING_POINT_KINDS = new Set(["function", "method", "class", "interface", "struct", "enum", "trait", "module", "type"]);
-export function formatStartingPoints(result: TaskContextResult): string {
+export function formatStartingPoints(result: TaskContextResult, seeds: ReadonlySet<string>): string {
   const lines: string[] = [];
+  let related = 0;
   for (const definition of result.definitions) {
     const symbol = definition.symbol;
+    if (!seeds.has(symbol.qualifiedName)) { related++; continue; }
     if (!STARTING_POINT_KINDS.has(symbol.kind)) continue;
     lines.push(`- ${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}`);
   }
-  for (const relationship of result.relationships) {
-    const edge = relationship.edge;
-    lines.push(`  ${edge.fromSymbol || edge.fromFile} -> ${edge.toSymbol ?? edge.toName} ${edge.kind} ${edge.fromFile}:${edge.line}`);
-  }
-  const omitted = result.omitted;
-  if (omitted.definitions > 0 || omitted.relationships > 0) lines.push(`  omitted: ${omitted.definitions} definitions, ${omitted.relationships} relationships`);
+  const definitions = result.omitted.definitions + related;
+  const relationships = result.omitted.relationships + result.relationships.length;
+  if (definitions > 0 || relationships > 0) lines.push(`  omitted: ${definitions} definitions, ${relationships} relationships`);
   return lines.join("\n");
 }
 
