@@ -176,6 +176,7 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     c_sharp: "class Probe { void Run() {} }",
     c: "int probe() { return 1; }",
     cpp: "int probe() { return 1; }",
+    objc: "@interface Probe\n- (int)probe;\n@end\n",
     ruby: "def probe\n  1\nend\n",
     php: "<?php\nfunction probe() { return 1; }\n",
     kotlin: "fun probe(): Int { return 1 }",

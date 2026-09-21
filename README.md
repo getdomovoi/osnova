@@ -20,7 +20,7 @@ npx -y @getdomovoi/osnova mcp --workspace /path/to/repo
 - **Honest about limits.** Results state what was omitted and why. Partial indexes say so on every response. Absence of a caller never claims deletion is safe.
 - **Local and read-only.** One cache directory, no writes inside your repository, no per-agent files to keep in sync, no usage reporting. Indexing and every query run offline. The one command that opens a network connection is `osnova update-check`, which asks the npm registry for the latest version and runs only when you type it.
 - **Refreshes as you type.** Query commands hash the working tree first and apply only what changed, uncommitted edits included.
-- **Nineteen languages.** Deep adapters for TypeScript, JavaScript, Python, Go, Rust, Java and C#. A generic tier for C, C++, Ruby, PHP, Kotlin, Swift, Scala, Dart, Elixir, OCaml, Zig and Bash. Grammars ship as WASM, so there is nothing to compile.
+- **Twenty languages.** Deep adapters for TypeScript, JavaScript, Python, Go, Rust, Java and C#. A generic tier for C, C++, Objective-C, Ruby, PHP, Kotlin, Swift, Scala, Dart, Elixir, OCaml, Zig and Bash. Grammars ship as WASM, so there is nothing to compile.
 
 ## Quick start
 

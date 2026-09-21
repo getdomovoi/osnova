@@ -30,7 +30,7 @@ try {
     cwd: consumer, encoding: "utf8", timeout: 60_000,
     env: { ...environment, NODE_PATH: "", NODE_OPTIONS: "", OSNOVA_CACHE_DIR: path.join(consumer, "cache") },
   });
-  assert(output.includes("packed consumer: exports, 20 WASM grammars"));
+  assert(output.includes("packed consumer: exports, 21 WASM grammars"));
   process.stdout.write(output);
   process.stdout.write("clean registry-backed install: passed; dependency install scripts disabled\n");
 } finally {

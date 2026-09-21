@@ -140,6 +140,30 @@ describe("extraction adapters", () => {
     expect(index.outgoing("src/breadth/shape.cpp#describe").map((e) => e.toName)).toContain("area");
   });
 
+  it("extracts objective-c definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.m")).toEqual([
+      "type:src/breadth/greeter.m#Point",
+      "enum:src/breadth/greeter.m#Mode",
+      "interface:src/breadth/greeter.m#Named",
+      "method:src/breadth/greeter.m#Named.name",
+      "class:src/breadth/greeter.m#Greeter",
+      "method:src/breadth/greeter.m#Greeter.greet",
+      "method:src/breadth/greeter.m#Greeter.formatName",
+      "method:src/breadth/greeter.m#Greeter.shared",
+      "method:src/breadth/greeter.m#Greeter.name",
+      "function:src/breadth/greeter.m#helper",
+      "function:src/breadth/greeter.m#run",
+    ]);
+    expect(index.symbols.get("src/breadth/greeter.m#Greeter")?.span.startLine).toBe(18);
+    expect(index.outgoing("src/breadth/greeter.m#Greeter.greet").map((e) => e.toName)).toEqual(["formatName"]);
+    expect(index.outgoing("src/breadth/greeter.m#Greeter.formatName").map((e) => e.toName)).toEqual(["stringWithFormat", "uppercaseString"]);
+    expect(index.outgoing("src/breadth/greeter.m#Greeter.shared").map((e) => e.toName)).toEqual(["alloc", "init"]);
+    const runCalls = index.outgoing("src/breadth/greeter.m#run");
+    expect(runCalls.map((e) => e.toName)).toEqual(["shared", "NSLog", "greet", "helper"]);
+    expect(runCalls.find((e) => e.toName === "helper")?.toSymbol).toBe("src/breadth/greeter.m#helper");
+    expect(runCalls.find((e) => e.toName === "greet")?.toSymbol).toBe("src/breadth/greeter.m#Greeter.greet");
+  });
+
   it("extracts ruby definitions and calls through the generic tier", () => {
     expect(symbolsOf("src/breadth/greeter.rb")).toEqual([
       "module:src/breadth/greeter.rb#Greeting",
