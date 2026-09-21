@@ -71,7 +71,7 @@ export type MemberKind = "instance" | "static" | "class" | "property" | "unknown
 export type ReceiverMode = "instance" | "class";
 export type ReceiverBasis = "constructor" | "lexical" | "class-reference" | "annotation" | "return";
 
-export type EdgeKind = "calls" | "references" | "imports";
+export type EdgeKind = "calls" | "references" | "imports" | "extends";
 
 export type EdgeResolution =
   | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition"; readonly via?: undefined }
