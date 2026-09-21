@@ -460,6 +460,7 @@ describe("function value references", () => {
         "11:main.ts#useAll->local=main.ts#local[lexical-definition]",
         "12:main.ts#useAll->helper=lib.ts#helper[import-binding]",
         "13:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "14:main.ts#useAll->alias=main.ts#local[lexical-definition]",
         "15:main.ts#useAll->helper=lib.ts#helper[import-binding]",
       ]);
       const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.ts#nonEmit");
@@ -495,11 +496,13 @@ describe("function value references", () => {
         "12:main.py#use_all->helper=lib.py#helper[import-binding]",
         "13:main.py#use_all->helper=lib.py#helper[import-binding]",
         "13:main.py#use_all->other=lib.py#other[import-binding]",
+        "14:main.py#use_all->alias=main.py#local[lexical-definition]",
         "14:main.py#use_all->helper=lib.py#helper[import-binding]",
         "15:main.py#use_all->helper=lib.py#helper[import-binding]",
         "16:main.py#use_all->helper=lib.py#helper[import-binding]",
         "16:main.py#use_all->other=lib.py#other[import-binding]",
         "17:main.py#use_all->Widget=lib.py#Widget[import-binding]",
+        "18:main.py#use_all->alias=main.py#local[lexical-definition]",
         "19:main.py#use_all->helper=lib.py#helper[import-binding]",
       ]);
       const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.py#non_emit");
