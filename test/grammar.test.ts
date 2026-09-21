@@ -39,6 +39,7 @@ describe("grammar loader", () => {
       c_sharp: "class A { void M() {} }",
       c: "#include <stdio.h>",
       cpp: "namespace geo {",
+      objc: "@interface Greeter : NSObject\n- (void)greet;\n@end",
       ruby: "module Greeting",
       php: "<?php",
       kotlin: "package app",
@@ -73,8 +74,8 @@ describe("grammar loader", () => {
 });
 
 describe("breadth registry", () => {
-  it("lists twelve generic languages with grammars and queries", () => {
-    expect([...genericLanguages].sort()).toEqual(["bash", "c", "cpp", "dart", "elixir", "kotlin", "ocaml", "php", "ruby", "scala", "swift", "zig"]);
+  it("lists thirteen generic languages with grammars and queries", () => {
+    expect([...genericLanguages].sort()).toEqual(["bash", "c", "cpp", "dart", "elixir", "kotlin", "objc", "ocaml", "php", "ruby", "scala", "swift", "zig"]);
     for (const language of genericLanguages) {
       expect(languageTier[language]).toBe("generic");
       expect(grammarFile[language]).toMatch(/^tree-sitter-[a-z_]+\.wasm$/);
@@ -88,6 +89,8 @@ describe("breadth registry", () => {
     expect(languageForPath("a.h")).toBe("c");
     expect(languageForPath("a.cpp")).toBe("cpp");
     expect(languageForPath("a.hpp")).toBe("cpp");
+    expect(languageForPath("a.m")).toBe("objc");
+    expect(languageForPath("a.mm")).toBe("objc");
     expect(languageForPath("a.rb")).toBe("ruby");
     expect(languageForPath("a.php")).toBe("php");
     expect(languageForPath("a.kt")).toBe("kotlin");

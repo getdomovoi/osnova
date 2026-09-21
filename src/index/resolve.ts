@@ -25,7 +25,7 @@ function goPackageOf(card: FileCard): string {
 
 export function languageFamily(language: CardLanguage | undefined): string | undefined {
   if (language === "typescript" || language === "tsx" || language === "javascript") return "javascript";
-  if (language === "c" || language === "cpp") return "c";
+  if (language === "c" || language === "cpp" || language === "objc") return "c";
   if (language === "java" || language === "kotlin" || language === "scala") return "java";
   return language;
 }

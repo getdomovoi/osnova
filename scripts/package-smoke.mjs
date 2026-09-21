@@ -22,6 +22,7 @@ const samples = {
   "Probe.cs": "class Probe { void Run() {} }\n",
   "probe.c": "int probe_c(void) { return 1; }\n",
   "probe.cpp": "int probe_cpp() { return 1; }\n",
+  "probe.m": "@implementation Probe\n- (int)probeObjc { return 1; }\n@end\n",
   "probe.rb": "def probe_ruby\n  1\nend\n",
   "probe.php": "<?php\nfunction probe_php() { return 1; }\n",
   "Probe.kt": "fun probeKotlin(): Int { return 1 }\n",
@@ -73,7 +74,7 @@ async function consumer() {
   const frames = await smokeStdio({ cliPath: path.join(packageRoot, manifest.bin.osnova), workspace, cacheDir, cwd: root });
   assert.deepEqual(await snapshot(packageRoot), packageBefore, "Core operations mutated installed package");
   assert.deepEqual((await readdir(root)).sort(), [...new Set([...rootBefore, "cache", "workspace"])].sort(), "Core operations wrote outside designated cache/workspace fixtures");
-  console.log(`packed consumer: exports, 20 WASM grammars, doctor, build/ask, 8 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
+  console.log(`packed consumer: exports, 21 WASM grammars, doctor, build/ask, 8 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
 }
 
 export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [], omitWorkspaceArg = false }) {
@@ -186,7 +187,7 @@ async function packAndTest() {
       cwd: consumerRoot, encoding: "utf8", timeout: 60_000,
       env: { ...process.env, NODE_PATH: "", NODE_OPTIONS: "", HOME: home, USERPROFILE: home, OSNOVA_CACHE_DIR: path.join(consumerRoot, "cache") },
     });
-    assert(result.includes("packed consumer: exports, 20 WASM grammars"), "Consumer validation did not execute");
+    assert(result.includes("packed consumer: exports, 21 WASM grammars"), "Consumer validation did not execute");
     console.log(result.trim());
     console.log(`artifact: ${filename}; ${entries.length} archive entries; isolated consumer outside checkout with existing dependency links; no install/download/native compilation`);
     console.log("clean registry-backed install: run separately with scripts/clean-install-smoke.mjs");

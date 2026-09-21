@@ -11,6 +11,7 @@ export type LanguageId =
   | "c_sharp"
   | "c"
   | "cpp"
+  | "objc"
   | "ruby"
   | "php"
   | "kotlin"
