@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ask, buildIndex, applyChanges } from "../src/index.js";
+import { formatAsk } from "../src/query/format.js";
 import { OsnovaIndexImpl } from "../src/index/indexImpl.js";
 import { queryContext } from "../src/query/context.js";
 
@@ -147,5 +148,32 @@ describe("definition-level retrieval", () => {
   it.each([-1, 0.5, NaN, Infinity])("rejects invalid result limits: %s", async (limit) => {
     const index = await build({ "a.ts": "export const value = 1;\n" });
     expect(() => ask(index, "value", { limit })).toThrow(RangeError);
+  });
+});
+
+describe("role words and nested best matches", () => {
+  const files = {
+    "foo.py": "class Foo:\n    def bar(self):\n        return 1\n",
+    "test_foo.py": "def test_flag_definition():\n    return 1\n",
+  };
+
+  it("does not let a role word like definition rank a stray test above the named method", async () => {
+    const index = await build(files);
+    const names = ask(index, "Foo.bar definition", { limit: 3 }).hits.map((hit) => hit.symbol?.qualifiedName);
+    expect(names[0]).toBe("foo.py#Foo.bar");
+    expect(names).not.toContain("test_foo.py#test_flag_definition");
+  });
+
+  it("still counts a role word when the query has nothing else", async () => {
+    const index = await build(files);
+    expect(ask(index, "definition").hits[0]?.symbol?.qualifiedName).toBe("test_foo.py#test_flag_definition");
+  });
+
+  it("prints the best-matching method as its own top hit instead of folding it under its class", async () => {
+    const index = await build(files);
+    const text = formatAsk(ask(index, "Foo.bar definition", { limit: 3 }));
+    const headers = text.split("\n\n").map((block) => block.split("\n")[0]);
+    expect(headers[0]).toBe("foo.py:2 method foo.py#Foo.bar");
+    expect(text).not.toContain("also: .bar");
   });
 });

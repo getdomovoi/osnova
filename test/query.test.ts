@@ -75,14 +75,16 @@ describe("ground formatting", () => {
     expect(text).not.toContain("also:");
   });
 
-  it("keeps result order when the parent ranks after its child", () => {
-    const text = formatAsk({ hits: [first, other, parent], filesSearched: 1 });
+  it("keeps a child that outranks its parent as its own hit", () => {
+    const text = formatAsk({ hits: [first, other, parent, second], filesSearched: 1 });
     const blocks = text.split("\n\n");
     expect(blocks.map((block) => block.split("\n")[0])).toEqual([
+      "src/a.ts:12 constant src/a.ts#outer.first",
       "src/a.ts:50 constant src/a.ts#other",
       "src/a.ts:10 constant src/a.ts#outer",
     ]);
-    expect(blocks[1]).toContain("also: .first L12");
+    expect(blocks[2]).toContain("also: .second.deep L20");
+    expect(text).not.toContain("also: .first");
   });
 });
 
