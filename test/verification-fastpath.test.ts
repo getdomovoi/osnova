@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildIndex, freshness, indexGeneration, refreshWorkspace, serializeArtifact } from "../src/index.js";
+import { buildIndex, freshness, indexGeneration, loadIndex, refreshWorkspace, serializeArtifact } from "../src/index.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
 import { inspectFreshness } from "../src/index/incremental.js";
 import { loadVerification } from "../src/index/verification.js";
@@ -156,4 +156,60 @@ it("does not rehash every unchanged file during an edited refresh", async () => 
   expect(refreshed.symbols.has("file-0.ts#changed")).toBe(true);
   expect(serializeArtifact(refreshed)).toEqual(serializeArtifact(await buildIndex(workspace, { cacheDir: path.join(temporary, "full-cache") })));
   expect(indexGeneration(refreshed)).not.toBe(indexGeneration(built));
+});
+
+it("leaves the verification sidecar untouched on an unchanged refresh", async () => {
+  const built = await buildIndex(workspace, { cacheDir });
+  const verification = path.join(workspaceDirFor(cacheDir, built.root), "verification.json");
+  const before = await fs.stat(verification, { bigint: true });
+  const content = await fs.readFile(verification, "utf8");
+  await refreshWorkspace(workspace, { cacheDir });
+  const after = await fs.stat(verification, { bigint: true });
+  expect([after.ino, after.mtimeNs, after.size]).toEqual([before.ino, before.mtimeNs, before.size]);
+  expect(await fs.readFile(verification, "utf8")).toBe(content);
+  await fs.writeFile(path.join(workspace, "file-0.ts"), "export function changed() { return 0; }\n");
+  await refreshWorkspace(workspace, { cacheDir });
+  expect(await fs.readFile(verification, "utf8")).not.toBe(content);
+});
+
+it("defers the core body until first use and keeps the generation from the verified checksum", async () => {
+  const built = await buildIndex(workspace, { cacheDir });
+  const loaded = (await loadIndex(workspace, { cacheDir }))!;
+  expect(knownIndexGeneration(loaded)).toBe(indexGeneration(built));
+  expect(loaded.root).toBe(built.root);
+  expect(loaded.files.size).toBe(20);
+  expect(loaded.symbols.has("file-3.ts#value3")).toBe(true);
+  expect(serializeArtifact(loaded)).toEqual(serializeArtifact(built));
+});
+
+it("rejects a same-size tamper past the envelope before the body is ever read", async () => {
+  const built = await buildIndex(workspace, { cacheDir });
+  const dir = workspaceDirFor(cacheDir, built.root);
+  const core = path.join(dir, "index.json");
+  const original = await fs.readFile(core);
+  const offset = original.indexOf(Buffer.from('"kind":"function"', "utf8"), original.indexOf(',"files":['));
+  expect(offset).toBeGreaterThan(0);
+  const tampered = Buffer.from(original);
+  tampered.write("g", offset + '"kind":"'.length, "utf8");
+  expect(tampered.length).toBe(original.length);
+  await fs.writeFile(core, tampered);
+  await expect(loadIndex(workspace, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
+  const refreshed = await refreshWorkspace(workspace, { cacheDir });
+  expect(indexGeneration(refreshed)).toBe(indexGeneration(built));
+  expect((await fs.readFile(core)).equals(original)).toBe(true);
+});
+
+it("reports a checksum-valid but structurally corrupt body as cache-read-failed on first use", async () => {
+  const built = await buildIndex(workspace, { cacheDir });
+  const dir = workspaceDirFor(cacheDir, built.root);
+  const core = path.join(dir, "index.json");
+  const parsed = JSON.parse(await fs.readFile(core, "utf8")) as { files: Array<{ symbols: Array<{ span: { e: number } }> }> };
+  parsed.files[0]!.symbols[0]!.span.e = 0;
+  const raw = Buffer.from(JSON.stringify(parsed), "utf8");
+  await fs.writeFile(core, raw);
+  await fs.writeFile(path.join(dir, "index.sha"), `${sha256Hex(raw)}\n`);
+  const loaded = (await loadIndex(workspace, { cacheDir }))!;
+  expect(loaded.root).toBe(built.root);
+  expect(() => loaded.files).toThrow(/cache-read-failed/);
+  expect(() => loaded.edges).toThrow(/cache-read-failed/);
 });

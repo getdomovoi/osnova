@@ -116,7 +116,8 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
         index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
-        const inspection = clean && known !== undefined && attempt === 0 && !dirty
+        const unchanged = clean && known !== undefined && attempt === 0 && !dirty;
+        const inspection = unchanged
           ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
           : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
         const report = inspection.report;
@@ -133,10 +134,12 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
             }
             await evictLru(canonicalCache, options);
           }
-          try {
-            await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
-          } catch (error) {
-            throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
+          if (!unchanged) {
+            try {
+              await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
+            } catch (error) {
+              throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
+            }
           }
           await ensureFamilySidecar(canonicalCache, canonicalRoot, seed?.family, seed !== undefined);
           if (options.reuseMemory === true) {

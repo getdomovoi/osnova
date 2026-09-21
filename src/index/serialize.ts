@@ -27,7 +27,7 @@ import type { CachePolicy } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
 import type { LockOptions } from "../cache/lock.js";
 import { IndexingError, SectionError } from "./diagnostics.js";
-import { rememberIndexGeneration } from "./generation.js";
+import { bindIndexGeneration, rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
 import { loadVerification } from "./verification.js";
@@ -187,6 +187,59 @@ export function deserializeArtifact(
   return deserializeParsedArtifact(JSON.parse(data), data, textPath, undefined, textBytes, edgeBytes);
 }
 
+interface SerializedEnvelope {
+  readonly formatVersion: number;
+  readonly extractionVersion: string;
+  readonly root: string;
+  readonly textHash: string;
+  readonly textBytes: number;
+  readonly edgesHash: string;
+  readonly edgesBytes: number;
+}
+
+function readEnvelope(parsed: unknown): SerializedEnvelope {
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("osnova: corrupt index artifact");
+  }
+  const artifact = parsed as Partial<SerializedArtifact>;
+  if (artifact.formatVersion !== indexFormatVersion) {
+    throw new ArtifactVersionError(artifact.formatVersion);
+  }
+  if (artifact.extractionVersion !== extractionVersion) {
+    throw new ExtractionVersionError("osnova: extraction inputs changed; rebuild the index");
+  }
+  if (typeof artifact.root !== "string" || !path.isAbsolute(artifact.root) || path.normalize(artifact.root) !== artifact.root) {
+    throw new Error("osnova: corrupt index envelope");
+  }
+  if (typeof artifact.textHash !== "string" || !/^[a-f0-9]{64}$/.test(artifact.textHash) || !nonnegativeInteger(artifact.textBytes)) {
+    throw new Error("osnova: corrupt text identity");
+  }
+  if (typeof artifact.edgesHash !== "string" || !/^[a-f0-9]{64}$/.test(artifact.edgesHash) || !nonnegativeInteger(artifact.edgesBytes)) {
+    throw new Error("osnova: corrupt edge identity");
+  }
+  return {
+    formatVersion: artifact.formatVersion, extractionVersion: artifact.extractionVersion, root: artifact.root,
+    textHash: artifact.textHash, textBytes: artifact.textBytes, edgesHash: artifact.edgesHash, edgesBytes: artifact.edgesBytes,
+  };
+}
+
+const FILES_KEY = Buffer.from(',"files":[', "utf8");
+
+function envelopeOfCore(raw: Buffer): { envelope: SerializedEnvelope; parsed: unknown | undefined } {
+  const cut = raw.indexOf(FILES_KEY);
+  if (cut > 0) {
+    let head: unknown;
+    try {
+      head = JSON.parse(`${raw.subarray(0, cut).toString("utf8")}}`);
+    } catch {
+      head = undefined;
+    }
+    if (typeof head === "object" && head !== null) return { envelope: readEnvelope(head), parsed: undefined };
+  }
+  const parsed: unknown = JSON.parse(raw.toString("utf8"));
+  return { envelope: readEnvelope(parsed), parsed };
+}
+
 function deserializeParsedArtifact(
   parsed: unknown,
   data: string,
@@ -196,25 +249,23 @@ function deserializeParsedArtifact(
   edgeBytes?: Buffer,
   rootOverride?: string,
 ): OsnovaIndexImpl {
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("osnova: corrupt index artifact");
-  }
+  const body = deserializeBody(parsed, textPath, edgeSource, textBytes, edgeBytes);
+  const index = new OsnovaIndexImpl(rootOverride ?? body.root, body.files, body.edges);
+  if (rootOverride === undefined) rememberIndexGeneration(index, data);
+  return index;
+}
+
+function deserializeBody(
+  parsed: unknown,
+  textPath: string | undefined,
+  edgeSource: { path: string; raw: Buffer } | undefined,
+  textBytes?: Buffer,
+  edgeBytes?: Buffer,
+): { root: string; files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource } {
+  const envelope = readEnvelope(parsed);
   const artifact = parsed as SerializedArtifact;
-  if (artifact.formatVersion !== indexFormatVersion) {
-    throw new ArtifactVersionError(artifact.formatVersion);
-  }
-  if (artifact.extractionVersion !== extractionVersion) {
-    throw new ExtractionVersionError("osnova: extraction inputs changed; rebuild the index");
-  }
-  if (typeof artifact.root !== "string" || !path.isAbsolute(artifact.root) || path.normalize(artifact.root) !== artifact.root ||
-    !Array.isArray(artifact.files) || !Array.isArray(artifact.paths) || !Array.isArray(artifact.names)) {
+  if (!Array.isArray(artifact.files) || !Array.isArray(artifact.paths) || !Array.isArray(artifact.names)) {
     throw new Error("osnova: corrupt index envelope");
-  }
-  if (typeof artifact.textHash !== "string" || !/^[a-f0-9]{64}$/.test(artifact.textHash) || !nonnegativeInteger(artifact.textBytes)) {
-    throw new Error("osnova: corrupt text identity");
-  }
-  if (typeof artifact.edgesHash !== "string" || !/^[a-f0-9]{64}$/.test(artifact.edgesHash) || !nonnegativeInteger(artifact.edgesBytes)) {
-    throw new Error("osnova: corrupt edge identity");
   }
   if (textBytes !== undefined && (textBytes.length !== artifact.textBytes || sha256Hex(textBytes) !== artifact.textHash)) {
     throw new Error("osnova: corrupt cached source content");
@@ -330,16 +381,12 @@ function deserializeParsedArtifact(
   if (edgeBytes !== undefined) {
     edges = deserializeEdges(edgeBytes, paths, files);
   } else if (edgeSource !== undefined) {
-    if (edgeSource.raw.length !== artifact.edgesBytes || sha256Hex(edgeSource.raw) !== artifact.edgesHash) {
-      throw new Error("osnova: corrupt cached edge content");
-    }
+    if (edgeSource.raw.length !== envelope.edgesBytes) throw new Error("osnova: corrupt cached edge content");
     edges = { path: edgeSource.path, raw: edgeSource.raw, paths };
   } else {
     throw new Error("osnova: edge source required");
   }
-  const index = new OsnovaIndexImpl(rootOverride ?? artifact.root, files, edges);
-  if (rootOverride === undefined) rememberIndexGeneration(index, data);
-  return index;
+  return { root: envelope.root, files, edges };
 }
 
 export function serializedTextIdentity(data: string): { hash: string; bytes: number } {
@@ -473,13 +520,8 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       const sha = shaText.trim();
       if (!/^[a-f0-9]{64}$/.test(sha)) throw new SectionError("osnova: cache core checksum corrupt");
       if (sha256Hex(raw) !== sha) throw new SectionError("osnova: cache core checksum mismatch");
-      const content = raw.toString("utf8");
-      const parsed: unknown = JSON.parse(content);
-      const parsedVersion = (parsed as { formatVersion?: unknown }).formatVersion;
-      if (parsedVersion !== indexFormatVersion) throw new ArtifactVersionError(parsedVersion);
-      const identity = parsed as { textHash?: unknown; textBytes?: unknown; edgesHash?: unknown; edgesBytes?: unknown };
-      if (typeof identity.textHash !== "string" || !nonnegativeInteger(identity.textBytes)) throw new Error("osnova: corrupt text identity");
-      if (typeof identity.edgesHash !== "string" || !nonnegativeInteger(identity.edgesBytes)) throw new Error("osnova: corrupt edge identity");
+      const { envelope: identity, parsed } = envelopeOfCore(raw);
+      if (identity.root !== root) throw new Error("osnova: cache artifact belongs to a different workspace");
       const textPath = path.join(dir, "text.bin");
       const textStat = await fs.lstat(textPath).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SectionError("osnova: cache text sidecar missing");
@@ -503,8 +545,11 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       if (edgesRaw.length !== identity.edgesBytes || sha256Hex(edgesRaw) !== identity.edgesHash) {
         throw new SectionError("osnova: cache edge sidecar mismatch");
       }
-      const index = deserializeParsedArtifact(parsed, content, textPath, { path: edgesPath, raw: edgesRaw });
-      if (index.root !== root) throw new Error("osnova: cache artifact belongs to a different workspace");
+      const index = new OsnovaIndexImpl(root, {
+        path: corePath,
+        load: () => deserializeBody(parsed ?? JSON.parse(raw.toString("utf8")), textPath, { path: edgesPath, raw: edgesRaw }),
+      });
+      bindIndexGeneration(index, sha);
       await touchWorkspace(dir).catch((error: unknown) => {
         throw new IndexingError({ phase: "cache", path: dir, code: "cache-access-write-failed" }, error);
       });
