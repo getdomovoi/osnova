@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
@@ -347,6 +347,7 @@ export async function runCli(
         `base ${result.base.generation}\ncurrent ${result.current.generation}`,
         `${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
         ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
+        ...formatImpactFiles(result),
         ...result.dependents.map(formatImpactDependent),
         formatImpactUncertainty(result.uncertainty),
       ].join("\n"));

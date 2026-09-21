@@ -657,6 +657,11 @@ export function formatImpactDependent(dependent: ImpactResult["dependents"][numb
   return `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash.slice(0, impactReceiptDigits)}]`;
 }
 
+export function formatImpactFiles(result: ImpactResult): string[] {
+  if (result.files.length === 0) return [];
+  return [`files changed: ${result.files.length}; importers of changed files: ${result.omitted.fileImporters} (not listed; module-level edits attribute to no symbol)`];
+}
+
 export function formatImpactUncertainty(uncertainty: ImpactResult["uncertainty"]): string {
   const phrases = uncertainty.notes.map((note) => {
     const short = note.match(/^diff-short-by-(\d+)-context-lines-treated-as-unchanged$/);
@@ -669,6 +674,7 @@ export function formatImpact(result: ImpactResult): string {
   return [
     `osnova settle: ${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
     ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
+    ...formatImpactFiles(result),
     ...result.dependents.map(formatImpactDependent),
     formatImpactUncertainty(result.uncertainty),
   ].join("\n");
