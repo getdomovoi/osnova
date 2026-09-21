@@ -19,7 +19,7 @@ function write(rel: string, content: string): void {
 beforeAll(async () => {
   write("src/math.ts", "export function add(a: number, b: number): number { return a + b; }\nexport function mul(a: number, b: number): number { return a * b; }\n");
   write("test/direct.test.ts", 'import { add } from "../src/math.js";\nimport { it } from "vitest";\nfunction helper(): number { return add(1, 2); }\nit("adds", () => { add(1, 2); helper(); });\n');
-  write("test/import-only.test.ts", 'import { add } from "../src/math.js";\nimport { it } from "vitest";\nit("imports", () => { const f = add; void f; });\n');
+  write("test/import-only.test.ts", 'import { add } from "../src/math.js";\nimport { it } from "vitest";\nit("imports", () => { void 0; });\n');
   write("test/string-only.test.ts", 'import { it } from "vitest";\nit("names", () => { const s = "add"; void s; });\n');
   index = await buildIndex(workspace, { cacheDir });
 }, 60_000);

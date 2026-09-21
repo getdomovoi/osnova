@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
+import { callers, callersDetailed } from "../src/query/callers.js";
+import { formatCallers, formatCallersDetailed } from "../src/query/format.js";
 import type { OsnovaIndex } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
@@ -323,6 +325,165 @@ describe("typescript variance annotations", () => {
       ]);
       const outline = built.edges.find((e) => e.fromSymbol === "frame.ts#outline" && e.toName === "measure");
       expect(outline?.toSymbol).toBe("frame.ts#Frame.measure");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("function value references", () => {
+  const tsLib = [
+    "export function helper(): number { return 1; }",
+    "export function other(): number { return 2; }",
+    "export class Widget { constructor(readonly cb: unknown) {} }",
+    'export const NAME = "x";',
+    "",
+  ].join("\n");
+  const tsMain = [
+    'import { helper, other, Widget, NAME } from "./lib.js";',
+    "function local(): number { return 3; }",
+    "export function useAll(xs: number[], flag: boolean, cb = helper): unknown {",
+    "  const alias = local;",
+    "  let late; late = helper;",
+    "  const arr = [other];",
+    "  const obj = { run: helper, other };",
+    "  xs.sort(local);",
+    "  const pick = flag ? helper : other;",
+    "  const fall = late ?? helper;",
+    "  const fall2 = late || local;",
+    "  const text = `${helper}`;",
+    "  const value = new Widget(helper);",
+    "  console.log(NAME, alias, arr, obj, pick, fall, fall2, text, value, cb);",
+    "  return helper;",
+    "}",
+    "export function nonEmit(): void {",
+    "  helper();",
+    "  const t = typeof helper;",
+    "  const w = { helper: 1 }.helper;",
+    '  const s = "helper";',
+    "  unbound(helper2);",
+    "  void t; void w; void s;",
+    "}",
+    "",
+  ].join("\n");
+  const pyLib = [
+    "def helper():",
+    "    return 1",
+    "",
+    "def other():",
+    "    return 2",
+    "",
+    "class Widget:",
+    "    pass",
+    "",
+    "LIMIT = 3",
+    "",
+  ].join("\n");
+  const pyMain = [
+    "from lib import helper, other, Widget, LIMIT",
+    "",
+    "def local():",
+    "    return 3",
+    "",
+    "def use_all(xs, flag, cb=helper):",
+    "    alias = local",
+    "    arr = [other]",
+    "    pair = {\"run\": helper}",
+    "    tup = (other, 1)",
+    "    xs.sort(key=local)",
+    "    list(map(helper, xs))",
+    "    pick = helper if flag else other",
+    "    fall = alias or helper",
+    "    text = f\"{helper}\"",
+    "    a, b = other, helper",
+    "    obj = isinstance(xs, Widget)",
+    "    print(LIMIT, alias, arr, pair, tup, pick, fall, text, a, b, obj, cb)",
+    "    return helper",
+    "",
+    "def non_emit(x):",
+    "    helper()",
+    "    y = x.helper",
+    "    s = \"helper\"",
+    "    unbound(helper2)",
+    "    return y, s",
+    "",
+    "class Child(Widget):",
+    "    pass",
+    "",
+  ].join("\n");
+
+  const references = (built: OsnovaIndex, file: string): string[] =>
+    built.edges.filter((e) => e.fromFile === file && e.kind === "references")
+      .map((e) => `${e.line}:${e.fromSymbol}->${e.toName}=${e.toSymbol ?? "unresolved"}[${e.evidence?.source === "syntax" && e.evidence.resolution.status === "resolved" ? e.evidence.resolution.method : e.evidence?.source === "syntax" ? e.evidence.resolution.status : "?"}]`);
+
+  it("emits a bound references edge for every typescript value position and none elsewhere", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-valueref-ts-"));
+    try {
+      fs.writeFileSync(path.join(dir, "lib.ts"), tsLib);
+      fs.writeFileSync(path.join(dir, "main.ts"), tsMain);
+      const built = await buildIndex(dir);
+      expect(references(built, "main.ts")).toEqual([
+        "3:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "4:main.ts#useAll->local=main.ts#local[lexical-definition]",
+        "5:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "6:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "7:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "7:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "8:main.ts#useAll->local=main.ts#local[lexical-definition]",
+        "9:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "9:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "10:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "11:main.ts#useAll->local=main.ts#local[lexical-definition]",
+        "12:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "13:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "15:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+      ]);
+      const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.ts#nonEmit");
+      expect(nonEmit.map((e) => `${e.kind}:${e.toName}`).sort()).toEqual(["calls:helper", "calls:unbound"]);
+      expect(built.edges.some((e) => e.toName === "helper2" || e.toName === "NAME")).toBe(false);
+      expect(built.edges.some((e) => e.kind === "references" && e.binding === undefined)).toBe(false);
+      const detailed = callersDetailed(built, "lib.ts#helper");
+      expect(detailed.status).toBe("found");
+      if (detailed.status !== "found") return;
+      expect(detailed.reach?.d1.edges).toBe(9);
+      const text = formatCallersDetailed(detailed);
+      expect(text).toContain("d1 references main.ts#useAll:3,5,7,9,10,12,13,15 [import-binding]");
+      expect(text).toContain("d1 calls main.ts#nonEmit:18 [import-binding]");
+      expect(formatCallers(callers(built, "main.ts#local"))).toContain("d1 references function main.ts#useAll main.ts:4");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a bound references edge for every python value position and none elsewhere", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-valueref-py-"));
+    try {
+      fs.writeFileSync(path.join(dir, "lib.py"), pyLib);
+      fs.writeFileSync(path.join(dir, "main.py"), pyMain);
+      const built = await buildIndex(dir);
+      expect(references(built, "main.py").filter((line) => !line.startsWith("1:"))).toEqual([
+        "6:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "7:main.py#use_all->local=main.py#local[lexical-definition]",
+        "8:main.py#use_all->other=lib.py#other[import-binding]",
+        "9:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "10:main.py#use_all->other=lib.py#other[import-binding]",
+        "11:main.py#use_all->local=main.py#local[lexical-definition]",
+        "12:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "13:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "13:main.py#use_all->other=lib.py#other[import-binding]",
+        "14:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "15:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "16:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "16:main.py#use_all->other=lib.py#other[import-binding]",
+        "17:main.py#use_all->Widget=lib.py#Widget[import-binding]",
+        "19:main.py#use_all->helper=lib.py#helper[import-binding]",
+      ]);
+      const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.py#non_emit");
+      expect(nonEmit.map((e) => `${e.kind}:${e.toName}`).sort()).toEqual(["calls:helper", "calls:unbound"]);
+      expect(built.edges.some((e) => e.toName === "helper2")).toBe(false);
+      expect(built.edges.some((e) => e.kind === "references" && e.toName === "LIMIT" && e.line !== 1)).toBe(false);
+      expect(built.edges.some((e) => e.kind === "references" && e.line === 28)).toBe(false);
+      expect(built.symbols.get("main.py#Child")?.heritage).toEqual([{ kind: "import", source: "lib", importedName: "Widget" }]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

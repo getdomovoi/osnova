@@ -4,6 +4,8 @@ import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import { FIELD_NODES, FUNCTION_VALUE_NODES, collectBindings, memberKindOf } from "./bindings.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const VALUE_WRAPPERS = new Set(["parenthesized_expression", "as_expression", "satisfies_expression", "non_null_expression"]);
+const VALUE_OPERATORS = new Set(["??", "||"]);
 
 class TsExtractor {
   readonly out = new Extractor();
@@ -54,6 +56,23 @@ function stringFragmentOf(node: Node): string | null {
   if (node.type === "string_fragment") return node.text;
   const fragment = childOfType(node, "string_fragment");
   return fragment !== null ? fragment.text : null;
+}
+
+function valuePosition(node: Node): boolean {
+  let child = node;
+  let parent = node.parent;
+  while (parent !== null && VALUE_WRAPPERS.has(parent.type)) { child = parent; parent = parent.parent; }
+  if (parent === null) return false;
+  const inField = (field: string): boolean => parent.childForFieldName(field)?.id === child.id;
+  switch (parent.type) {
+    case "arguments": case "array": case "return_statement": case "template_substitution": case "object": return true;
+    case "pair": case "variable_declarator": case "required_parameter": case "optional_parameter": return inField("value");
+    case "assignment_expression": case "assignment_pattern": case "object_assignment_pattern": return inField("right");
+    case "arrow_function": return inField("body");
+    case "binary_expression": return VALUE_OPERATORS.has(parent.childForFieldName("operator")?.text ?? "");
+    case "ternary_expression": return inField("consequence") || inField("alternative");
+    default: return FIELD_NODES.has(parent.type) && inField("value");
+  }
 }
 
 function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
@@ -252,6 +271,13 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
           const target = newTarget(node);
           if (target !== null) ex.out.addEdge("calls", target, node, bindings.at(node.childForFieldName("constructor"), node));
           for (const child of childrenOf(node)) visit(child);
+          return;
+        }
+        case "identifier":
+        case "shorthand_property_identifier": {
+          if (!valuePosition(node)) return;
+          const binding = bindings.boundValue(node.text, node);
+          if (binding !== undefined) ex.out.addEdge("references", node.text, node, binding);
           return;
         }
         default: {
