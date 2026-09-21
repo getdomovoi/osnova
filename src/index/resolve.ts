@@ -4,8 +4,8 @@ import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { collectLockfiles, externalLabel } from "./external.js";
 import type { Lockfiles } from "./external.js";
+import { TsConfigs, probeNodeFile } from "./tsconfig.js";
 
-const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
 const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
 // Languages whose receiver hints name a type without an import binding; a type not declared in the
@@ -35,19 +35,7 @@ function resolveNodeSpecifier(
   spec: string,
   knownFiles: ReadonlySet<string>,
 ): string | undefined {
-  const dir = path.posix.dirname(fromFile);
-  const base = path.posix.normalize(path.posix.join(dir, spec));
-  const candidates = [base];
-  for (const ext of TS_EXTENSIONS) candidates.push(base + ext);
-  for (const ext of TS_EXTENSIONS) candidates.push(`${base}/index${ext}`);
-  if (base.endsWith(".js") || base.endsWith(".mjs") || base.endsWith(".cjs")) {
-    const swapped = base.replace(/\.(m|c)?js$/, ".ts");
-    candidates.push(swapped, swapped.replace(/\.ts$/, ".mts"), base.replace(/\.js$/, ".tsx"));
-  }
-  for (const candidate of candidates) {
-    if (knownFiles.has(candidate)) return candidate;
-  }
-  return undefined;
+  return probeNodeFile(path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)), knownFiles);
 }
 
 function resolvePythonSpecifier(
@@ -111,6 +99,8 @@ export interface WorkspaceContext {
   readonly lockfiles: ReadonlyMap<string, Lockfiles>;
   /** Crate directory to the crate names its Cargo.toml dependency tables declare. */
   readonly cargoDependencies: ReadonlyMap<string, ReadonlySet<string>>;
+  /** tsconfig.json and jsconfig.json `paths` and `baseUrl`, read from the nearest config above the importing file. */
+  readonly tsConfigs: TsConfigs;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -161,7 +151,7 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files) };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -232,7 +222,10 @@ function resolveImportTarget(
 ): string | undefined {
   if (language === "typescript" || language === "tsx" || language === "javascript") {
     if (spec.startsWith("./") || spec.startsWith("../")) return resolveNodeSpecifier(fromFile, spec, knownFiles);
-    if (spec.startsWith("node:") || spec.startsWith("/") || spec.startsWith("#")) return undefined;
+    if (spec.startsWith("node:") || spec.startsWith("/")) return undefined;
+    const alias = context.tsConfigs.resolve(fromFile, spec, knownFiles);
+    if (alias.kind !== "none") return alias.kind === "file" ? alias.file : undefined;
+    if (spec.startsWith("#")) return undefined;
     return resolveBareSpecifier(spec, knownFiles, context);
   }
   if (language === "python") {
@@ -372,6 +365,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   const context = workspaceContext(files);
   const externalInput = { lockfiles: context.lockfiles, workspacePackages: new Set(context.packages.keys()), pythonRoots: context.pythonRoots, goModules: new Set(context.goModules.keys()), cargoPackages: new Set(context.cargoPackages.keys()), cargoDependencies: context.cargoDependencies, knownFiles };
   const unresolvedImport = (language: CardLanguage, fromFile: string, spec: string): Extract<EdgeResolution, { status: "unresolved" }> => {
+    if ((language === "typescript" || language === "tsx" || language === "javascript") && !spec.startsWith(".") && context.tsConfigs.resolve(fromFile, spec, knownFiles).kind === "ambiguous") return { status: "unresolved", reason: "import-target-ambiguous" };
     const external = externalLabel(language, fromFile, spec, externalInput);
     return external === undefined ? { status: "unresolved", reason: "import-target-unresolved" } : { status: "unresolved", reason: "import-target-unresolved", external };
   };
