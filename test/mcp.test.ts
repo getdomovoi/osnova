@@ -186,6 +186,22 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("folds nested locals of a shown ground hit into an also line", async () => {
+    write("src/fold.ts", "export function foldRoot(): number {\n  const foldLeft = 1;\n  const foldRight = 2;\n  return foldLeft + foldRight;\n}\n");
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_ground", { question: "fold" });
+      expect(text).toContain("src/fold.ts:1 function src/fold.ts#foldRoot");
+      expect(text).toContain("also: .foldLeft L2, .foldRight L3");
+      expect(text).not.toContain("constant src/fold.ts#foldRoot.foldLeft");
+      const scoped = await callTool(client, "osnova_ground", { question: "foldLeft" });
+      expect(scoped).toContain("also: .foldLeft L2");
+      expect(scoped).not.toContain("constant src/fold.ts#foldRoot.foldLeft");
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
   it("keeps the excerpt notice when inlining would overflow the ground budget", async () => {
     const wide = "x".repeat(50);
     for (let n = 0; n < 12; n++) write(`src/wide${n}.ts`, `export function wideFn${n}(): string {\n${Array.from({ length: 30 }, (_, i) => `  const a${i} = "${wide}";`).join("\n")}\n  return a0;\n}\n`);
