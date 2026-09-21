@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import type { OsnovaIndex } from "../types.js";
@@ -44,7 +44,7 @@ usage:
   osnova ground "<question>" [--in <path>] [-n <n>] [--full] [--scoped] [--workspace <path>] [--cache-dir <path>]
   osnova thread "<pattern>" [--fixed] [-i] [--in <path>] [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova outline <file> [--workspace <path>] [--cache-dir <path>]
-  osnova warp <symbol> [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova warp <symbol> [--direction in|out] [--depth <n>] [--full] [--workspace <path>] [--cache-dir <path>]
   osnova groundwork [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
   osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
   osnova settle <--base-ref <ref> | --base-cache <path>> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
@@ -59,6 +59,7 @@ usage:
 queries refresh the index first so answers describe current disk state.`;
 
 const EXIT_OK = 0;
+const cliCallersCodeUnits = 2_048;
 const EXIT_STALE = 1;
 const EXIT_ERROR = 2;
 
@@ -246,6 +247,7 @@ export async function runCli(
         options: {
           direction: { type: "string" },
           depth: { type: "string" },
+          full: { type: "boolean" },
           workspace: { type: "string" },
           "cache-dir": { type: "string" },
         },
@@ -261,7 +263,7 @@ export async function runCli(
         ...(direction !== undefined ? { direction } : {}),
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
       });
-      io.stdout(formatCallersDetailed(result));
+      io.stdout(parsed.values.full === true ? formatCallersDetailed(result) : formatCallersDetailedBounded(result, cliCallersCodeUnits));
       return EXIT_OK;
     }
     case "groundwork": {

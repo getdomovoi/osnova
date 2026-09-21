@@ -328,22 +328,37 @@ function callerGroups(hits: readonly CallerEvidenceHit[]): CallerGroup[] {
   return sorted;
 }
 
-function siteList(sites: readonly CallerSite[], file: string): string {
+function siteList(sites: readonly CallerSite[], file: string, cap = Number.POSITIVE_INFINITY): string {
   const byFile = new Map<string, number[]>();
+  let total = 0;
   for (const site of sites) {
     const lines = byFile.get(site.file) ?? [];
-    if (!lines.includes(site.line)) lines.push(site.line);
+    if (!lines.includes(site.line)) {
+      lines.push(site.line);
+      total += 1;
+    }
     byFile.set(site.file, lines);
   }
-  const single = byFile.get(file);
-  if (byFile.size === 1 && single !== undefined) return single.join(",");
-  return [...byFile].map(([siteFile, lines]) => `${siteFile}:${lines.join(",")}`).join("; ");
+  const more = total > cap ? `,+${total - cap} more` : "";
+  let remaining = Math.min(total, cap);
+  const entries: string[] = [];
+  for (const [siteFile, lines] of byFile) {
+    if (remaining <= 0) break;
+    const kept = lines.slice(0, remaining);
+    remaining -= kept.length;
+    entries.push(byFile.size === 1 && siteFile === file ? kept.join(",") : `${siteFile}:${kept.join(",")}`);
+  }
+  return `${entries.join("; ")}${more}`;
 }
 
-function callerGroupLines(group: CallerGroup): string[] {
+function siteCount(group: CallerGroup): number {
+  return new Set(group.sites.map((site) => `${site.file}:${site.line}`)).size;
+}
+
+function callerGroupLines(group: CallerGroup, cap = Number.POSITIVE_INFINITY): string[] {
   const header = group.definitionLine === null
-    ? `d${group.depth} ${group.kind} ${group.label}:${siteList(group.sites, group.file)} [${group.basis}]`
-    : `d${group.depth} ${group.kind} ${group.label}:${group.definitionLine} [${group.basis}; source ${siteList(group.sites, "")}]`;
+    ? `d${group.depth} ${group.kind} ${group.label}:${siteList(group.sites, group.file, cap)} [${group.basis}]`
+    : `d${group.depth} ${group.kind} ${group.label}:${group.definitionLine} [${group.basis}; source ${siteList(group.sites, "", cap)}]`;
   const details = new Map<string, CallerSite[]>();
   for (const site of group.sites) {
     const key = site.detail.join("\n");
@@ -397,33 +412,133 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
     "indexed-graph results; relationships use heuristic resolution, not type inference",
     "This does not prove absence of callers or that deletion is safe.",
   ];
-  const hitBlocks = callerGroups(result.hits).map((group) => ({ lines: callerGroupLines(group), edges: group.edges }));
+  const groups = callerGroups(result.hits).sort(comparePriority);
+  const hoisted = hoistedVia(groups, Math.floor(maxCodeUnits / 4));
+  const shownGroups = hoisted.length > 0 ? groups.map((group) => stripVia(group, hoisted)) : groups;
+  const summary = groups.length > 0 ? [directorySummary(groups, Math.floor(maxCodeUnits / 4))] : [];
+  const hoistedLines = hoisted.map((line) => `via (all): ${line.slice("via ".length)}`);
   const unresolvedBlocks = result.unresolved.map(({ edge, depth, nameMatches }) => unresolvedCallerLines(edge, depth, nameMatches));
-  const selectedHits: string[][] = [];
-  const selectedUnresolved: string[][] = [];
-  let shownEdges = 0;
-  const footer = (): string => `omitted: ${result.hits.length - shownEdges} of ${result.hits.length} confirmed edges; ${unresolvedBlocks.length - selectedUnresolved.length} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
+  const footer = (shownEdges: number, shownUnresolved: number): string => `omitted: ${result.hits.length - shownEdges} of ${result.hits.length} confirmed edges; ${unresolvedBlocks.length - shownUnresolved} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
   const targetSuffix = `: ${result.hits.length} indexed edges`;
-  const fixedUnits = [...base, footer()].join("\n").length + targetSuffix.length + 2;
+  const fixedUnits = [...base, ...summary, ...hoistedLines, footer(0, 0)].join("\n").length + targetSuffix.length + 2;
   const target = `${result.target.kind} ${compactField(result.target.qualifiedName, Math.max(1, maxCodeUnits - fixedUnits - result.target.kind.length - 1))}${targetSuffix}`;
-  const fixed = [base[0] ?? "", target, base[1] ?? ""];
+  const header = [base[0] ?? "", target, base[1] ?? "", ...summary, ...hoistedLines];
   const unresolvedHeader = `unresolved evidence (${result.unresolved.length}); not confirmed relationships`;
-  const fits = (block: string[], unresolved: boolean): boolean => [
-    ...fixed, ...selectedHits.flat(),
-    ...(selectedUnresolved.length > 0 || unresolved ? [unresolvedHeader] : []),
-    ...selectedUnresolved.flat(), ...block, footer(),
-  ].join("\n").length <= maxCodeUnits;
-  for (const block of hitBlocks) {
-    if (!fits(block.lines, false)) continue;
-    selectedHits.push(block.lines);
-    shownEdges += block.edges;
+  const folds = (tail: readonly CallerGroup[]): FoldLine[] => {
+    const byFile = new Map<string, FoldLine>();
+    for (const group of tail) {
+      const key = `d${group.depth} ${group.kind} ${group.file}`;
+      const fold = byFile.get(key) ?? { key, symbols: 0, edges: 0 };
+      byFile.set(key, { key, symbols: fold.symbols + 1, edges: fold.edges + group.edges });
+    }
+    return [...byFile.values()];
+  };
+  const layout = (cap: number, shown: number, foldLines: readonly FoldLine[], unresolved: readonly string[][]): { text: string; edges: number } => {
+    const visible = shownGroups.slice(0, shown);
+    const hidden = visible.reduce((sum, group) => sum + Math.max(0, siteCount(group) - cap), 0);
+    const foldedEdges = foldLines.reduce((sum, fold) => sum + fold.edges, 0);
+    const edges = visible.reduce((sum, group) => sum + group.edges, 0) + foldedEdges;
+    const capped: string[] = [];
+    if (hidden > 0) capped.push(`${cap} line number${cap === 1 ? "" : "s"} per symbol; ${hidden} site${hidden === 1 ? "" : "s"} not listed`);
+    if (foldLines.length > 0) capped.push(`${foldedEdges} edges folded into ${foldLines.length} file line${foldLines.length === 1 ? "" : "s"}`);
+    const text = [
+      ...header,
+      ...visible.flatMap((group) => callerGroupLines(group, cap)),
+      ...foldLines.map((fold) => `${fold.key}: +${fold.symbols} symbol${fold.symbols === 1 ? "" : "s"}, ${fold.edges} edge${fold.edges === 1 ? "" : "s"}`),
+      ...(capped.length > 0 ? [`capped: ${capped.join("; ")}; request full output for every site.`] : []),
+      ...(unresolved.length > 0 ? [unresolvedHeader, ...unresolved.flat()] : []),
+      footer(edges, unresolved.length),
+    ].join("\n");
+    return { text, edges };
+  };
+  const fits = (cap: number, shown: number, foldLines: readonly FoldLine[], unresolved: readonly string[][]): boolean =>
+    layout(cap, shown, foldLines, unresolved).text.length <= maxCodeUnits;
+  const maxSites = Math.max(1, ...shownGroups.map(siteCount));
+  let cap = 1;
+  let shown = shownGroups.length;
+  const selectedFolds: FoldLine[] = [];
+  if (fits(maxSites, shown, [], [])) {
+    cap = maxSites;
+  } else if (fits(1, shown, [], [])) {
+    let low = 1;
+    let high = maxSites;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (fits(middle, shown, [], [])) low = middle;
+      else high = middle - 1;
+    }
+    cap = low;
+  } else {
+    shown = 0;
+    while (shown < shownGroups.length && fits(1, shown + 1, folds(shownGroups.slice(shown + 1)), [])) shown += 1;
+    for (const fold of folds(shownGroups.slice(shown))) {
+      if (fits(1, shown, [...selectedFolds, fold], [])) selectedFolds.push(fold);
+    }
   }
-  for (const block of unresolvedBlocks) if (fits(block, true)) selectedUnresolved.push(block);
-  return [
-    ...fixed, ...selectedHits.flat(),
-    ...(selectedUnresolved.length > 0 ? [unresolvedHeader, ...selectedUnresolved.flat()] : []),
-    footer(),
-  ].join("\n");
+  const selectedUnresolved: string[][] = [];
+  for (const block of unresolvedBlocks) {
+    if (fits(cap, shown, selectedFolds, [...selectedUnresolved, block])) selectedUnresolved.push(block);
+  }
+  return layout(cap, shown, selectedFolds, selectedUnresolved).text;
+}
+
+interface FoldLine {
+  readonly key: string;
+  readonly symbols: number;
+  readonly edges: number;
+}
+
+function isTestFile(file: string): boolean {
+  return /(^|\/)(tests?|__tests__|spec)\//.test(file) || /[._](test|spec)\.[^/]+$/.test(file) || /(^|\/)test_[^/]+$/.test(file);
+}
+
+function comparePriority(a: CallerGroup, b: CallerGroup): number {
+  return a.depth - b.depth || Number(isTestFile(a.file)) - Number(isTestFile(b.file)) || compareGroups(a, b);
+}
+
+function directorySummary(groups: readonly CallerGroup[], maxCodeUnits: number): string {
+  const directories = new Map<string, { sites: number; files: Set<string>; allTest: boolean }>();
+  for (const group of groups) {
+    const slash = group.file.lastIndexOf("/");
+    const directory = slash === -1 ? "./" : group.file.slice(0, slash + 1);
+    const entry = directories.get(directory) ?? { sites: 0, files: new Set<string>(), allTest: true };
+    entry.sites += siteCount(group);
+    entry.files.add(group.file);
+    entry.allTest &&= isTestFile(group.file);
+    directories.set(directory, entry);
+  }
+  const ordered = [...directories].sort(([a, left], [b, right]) => Number(left.allTest) - Number(right.allTest) || compareText(a, b));
+  const entries = ordered.map(([directory, { sites, files }]) => `${directory}: ${sites} site${sites === 1 ? "" : "s"} in ${files.size} file${files.size === 1 ? "" : "s"}`);
+  const kept: string[] = [];
+  for (const entry of entries) {
+    const rest = entries.length - kept.length - 1;
+    const line = `summary: ${[...kept, entry].join("; ")}${rest > 0 ? `; +${rest} directories` : ""}`;
+    if (line.length > maxCodeUnits) break;
+    kept.push(entry);
+  }
+  const rest = entries.length - kept.length;
+  return `summary: ${kept.join("; ")}${rest > 0 ? `${kept.length > 0 ? "; " : ""}+${rest} directories` : ""}`;
+}
+
+function hoistedVia(groups: readonly CallerGroup[], maxCodeUnits: number): string[] {
+  let shared: string | undefined;
+  let carriers = 0;
+  for (const group of groups) {
+    const perSite = group.sites.map((site) => site.detail.filter((line) => line.startsWith("via ")).join("\n"));
+    const present = perSite.filter((value) => value.length > 0);
+    if (present.length === 0) continue;
+    if (present.length !== perSite.length || new Set(present).size !== 1) return [];
+    const value = present[0] ?? "";
+    if (shared !== undefined && shared !== value) return [];
+    shared = value;
+    carriers += 1;
+  }
+  if (shared === undefined || carriers < 2 || shared.length > maxCodeUnits) return [];
+  return shared.split("\n");
+}
+
+function stripVia(group: CallerGroup, hoisted: readonly string[]): CallerGroup {
+  return { ...group, sites: group.sites.map((site) => ({ ...site, detail: site.detail.filter((line) => !hoisted.includes(line)) })) };
 }
 
 export function formatMap(result: MapResult): string {

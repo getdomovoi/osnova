@@ -19,7 +19,7 @@ import { renderMapCard } from "../query/mapCard.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
-import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -101,6 +101,7 @@ const toolDefinitions = [
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers (default), out = callees" },
         depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
+        full: { type: "boolean", description: "Print every call site with no per-symbol cap or summary (default false); output is still clipped at 16,384 code units" },
       },
       required: ["symbol"],
     },
@@ -286,10 +287,12 @@ export function createOsnovaMcpServer(
             throw new RangeError("osnova: caller depth must be a positive safe integer");
           }
           const depthValue = args.depth;
+          const full = optionalBoolean(args, "full") ?? false;
           const result = callersDetailed(index, symbol, {
             ...(direction !== undefined ? { direction } : {}),
             ...(depthValue !== undefined ? { depth: depthValue } : {}),
           });
+          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits));
           const available = maximumMcpCallersCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}`);
         }

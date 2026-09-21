@@ -288,6 +288,12 @@ describe("mcp stdio server", () => {
       expect(text).toMatch(/omitted: \d+ of 100 confirmed edges/);
       expect(text).toContain("Use callersDetailed API for complete structured results");
       expect(text).not.toContain("[output truncated:");
+      const full = await callTool(client, "osnova_warp", { symbol: "src/caller-target.ts#callerTarget", full: true });
+      expect(full.length).toBeGreaterThan(2_048);
+      expect(full.length).toBeLessThanOrEqual(16_384);
+      expect(full).toContain("src/caller-99.ts#caller99:2 [import-binding]");
+      expect(full).not.toContain("omitted:");
+      expect(full).not.toContain("summary:");
     } finally {
       await client.close();
     }
