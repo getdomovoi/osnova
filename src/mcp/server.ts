@@ -19,9 +19,16 @@ import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
-import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex } from "../types.js";
+import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
+
+const symbolKinds = Object.keys({ function: true, method: true, class: true, struct: true, interface: true, trait: true, enum: true, type: true, constant: true, module: true } satisfies Record<SymbolKind, true>) as readonly SymbolKind[];
+
+function isSymbolKind(value: string): value is SymbolKind {
+  return (symbolKinds as readonly string[]).includes(value);
+}
+
 
 const maximumMcpSkeletonCodeUnits = 4_096;
 // Sent on initialize; clients that honour MCP instructions place it in the system prompt, so every
@@ -121,6 +128,7 @@ const toolDefinitions = [
         in: { type: "string", description: "Restrict to a file or directory path (repo-relative)" },
         limit: { type: "number", description: "Maximum retrieval seeds (default 8)" },
         depth: { type: "number", description: "Relationship walk depth (default 3)" },
+        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Only seed question hits of these symbol kinds (default: every kind, real definitions before 1-line constants, type aliases and test-file symbols)" },
       },
     },
   },
@@ -303,9 +311,13 @@ export function createOsnovaMcpServer(
           for (const key of ["limit", "depth"]) {
             if (args[key] !== undefined && typeof args[key] !== "number") throw new RangeError(`osnova: footing ${key} must be a nonnegative safe integer`);
           }
+          const kinds = optionalStringArray(args, "kinds");
+          for (const kind of kinds ?? []) {
+            if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
+          }
           const available = maximumMcpFootingCodeUnits - prefix.length - 1;
           const result = taskContext(index, {
-            task, question: question ?? "", symbols, in: optionalString(args, "in"),
+            task, question: question ?? "", symbols, kinds: kinds?.filter(isSymbolKind), in: optionalString(args, "in"),
             limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines, inlineShortDefinitions: mcpInlineShortDefinitions,
             measure: (partial) => formatTaskContext(partial).length,
           });
