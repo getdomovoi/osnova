@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { discardParser, getParser } from "../grammar/loader.js";
 import { languageForPath } from "../grammar/languages.js";
 import { adapterFor } from "../extract/adapters.js";
-import { localJoin } from "../extract/util.js";
+import { forgetTree, localJoin } from "../extract/util.js";
 import type { RawDefinition, RawEdge } from "../extract/adapter.js";
 import type {
   CardLanguage,
@@ -88,6 +88,7 @@ export async function extractCard(
         }));
       } finally {
         tree.delete();
+        forgetTree(tree);
       }
     } else {
       diagnostics.push({ phase: "parse", path: relPath, code: "empty-parse" });

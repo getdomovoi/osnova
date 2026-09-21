@@ -1,12 +1,27 @@
-import type { Node } from "web-tree-sitter";
+import type { Node, Tree } from "web-tree-sitter";
 import { makeSpan, makeSignature } from "./adapter.js";
 import type { RawDefinition, RawEdge } from "./adapter.js";
 import type { Callee, EdgeBinding, EdgeKind, MemberKind, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
 
 export type VisitResult = boolean | void;
 
+const childrenMemo = new WeakMap<Tree, Map<number, Node[]>>();
+
 export function childrenOf(node: Node): Node[] {
-  return node.namedChildren.filter((child): child is Node => child !== null);
+  let perTree = childrenMemo.get(node.tree);
+  if (perTree === undefined) {
+    perTree = new Map();
+    childrenMemo.set(node.tree, perTree);
+  }
+  const cached = perTree.get(node.id);
+  if (cached !== undefined) return cached;
+  const children = node.namedChildren.filter((child): child is Node => child !== null);
+  perTree.set(node.id, children);
+  return children;
+}
+
+export function forgetTree(tree: Tree): void {
+  childrenMemo.delete(tree);
 }
 
 export function walk(node: Node, visit: (node: Node) => VisitResult): void {
