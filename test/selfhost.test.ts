@@ -38,7 +38,7 @@ describe("self-hosting", () => {
     const index = await buildIndex(root);
     const card = await renderMapCard(index, { staleCount: 0 });
     expect(card.length).toBeLessThanOrEqual(maximumOsnovaMapCardCodeUnits);
-    expect(card).toContain("osnova osnova");
+    expect(card).toContain(`osnova ${path.basename(root)} | files `);
   }, 120_000);
 
   it("traces buildIndex callers through the public barrel", async () => {
