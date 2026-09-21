@@ -13,6 +13,7 @@ import type {
   NameMatches,
   OsnovaEdge,
   EdgeKind,
+  UnresolvedCallerEdge,
 } from "../types.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
@@ -252,9 +253,7 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
   lines.push("This does not prove absence of callers or that deletion is safe.");
   if (result.unresolved.length > 0) {
     lines.push(`unresolved evidence (${result.unresolved.length}); not confirmed relationships`);
-    for (const { edge, depth, nameMatches } of result.unresolved) {
-      lines.push(...unresolvedCallerLines(edge, depth, nameMatches));
-    }
+    lines.push(...unresolvedGroupLines(unresolvedGroups(result.unresolved)));
   }
   return lines.join("\n");
 }
@@ -356,7 +355,7 @@ function siteList(sites: readonly CallerSite[], file: string, cap = Number.POSIT
   return `${entries.join("; ")}${more}`;
 }
 
-function siteCount(group: CallerGroup): number {
+function siteCount(group: { readonly sites: readonly CallerSite[] }): number {
   return new Set(group.sites.map((site) => `${site.file}:${site.line}`)).size;
 }
 
@@ -381,18 +380,64 @@ function callerGroupLines(group: CallerGroup, cap = Number.POSITIVE_INFINITY): s
   return lines;
 }
 
-function unresolvedCallerLines(edge: OsnovaEdge, depth: number, matches?: NameMatches): string[] {
-  const lines = [`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`];
-  if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "unresolved") {
-    const external = edge.evidence.resolution.external;
-    lines.push(`  reason: ${edge.evidence.resolution.reason}${external === undefined ? "" : ` (external:${external})`}`);
+interface UnresolvedGroup {
+  readonly depth: number;
+  readonly kind: EdgeKind;
+  readonly name: string;
+  readonly basis: string;
+  readonly detail: string[];
+  readonly candidates: string | undefined;
+  readonly sites: CallerSite[];
+  edges: number;
+}
+
+function unresolvedBasis(edge: OsnovaEdge): string {
+  const resolution = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined;
+  if (resolution?.status === "unresolved") {
+    return `${resolution.reason}${resolution.external === undefined ? "" : ` (external:${resolution.external})`}`;
   }
-  if (matches !== undefined && matches.total > 0) {
-    const more = matches.total - matches.candidates.length;
-    lines.push(`  same-name symbols (${matches.total}, unverified): ${matches.candidates.join(", ")}${more > 0 ? ` and ${more} more` : ""}`);
+  return resolution?.status ?? "unknown provenance";
+}
+
+function candidateLine(name: string, matches: NameMatches | undefined): string | undefined {
+  if (matches === undefined || matches.total === 0) return undefined;
+  const more = matches.total - matches.candidates.length;
+  return `candidates for ${name} (${matches.total}, unverified): ${matches.candidates.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+}
+
+function unresolvedGroups(items: readonly UnresolvedCallerEdge[]): UnresolvedGroup[] {
+  const groups = new Map<string, UnresolvedGroup>();
+  for (const { edge, depth, nameMatches } of items) {
+    const basis = unresolvedBasis(edge);
+    const detail = edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous"
+      ? [`ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`]
+      : [];
+    const candidates = candidateLine(edge.toName, nameMatches);
+    const key = [depth, edge.kind, edge.toName, basis, detail.join("\n"), candidates ?? ""].join("\0");
+    const group = groups.get(key) ?? { depth, kind: edge.kind, name: edge.toName, basis, detail, candidates, sites: [], edges: 0 };
+    if (!group.sites.some((site) => site.file === edge.fromFile && site.line === edge.line)) {
+      group.sites.push({ file: edge.fromFile, line: edge.line, detail: [] });
+    }
+    group.edges += 1;
+    groups.set(key, group);
   }
-  if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous") {
-    lines.push(`  ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`);
+  const sorted = [...groups.values()];
+  for (const group of sorted) group.sites.sort(compareSites);
+  sorted.sort((a, b) => compareText(a.name, b.name) || a.depth - b.depth || compareText(a.kind, b.kind)
+    || compareText(a.basis, b.basis) || compareText(a.detail.join("\n"), b.detail.join("\n")) || compareSites(a.sites[0], b.sites[0]));
+  return sorted;
+}
+
+function unresolvedGroupLines(groups: readonly UnresolvedGroup[], cap = Number.POSITIVE_INFINITY): string[] {
+  const shownCandidates = new Set<string>();
+  const lines: string[] = [];
+  for (const group of groups) {
+    if (group.candidates !== undefined && !shownCandidates.has(group.candidates)) {
+      shownCandidates.add(group.candidates);
+      lines.push(group.candidates);
+    }
+    lines.push(`d${group.depth} ${group.kind} ${group.name} ${siteList(group.sites, "", cap)} [${group.basis}]`);
+    for (const line of group.detail) lines.push(`  ${line}`);
   }
   return lines;
 }
@@ -423,8 +468,8 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
   const shownGroups = hoisted.length > 0 ? groups.map((group) => stripVia(group, hoisted)) : groups;
   const summary = groups.length > 0 ? [directorySummary(groups, Math.floor(maxCodeUnits / 4))] : [];
   const hoistedLines = hoisted.map((line) => `via (all): ${line.slice("via ".length)}`);
-  const unresolvedBlocks = result.unresolved.map(({ edge, depth, nameMatches }) => unresolvedCallerLines(edge, depth, nameMatches));
-  const footer = (shownEdges: number, shownUnresolved: number): string => `omitted: ${result.hits.length - shownEdges} of ${result.hits.length} confirmed edges; ${unresolvedBlocks.length - shownUnresolved} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
+  const unresolvedBlocks = unresolvedGroups(result.unresolved);
+  const footer = (shownEdges: number, shownUnresolved: number): string => `omitted: ${result.hits.length - shownEdges} of ${result.hits.length} confirmed edges; ${result.unresolved.length - shownUnresolved} of ${result.unresolved.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
   const targetSuffix = `: ${result.hits.length} indexed edges`;
   const reachLines = result.reach === undefined ? [] : [formatReach(result.reach)];
   const fixedUnits = [...base, ...reachLines, ...summary, ...hoistedLines, footer(0, 0)].join("\n").length + targetSuffix.length + 2;
@@ -440,9 +485,9 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
     }
     return [...byFile.values()];
   };
-  const layout = (cap: number, shown: number, foldLines: readonly FoldLine[], unresolved: readonly string[][]): { text: string; edges: number } => {
+  const layout = (cap: number, shown: number, foldLines: readonly FoldLine[], unresolved: readonly UnresolvedGroup[]): { text: string; edges: number } => {
     const visible = shownGroups.slice(0, shown);
-    const hidden = visible.reduce((sum, group) => sum + Math.max(0, siteCount(group) - cap), 0);
+    const hidden = [...visible, ...unresolved].reduce((sum, group) => sum + Math.max(0, siteCount(group) - cap), 0);
     const foldedEdges = foldLines.reduce((sum, fold) => sum + fold.edges, 0);
     const edges = visible.reduce((sum, group) => sum + group.edges, 0) + foldedEdges;
     const capped: string[] = [];
@@ -453,12 +498,12 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
       ...visible.flatMap((group) => callerGroupLines(group, cap)),
       ...foldLines.map((fold) => `${fold.key}: +${fold.symbols} symbol${fold.symbols === 1 ? "" : "s"}, ${fold.edges} edge${fold.edges === 1 ? "" : "s"}`),
       ...(capped.length > 0 ? [`capped: ${capped.join("; ")}; request full output for every site.`] : []),
-      ...(unresolved.length > 0 ? [unresolvedHeader, ...unresolved.flat()] : []),
-      footer(edges, unresolved.length),
+      ...(unresolved.length > 0 ? [unresolvedHeader, ...unresolvedGroupLines(unresolved, cap)] : []),
+      footer(edges, unresolved.reduce((sum, group) => sum + group.edges, 0)),
     ].join("\n");
     return { text, edges };
   };
-  const fits = (cap: number, shown: number, foldLines: readonly FoldLine[], unresolved: readonly string[][]): boolean =>
+  const fits = (cap: number, shown: number, foldLines: readonly FoldLine[], unresolved: readonly UnresolvedGroup[]): boolean =>
     layout(cap, shown, foldLines, unresolved).text.length <= maxCodeUnits;
   const maxSites = Math.max(1, ...shownGroups.map(siteCount));
   let cap = 1;
@@ -482,7 +527,7 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
       if (fits(1, shown, [...selectedFolds, fold], [])) selectedFolds.push(fold);
     }
   }
-  const selectedUnresolved: string[][] = [];
+  const selectedUnresolved: UnresolvedGroup[] = [];
   for (const block of unresolvedBlocks) {
     if (fits(cap, shown, selectedFolds, [...selectedUnresolved, block])) selectedUnresolved.push(block);
   }

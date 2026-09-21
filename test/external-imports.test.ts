@@ -95,7 +95,7 @@ describe("external import labels", () => {
     expect(text).toContain("- import-target-unresolved: 9 (external 6, in-repo 3)");
     expect(text).toContain("external packages (top 10):\n- @scope/pkg@1.2.3: 1\n- chalk@5.3.0: 1");
     const callers = formatCallersDetailed(callersDetailed(index, "packages/lib/src/index.ts#use", { direction: "out" }));
-    expect(callers).toContain("  reason: import-target-unresolved (external:vitest@4.1.5)");
+    expect(callers).toMatch(/^d1 calls test packages\/lib\/src\/index\.ts:\d+ \[import-target-unresolved \(external:vitest@4\.1\.5\)\]$/m);
   });
 
   it("labels Python absolute imports outside the workspace and keeps relative and in-repo imports generic", async () => {
