@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { gzipSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
 import { refreshWorkspace } from "../src/api.js";
@@ -109,6 +110,24 @@ it("produces the same artifact bytes when seeded from a sibling as when built co
   expect(seeds(cliCold)).toEqual([]);
   const c = await artifacts(path.join(cacheB, "..", "cacheC"), linked);
   for (const name of artifactNames) expect(a[name]!.equals(c[name]!), name).toBe(true);
+});
+
+it.each(["edges.json", "index.json"])("builds cold when the sibling's gzipped %s is corrupt", async (name) => {
+  const { main, linked, cacheA, cacheB } = await fixture();
+  await buildIndex(main, { cacheDir: cacheA });
+  const cache = await fs.realpath(cacheA);
+  const siblingDir = workspaceDirFor(cache, main);
+  const gzipped = gzipSync(await fs.readFile(path.join(siblingDir, name)));
+  await fs.writeFile(path.join(siblingDir, name), gzipped.subarray(0, Math.floor(gzipped.length / 2)));
+  const progress = vi.fn();
+  const built = await refreshWorkspace(linked, { cacheDir: cacheA, onProgress: progress });
+  expect(seeds(progress)).toEqual([]);
+  expect([...built.files.keys()]).toEqual(["a.ts", "c.ts"]);
+  process.env.OSNOVA_CACHE_SEED = "0";
+  await refreshWorkspace(linked, { cacheDir: cacheB });
+  const a = await artifacts(cacheA, linked);
+  const b = await artifacts(cacheB, linked);
+  for (const artifact of artifactNames) expect(a[artifact]!.equals(b[artifact]!), artifact).toBe(true);
 });
 
 it("reuses nothing from a sibling whose checkout converted line endings and still matches a cold build", async () => {
