@@ -19,6 +19,8 @@ import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 import type { SymbolsUnderTestResult, TestSite, TestsForResult } from "./tests.js";
+import type { UnreferencedResult } from "./unreferenced.js";
+import { entryPointRuleText, unreferencedNotice } from "./unreferenced.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
   if (index.diagnostics === undefined) return "osnova foundation: unverified; index health could not be checked";
@@ -696,4 +698,25 @@ export function formatSymbolsUnderTest(result: SymbolsUnderTestResult): string {
   for (const item of result.imports) lines.push(`- ${item.file} at ${item.lines.map((line) => `${result.file}:${line}`).join(", ")}`);
   lines.push(testsNotice, `limitations: ${result.limitations.join(", ")}`);
   return lines.join("\n");
+}
+
+export function formatUnreferenced(result: UnreferencedResult): string {
+  const listed = result.candidates.length;
+  const lines = [`osnova unreferenced: scope ${result.scope === "" ? "." : result.scope}, kinds ${result.kinds.join(",")}, ${listed} candidates listed of ${listed + result.omitted}, ${result.exportedNotListed} exported not listed, ${result.examined} symbols examined`];
+  for (const candidate of result.candidates) {
+    const symbol = candidate.symbol;
+    const mentions = candidate.mentions === null ? "text mentions skipped (corpus over cap)" : `${candidate.mentions} text mentions in non-test files`;
+    const noLeads = candidate.unresolvedSameNameSites === 0 && candidate.testSites === 0 && candidate.mentions === 0 ? "; no leads" : "";
+    lines.push(`- ${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}${candidate.exported ? " (exported)" : ""}: ${candidate.unresolvedSameNameSites} unresolved same-name sites, ${candidate.testSites} test sites, ${mentions}${noLeads}`);
+  }
+  lines.push(`${result.withoutLeads} of ${listed} listed candidates have no lead at all (no unresolved same-name site, no test site, no text mention); a lead is a place to check by hand, not a caller.`);
+  const entries = result.entryPoints;
+  lines.push(
+    `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}`,
+    entryPointRuleText,
+    result.exportedNotListed > 0 ? "exported symbols are entry points for external consumers and are listed only with includeExported." : "",
+    unreferencedNotice,
+    `limitations: ${result.limitations.join(", ")}`,
+  );
+  return lines.filter((line) => line.length > 0).join("\n");
 }

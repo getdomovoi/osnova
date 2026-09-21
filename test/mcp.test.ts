@@ -39,7 +39,7 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 describe("mcp stdio server", () => {
-  it("exposes exactly the nine foundation tools", async () => {
+  it("exposes exactly the ten foundation tools", async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
@@ -53,12 +53,13 @@ describe("mcp stdio server", () => {
         "osnova_settle",
         "osnova_plumb",
         "osnova_tests",
+        "osnova_unreferenced",
       ]);
       const byName = new Map(tools.map((t) => [t.name, t]));
       for (const [name, verb] of [
         ["osnova_ground", "Search:"], ["osnova_thread", "Text search:"], ["osnova_outline", "Outline:"],
         ["osnova_warp", "Call graph:"], ["osnova_groundwork", "Repository map:"],
-        ["osnova_footing", "Task context:"], ["osnova_settle", "Change impact:"], ["osnova_plumb", "Check claims:"], ["osnova_tests", "Tests:"],
+        ["osnova_footing", "Task context:"], ["osnova_settle", "Change impact:"], ["osnova_plumb", "Check claims:"], ["osnova_tests", "Tests:"], ["osnova_unreferenced", "Unreferenced candidates:"],
       ] as const) {
         expect(byName.get(name)?.description?.startsWith(verb) ?? false, name).toBe(true);
       }
@@ -271,6 +272,32 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("lists unreferenced candidates with leads and the not-proof notice", async () => {
+    write("src/lonely.ts", 'export function lonely(): number { return quiet(); }\nfunction quiet(): number { return 1; }\nfunction silent(): number { return 2; }\nfunction echo(): number { return 3; }\n');
+    write("src/caller.ts", "export function caller(): number { return echo(); }\n");
+    const client = await connect();
+    try {
+      const text = await callTool(client, "osnova_unreferenced", { scope: "src/" });
+      expect(text).toMatch(/^osnova generation [a-f0-9]{16}\nosnova unreferenced: scope src, kinds class,function,method, 2 candidates listed of 2, /);
+      expect(text).toContain("- function src/lonely.ts#silent src/lonely.ts:3: 0 unresolved same-name sites, 0 test sites, 0 text mentions in non-test files");
+      expect(text).toContain("- function src/lonely.ts#echo src/lonely.ts:4: 1 unresolved same-name sites, 0 test sites, 1 text mentions in non-test files");
+      expect(text).not.toContain("#quiet");
+      expect(text).toContain("Candidates only: no indexed caller is not proof of no caller.");
+      const exported = await callTool(client, "osnova_unreferenced", { scope: "src/lonely", includeExported: true, kinds: ["function"], limit: 1 });
+      expect(exported).toContain("1 candidates listed of 3");
+      expect(exported).toContain("- function src/lonely.ts#lonely src/lonely.ts:1 (exported):");
+      expect(await callTool(client, "osnova_unreferenced", { scope: "src/" })).toBe(text);
+      for (const args of [{ limit: "2" }, { kinds: ["nope"] }, { includeExported: "yes" }, { scope: 3 }]) {
+        const rejected = await client.callTool({ name: "osnova_unreferenced", arguments: args });
+        expect(rejected.isError, JSON.stringify(args)).toBe(true);
+      }
+    } finally {
+      await client.close();
+      fs.rmSync(path.join(workspace, "src/lonely.ts"), { force: true });
+      fs.rmSync(path.join(workspace, "src/caller.ts"), { force: true });
+    }
+  }, 60_000);
+
   it("returns isError for tool failures without crashing the server", async () => {
     const client = await connect();
     try {
@@ -287,7 +314,7 @@ describe("mcp stdio server", () => {
       const text = content.map((c) => (c.type === "text" ? c.text : "")).join("");
       expect(text).toContain("osnova error");
       const still = await client.listTools();
-      expect(still.tools).toHaveLength(9);
+      expect(still.tools).toHaveLength(10);
     } finally {
       await client.close();
     }

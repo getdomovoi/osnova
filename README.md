@@ -95,9 +95,9 @@ It reads the client's real config file, proposes the one entry as a unified diff
 
 `osnova doctor` checks the runtime, the cache and every packaged grammar.
 
-## The nine tools
+## The ten tools
 
-The tool names play on the foundation image. The CLI uses the same nine names without the prefix, so `osnova ground` on the command line and `osnova_ground` over MCP are the same query.
+The tool names play on the foundation image. The CLI uses the same ten names without the prefix, so `osnova ground` on the command line and `osnova_ground` over MCP are the same query.
 
 | Tool | Meaning | Does |
 | --- | --- | --- |
@@ -110,6 +110,7 @@ The tool names play on the foundation image. The CLI uses the same nine names wi
 | `osnova_settle` | how the ground settles after a change | Change impact: the symbols a unified diff touches and their indexed dependents |
 | `osnova_plumb` | the plumb line that tests true vertical | Check claims: which of a listed set of call sites the index confirms, which are name matches only, and which dependents were left out |
 | `osnova_tests` | the load test before the floor is trusted | Tests: the indexed test files that reference a symbol with the basis of each edge, or the symbols one test file reaches |
+| `osnova_unreferenced` | the stone no wall rests on | Unreferenced candidates: definitions with no indexed caller, each with its unresolved same-name leads, test sites and text mentions; candidates, never proof |
 
 Every successful response opens with `osnova generation <id>`; errors open with `osnova error:` instead. When the index is partial, one `osnova foundation:` line counts the diagnostics by phase and code (the map card carries its own health line). Outputs stay under fixed budgets (16,384 code units for search, 4,096 for task context, outlines, change impact and claim checks, 2,048 for call graphs and maps). Structured selections print exact omission counts; when text still exceeds the budget, a clipping notice states the omitted code units, so the agent knows when to ask for more.
 
