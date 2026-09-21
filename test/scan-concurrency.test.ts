@@ -29,14 +29,27 @@ describe("scan", () => {
     expect(result.paths).toHaveLength(20 * 10 - 7);
   });
 
-  it("rejects a symlinked directory and a symlinked ignore file", async () => {
+  it("skips a symlinked directory and rejects a symlinked ignore file", async () => {
     const root = await repo();
     await fs.symlink(path.join(root, "pkg1"), path.join(root, "linked"));
-    await expect(scanFiles(root)).rejects.toMatchObject({ diagnostic: { code: "symlink-not-indexed" } });
+    const result = await scanFiles(root);
+    expect(result.symlinkedDirectories).toEqual(["linked"]);
+    expect(result.paths.some((entry) => entry.startsWith("linked/"))).toBe(false);
+    expect(result.paths).toHaveLength(20 * 10 - 7);
     await fs.rm(path.join(root, "linked"));
     await fs.writeFile(path.join(root, "real-ignore"), "");
     await fs.symlink(path.join(root, "real-ignore"), path.join(root, "pkg2", ".gitignore"));
     await expect(scanFiles(root)).rejects.toMatchObject({ diagnostic: { code: "ignore-unreadable" } });
+  });
+
+  it("lists every skipped symlinked directory in sorted order", async () => {
+    const root = await repo();
+    await fs.symlink(path.join(root, "pkg1"), path.join(root, "zlink"));
+    await fs.symlink(path.join(root, "pkg2"), path.join(root, "alink"));
+    await fs.symlink(path.join(root, "pkg3", "src", "f0.ts"), path.join(root, "filelink.ts"));
+    const result = await scanFiles(root);
+    expect(result.symlinkedDirectories).toEqual(["alink", "zlink"]);
+    expect(result.paths).not.toContain("filelink.ts");
   });
 
   it("reports the lexically smaller relative path when two ignore files fail", async () => {

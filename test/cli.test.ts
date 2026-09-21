@@ -47,6 +47,25 @@ describe("cli", () => {
     expect(lines.join("\n")).toMatch(/2 files, \d+ symbols, \d+ edges in \d+ms/);
   });
 
+  it("builds a workspace holding a symlinked directory and names what it skipped", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-symlink-"));
+    const cache = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-symlink-cache-"));
+    try {
+      fs.mkdirSync(path.join(root, "pkg", "brew"), { recursive: true });
+      fs.writeFileSync(path.join(root, "pkg", "brew", "formula.ts"), "export function formula(): number { return 1; }\n");
+      fs.symlinkSync(path.join(root, "pkg", "brew"), path.join(root, "HomebrewFormula"));
+      const { lines, io } = capture();
+      const code = await runCli(["build", root, "--cache-dir", cache], io);
+      expect(code).toBe(0);
+      const text = lines.join("\n");
+      expect(text).toContain("[stderr] osnova build: skipped 1 symlinked directory; symlinks are not followed: HomebrewFormula");
+      expect(text).toMatch(/1 files, \d+ symbols/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cache, { recursive: true, force: true });
+    }
+  });
+
   it("prints the package version", async () => {
     const out: string[] = [];
     expect(await runCli(["--version"], { stdout: (text) => out.push(text), stderr: () => {} })).toBe(0);

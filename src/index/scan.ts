@@ -51,6 +51,7 @@ export interface ScanResult {
   readonly paths: string[];
   readonly truncated: number;
   readonly metadata: ReadonlyMap<string, FileMetadata>;
+  readonly symlinkedDirectories: readonly string[];
 }
 
 export interface FileMetadata {
@@ -71,6 +72,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
 
   const errors: IndexingError[] = [];
   const results: Array<{ rel: string; metadata: FileMetadata }> = [];
+  const symlinkedDirectories: string[] = [];
   let truncated = 0;
 
   const limited = (limit: number) => {
@@ -150,7 +152,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
           }
           if (!stat.isDirectory()) return;
           if (ignored(`${rel}/`)) return;
-          fail({ phase: "read", path: rel, code: "symlink-not-indexed" }, undefined);
+          symlinkedDirectories.push(rel);
         }));
         continue;
       }
@@ -175,5 +177,6 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
   results.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
   const paths = results.map((item) => item.rel);
   const metadata = new Map(results.map((item) => [item.rel, item.metadata]));
-  return { paths, truncated, metadata };
+  symlinkedDirectories.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { paths, truncated, metadata, symlinkedDirectories };
 }

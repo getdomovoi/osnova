@@ -189,6 +189,9 @@ export async function buildIndex(root: string, options?: WorkspaceOptions): Prom
 export async function buildIndexSnapshot(absRoot: string, onProgress?: WorkspaceOptions["onProgress"], cacheDir?: string): Promise<OsnovaIndex> {
   onProgress?.({ phase: "scan", done: 0, total: 0 } satisfies ProgressEvent);
   const scan = await scanFiles(absRoot, cacheDir);
+  if (scan.symlinkedDirectories.length > 0) {
+    onProgress?.({ phase: "scan", done: scan.paths.length, total: scan.paths.length, skippedSymlinkedDirectories: scan.symlinkedDirectories } satisfies ProgressEvent);
+  }
   const files = new Map<string, FileCard>();
   const rawEdges = new Map<string, RawEdgeItem[]>();
   const extracted = await extractCards(absRoot, scan.paths, extractCard, (done) => {

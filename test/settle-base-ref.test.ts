@@ -59,6 +59,18 @@ describe.skipIf(process.platform === "win32")("settle --base-ref", () => {
     expect(await baseTrees()).toEqual([base]);
   });
 
+  it("walks one level of dependents by default and deeper only when --depth asks", async () => {
+    await fs.writeFile(path.join(repo, "outer.ts"), "import { start } from './entry.js';\nexport function outer() { return start(); }\n");
+    git(repo, "add", "."); git(repo, "commit", "-q", "-m", "outer");
+    await fs.writeFile(path.join(repo, "api.ts"), "export function work() { return 3; }\n");
+    git(repo, "commit", "-q", "-am", "head2");
+    const fallback = await settle(["--base-ref", "HEAD~1"]);
+    expect(fallback.text).toContain("entry.ts#start");
+    expect(fallback.text).not.toContain("outer.ts#outer");
+    const deeper = await settle(["--base-ref", "HEAD~1", "--depth", "2"]);
+    expect(deeper.text).toContain("outer.ts#outer");
+  });
+
   it("sees uncommitted edits as part of the current side", async () => {
     await fs.writeFile(path.join(repo, "entry.ts"), "import { work } from './api.js';\nexport function start() { return work(); }\nexport function extra() { return start(); }\n");
     const result = await settle(["--base-ref", "HEAD"]);
