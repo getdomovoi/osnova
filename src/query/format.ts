@@ -3,6 +3,7 @@ import type {
   CallersResult,
   CallersDetailedResult,
   FindTextGroup,
+  FindTextMatch,
   FindTextResult,
   MapResult,
   SkeletonResult,
@@ -61,6 +62,51 @@ export function formatAsk(result: AskResult): string {
 }
 
 
+const threadWindowCodeUnits = 120;
+
+interface ThreadRow {
+  readonly line: number;
+  readonly cols: number[];
+  readonly text: string;
+  start: number;
+  end: number;
+}
+
+export function clipThreadText(text: string, spanStart: number, spanEnd: number, window = threadWindowCodeUnits): string {
+  const indent = text.length - text.trimStart().length;
+  const trimmed = text.trim();
+  const from = Math.max(0, Math.min(spanStart - indent, trimmed.length));
+  const to = Math.max(from, Math.min(spanEnd - indent, trimmed.length));
+  if (trimmed.length <= window) return trimmed;
+  const span = to - from;
+  let start: number;
+  let end: number;
+  if (span >= window) {
+    start = from;
+    end = to;
+  } else {
+    start = Math.max(0, from - Math.floor((window - span) / 2));
+    end = Math.min(trimmed.length, start + window);
+    start = Math.max(0, end - window);
+  }
+  return `${start > 0 ? "…" : ""}${trimmed.slice(start, end)}${end < trimmed.length ? "…" : ""}`;
+}
+
+function threadRows(matches: readonly FindTextMatch[]): ThreadRow[] {
+  const rows: ThreadRow[] = [];
+  for (const match of matches) {
+    const last = rows[rows.length - 1];
+    if (last !== undefined && last.line === match.line) {
+      last.cols.push(match.col + 1);
+      last.start = Math.min(last.start, match.col);
+      last.end = Math.max(last.end, match.col + match.length);
+      continue;
+    }
+    rows.push({ line: match.line, cols: [match.col + 1], text: match.text, start: match.col, end: match.col + match.length });
+  }
+  return rows;
+}
+
 export function formatFindText(groups: readonly FindTextGroup[]): string {
   if (groups.length === 0) return "no matches";
   const blocks: string[] = [];
@@ -69,8 +115,8 @@ export function formatFindText(groups: readonly FindTextGroup[]): string {
       group.symbol !== null
         ? `${group.symbol.kind} ${group.symbol.qualifiedName} (${group.incomingEdges} in)`
         : `<module> ${group.file} (${group.incomingEdges} in)`;
-    const hits = group.matches
-      .map((match) => `${group.file}:${match.line}:${match.col + 1}: ${match.text.trim()}`)
+    const hits = threadRows(group.matches)
+      .map((row) => `${group.file}:${row.line}:${row.cols.join(",")}: ${clipThreadText(row.text, row.start, row.end)}`)
       .join("\n");
     blocks.push(`${label}\n${hits}`);
   }

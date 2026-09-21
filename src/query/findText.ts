@@ -73,7 +73,7 @@ export function findTextDetailed(
           groups.push(group);
         }
         if (group.matches.length < matchLimit) {
-          const hit: FindTextMatch = { line: i + 1, col: match.index, text: line };
+          const hit: FindTextMatch = { line: i + 1, col: match.index, length: match[0].length, text: line };
           const last = group.matches[group.matches.length - 1];
           if (last === undefined || last.line !== hit.line || last.col !== hit.col) {
             group.matches.push(hit);

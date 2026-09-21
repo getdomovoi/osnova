@@ -191,6 +191,7 @@ export interface AskDetailedResult extends AskResult {
 export interface FindTextMatch {
   readonly line: number;
   readonly col: number;
+  readonly length: number;
   readonly text: string;
 }
 
