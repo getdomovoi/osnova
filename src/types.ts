@@ -332,9 +332,10 @@ export interface BuildOptions {
 }
 
 export interface ProgressEvent {
-  readonly phase: "scan" | "extract" | "resolve" | "save";
+  readonly phase: "scan" | "seed" | "extract" | "resolve" | "save";
   readonly done: number;
   readonly total: number;
+  readonly sibling?: string | undefined;
 }
 
 export interface LoadIndexOptions {

@@ -12,6 +12,7 @@ import { loadVerification, saveVerification } from "./index/verification.js";
 import { scanFiles, sameFileMetadata } from "./index/scan.js";
 import { IndexingError } from "./index/diagnostics.js";
 import { knownIndexGeneration, rememberIndexGeneration } from "./index/generation.js";
+import { ensureFamilySidecar, seedProgress, seedWorkspace } from "./index/seed.js";
 
 export type { WorkspaceOptions } from "./index/workspace.js";
 export type { CachePolicy } from "./cache/cache.js";
@@ -104,8 +105,13 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
         index = undefined;
       }
     }
-    let dirty = index === undefined;
-    let known = index === undefined || indexGeneration(index) !== generation ? undefined : verified;
+    const seed = index === undefined && generation === undefined
+      ? await seedWorkspace(canonicalRoot, canonicalCache, options)
+      : undefined;
+    let seededFrom = seed?.sibling;
+    index ??= seed?.index;
+    let dirty = index === undefined || seededFrom !== undefined;
+    let known = index === undefined || seededFrom !== undefined || indexGeneration(index) !== generation ? undefined : verified;
     let rebuiltAfterSectionFailure = false;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
@@ -114,6 +120,10 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
           ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
           : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
         const report = inspection.report;
+        if (seededFrom !== undefined) {
+          options.onProgress?.(seedProgress(seededFrom, index.files.size, report));
+          seededFrom = undefined;
+        }
         if (!isStale(report)) {
           if (dirty) await saveArtifact(index, canonicalCache, options);
           else {
@@ -128,6 +138,7 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
           } catch (error) {
             throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
           }
+          await ensureFamilySidecar(canonicalCache, canonicalRoot, seed?.family, seed !== undefined);
           if (options.reuseMemory === true) {
             rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
           }
