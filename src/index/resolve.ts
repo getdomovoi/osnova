@@ -343,6 +343,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (list === undefined) symbolsByName.set(symbol.name, [symbol]);
     else list.push(symbol);
   }
+  const symbolsByQualifiedName = new Map<string, Map<string, OsnovaSymbol[]>>();
+  for (const [file, card] of files) {
+    const byName = new Map<string, OsnovaSymbol[]>();
+    for (const symbol of card.symbols) {
+      const list = byName.get(symbol.qualifiedName);
+      if (list === undefined) byName.set(symbol.qualifiedName, [symbol]);
+      else list.push(symbol);
+    }
+    symbolsByQualifiedName.set(file, byName);
+  }
+  const declaredAs = (file: string, qualifiedName: string): readonly OsnovaSymbol[] => symbolsByQualifiedName.get(file)?.get(qualifiedName) ?? [];
 
   const knownFiles = new Set(files.keys());
   const context = workspaceContext(files);
@@ -464,6 +475,40 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (targets.length > 0) importTargetsByFile.set(fromFile, targets);
   }
 
+  // Declarations sharing a holder's qualified name (overloads, merged declarations) in its file.
+  const declarationsOf = (holder: OsnovaSymbol): OsnovaSymbol[] => declaredAs(holder.file, holder.qualifiedName).filter(isHolder);
+  const basesOf = (holder: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol[] | null => {
+    const holderCard = files.get(holder.file);
+    if (holderCard === undefined) return null;
+    let bases: readonly OsnovaSymbol[] = [];
+    if (base.kind === "local") bases = declaredAs(holder.file, qualifiedNameOf(holder.file, base.name));
+    else {
+      const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles, context);
+      if (target === undefined) return null;
+      const found = exported(target, base.importedName);
+      if (found.incomplete) return null;
+      bases = [...found.symbols.values()];
+    }
+    const holders = bases.filter(isHolder);
+    return holders.length === 0 || new Set(holders.map((symbol) => symbol.qualifiedName)).size !== 1 ? null : [holders[0]!];
+  };
+  const symbolsFor = (file: string, ref: SymbolBinding): OsnovaSymbol[] | null => {
+    const holderCard = files.get(file);
+    if (holderCard === undefined) return null;
+    if (ref.kind === "local") {
+      const local = [...declaredAs(file, qualifiedNameOf(file, ref.name))];
+      if (local.length > 0 || !TYPED_FAMILY.has(holderCard.language)) return local;
+      const family = languageFamily(holderCard.language);
+      return (symbolsByName.get(ref.name) ?? []).filter((symbol) => (isHolder(symbol) || symbol.kind === "function") && languageFamily(files.get(symbol.file)?.language) === family);
+    }
+    const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles, context);
+    if (target === undefined) return null;
+    const found = exported(target, ref.importedName);
+    return found.incomplete ? null : [...found.symbols.values()];
+  };
+  const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
+    symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
+
   const edges: OsnovaEdge[] = [];
   for (const fromFile of [...rawEdges.keys()].sort()) {
     if (reusable !== undefined && reuse !== undefined && !reuse.resolve.has(fromFile)) {
@@ -510,7 +555,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             }
           }
         } else if (reference.kind === "local") {
-          candidates = card.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(fromFile, reference.name));
+          candidates = [...declaredAs(fromFile, qualifiedNameOf(fromFile, reference.name))];
           // A same-file function named like a builtin (`export function string()`) is not the type a receiver carries.
           if (binding.kind === "member" && BUILTIN_TYPES.has(reference.name) && !candidates.some(isHolder)) candidates = [];
           resolution = { status: "resolved", method: "lexical-definition" };
@@ -561,8 +606,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             const callableKinds: readonly string[] = holder.kind === "module"
               ? ["method", "function", "constant"]
               : ["method", "function"];
-            const own = (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
-              callableKinds.includes(symbol.kind) && symbol.qualifiedName === `${holder.qualifiedName}.${member}`);
+            const own = declaredAs(holder.file, `${holder.qualifiedName}.${member}`).filter((symbol) => callableKinds.includes(symbol.kind));
             if (own.length > 0 || !TYPED_FAMILY.has(card.language)) return own;
             // Go methods and Rust impl blocks may sit in another file of the same package or crate.
             const family = languageFamily(card.language);
@@ -574,23 +618,6 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           // Walk declared heritage when the owner itself lacks the member. Any base that cannot be
           // identified, a cycle, an own non-method field of that name, or two base chains that
           // disagree leaves the member unresolved rather than guessed.
-          const declarationsOf = (holder: OsnovaSymbol): OsnovaSymbol[] => (files.get(holder.file)?.symbols ?? []).filter((symbol) =>
-            symbol.qualifiedName === holder.qualifiedName && isHolder(symbol));
-          const basesOf = (holder: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol[] | null => {
-            const holderCard = files.get(holder.file);
-            if (holderCard === undefined) return null;
-            let bases: OsnovaSymbol[] = [];
-            if (base.kind === "local") bases = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(holder.file, base.name));
-            else {
-              const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles, context);
-              if (target === undefined) return null;
-              const found = exported(target, base.importedName);
-              if (found.incomplete) return null;
-              bases = [...found.symbols.values()];
-            }
-            const holders = bases.filter(isHolder);
-            return holders.length === 0 || new Set(holders.map((symbol) => symbol.qualifiedName)).size !== 1 ? null : [holders[0]!];
-          };
           const inherited = (holder: OsnovaSymbol, depth: number, visited: ReadonlySet<string>, member: string = binding.member): OsnovaSymbol[] | null => {
             const declarations = declarationsOf(holder);
             if (declarations.some((declaration) => declaration.fields?.includes(member))) return null;
@@ -612,28 +639,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             }
             return result;
           };
-          const symbolsFor = (file: string, ref: SymbolBinding): OsnovaSymbol[] | null => {
-            const holderCard = files.get(file);
-            if (holderCard === undefined) return null;
-            if (ref.kind === "local") {
-              const local = holderCard.symbols.filter((symbol) => symbol.qualifiedName === qualifiedNameOf(file, ref.name));
-              if (local.length > 0 || !TYPED_FAMILY.has(holderCard.language)) return local;
-              const family = languageFamily(holderCard.language);
-              return (symbolsByName.get(ref.name) ?? []).filter((symbol) => (isHolder(symbol) || symbol.kind === "function") && languageFamily(files.get(symbol.file)?.language) === family);
-            }
-            const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles, context);
-            if (target === undefined) return null;
-            const found = exported(target, ref.importedName);
-            return found.incomplete ? null : [...found.symbols.values()];
-          };
-          const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
-            symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
           // Every declaration sharing the qualified name (overloads) must agree on the return binding.
           const holderOfCallables = (found: OsnovaSymbol[] | null, receiver: OsnovaSymbol | undefined, mode: ReceiverMode | undefined, select: number | "returns" | "unwrapped" | "elements" | "values" = "returns"): OsnovaSymbol | undefined => {
             if (found === null || found.length === 0) return undefined;
             // An export lookup keeps one symbol per qualified name; every overload declaration must still agree.
             const callables = [...new Map(found.map((symbol) => [symbol.qualifiedName, symbol])).values()].flatMap((symbol) =>
-              (files.get(symbol.file)?.symbols ?? []).filter((other) => other.qualifiedName === symbol.qualifiedName && other.kind === symbol.kind));
+              declaredAs(symbol.file, symbol.qualifiedName).filter((other) => other.kind === symbol.kind));
             const first = callables[0]!;
             if (callables.some((symbol) => symbol.qualifiedName !== first.qualifiedName)) return undefined;
             if (first.kind === "class" || first.kind === "interface") return card.language === "python" && receiver === undefined ? first : undefined;
@@ -855,10 +866,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       // A plain Rust name never names an impl method or a variant: `Ok(x)` is the prelude's, not `ParseResult::Ok`,
       // however unique that is. A function nested in a function or method (`fn imp` inside `fn is_readable_stdin`) still counts.
       const memberOfHolder = (symbol: OsnovaSymbol): boolean => {
-        const own = files.get(symbol.file)?.symbols ?? [];
         const parts = symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).split(".");
         for (let take = parts.length - 1; take > 0; take -= 1) {
-          const parent = own.find((other) => other.qualifiedName === `${symbol.file}#${parts.slice(0, take).join(".")}`);
+          const parent = declaredAs(symbol.file, `${symbol.file}#${parts.slice(0, take).join(".")}`)[0];
           if (parent !== undefined) return isHolder(parent);
         }
         return false;
