@@ -1,6 +1,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-dark.png">
-  <img alt="osnova. A deterministic code map for AI coding agents. Eight tools: ground, thread, outline, warp, groundwork, footing, settle, plumb." src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-light.png" width="1200">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-light.png">
+  <img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/banner-dark.png" width="1200" alt="osnova. A deterministic code map for AI coding agents. Ten tools over MCP and CLI.">
 </picture>
 
 # Osnova
@@ -11,7 +12,11 @@
 
 *Osnova* is the Slavic word for base or foundation. That is the job: give an agent solid ground to stand on before it edits code.
 
-<!-- diagram: architecture, added in the brand PR -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/diagram-architecture-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/diagram-architecture-light.svg">
+  <img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/diagram-architecture-dark.svg" width="1600" alt="A coding agent asks osnova a question and gets back exact file and line, the resolution basis and an omission count; osnova reads a local cache that is built and refreshed from the repository by tree-sitter parsing.">
+</picture>
 
 ## Quick start
 
@@ -32,6 +37,12 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 ```json
 { "mcpServers": { "osnova": { "command": "osnova", "args": ["mcp"] } } }
 ```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/diagram-agent-turn-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/diagram-agent-turn-light.svg">
+  <img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/brand/diagram-agent-turn-dark.svg" width="1600" alt="One agent turn in five steps: prompt, footing, edit, settle, review; footing and settle are answered by osnova from the index, the rest are the agent or the developer acting.">
+</picture>
 
 ## What you get back
 
