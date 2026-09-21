@@ -42,7 +42,15 @@ describe("osnova hook", () => {
       c = capture(JSON.stringify({ cwd: root }));
       expect(await runCli(["hook", "session", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out.join("\n")).toContain("osnova_footing");
-      expect(c.out.join("\n")).toMatch(/Indexed: 2 files, \d+ symbols\./);
+      expect(c.out.join("\n")).toMatch(/Indexed: 2 files, \d+ symbols/);
+      expect(c.out.join("\n")).not.toContain("osnova_thread");
+      expect(c.out.join("\n").split("\n")).toHaveLength(1);
+      expect(c.out.join("\n").length).toBeLessThanOrEqual(160);
+      c = capture(JSON.stringify({ cwd: root }));
+      expect(await runCli(["hook", "session", "--full-contract", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out.join("\n")).toContain("- osnova_thread:");
+      expect(c.out.join("\n")).toContain("not proof of absence");
+      expect(c.out.join("\n")).toMatch(/\nIndexed: 2 files, \d+ symbols\.$/);
       c = capture(JSON.stringify({ prompt: "why does renderInvoice return the wrong total", cwd: path.join(temporary, "missing") }));
       expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out).toEqual([]);
@@ -56,16 +64,37 @@ describe("osnova hook", () => {
       expect(JSON.parse(c.out.join("\n")).hookSpecificOutput.hookEventName).toBe("SessionStart");
       c = capture();
       expect(await runCli(["hook", "install-preview", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
-      const snippet = JSON.parse(c.out.join("\n").split("\n").slice(1).join("\n"));
+      expect(c.out.join("\n").split("\n")[1]).toContain("at most once per diff per session, and only when more than OSNOVA_HOOK_SETTLE_BLOCK_AT");
+      const snippet = JSON.parse(c.out.join("\n").split("\n").slice(2).join("\n"));
       expect(snippet.hooks.UserPromptSubmit[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook prompt");
       expect(snippet.hooks.SessionStart[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook session");
       expect(snippet.hooks.Stop[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook stop");
       expect(snippet.hooks.PostToolUse).toBeUndefined();
       c = capture();
       expect(await runCli(["hook", "install-preview", "--nudge", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
-      const withNudge = JSON.parse(c.out.join("\n").split("\n").slice(1).join("\n"));
+      const withNudge = JSON.parse(c.out.join("\n").split("\n").slice(2).join("\n"));
       expect(withNudge.hooks.PostToolUse[0].matcher).toBe("Grep|Bash");
       expect(withNudge.hooks.PostToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook tool");
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+
+  it("prompt prints the named definitions and the omitted counts, never relationship lines", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-lean-"));
+    try {
+      const root = path.join(temporary, "ws"); await fs.mkdir(root);
+      await fs.writeFile(path.join(root, "billing.ts"), "export function total() { return 1; }\nexport function renderInvoice() { return total(); }\n");
+      await fs.writeFile(path.join(root, "use.ts"), "import { renderInvoice } from \"./billing\";\nexport function report() { return renderInvoice(); }\nexport function again() { return renderInvoice(); }\n");
+      const cacheDir = path.join(temporary, "cache");
+      const { buildIndex } = await import("../src/index.js");
+      await buildIndex(root, { cacheDir });
+      const c = capture(JSON.stringify({ prompt: "what does `renderInvoice` return here", cwd: root }));
+      expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
+      const text = c.out.join("\n");
+      expect(text).toContain("- function billing.ts#renderInvoice billing.ts:2");
+      expect(text).not.toContain("billing.ts#total billing.ts:1");
+      expect(text).not.toContain("use.ts#report use.ts:2");
+      expect(text).not.toMatch(/ -> /);
+      expect(text).toMatch(/\n {2}omitted: 3 definitions, 3 relationships$/);
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
@@ -106,6 +135,8 @@ describe("osnova hook", () => {
       c = capture(JSON.stringify({ session_id: `${session}-b`, cwd: root, tool_name: "Bash", tool_input: { command: "cat x | rg --type ts \\bInvoice\\b" } }));
       expect(await runCli(["hook", "tool", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out.join("\n")).toContain("billing.ts#Invoice is indexed");
+      await expect(fs.access(path.join(cacheDir, "hook-state", `${session}.json`))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(os.tmpdir(), "osnova-hook-nudges", `${session}.json`))).rejects.toThrow();
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
@@ -142,40 +173,89 @@ describe("osnova hook", () => {
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
-  it("stop blocks once with the dependents of the uncommitted diff, and stays silent otherwise", async () => {
+  it("stop continues the turn once per diff when the dependents pass the threshold, warns otherwise, and keeps its state under the cache directory", async () => {
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-stop-"));
     try {
       const root = path.join(temporary, "ws"); await fs.mkdir(root);
       const { execFileSync } = await import("node:child_process");
       const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
       git("init", "-q"); git("config", "user.email", "t@example.com"); git("config", "user.name", "t");
-      await fs.writeFile(path.join(root, "lib.ts"), "export function total(n: number) {\n  return n;\n}\n");
-      await fs.writeFile(path.join(root, "use.ts"), "import { total } from './lib.js';\nexport function report() { return total(1); }\n");
+      const lib = (tax: string, total: string) => `export function tax(n: number) {\n  return ${tax};\n}\nexport function total(n: number) {\n  return ${total};\n}\n`;
+      await fs.writeFile(path.join(root, "lib.ts"), lib("n", "n"));
+      await fs.writeFile(path.join(root, "use.ts"), "import { total, tax } from './lib.js';\nexport function report() { return total(1) + tax(1); }\n");
+      await fs.writeFile(path.join(root, "alt.ts"), "import { total } from './lib.js';\nexport function summary() { return total(2); }\n");
       git("add", "."); git("commit", "-q", "-m", "init");
       const cacheDir = path.join(temporary, "cache");
+      const session = `osnova-stop-${Date.now()}`;
+      const stateFile = path.join(cacheDir, "hook-state", `${session}.json`);
       const { runHook } = await import("../src/cli/hook.js");
       let c = capture();
-      await runHook("stop", JSON.stringify({ cwd: root }), c.io, { cacheDir });
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
       expect(c.out).toEqual([]);
       const { buildIndex } = await import("../src/index.js");
       await buildIndex(root, { cacheDir });
       c = capture();
-      await runHook("stop", JSON.stringify({ cwd: root }), c.io, { cacheDir });
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
       expect(c.out).toEqual([]);
-      await fs.writeFile(path.join(root, "lib.ts"), "export function total(n: number) {\n  return n * 2;\n}\n");
+      await fs.writeFile(path.join(root, "lib.ts"), lib("n * 3", "n"));
       c = capture();
-      await runHook("stop", JSON.stringify({ cwd: root }), c.io, { cacheDir });
-      const decision = JSON.parse(c.out.join("\n"));
-      expect(decision.decision).toBe("block");
-      expect(decision.reason).toContain("- use.ts: report:");
-      expect(decision.reason).toMatch(/dependents in 1 files/);
-      expect(decision.reason.length).toBeLessThanOrEqual(1_536);
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
+      const warned = JSON.parse(c.out.join("\n"));
+      expect(warned.decision).toBeUndefined();
+      expect(warned.hookSpecificOutput).toBeUndefined();
+      expect(warned.systemMessage).toContain("- use.ts: report:");
+      expect(warned.systemMessage).toMatch(/1 indexed dependents in 1 files/);
+      await expect(fs.access(stateFile)).rejects.toThrow();
+      await fs.writeFile(path.join(root, "lib.ts"), lib("n", "n * 2"));
       c = capture();
-      await runHook("stop", JSON.stringify({ cwd: root, stop_hook_active: true }), c.io, { cacheDir });
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
+      const fired = JSON.parse(c.out.join("\n"));
+      expect(fired.decision).toBeUndefined();
+      expect(fired.hookSpecificOutput.hookEventName).toBe("Stop");
+      expect(fired.hookSpecificOutput.additionalContext).toContain("- use.ts: report:");
+      expect(fired.hookSpecificOutput.additionalContext).toContain("- alt.ts: summary:");
+      expect(fired.hookSpecificOutput.additionalContext).toMatch(/2 indexed dependents in 2 files/);
+      expect(fired.hookSpecificOutput.additionalContext.length).toBeLessThanOrEqual(1_536);
+      await expect(fs.access(stateFile)).resolves.toBeUndefined();
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
+      const repeated = JSON.parse(c.out.join("\n"));
+      expect(repeated.hookSpecificOutput).toBeUndefined();
+      expect(repeated.decision).toBeUndefined();
+      expect(repeated.systemMessage).toMatch(/2 indexed dependents in 2 files/);
+      await fs.writeFile(path.join(root, "lib.ts"), lib("n", "n * 4"));
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
+      expect(JSON.parse(c.out.join("\n")).hookSpecificOutput.hookEventName).toBe("Stop");
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session, stop_hook_active: true }), c.io, { cacheDir });
       expect(c.out).toEqual([]);
       c = capture();
-      await runHook("stop", JSON.stringify({ cwd: root }), c.io, { cacheDir, client: "cursor" });
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: `${session}-codex` }), c.io, { cacheDir, client: "codex" });
+      const codex = JSON.parse(c.out.join("\n"));
+      expect(codex.decision).toBe("block");
+      expect(codex.reason).toContain("- alt.ts: summary:");
+      expect(codex.hookSpecificOutput).toBeUndefined();
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: `${session}-codex` }), c.io, { cacheDir, client: "codex" });
+      const codexAgain = JSON.parse(c.out.join("\n"));
+      expect(codexAgain.decision).toBeUndefined();
+      expect(codexAgain.systemMessage).toContain("- alt.ts: summary:");
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, conversation_id: `${session}-cursor` }), c.io, { cacheDir, client: "cursor" });
       expect(JSON.parse(c.out.join("\n")).followup_message).toContain("- use.ts: report:");
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, conversation_id: `${session}-cursor` }), c.io, { cacheDir, client: "cursor" });
+      expect(c.out).toEqual([]);
+      await expect(fs.access(path.join(cacheDir, "hook-state", `${session}-cursor.json`))).resolves.toBeUndefined();
+      process.env.OSNOVA_HOOK_SETTLE_BLOCK_AT = "5";
+      try {
+        c = capture();
+        await runHook("stop", JSON.stringify({ cwd: root, session_id: `${session}-high` }), c.io, { cacheDir });
+        const under = JSON.parse(c.out.join("\n"));
+        expect(under.hookSpecificOutput).toBeUndefined();
+        expect(under.systemMessage).toMatch(/2 indexed dependents/);
+      } finally { delete process.env.OSNOVA_HOOK_SETTLE_BLOCK_AT; }
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 });

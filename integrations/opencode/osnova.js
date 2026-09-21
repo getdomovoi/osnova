@@ -6,11 +6,11 @@ import { spawn } from "node:child_process";
 
 const executable = process.env.OSNOVA_BIN ?? "osnova";
 
-function hook(event, payload, cwd) {
+function hook(event, payload, cwd, ...flags) {
   return new Promise((resolve) => {
     let out = "";
     try {
-      const child = spawn(executable, ["hook", event], { cwd, stdio: ["pipe", "pipe", "ignore"] });
+      const child = spawn(executable, ["hook", event, ...flags], { cwd, stdio: ["pipe", "pipe", "ignore"] });
       const timer = setTimeout(() => { child.kill(); resolve(""); }, 15_000);
       child.stdout.on("data", (chunk) => { out += chunk; });
       child.on("error", () => { clearTimeout(timer); resolve(""); });
@@ -25,7 +25,7 @@ export const OsnovaPlugin = async ({ directory, worktree }) => {
   let contract;
   return {
     "experimental.chat.system.transform": async (_input, output) => {
-      contract ??= await hook("session", { cwd }, cwd);
+      contract ??= await hook("session", { cwd }, cwd, "--full-contract");
       if (contract.length > 0) output.system.push(contract);
     },
     "chat.message": async (_input, output) => {

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>osnova social preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400&display=block" rel="stylesheet">
+<style>
+:root { --bg: #0D0E0F; --ink: #E8E6E3; --muted: #9A9894; --brass: #C89B4A; --slate: #6FA3A8; }
+html, body { margin: 0; }
+body { width: 1200px; height: 630px; overflow: hidden; background: var(--bg); font-family: "IBM Plex Sans", sans-serif; -webkit-font-smoothing: antialiased; }
+.frame { position: relative; box-sizing: border-box; width: 1200px; height: 630px; display: flex; flex-direction: column; justify-content: space-between; padding: 78px 84px; }
+.plinth { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; background: var(--brass); }
+.thread { position: absolute; bottom: 22px; width: 26px; }
+.t1 { left: 84px; height: 52px; background: color-mix(in srgb, var(--brass) 22%, var(--bg)); }
+.t2 { left: 134px; height: 34px; background: color-mix(in srgb, var(--brass) 16%, var(--bg)); }
+.t3 { left: 184px; height: 42px; background: color-mix(in srgb, var(--brass) 10%, var(--bg)); }
+.top { display: flex; align-items: center; gap: 26px; }
+.mark { color: var(--brass); display: inline-flex; }
+.mark svg { width: 86px; height: 86px; }
+.eyebrow { font-family: "JetBrains Mono", monospace; font-size: 17px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+.lockup { display: flex; flex-direction: column; gap: 26px; position: relative; }
+.wordmark { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 128px; line-height: 1; letter-spacing: -0.025em; color: var(--ink); }
+.tagline { font-size: 34px; line-height: 1.35; color: var(--muted); max-width: 820px; }
+.foot { display: flex; align-items: center; justify-content: space-between; position: relative; font-family: "JetBrains Mono", monospace; font-size: 22px; }
+.repo { color: var(--slate); }
+.npm { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="plinth"></div>
+  <div class="thread t1"></div><div class="thread t2"></div><div class="thread t3"></div>
+  <div class="top">
+    <span class="mark"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4.4" y="2.6" width="3.1" height="17.9" rx="0.4"/><rect x="10.45" y="5.6" width="3.1" height="14.9" rx="0.4"/><rect x="16.5" y="4.1" width="3.1" height="16.4" rx="0.4"/><rect x="1.6" y="10.9" width="20.8" height="2.6" rx="0.4"/><rect x="1.6" y="17.4" width="20.8" height="3.1" rx="0.4"/></svg></span>
+    <span class="eyebrow">Apache-2.0 · no network · no telemetry</span>
+  </div>
+  <div class="lockup">
+    <div class="wordmark">osnova</div>
+    <div class="tagline">A deterministic code map for AI coding agents</div>
+  </div>
+  <div class="foot">
+    <span class="repo">github.com/getdomovoi/osnova</span>
+    <span class="npm">npm @getdomovoi/osnova</span>
+  </div>
+</div>
+</body>
+</html>

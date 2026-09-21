@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
-import { getParser } from "../grammar/loader.js";
+import { discardParser, getParser } from "../grammar/loader.js";
 import { languageForPath } from "../grammar/languages.js";
 import { adapterFor } from "../extract/adapters.js";
-import { localJoin } from "../extract/util.js";
+import { forgetTree, localJoin } from "../extract/util.js";
 import type { RawDefinition, RawEdge } from "../extract/adapter.js";
 import type {
   CardLanguage,
@@ -17,14 +17,18 @@ import { OsnovaIndexImpl, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { resolveCacheDir, workspaceLockPath } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
-import { saveArtifact, serializeArtifact } from "./serialize.js";
+import { artifactPathFor, saveArtifact, serializeArtifact } from "./serialize.js";
+import { ensureFamilySidecar, seedProgress, seedWorkspace } from "./seed.js";
 import { saveVerification } from "./verification.js";
+import { knownIndexGeneration } from "./generation.js";
 import { resolveEdges } from "./resolve.js";
+import type { EdgeReuse } from "./resolve.js";
 import { scanFiles, sha256Hex, sourceText } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
 import type { WorkspaceOptions } from "./workspace.js";
-import { inspectFreshness, isStale } from "./incremental.js";
+import { applyFreshnessReport, inspectFreshness, isStale } from "./incremental.js";
+import { extractCards } from "./extractPool.js";
 
 function languageOf(relPath: string): CardLanguage {
   return languageForPath(relPath) ?? "fallback";
@@ -86,11 +90,13 @@ export async function extractCard(
         }));
       } finally {
         tree.delete();
+        forgetTree(tree);
       }
     } else {
       diagnostics.push({ phase: "parse", path: relPath, code: "empty-parse" });
     }
   } catch {
+    discardParser(language);
     definitions = [];
     rawEdges = [];
     reExports = [];
@@ -142,8 +148,9 @@ export function finalizeIndex(
   root: string,
   files: Map<string, FileCard>,
   rawEdges: ReadonlyMap<string, readonly RawEdgeItem[]>,
+  reuse?: EdgeReuse,
 ): OsnovaIndexImpl {
-  const edges = resolveEdges({ root, files, rawEdges });
+  const edges = resolveEdges({ root, files, rawEdges, ...(reuse === undefined ? {} : { reuse }) });
   return new OsnovaIndexImpl(root, files, edges);
 }
 
@@ -153,13 +160,26 @@ export async function buildIndex(root: string, options?: WorkspaceOptions): Prom
   await fs.mkdir(cacheDir, { recursive: true });
   const canonicalCache = await fs.realpath(cacheDir);
   return withCacheLock(workspaceLockPath(canonicalCache, absRoot), async () => {
+    const seed = await artifactPathFor(absRoot, canonicalCache) === undefined
+      ? await seedWorkspace(absRoot, canonicalCache, options)
+      : undefined;
+    let seeded = seed?.index !== undefined && seed.sibling !== undefined ? { index: seed.index, sibling: seed.sibling } : undefined;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const index = await buildIndexSnapshot(absRoot, options?.onProgress, canonicalCache);
-      const inspection = await inspectFreshness(index, absRoot);
+      let index = seeded?.index ?? await buildIndexSnapshot(absRoot, options?.onProgress, canonicalCache);
+      let inspection = await inspectFreshness(index, absRoot);
+      if (seeded !== undefined) {
+        options?.onProgress?.(seedProgress(seeded.sibling, index.files.size, inspection.report));
+        seeded = undefined;
+        if (isStale(inspection.report)) {
+          index = await applyFreshnessReport(index, absRoot, [], inspection.report);
+          inspection = await inspectFreshness(index, absRoot, inspection.metadata);
+        }
+      }
       if (isStale(inspection.report)) continue;
       options?.onProgress?.({ phase: "save", done: 0, total: 0 });
       await saveArtifact(index, canonicalCache, options);
-      await saveVerification(canonicalCache, absRoot, sha256Hex(serializeArtifact(index)), inspection.metadata);
+      await saveVerification(canonicalCache, absRoot, knownIndexGeneration(index) ?? sha256Hex(serializeArtifact(index)), inspection.metadata);
+      await ensureFamilySidecar(canonicalCache, absRoot, seed?.family, seed !== undefined);
       return index;
     }
     throw new IndexingError({ phase: "scan", path: absRoot, code: "workspace-changing" });
@@ -171,13 +191,12 @@ export async function buildIndexSnapshot(absRoot: string, onProgress?: Workspace
   const scan = await scanFiles(absRoot, cacheDir);
   const files = new Map<string, FileCard>();
   const rawEdges = new Map<string, RawEdgeItem[]>();
-  for (let i = 0; i < scan.paths.length; i += 1) {
-    const relPath = scan.paths[i];
-    if (relPath === undefined) continue;
-    const { card, rawEdges: fileEdges } = await extractCard(absRoot, relPath);
-    files.set(relPath, card);
-    if (fileEdges.length > 0) rawEdges.set(relPath, fileEdges);
-    onProgress?.({ phase: "extract", done: i + 1, total: scan.paths.length } satisfies ProgressEvent);
+  const extracted = await extractCards(absRoot, scan.paths, extractCard, (done) => {
+    onProgress?.({ phase: "extract", done, total: scan.paths.length } satisfies ProgressEvent);
+  });
+  for (const { card, rawEdges: fileEdges } of extracted) {
+    files.set(card.path, card);
+    if (fileEdges.length > 0) rawEdges.set(card.path, fileEdges);
   }
   onProgress?.({ phase: "resolve", done: 0, total: 0 } satisfies ProgressEvent);
   return bindIndexCache(finalizeIndex(absRoot, files, rawEdges), cacheDir);

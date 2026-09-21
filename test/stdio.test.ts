@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 
-it("initializes real stdio, exercises all eight tools, refreshes and shuts down without stdout noise", async () => {
+it("initializes real stdio, exercises all ten tools, refreshes and shuts down without stdout noise", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "osnova-stdio-"));
   try {
     const workspace = path.join(root, "workspace");

@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { OSNOVA_VERSION } from "../version.js";
 import { resolveCacheDir } from "../cache/cache.js";
+import { familySiblings, workspaceFamily } from "../cache/family.js";
 import { getParser } from "../grammar/loader.js";
 import { extensionLanguage, grammarFile, languageTier } from "../grammar/languages.js";
 import type { LanguageId } from "../types.js";
@@ -106,6 +107,25 @@ export async function integrationFileChecks(home: string): Promise<DiagnosticChe
   return checks;
 }
 
+async function familyCheck(workspace: string, cache: string): Promise<DiagnosticCheck> {
+  const family = await workspaceFamily(path.resolve(workspace));
+  if (family === undefined) {
+    return { id: "cache:family", status: "ok", message: "Workspace is not the top level of a git worktree; no cache family, so a first build starts cold." };
+  }
+  let siblings: string[];
+  try {
+    siblings = (await familySiblings(cache, path.resolve(workspace), family)).map((sibling) => sibling.root);
+  } catch (error) {
+    return { id: "cache:family", status: "warning", message: `Cache family ${family}; sibling caches could not be listed: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  return {
+    id: "cache:family", status: "ok",
+    message: siblings.length === 0
+      ? `Cache family ${family} (git common dir); no sibling worktree cache, so a first build starts cold.`
+      : `Cache family ${family} (git common dir); ${siblings.length} sibling worktree cache${siblings.length === 1 ? "" : "s"} a first build may seed from: ${siblings.join(", ")}.`,
+  };
+}
+
 export async function doctor(workspace: string, options: DoctorOptions = {}): Promise<DoctorReport> {
   const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
   const runtimeOk = major > 22 || (major === 22 && minor >= 13);
@@ -144,6 +164,7 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
   } catch {
     checks.push({ id: "cache", status: "error", message: "Cache path or its existing ancestor is not an accessible writable directory. No writes attempted." });
   }
+  checks.push(await familyCheck(workspace, cache));
   const samples: Record<LanguageId, string> = {
     typescript: "function probe(): number { return 1; }",
     tsx: "const probe = <div />;",
@@ -155,6 +176,7 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     c_sharp: "class Probe { void Run() {} }",
     c: "int probe() { return 1; }",
     cpp: "int probe() { return 1; }",
+    objc: "@interface Probe\n- (int)probe;\n@end\n",
     ruby: "def probe\n  1\nend\n",
     php: "<?php\nfunction probe() { return 1; }\n",
     kotlin: "fun probe(): Int { return 1 }",

@@ -7,6 +7,7 @@ import type { LockOptions } from "../cache/lock.js";
 
 export interface WorkspaceOptions extends BuildOptions, CachePolicy, LockOptions {
   readonly reuseMemory?: boolean | undefined;
+  readonly seedFromSiblings?: boolean | undefined;
 }
 
 const indexCaches = new WeakMap<OsnovaIndex, string>();

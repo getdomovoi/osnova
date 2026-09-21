@@ -301,6 +301,37 @@ describe("receiver identity", () => {
     expect(index.outgoing("a.py#outside")[0]?.toSymbol).toBeUndefined();
   });
 
+  it("resolves Python methods under shape-preserving decorators and still refuses unknown ones", async () => {
+    const index = await build({
+      "core.py": "import contextlib\nimport functools\nfrom contextlib import contextmanager\nfrom functools import lru_cache\nfrom typing import final\nfrom abc import abstractmethod\n\nclass Formatter:\n    @contextmanager\n    def section(self):\n        yield\n    @contextlib.contextmanager\n    def indent(self):\n        yield\n    @lru_cache(maxsize=8)\n    def cached(self):\n        return 1\n    @functools.cache\n    def cached2(self):\n        return 1\n    @final\n    def fixed(self):\n        return 1\n    @abstractmethod\n    def abstract(self):\n        return 1\n    @weird\n    def odd(self):\n        return 1\n    @contextmanager\n    def inner(self):\n        self.cached()\n        yield\n",
+      "use.py": "from core import Formatter\n\ndef with_section(f: Formatter):\n    with f.section():\n        pass\n\ndef with_indent(f: Formatter):\n    with f.indent():\n        pass\n\ndef plain(f: Formatter):\n    f.cached()\n    f.cached2()\n    f.fixed()\n    f.abstract()\n    f.odd()\n",
+      "shadow.py": "def contextmanager(f):\n    return property(f)\n\nclass Shadowed:\n    @contextmanager\n    def section(self):\n        yield\n\ndef use(s: Shadowed):\n    with s.section():\n        pass\n",
+      "imports.py": "import contextlib as lib\nfrom contextlib import contextmanager as cm\n\nclass Aliased:\n    @lib.contextmanager\n    def namespaced(self):\n        yield\n    @cm\n    def renamed(self):\n        yield\n\ndef use(a: Aliased):\n    with a.namespaced():\n        pass\n    with a.renamed():\n        pass\n",
+      "star.py": "from functools import *\n\nclass Starred:\n    @cache\n    def starred(self):\n        return 1\n",
+      "use_star.py": "from star import Starred\n\ndef use(s: Starred):\n    s.starred()\n",
+    });
+    expect(index.symbols.get("core.py#Formatter.section")?.memberKind).toBe("instance");
+    expect(index.symbols.get("core.py#Formatter.odd")?.memberKind).toBe("unknown");
+    expect(index.symbols.get("shadow.py#Shadowed.section")?.memberKind).toBe("unknown");
+    const section = index.outgoing("use.py#with_section")[0];
+    expect(section?.toSymbol).toBe("core.py#Formatter.section");
+    expect(section?.evidence).toMatchObject({ resolution: { method: "receiver-hint", receiver: { classSymbol: "core.py#Formatter", mode: "instance", basis: "annotation" } } });
+    expect(index.outgoing("use.py#with_indent")[0]?.toSymbol).toBe("core.py#Formatter.indent");
+    const plain = new Map(index.outgoing("use.py#plain").map((edge) => [edge.toName, edge.toSymbol]));
+    expect(plain.get("cached")).toBe("core.py#Formatter.cached");
+    expect(plain.get("cached2")).toBe("core.py#Formatter.cached2");
+    expect(plain.get("fixed")).toBe("core.py#Formatter.fixed");
+    expect(plain.get("abstract")).toBe("core.py#Formatter.abstract");
+    expect(plain.get("odd")).toBeUndefined();
+    expect(index.outgoing("core.py#Formatter.inner").find((edge) => edge.toName === "cached")?.toSymbol).toBe("core.py#Formatter.cached");
+    expect(index.outgoing("shadow.py#use")[0]?.toSymbol).toBeUndefined();
+    const aliased = new Map(index.outgoing("imports.py#use").map((edge) => [edge.toName, edge.toSymbol]));
+    expect(aliased.get("namespaced")).toBe("imports.py#Aliased.namespaced");
+    expect(aliased.get("renamed")).toBeUndefined();
+    expect(index.symbols.get("star.py#Starred.starred")?.memberKind).toBe("unknown");
+    expect(index.outgoing("use_star.py#use")[0]?.toSymbol).toBeUndefined();
+  });
+
   it("does not use an instance before its local initialization", async () => {
     const index = await build({ "a.ts": "export class A { send() {} }\nexport function caller() { x.send(); const x = new A(); x.send(); }\n" });
     expect(index.outgoing("a.ts#caller").filter((edge) => edge.toName === "send").map((edge) => edge.toSymbol)).toEqual(expect.arrayContaining([undefined, "a.ts#A.send"]));

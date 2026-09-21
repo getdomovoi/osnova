@@ -15,6 +15,8 @@ interface Scope {
   classScope?: Scope | undefined;
   constructorScope?: Scope | undefined;
   typeNames?: Map<string, SymbolBinding> | undefined;
+  reassigned?: Set<string> | undefined;
+  params?: Set<string> | undefined;
 }
 
 const nullish = new Set(["undefined", "null"]);
@@ -77,6 +79,15 @@ function annotationTypeName(annotation: Node | null): string | undefined {
 
 const ELEMENT_GENERICS = new Set(["Array", "ReadonlyArray", "Set", "ReadonlySet", "Iterable", "IterableIterator", "Generator"]);
 const VALUE_GENERICS = new Set(["Map", "ReadonlyMap", "WeakMap", "Record"]);
+// Language containers a file constructs with `new` without declaring them. Each name is also a builtin type at
+// resolution, so a call on one of them classifies as external rather than as an unknown receiver.
+const BUILTIN_CONSTRUCTORS = new Set(["Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Array", "Object", "Function"]);
+// `new Map()` names the container it builds; anything else stays untyped, so a field keeps its unknown receiver.
+function builtinConstructorName(value: Node | null): string | undefined {
+  if (value === null || value.type !== "new_expression") return undefined;
+  const constructor = value.childForFieldName("constructor");
+  return constructor?.type === "identifier" && BUILTIN_CONSTRUCTORS.has(constructor.text) ? constructor.text : undefined;
+}
 const PYTHON_ELEMENT_GENERICS = new Set(["list", "List", "Sequence", "MutableSequence", "Iterable", "Iterator", "Collection", "set", "Set", "MutableSet", "frozenset", "FrozenSet", "deque", "Deque", "Generator"]);
 const PYTHON_VALUE_GENERICS = new Set(["dict", "Dict", "Mapping", "MutableMapping", "defaultdict", "DefaultDict", "OrderedDict"]);
 interface Contents { readonly element?: string | undefined; readonly value?: string | undefined }
@@ -115,14 +126,22 @@ function pythonContentTypeNames(type: Node | null): Contents | undefined {
 }
 
 // A type parameter of an enclosing declaration (`class Box<T>`, `function f<T>()`) names no type the index can hold.
+// A variance annotation (`class Box<out T>`) is unknown to the grammar: `out T` recovers as a stray `out` beside a
+// parameter named `T`, and `<in T = never>` as a parameter named `in` with `T` inside its error node. Both still
+// declare `T`, so a recovered list is walked rather than skipped.
+const VARIANCE_KEYWORDS = new Set(["in", "out"]);
 function isTypeParameter(name: string, site: Node): boolean {
   for (let current: Node | null = site; current !== null; current = current.parent) {
     const parameters = current.childForFieldName("type_parameters") ?? childrenOf(current).find((child) => child.type === "type_parameters");
-    if (parameters === undefined || parameters === null || parameters.hasError) continue;
+    if (parameters === undefined || parameters === null) continue;
     for (const parameter of childrenOf(parameters)) {
       if (parameter.type !== "type_parameter") continue;
       const declared = parameter.childForFieldName("name") ?? childrenOf(parameter).find((child) => child.type === "type_identifier" || child.type === "identifier");
       if (declared?.text === name) return true;
+      if (declared === undefined || declared === null || !VARIANCE_KEYWORDS.has(declared.text)) continue;
+      for (const child of childrenOf(parameter)) {
+        if (child.type === "ERROR" && childrenOf(child).some((inner) => inner.type === "identifier" && inner.text === name)) return true;
+      }
     }
   }
   return false;
@@ -151,12 +170,35 @@ export const FIELD_NODES = new Set(["public_field_definition", "field_definition
 const THIS_TYPE = "\0this";
 const fieldNameOf = (member: Node): Node | null => member.childForFieldName("name") ?? member.childForFieldName("property");
 
+// Decorators that return a plain function or the function itself keep the declared calling shape of a method.
+// Each name is trusted only when it is imported from the module that defines it.
+const SHAPE_PRESERVING_DECORATORS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["contextmanager", ["contextlib"]],
+  ["asynccontextmanager", ["contextlib"]],
+  ["lru_cache", ["functools"]],
+  ["cache", ["functools"]],
+  ["final", ["typing", "typing_extensions"]],
+  ["override", ["typing", "typing_extensions"]],
+  ["abstractmethod", ["abc"]],
+]);
+
+function decoratorPath(text: string): readonly string[] | undefined {
+  const bare = text.trim().replace(/^@/, "").replace(/\(.*$/s, "").trim();
+  return /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(bare) ? bare.split(".") : undefined;
+}
+
+function isShapePreserving(text: string): boolean {
+  const name = decoratorPath(text)?.at(-1);
+  return name !== undefined && SHAPE_PRESERVING_DECORATORS.has(name);
+}
+
 export function memberKindOf(node: Node, python: boolean, decoratorTexts?: readonly string[]): MemberKind {
   if (!python) {
     if (node.children.some((child) => child?.type === "get" || child?.type === "set") || node.childForFieldName("name")?.text === "constructor") return "property";
     return node.children.some((child) => child?.type === "static") ? "static" : "instance";
   }
-  const decorators = decoratorTexts ?? (node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : []);
+  const all = decoratorTexts ?? (node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : []);
+  const decorators = all.filter((decorator) => !isShapePreserving(decorator));
   if (decorators.length === 0) return "instance";
   if (decorators.length !== 1) return "unknown";
   if (decorators[0] === "@staticmethod") return "static";
@@ -165,8 +207,17 @@ export function memberKindOf(node: Node, python: boolean, decoratorTexts?: reado
   return "unknown";
 }
 
+const CASTS = new Set(["as_expression", "satisfies_expression", "type_assertion"]);
+
 function unwrap(node: Node | null): Node | null {
-  while (node !== null && ["parenthesized_expression", "non_null_expression"].includes(node.type)) node = childrenOf(node)[0] ?? null;
+  const original = node;
+  let casts = 0;
+  while (node !== null && (CASTS.has(node.type) || ["parenthesized_expression", "non_null_expression"].includes(node.type))) {
+    // `x as T` keeps the runtime value of `x`, so the cast is transparent. A chain such as `x as unknown as T`
+    // is written to change the type, so the inner expression no longer stands for what the code treats it as.
+    if (CASTS.has(node.type) && (casts += 1) > 1) return original;
+    node = childrenOf(node)[0] ?? null;
+  }
   return node;
 }
 
@@ -181,38 +232,82 @@ function patternNames(node: Node | null): string[] {
   return containers.has(node.type) ? childrenOf(node).flatMap(patternNames) : [];
 }
 
-function reassigns(body: Node, name: string, except?: number): boolean {
-  const stack: Node[] = [body];
+interface ReassignScope {
+  bodyId: number | null;
+  params: readonly string[] | null;
+  next: ReassignScope | null;
+}
+interface ReassignHit {
+  id: number | null;
+  scope: ReassignScope;
+}
+interface ReassignIndex {
+  byName: Map<string, ReassignHit[]>;
+  anyName: ReassignHit[];
+}
+
+const reassignNodes = new Set(["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression", "as_pattern", "global_statement", "nonlocal_statement",
+  "assignment_expression", "augmented_assignment_expression", "update_expression", "for_in_statement"]);
+
+// One walk per file records every write with the function scopes between it and the module, so each
+// body/name query answers from the record instead of re-walking the body.
+function buildReassignIndex(root: Node): ReassignIndex {
+  const index: ReassignIndex = { byName: new Map(), anyName: [] };
+  const record = (name: string, hit: ReassignHit): void => {
+    const hits = index.byName.get(name);
+    if (hits === undefined) index.byName.set(name, [hit]); else hits.push(hit);
+  };
+  const stack: Array<{ node: Node; scope: ReassignScope }> = [{ node: root, scope: { bodyId: root.id, params: null, next: null } }];
   while (stack.length > 0) {
-    const node = stack.pop()!;
+    const { node, scope: outer } = stack.pop()!;
+    let scope = outer;
+    let bodyId: number | null = null;
+    if (functions.has(node.type)) {
+      bodyId = node.childForFieldName("body")?.id ?? null;
+      if (bodyId === null) scope = { bodyId: node.id, params: null, next: scope };
+      scope = { bodyId: null, params: patternNames(node.childForFieldName("parameters") ?? node.childForFieldName("parameter")), next: scope };
+    }
     // A block-scoped loop declaration (`for (const x of xs)`) declares, it does not reassign.
     const declares = node.type === "for_in_statement" && node.childForFieldName("kind") !== null && node.childForFieldName("kind")?.type !== "var";
-    if (node.id !== except && !declares && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression", "as_pattern", "global_statement", "nonlocal_statement",
-      "assignment_expression", "augmented_assignment_expression", "update_expression", "for_in_statement"].includes(node.type)) {
-      const target = node.childForFieldName("left") ?? node.childForFieldName("name") ?? node.childForFieldName("alias") ?? node.childForFieldName("argument");
-      if (target !== null && patternNames(unwrap(target) ?? target).includes(name)) return true;
-      if (node.type === "global_statement" || node.type === "nonlocal_statement") return true;
+    if (!declares && reassignNodes.has(node.type)) {
+      const hit: ReassignHit = { id: node.id, scope };
+      if (node.type === "global_statement" || node.type === "nonlocal_statement") index.anyName.push(hit);
+      else {
+        const target = node.childForFieldName("left") ?? node.childForFieldName("name") ?? node.childForFieldName("alias") ?? node.childForFieldName("argument");
+        if (target !== null) for (const name of new Set(patternNames(unwrap(target) ?? target))) record(name, hit);
+      }
     }
     if (node.type === "delete_statement") {
+      const hit: ReassignHit = { id: null, scope };
+      const seen = new Set<string>();
       const inner: Node[] = [...childrenOf(node)];
       while (inner.length > 0) {
         const item = inner.pop()!;
-        if (item.type === "identifier" && item.text === name) return true;
+        if (item.type === "identifier") { if (!seen.has(item.text)) { seen.add(item.text); record(item.text, hit); } continue; }
         if (item.type === "attribute" || item.type === "subscript") continue;
         inner.push(...childrenOf(item));
       }
     }
-    if (functions.has(node.type) && node.id !== body.parent?.id) {
-      const params = patternNames(node.childForFieldName("parameters") ?? node.childForFieldName("parameter"));
-      if (params.includes(name)) continue;
+    for (const child of childrenOf(node)) stack.push({ node: child, scope: child.id === bodyId ? { bodyId, params: null, next: scope } : scope });
+  }
+  return index;
+}
+
+function reassignsIn(index: ReassignIndex, body: Node, name: string, except?: number): boolean {
+  const hits = [...(index.byName.get(name) ?? []), ...index.anyName];
+  for (const hit of hits) {
+    if (hit.id !== null && hit.id === except) continue;
+    for (let scope: ReassignScope | null = hit.scope; scope !== null; scope = scope.next) {
+      if (scope.bodyId === body.id) return true;
+      if (scope.params !== null && scope.params.includes(name)) break;
     }
-    for (const child of childrenOf(node)) stack.push(child);
   }
   return false;
 }
 
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
+  boundValue: (name: string, site: Node) => SymbolBinding | undefined;
   aliasCallee: (node: Node) => Callee | undefined;
   heritage: (node: Node) => SymbolBinding[];
   returns: (node: Node) => ReturnBinding | undefined;
@@ -227,6 +322,8 @@ export function collectBindings(root: Node, python: boolean): {
   reExports: readonly ReExport[];
   memberKind: (node: Node) => MemberKind;
 } {
+  let reassignIndex: ReassignIndex | undefined;
+  const reassigns = (body: Node, name: string, except?: number): boolean => reassignsIn(reassignIndex ??= buildReassignIndex(root), body, name, except);
   const module: Scope = { kind: "module", owner: "", parent: null, names: new Map(), thisBinding: null };
   const scopes = new Map<number, Scope>();
   const exports = new Map<string, Map<string, number>>();
@@ -242,6 +339,10 @@ export function collectBindings(root: Node, python: boolean): {
   const contentsOf = new Map<EdgeBinding, { element?: SymbolBinding | undefined; value?: SymbolBinding | undefined }>();
   // A local that aliases a member chain or an indexed element takes that owner.
   const aliases: Array<{ scope: Scope; name: string; value: Node; site: Node }> = [];
+  // `const f = g` names whatever declaration or import `g` names at that point; anything else stays a value.
+  const nameAliases: Array<{ scope: Scope; name: string; value: Node; site: Node }> = [];
+  // Python binds a def or class where it runs, so an alias taken earlier in the same body names nothing yet.
+  const declaredAt = new Map<string, number>();
   const CALLBACK_METHODS = new Set(["forEach", "map", "filter", "some", "every", "find", "findIndex", "findLast", "findLastIndex", "flatMap"]);
   const memberWrites: Array<{ object: Node; member: string; scope: Scope }> = [];
   const mutations = new Map<object, Set<string>>();
@@ -348,14 +449,19 @@ export function collectBindings(root: Node, python: boolean): {
       const nameNode = node.childForFieldName("name");
       const variableName = node.parent?.type === "variable_declarator" || (node.parent !== null && FIELD_NODES.has(node.parent.type)) ? fieldNameOf(node.parent) : null;
       const name = variableName?.type === "identifier" || variableName?.type === "property_identifier" ? variableName.text : nameNode?.text ?? "";
-      const owner = name ? join(outer.owner, name) : outer.owner;
+      // An object literal method opens no frame in the adapter, so the names it declares stay on the enclosing owner.
+      const objectMethod = !python && node.type === "method_definition" && node.parent?.type === "object";
+      const owner = name && !objectMethod ? join(outer.owner, name) : outer.owner;
       if (["function_definition", "function_declaration", "generator_function_declaration"].includes(node.type) && nameNode !== null) {
-        bind(outer, nameNode.text, { kind: "local", name: join(outer.owner, nameNode.text) });
+        const binding: EdgeBinding = { kind: "local", name: join(outer.owner, nameNode.text) };
+        bind(outer, nameNode.text, binding);
+        if (python) declaredAt.set(canonical(binding), Math.min(declaredAt.get(canonical(binding)) ?? node.startIndex, node.startIndex));
       }
       let parent = outer;
       while (python && parent.kind === "class") parent = parent.parent ?? module;
       const inner: Scope = { kind: "function", owner, parent, names: new Map() };
       bindPattern(inner, node.childForFieldName("parameters") ?? node.childForFieldName("parameter"));
+      inner.params = new Set(patternNames(node.childForFieldName("parameters") ?? node.childForFieldName("parameter")));
       if (!python && (node.type === "arrow_function" || node.type === "function_expression" || node.type === "function") && node.parent?.type === "arguments" && childrenOf(node.parent)[0]?.id === node.id) {
         const call = node.parent.parent;
         const callee = call?.type === "call_expression" ? call.childForFieldName("function") : null;
@@ -424,7 +530,11 @@ export function collectBindings(root: Node, python: boolean): {
     }
     if (classes.has(node.type)) {
       const name = node.childForFieldName("name")?.text ?? "";
-      if (name) bind(outer, name, { kind: "local", name: join(outer.owner, name) });
+      if (name) {
+        const binding: EdgeBinding = { kind: "local", name: join(outer.owner, name) };
+        bind(outer, name, binding);
+        if (python) declaredAt.set(canonical(binding), Math.min(declaredAt.get(canonical(binding)) ?? node.startIndex, node.startIndex));
+      }
       let parent = outer;
       while (python && parent.kind === "class") parent = parent.parent ?? module;
       scope = { kind: "class", owner: join(outer.owner, name), parent, names: new Map(), thisBinding: null };
@@ -433,7 +543,8 @@ export function collectBindings(root: Node, python: boolean): {
         for (const member of childrenOf(node.childForFieldName("body") ?? node)) {
           if (FIELD_NODES.has(member.type) && !member.children.some((child) => child?.type === "static")) {
             const fieldName = fieldNameOf(member);
-            const typeName = annotationTypeName(member.childForFieldName("type"));
+            // An annotation types the field first; failing that, a `new Map()` initialiser names the builtin container it holds.
+            const typeName = annotationTypeName(member.childForFieldName("type")) ?? builtinConstructorName(member.childForFieldName("value"));
             if (fieldName?.type === "property_identifier" && typeName !== undefined) fields.set(fieldName.text, { typeName, site: node, contents: contentTypeNames(member.childForFieldName("type")) });
           }
           if (member.type === "method_definition" && member.childForFieldName("name")?.text === "constructor") {
@@ -581,20 +692,23 @@ export function collectBindings(root: Node, python: boolean): {
       if (typeName !== undefined && target?.type === "identifier") annotated.push({ scope: destination, parameter: target.text, typeName, site: node });
       const aliased = unwrap(value);
       if (binding === localValue && typeName === undefined && target?.type === "identifier" && aliased !== null && (aliased.type === "member_expression" || aliased.type === "subscript_expression")) aliases.push({ scope: destination, name: target.text, value: aliased, site: node });
+      if (binding === localValue && typeName === undefined && target?.type === "identifier" && aliased?.type === "identifier") nameAliases.push({ scope: destination, name: target.text, value: aliased, site: node });
     }
     if (python && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression"].includes(node.type)) {
       const target = node.childForFieldName("left") ?? node.childForFieldName("name");
       recordMemberWrite(target, scope, node.type === "assignment" ? node.childForFieldName("right") : null);
       const binding = node.type === "assignment" && target?.type === "identifier" ? construction(node.childForFieldName("right"), node, node.childForFieldName("type") === null) ?? localValue : localValue;
       bindPattern(scope, target, binding);
+      for (const name of patternNames(target)) (scope.reassigned ??= new Set()).add(name);
       const iterated = node.type === "for_statement" || node.type === "for_in_clause" ? node.childForFieldName("right") : null;
       if (iterated !== null && target?.type === "identifier") loops.push({ scope, name: target.text, source: iterated, site: node });
       const right = node.type === "assignment" ? unwrap(node.childForFieldName("right")) : null;
       if (binding === localValue && node.childForFieldName("type") === null && target?.type === "identifier" && right !== null && (right.type === "attribute" || right.type === "subscript")) aliases.push({ scope, name: target.text, value: right, site: node });
+      if (binding === localValue && node.childForFieldName("type") === null && target?.type === "identifier" && right?.type === "identifier") nameAliases.push({ scope, name: target.text, value: right, site: node });
       if (binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(scope) });
     }
-    if (python && node.type === "as_pattern") bindPattern(scope, node.childForFieldName("alias"));
-    if (python && node.type === "delete_statement") for (const child of childrenOf(node)) { bindPattern(scope, child); recordMemberWrite(child, scope); }
+    if (python && node.type === "as_pattern") { bindPattern(scope, node.childForFieldName("alias")); for (const name of patternNames(node.childForFieldName("alias"))) (scope.reassigned ??= new Set()).add(name); }
+    if (python && node.type === "delete_statement") for (const child of childrenOf(node)) { bindPattern(scope, child); for (const name of patternNames(child)) (scope.reassigned ??= new Set()).add(name); recordMemberWrite(child, scope); }
     if (python && node.type === "match_statement") bind(scope, "*", { kind: "blocked", reason: "unsupported" });
     if (!python && node.type === "for_in_statement") {
       const kind = node.childForFieldName("kind");
@@ -606,7 +720,7 @@ export function collectBindings(root: Node, python: boolean): {
     }
     if (python && ["global_statement", "nonlocal_statement"].includes(node.type)) {
       for (const name of childrenOf(node).filter((child) => child.type === "identifier").map((child) => child.text)) {
-        for (let current: Scope | null = scope; current !== null; current = current.parent) bind(current, name, { kind: "blocked", reason: "unsupported" });
+        for (let current: Scope | null = scope; current !== null; current = current.parent) { bind(current, name, { kind: "blocked", reason: "unsupported" }); (current.reassigned ??= new Set()).add(name); }
       }
     }
     if (!python && ["assignment_expression", "augmented_assignment_expression", "update_expression"].includes(node.type)) {
@@ -622,6 +736,7 @@ export function collectBindings(root: Node, python: boolean): {
     let scope = write.scope;
     while (!scope.names.has(write.name) && scope.parent !== null) scope = scope.parent;
     bind(scope, write.name, localValue);
+    (scope.reassigned ??= new Set()).add(write.name);
   }
   const forward = (exportedName: string, bindings: readonly EdgeBinding[] | undefined, line: number): void => {
     const binding = bindings?.length === 1 ? bindings[0] : undefined;
@@ -649,8 +764,14 @@ export function collectBindings(root: Node, python: boolean): {
       if (scope.names.has("*")) return { kind: "blocked", reason: "unsupported" };
       const bindings = scope.names.get(name);
       if (bindings !== undefined) {
-        if (bindings.length !== 1) return { kind: "blocked", reason: "ambiguous" };
-        const binding = bindings[0];
+        // TypeScript declaration merging gives one name an explicit declaration and a value whose type
+        // only an inference engine could recover. The declaration is the one the source states outright.
+        const declared = bindings.length === 1 ? bindings : bindings.filter((candidate) => candidate?.kind === "local");
+        if (declared.length !== 1) return { kind: "blocked", reason: "ambiguous" };
+        // A declaration the same scope assigns over no longer names what a call reaches; a conditional import
+        // beside the one declaration still takes the declaration.
+        if (bindings.length > 1 && scope.reassigned?.has(name) === true) return { kind: "blocked", reason: "ambiguous" };
+        const binding = declared[0];
         const initializer = binding === undefined ? undefined : initializers.get(binding);
         if (initializer !== undefined && site.startIndex < initializer.end &&
           nearestFunction(scopes.get(site.id) ?? module) === initializer.scope) return localValue;
@@ -659,6 +780,17 @@ export function collectBindings(root: Node, python: boolean): {
     }
     return undefined;
   };
+  for (const alias of nameAliases) {
+    const current = alias.scope.names.get(alias.name);
+    if (current === undefined || current.length !== 1 || current[0] !== localValue || alias.scope.params?.has(alias.name) === true) continue;
+    if (reassigns(enclosingBody(alias.site, root), alias.name, alias.site.id)) continue;
+    const target = lookup(alias.value.text, alias.site);
+    if (target === undefined || (target.kind !== "local" && target.kind !== "import")) continue;
+    if (python && target.kind === "local" && (declaredAt.get(canonical(target)) ?? Number.POSITIVE_INFINITY) > alias.site.startIndex) continue;
+    const binding: EdgeBinding = { ...target };
+    alias.scope.names.set(alias.name, [binding]);
+    initializers.set(binding, { end: alias.site.endIndex, scope: nearestFunction(alias.scope) });
+  }
   const isTypingOverload = (decorator: Node): boolean => {
     const text = decorator.text.trim().slice(1);
     if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$/.test(text)) return false;
@@ -668,6 +800,18 @@ export function collectBindings(root: Node, python: boolean): {
     if (binding?.kind !== "import" || !["typing", "typing_extensions"].includes(binding.source)) return false;
     return member === undefined ? binding.importedName === "overload" : member === "overload" && binding.importedName === "*";
   };
+  // An allowlisted decorator name that does not bind to an import from its defining module could be anything.
+  const isUntrustedShapeDecorator = (decorator: Node): boolean => {
+    const segments = decoratorPath(decorator.text);
+    const name = segments?.at(-1);
+    const modules = name === undefined ? undefined : SHAPE_PRESERVING_DECORATORS.get(name);
+    if (segments === undefined || name === undefined || modules === undefined) return false;
+    const [head, member, extra] = segments;
+    if (head === undefined || extra !== undefined) return true;
+    const binding = lookup(head, decorator);
+    if (binding?.kind !== "import" || !modules.includes(binding.source)) return true;
+    return member === undefined ? binding.importedName !== name : binding.importedName !== "*";
+  };
   const memberKind = (node: Node): MemberKind => {
     if (!python || node.parent?.type !== "decorated_definition") return memberKindOf(node, python);
     const decorators = childrenOf(node.parent).filter((child) => child.type === "decorator");
@@ -675,6 +819,7 @@ export function collectBindings(root: Node, python: boolean): {
     for (const decorator of decorators) {
       const name = decorator.text.trim().slice(1);
       if (["staticmethod", "classmethod", "property"].includes(name) && lookup(name, decorator) !== undefined) return "unknown";
+      if (isUntrustedShapeDecorator(decorator)) return "unknown";
     }
     return kind;
   };
@@ -786,6 +931,10 @@ export function collectBindings(root: Node, python: boolean): {
     if (created === undefined) return binding;
     const owner = symbolBinding(created.expression, created.site);
     if (owner !== undefined && (!created.call || (python && created.awaited !== true))) return { kind: "instance", owner, basis: "constructor" };
+    // `new Map()` where the file binds no `Map` builds a language container, not a type this repository holds,
+    // so a call on it is external like an array literal. A file that binds the name itself already won above.
+    if (!created.call && created.expression.type === "identifier" && BUILTIN_CONSTRUCTORS.has(created.expression.text))
+      return { kind: "instance", owner: { kind: "local", name: created.expression.text }, basis: "constructor" };
     if (!created.call) return { kind: "blocked", reason: "unknown-receiver" };
     const produced = returnOwner(calleeOf(created.expression, created.site), created.awaited);
     return produced === undefined ? { kind: "blocked", reason: "unknown-receiver" } : { kind: "instance", owner: produced, basis: "return" };
@@ -1129,8 +1278,13 @@ export function collectBindings(root: Node, python: boolean): {
     if (reassigns(enclosingBody(node, root), target.text, node.id)) return undefined;
     return calleeOf(value, node);
   };
+  const boundValue = (name: string, site: Node): SymbolBinding | undefined => {
+    const binding = lookup(name, site);
+    return binding?.kind === "local" || binding?.kind === "import" ? binding : undefined;
+  };
   return {
     at,
+    boundValue,
     aliasCallee,
     returns,
     heritage: (node) => {

@@ -18,6 +18,8 @@ if (mode === "commit") {
   }
 }
 
+const gateEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
+
 for (const tree of trees) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-gate-"));
   try {
@@ -32,7 +34,7 @@ for (const tree of trees) {
     }
     for (const gate of mode === "commit" ? ["lint", "typecheck"] : ["lint", "typecheck", "build", "test"]) {
       process.stdout.write(`osnova: ${gate} on ${mode === "commit" ? "staged snapshot" : "pushed snapshot"} ${tree.slice(0, 8)}\n`);
-      const result = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", gate], { cwd: temporary, stdio: "inherit", shell: process.platform === "win32" });
+      const result = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", gate], { cwd: temporary, env: gateEnv, stdio: "inherit", shell: process.platform === "win32" });
       if (result.error || result.status !== 0) throw new Error(`${gate} failed; ${mode} blocked${result.error ? `: ${result.error.message}` : ""}`);
     }
   } finally {

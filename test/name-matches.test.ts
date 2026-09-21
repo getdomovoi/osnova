@@ -26,7 +26,7 @@ describe("same-name candidates for unresolved calls", () => {
     expect(result.unresolved).toHaveLength(1);
     expect(result.unresolved[0]?.nameMatches).toEqual({ candidates: ["a.ts#A.hit", "a.ts#B.hit", "a.ts#C.hit", "a.ts#D.hit", "a.ts#E.hit"], total: 6 });
     const text = formatCallersDetailed(result);
-    expect(text).toContain("same-name symbols (6, unverified): a.ts#A.hit, a.ts#B.hit, a.ts#C.hit, a.ts#D.hit, a.ts#E.hit and 1 more");
+    expect(text).toContain("candidates for hit (6, unverified): a.ts#A.hit, a.ts#B.hit, a.ts#C.hit, a.ts#D.hit, a.ts#E.hit and 1 more");
     const inbound = callersDetailed(index, "a.ts#A.hit");
     if (inbound.status !== "found") throw new Error("expected found");
     expect(inbound.unresolved[0]?.nameMatches.total).toBe(6);

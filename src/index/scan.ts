@@ -92,12 +92,16 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
   const walk = async (dir: string, relDir: string, inherited: readonly { base: string; rules: Ignore }[]): Promise<void> => {
     let entries;
     const rules = ignore();
+    let patterned = false;
     try {
       entries = await dirGate(async () => {
         const dirEntries = await fs.readdir(dir, { withFileTypes: true });
         const names = new Set(dirEntries.map((entry) => entry.name));
         for (const name of [".gitignore", ".osnovaignore"]) {
-          if (names.has(name)) rules.add(await loadIgnoreFile(path.join(dir, name), relDir, name));
+          if (!names.has(name)) continue;
+          const lines = await loadIgnoreFile(path.join(dir, name), relDir, name);
+          if (lines.some((line) => { const text = line.trim(); return text.length > 0 && !text.startsWith("#"); })) patterned = true;
+          rules.add(lines);
         }
         return dirEntries;
       });
@@ -106,8 +110,9 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
       fail({ phase: "scan", path: relDir || ".", code: "directory-unreadable" }, error);
       return;
     }
-    const layers = [...inherited, { base: relDir === "" ? "" : `${relDir}/`, rules }];
+    const layers = patterned ? [...inherited, { base: relDir === "" ? "" : `${relDir}/`, rules }] : inherited;
     const ignored = (relative: string): boolean => {
+      if (layers.length === 0) return false;
       let excluded = false;
       for (const layer of layers) {
         const result = layer.rules.test(relative.slice(layer.base.length));

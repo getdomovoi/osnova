@@ -11,6 +11,7 @@ import type {
   OsnovaEdge,
 } from "../types.js";
 import { languageFamily } from "../index/resolve.js";
+import { reachCounter } from "./reach.js";
 
 const NAME_MATCH_LIMIT = 5;
 
@@ -76,10 +77,24 @@ export function callersDetailed(
   const target = candidates[0] as OsnovaSymbol;
   const { hits, unresolved } = walkCallers(index, target, { direction, depth });
   return {
-    status: "found", scope: "indexed-graph", direction, depth, target,
+    status: "found", scope: "indexed-graph", direction, depth, target, reach: reachCounter(index)(target, { depth: 2 }),
     hits: hits.filter((hit) => hit.resolved).map((hit) => direction === "out"
       ? { ...hit, line: hit.symbol?.span.startLine ?? null } : hit), unresolved,
   };
+}
+
+export function unresolvedCallsByName(index: OsnovaIndex): Map<string, OsnovaEdge[]> {
+  const unresolvedByName = new Map<string, OsnovaEdge[]>();
+  for (const edge of index.edges) {
+    if (edge.toSymbol !== undefined || edge.kind === "imports") continue;
+    const targetName = edge.binding?.kind === "import" ? edge.binding.importedName
+      : edge.binding?.kind === "local" ? edge.binding.name : edge.toName;
+    const name = targetName.split(".").pop() ?? targetName;
+    const list = unresolvedByName.get(name) ?? [];
+    list.push(edge);
+    unresolvedByName.set(name, list);
+  }
+  return unresolvedByName;
 }
 
 function walkCallers(
@@ -93,18 +108,7 @@ function walkCallers(
   const hits: CallerEvidenceHit[] = [];
   const unresolved: UnresolvedCallerEdge[] = [];
   const seenUnresolved = new Set<OsnovaEdge>();
-  const unresolvedByName = new Map<string, OsnovaEdge[]>();
-  if (direction === "in") {
-    for (const edge of index.edges) {
-      if (edge.toSymbol !== undefined || edge.kind === "imports") continue;
-      const targetName = edge.binding?.kind === "import" ? edge.binding.importedName
-        : edge.binding?.kind === "local" ? edge.binding.name : edge.toName;
-      const name = targetName.split(".").pop() ?? targetName;
-      const list = unresolvedByName.get(name) ?? [];
-      list.push(edge);
-      unresolvedByName.set(name, list);
-    }
-  }
+  const unresolvedByName = direction === "in" ? unresolvedCallsByName(index) : new Map<string, OsnovaEdge[]>();
   const visited = new Set<string>([target.qualifiedName]);
   let frontier: string[] = [target.qualifiedName];
 

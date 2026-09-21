@@ -1,5 +1,5 @@
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
 import { hookClients, runHook, workspaceRootFor } from "./hook.js";
@@ -14,13 +14,16 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatCoverage, formatFindTextResult, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
-import type { OsnovaIndex } from "../types.js";
+import { symbolsUnderTest, testsFor } from "../query/tests.js";
+import { unreferenced } from "../query/unreferenced.js";
+import type { OsnovaIndex, SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
+import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
 import { taskContext } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
 import { doctor, setupClients } from "../diagnostics/index.js";
@@ -43,20 +46,27 @@ usage:
   osnova ground "<question>" [--in <path>] [-n <n>] [--full] [--scoped] [--workspace <path>] [--cache-dir <path>]
   osnova thread "<pattern>" [--fixed] [-i] [--in <path>] [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova outline <file> [--workspace <path>] [--cache-dir <path>]
-  osnova warp <symbol> [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova warp <symbol> [--direction in|out] [--depth <n>] [--full] [--workspace <path>] [--cache-dir <path>]
   osnova groundwork [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
   osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
-  osnova settle --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova settle <--base-ref <ref> | --base-cache <path>> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova tests <symbol...> [--no-import-only] [-n <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
-  osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
+  osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
+  osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
-queries refresh the index first so answers describe current disk state.`;
+queries refresh the index first so answers describe current disk state.
+without --workspace, a query or symbol positional that names an existing directory (absolute, ., .., or ending with a path separator) exits 2: pass the workspace with --workspace <path>.`;
 
 const EXIT_OK = 0;
+const cliSymbolKinds: readonly SymbolKind[] = ["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant", "module"];
+const cliCallersCodeUnits = 2_048;
 const EXIT_STALE = 1;
 const EXIT_ERROR = 2;
 
@@ -76,6 +86,27 @@ async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function strayDirectoryPositional(values: readonly string[]): string | undefined {
+  for (const value of values) {
+    const pathLike = value === "." || value === ".." || path.isAbsolute(value) || value.endsWith("/") || value.endsWith(path.sep);
+    if (!pathLike) continue;
+    try {
+      if (statSync(path.resolve(value)).isDirectory()) return value;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function rejectStrayDirectory(values: readonly string[], workspace: string | undefined, command: string, io: CliIo): boolean {
+  if (workspace !== undefined) return false;
+  const stray = strayDirectoryPositional(values);
+  if (stray === undefined) return false;
+  io.stderr(`osnova ${command}: ${JSON.stringify(stray)} looks like a directory; pass the workspace with --workspace <path>`);
+  return true;
 }
 
 function requirePositional(values: readonly string[], name: string, command: string): string {
@@ -133,7 +164,9 @@ export async function runCli(
       const root = requirePositional(parsed.positionals, "root", "build");
       const cacheDir = parsed.values["cache-dir"];
       const started = Date.now();
-      const index = await buildIndex(root, { cacheDir });
+      const index = await buildIndex(root, { cacheDir, onProgress: (event) => {
+        if (event.phase === "seed") io.stdout(`seeded from sibling worktree cache ${event.sibling ?? ""}: ${event.done} of ${event.total} files reused`);
+      } });
       const diagnostics = formatIndexDiagnostics(index);
       if (diagnostics.length > 0) io.stderr(diagnostics);
       const ms = Date.now() - started;
@@ -184,6 +217,7 @@ export async function runCli(
       });
       const question = parsed.positionals.join(" ").trim();
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit");
       if (parsed.values.scoped === true) {
@@ -244,11 +278,13 @@ export async function runCli(
         options: {
           direction: { type: "string" },
           depth: { type: "string" },
+          full: { type: "boolean" },
           workspace: { type: "string" },
           "cache-dir": { type: "string" },
         },
       });
       const symbol = requirePositional(parsed.positionals, "symbol", "callers");
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "warp", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const depthValue = numericOption(parsed.values.depth, "depth", 1);
       const direction = parsed.values.direction;
@@ -259,7 +295,7 @@ export async function runCli(
         ...(direction !== undefined ? { direction } : {}),
         ...(depthValue !== undefined ? { depth: depthValue } : {}),
       });
-      io.stdout(formatCallersDetailed(result));
+      io.stdout(parsed.values.full === true ? formatCallersDetailed(result) : formatCallersDetailedBounded(result, cliCallersCodeUnits));
       return EXIT_OK;
     }
     case "groundwork": {
@@ -291,6 +327,7 @@ export async function runCli(
       } });
       const task = parsed.values.task;
       if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
@@ -301,30 +338,43 @@ export async function runCli(
       return EXIT_OK;
     }
     case "settle": {
-      const parsed = parseArgs({ args: rest, options: { "base-cache": { type: "string" }, depth: { type: "string" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
+      const parsed = parseArgs({ args: rest, options: { "base-ref": { type: "string" }, "base-cache": { type: "string" }, depth: { type: "string" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
       const baseCache = parsed.values["base-cache"];
-      if (baseCache === undefined) throw new Error("osnova settle: --base-cache is required");
+      const baseRef = parsed.values["base-ref"];
+      if (baseCache !== undefined && baseRef !== undefined) throw new Error("osnova settle: use either --base-ref or --base-cache");
+      if (baseCache === undefined && baseRef === undefined) throw new Error("osnova settle: --base-ref or --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const baseReal = await fs.realpath(baseCache).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") throw new Error(`osnova settle: baseline cache does not exist: ${baseCache}`);
-        throw error;
-      });
-      const currentReal = await fs.realpath(cacheDir).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw error;
-        return path.resolve(cacheDir);
-      });
-      if (baseReal === currentReal) throw new Error("osnova settle: base and current caches must be distinct");
-      const base = await loadArtifact(root, baseCache);
-      if (base === undefined) throw new Error("osnova settle: baseline index is missing or incompatible");
-      const current = await ensureIndex(root, cacheDir, io.stderr);
-      const result = impact(base, current, { maxDepth: numericOption(parsed.values.depth, "depth", 1) });
+      const maxDepth = numericOption(parsed.values.depth, "depth", 1);
+      let result;
+      if (baseRef !== undefined) {
+        const base = await materializeBaseRef(root, baseRef, { cacheDir });
+        io.stderr(`osnova settle: base ${baseRef} = ${base.sha} ${base.reused ? "reused" : "built"} at ${base.dir}`);
+        const diff = await baseDiff(root, base.sha);
+        const current = await ensureIndex(root, cacheDir, io.stderr);
+        result = impact(base.index, current, { diff: diff.trim().length === 0 ? undefined : diff, maxDepth });
+      } else {
+        const baseReal = await fs.realpath(baseCache!).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") throw new Error(`osnova settle: baseline cache does not exist: ${baseCache}`);
+          throw error;
+        });
+        const currentReal = await fs.realpath(cacheDir).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+          return path.resolve(cacheDir);
+        });
+        if (baseReal === currentReal) throw new Error("osnova settle: base and current caches must be distinct");
+        const base = await loadArtifact(root, baseCache!);
+        if (base === undefined) throw new Error("osnova settle: baseline index is missing or incompatible");
+        const current = await ensureIndex(root, cacheDir, io.stderr);
+        result = impact(base, current, { maxDepth });
+      }
       io.stdout([
         `base ${result.base.generation}\ncurrent ${result.current.generation}`,
         `${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
         ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
-        ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
-        `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
+        ...formatImpactFiles(result),
+        ...result.dependents.map(formatImpactDependent),
+        formatImpactUncertainty(result.uncertainty),
       ].join("\n"));
       return EXIT_OK;
     }
@@ -335,6 +385,7 @@ export async function runCli(
       } });
       const symbol = parsed.positionals.join(" ").trim();
       if (symbol.length === 0) throw new Error("osnova plumb: missing <symbol> argument");
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "plumb", io)) return EXIT_ERROR;
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`osnova plumb: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
       const fromFile = parsed.values["sites-file"] === undefined ? [] : (await fs.readFile(parsed.values["sites-file"], "utf8")).split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
@@ -345,12 +396,49 @@ export async function runCli(
       io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
       return EXIT_OK;
     }
+    case "tests": {
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: {
+        file: { type: "string" }, "no-import-only": { type: "boolean" }, limit: { type: "string", short: "n" }, workspace: { type: "string" }, "cache-dir": { type: "string" },
+      } });
+      const symbols = parsed.positionals.filter((name) => name.length > 0);
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "tests", io)) return EXIT_ERROR;
+      const file = parsed.values.file;
+      if ((symbols.length === 0) === (file === undefined)) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
+      const limit = numericOption(parsed.values.limit, "limit");
+      const includeImportOnly = parsed.values["no-import-only"] !== true;
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
+      io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
+      return EXIT_OK;
+    }
+    case "unreferenced": {
+      const parsed = parseArgs({ args: rest, options: {
+        scope: { type: "string" }, kinds: { type: "string" }, exported: { type: "boolean" }, limit: { type: "string", short: "n" },
+        workspace: { type: "string" }, "cache-dir": { type: "string" },
+      } });
+      const kinds = parsed.values.kinds === undefined ? undefined : parsed.values.kinds.split(",").map((kind) => kind.trim()).filter((kind) => kind.length > 0);
+      for (const kind of kinds ?? []) {
+        if (!(cliSymbolKinds as readonly string[]).includes(kind)) throw new Error(`osnova unreferenced: --kinds must be symbol kinds (${cliSymbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
+      }
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
+      const result = unreferenced(index, {
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit"), includeExported: parsed.values.exported,
+      });
+      io.stdout(formatUnreferenced(result));
+      return EXIT_OK;
+    }
     case "coverage": {
       const parsed = parseArgs({ args: rest, options: { json: { type: "boolean" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const report = resolutionCoverage(index);
       io.stdout(parsed.values.json === true ? jsonOutput(report, "coverage") : formatCoverage(report));
       return EXIT_OK;
+    }
+    case "update-check": {
+      const parsed = parseArgs({ args: rest, options: { json: { type: "boolean" } } });
+      const { updateCheck, formatUpdateCheck } = await import("./update-check.js");
+      const result = await updateCheck();
+      io.stdout(parsed.values.json === true ? jsonOutput(result, "update-check") : formatUpdateCheck(result));
+      return result.outdated ? EXIT_STALE : EXIT_OK;
     }
     case "doctor": {
       const parsed = parseArgs({ args: rest, options: { workspace: { type: "string" }, "cache-dir": { type: "string" } } });
@@ -387,13 +475,13 @@ export async function runCli(
       return EXIT_OK;
     }
     case "hook": {
-      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, "full-contract": { type: "boolean" } } });
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
       if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
       if (event !== "prompt" && event !== "session" && event !== "stop" && event !== "tool" && event !== "install-preview") throw new Error("osnova hook needs one of: prompt, session, stop, tool, install-preview");
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
-      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
+      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;
     }
     case "mcp": {

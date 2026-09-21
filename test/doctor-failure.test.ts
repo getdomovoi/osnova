@@ -8,8 +8,8 @@ vi.mock("../src/grammar/loader.js", () => ({
 it("reports unavailable grammar capabilities without rendering underlying errors", async () => {
   const report = await doctor(process.cwd());
   expect(report.ok).toBe(false);
-  expect(report.capabilities).toHaveLength(20);
+  expect(report.capabilities).toHaveLength(21);
   expect(report.capabilities.every((capability) => capability.status === "error")).toBe(true);
-  expect(report.checks.filter((check) => check.id.startsWith("grammar:") && check.status === "error")).toHaveLength(20);
+  expect(report.checks.filter((check) => check.id.startsWith("grammar:") && check.status === "error")).toHaveLength(21);
   expect(JSON.stringify(report)).not.toContain("never-echo-dependency-errors");
 });

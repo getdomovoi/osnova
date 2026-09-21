@@ -1,3 +1,9 @@
+import { createRequire } from "node:module";
+import type { OsnovaMcpOptions } from "./mcp/server.js";
+
+type McpServerModule = typeof import("./mcp/server.js");
+const requireSibling = createRequire(import.meta.url);
+
 export { indexFormatVersion, maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, maximumIndexedFileSizeBytes } from "./types.js";
 export type {
   AskHit,
@@ -32,6 +38,9 @@ export type {
   FindTextResult,
   FreshnessReport,
   HubEntry,
+  SymbolReach,
+  ReachSpread,
+  ReachDepthTwo,
   LanguageId,
   LoadIndexOptions,
   MapCardOptions,
@@ -72,8 +81,19 @@ export { detectScopes, scopedAsk } from "./query/scoped.js";
 export type { PackageScope, ScopedAskHit, ScopedAskResult } from "./query/scoped.js";
 export { taskContext } from "./query/task-context.js";
 export type { TaskContextOptions, TaskContextResult, ContextDefinition, CandidateTest } from "./query/task-context.js";
-export { createOsnovaMcpServer, runMcpStdio } from "./mcp/server.js";
+export { testsFor, symbolsUnderTest, isTestFile } from "./query/tests.js";
+export type { TestsForOptions, TestsForResult, SymbolTests, TestFileEvidence, TestSite, SymbolsUnderTestOptions, SymbolsUnderTestResult, SymbolUnderTest, ImportUnderTest } from "./query/tests.js";
+export { unreferenced, unreferencedLimitations, unreferencedNotice } from "./query/unreferenced.js";
+export type { UnreferencedOptions, UnreferencedResult, UnreferencedCandidate, EntryPointRule } from "./query/unreferenced.js";
 export type { OsnovaMcpOptions } from "./mcp/server.js";
+export function createOsnovaMcpServer(workspace: string, options?: OsnovaMcpOptions): ReturnType<McpServerModule["createOsnovaMcpServer"]> {
+  const mcp = requireSibling("./mcp.js") as McpServerModule;
+  return mcp.createOsnovaMcpServer(workspace, options);
+}
+export async function runMcpStdio(workspace: string, options?: OsnovaMcpOptions): Promise<void> {
+  const mcp = await import("./mcp/server.js");
+  return mcp.runMcpStdio(workspace, options);
+}
 export { runCli } from "./cli/cli.js";
 export type { CliIo } from "./cli/cli.js";
 export { doctor, previewSetup, setupClients } from "./diagnostics/index.js";

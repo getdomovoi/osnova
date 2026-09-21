@@ -21,6 +21,23 @@ function callTarget(node: Node): string | null {
   return null;
 }
 
+function valuePosition(node: Node): boolean {
+  let child = node;
+  let parent = node.parent;
+  while (parent !== null && parent.type === "parenthesized_expression") { child = parent; parent = parent.parent; }
+  if (parent === null) return false;
+  const inField = (field: string): boolean => parent.childForFieldName(field)?.id === child.id;
+  switch (parent.type) {
+    case "argument_list": return parent.parent?.type === "call";
+    case "list": case "tuple": case "set": case "expression_list": case "return_statement": case "interpolation": return true;
+    case "keyword_argument": case "pair": case "default_parameter": case "typed_default_parameter": return inField("value");
+    case "assignment": case "augmented_assignment": return inField("right");
+    case "boolean_operator": return true;
+    case "conditional_expression": { const parts = childrenOf(parent); return parts[0]?.id === child.id || parts[2]?.id === child.id; }
+    default: return false;
+  }
+}
+
 export const pythonAdapter: LanguageAdapter = {
   language: "python",
   extract(tree, _source): AdapterOutput {
@@ -53,6 +70,7 @@ export const pythonAdapter: LanguageAdapter = {
                       ? (inner.childForFieldName("attribute")?.text ?? null)
                       : null;
               if (name !== null && name.length > 0) out.addEdge("references", name, deco);
+              if (inner.type === "call") for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
             }
           }
           return;
@@ -128,6 +146,12 @@ export const pythonAdapter: LanguageAdapter = {
           return;
         }
         case "wildcard_import": {
+          return;
+        }
+        case "identifier": {
+          if (!valuePosition(node)) return;
+          const binding = bindings.boundValue(node.text, node);
+          if (binding !== undefined) out.addEdge("references", node.text, node, binding);
           return;
         }
         default: {

@@ -8,6 +8,7 @@ import {
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspace, indexGeneration } from "../api.js";
+import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -18,17 +19,26 @@ import { renderMapCard } from "../query/mapCard.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
-import { formatAsk, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
-import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex } from "../types.js";
+import { symbolsUnderTest, testsFor } from "../query/tests.js";
+import { unreferenced } from "../query/unreferenced.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
+
+const symbolKinds = Object.keys({ function: true, method: true, class: true, struct: true, interface: true, trait: true, enum: true, type: true, constant: true, module: true } satisfies Record<SymbolKind, true>) as readonly SymbolKind[];
+
+function isSymbolKind(value: string): value is SymbolKind {
+  return (symbolKinds as readonly string[]).includes(value);
+}
+
 
 const maximumMcpSkeletonCodeUnits = 4_096;
 // Sent on initialize; clients that honour MCP instructions place it in the system prompt, so every
 // harness with an MCP client gets the tool contract without a hook.
 export const mcpInstructions = [
   "Osnova is a deterministic call graph of this repository with exact file:line, no type inference, no LLM. Use its tools before grep and file reads.",
-  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites.",
+  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
 const maximumMcpCallersCodeUnits = 2_048;
@@ -36,6 +46,8 @@ const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
 const maximumMcpPlumbCodeUnits = maximumPlumbCodeUnits;
+const maximumMcpTestsCodeUnits = 4_096;
+const maximumMcpUnreferencedCodeUnits = 4_096;
 const mcpFootingExcerptLines = 8;
 const mcpInlineShortDefinitions = 40;
 const mcpGenerationDigits = 16;
@@ -93,6 +105,7 @@ const toolDefinitions = [
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers (default), out = callees" },
         depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
+        full: { type: "boolean", description: "Print every call site with no per-symbol cap or summary (default false); output is still clipped at 16,384 code units" },
       },
       required: ["symbol"],
     },
@@ -121,20 +134,21 @@ const toolDefinitions = [
         in: { type: "string", description: "Restrict to a file or directory path (repo-relative)" },
         limit: { type: "number", description: "Maximum retrieval seeds (default 8)" },
         depth: { type: "number", description: "Relationship walk depth (default 3)" },
+        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Only seed question hits of these symbol kinds (default: every kind, real definitions before 1-line constants, type aliases and test-file symbols)" },
       },
     },
   },
   {
     name: "osnova_settle",
     description:
-      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Compares against the current index only, so deleted symbols are not visible.",
+      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Without baseRef it compares against the current index only, so deleted symbols are not visible; with baseRef (a git commit or ref) it indexes that commit's tree under the cache and compares it with the current index, computing the diff with git when none is given.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths" },
+        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths (required unless baseRef is given)" },
+        baseRef: { type: "string", description: "Git commit or ref to compare against; its tree is indexed under the cache without a checkout" },
         depth: { type: "number", description: "Dependent walk depth (default 1)" },
       },
-      required: ["diff"],
     },
   },
   {
@@ -150,6 +164,34 @@ const toolDefinitions = [
         depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
       },
       required: ["symbol", "sites"],
+    },
+  },
+  {
+    name: "osnova_tests",
+    description:
+      "Tests: given symbols, the indexed test files for each one in two separate tiers with separate counts: files with a resolved call or reference edge to the symbol (exact file:line and resolution basis), then files that only import the symbol's file and contain no indexed call or reference to it. An empty resolved tier is stated on its own line; import-only files are leads, not tests of the symbol. Given one test file, the non-test symbols it calls and the files it imports. Exactly one of symbols or file. Use before editing to find the tests to run. No indexed test is not proof of no test, and a listed test is not coverage.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        symbols: { type: "array", items: { type: "string" }, description: "Symbol names or qualified names (file#Class.method) to find tests for" },
+        file: { type: "string", description: "Repo-relative test file whose symbols under test to list" },
+        limit: { type: "number", description: "Maximum test files per symbol (default 20) or symbols per file (default 50)" },
+        includeImportOnly: { type: "boolean", description: "With symbols: also list test files that only import the symbol's file (default true); false lists only files with a resolved edge" },
+      },
+    },
+  },
+  {
+    name: "osnova_unreferenced",
+    description:
+      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        scope: { type: "string", description: "Repo-relative path prefix to examine (default: whole index)" },
+        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Symbol kinds to examine (default function, method, class: the kinds the index records edges to; constants, types and interfaces receive no edges, so asking for them lists nearly all of them)" },
+        limit: { type: "number", description: "Maximum candidates (default 50); the omitted count is exact" },
+        includeExported: { type: "boolean", description: "Also list exported definitions, which external consumers may reach (default false)" },
+      },
     },
   },
 ] as const;
@@ -277,10 +319,12 @@ export function createOsnovaMcpServer(
             throw new RangeError("osnova: caller depth must be a positive safe integer");
           }
           const depthValue = args.depth;
+          const full = optionalBoolean(args, "full") ?? false;
           const result = callersDetailed(index, symbol, {
             ...(direction !== undefined ? { direction } : {}),
             ...(depthValue !== undefined ? { depth: depthValue } : {}),
           });
+          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits));
           const available = maximumMcpCallersCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}`);
         }
@@ -303,20 +347,33 @@ export function createOsnovaMcpServer(
           for (const key of ["limit", "depth"]) {
             if (args[key] !== undefined && typeof args[key] !== "number") throw new RangeError(`osnova: footing ${key} must be a nonnegative safe integer`);
           }
+          const kinds = optionalStringArray(args, "kinds");
+          for (const kind of kinds ?? []) {
+            if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
+          }
           const available = maximumMcpFootingCodeUnits - prefix.length - 1;
           const result = taskContext(index, {
-            task, question: question ?? "", symbols, in: optionalString(args, "in"),
+            task, question: question ?? "", symbols, kinds: kinds?.filter(isSymbolKind), in: optionalString(args, "in"),
             limit: optionalNumber(args, "limit"), maxDepth: optionalNumber(args, "depth"), maxCodeUnits: available, excerptLines: mcpFootingExcerptLines, inlineShortDefinitions: mcpInlineShortDefinitions,
             measure: (partial) => formatTaskContext(partial).length,
           });
           return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);
         }
         case "osnova_settle": {
-          const diff = requireString(args, "diff");
+          const baseRef = optionalString(args, "baseRef");
+          const diff = optionalString(args, "diff");
+          if (baseRef === undefined && diff === undefined) throw new Error("osnova_settle needs diff or baseRef");
           if (args.depth !== undefined && typeof args.depth !== "number") {
             throw new RangeError("osnova: settle depth must be a nonnegative safe integer");
           }
-          const result = impact(index, index, { diff, maxDepth: optionalNumber(args, "depth") ?? 1 });
+          const maxDepth = optionalNumber(args, "depth") ?? 1;
+          let result;
+          if (baseRef === undefined) result = impact(index, index, { diff, maxDepth });
+          else {
+            const base = await materializeBaseRef(absRoot, baseRef, { cacheDir });
+            const computed = diff ?? await baseDiff(absRoot, base.sha);
+            result = impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth });
+          }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
         }
@@ -330,6 +387,32 @@ export function createOsnovaMcpServer(
           const result = plumb(index, symbol, parseClaims(sites), { direction, depth: optionalNumber(args, "depth") });
           const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
+        }
+        case "osnova_tests": {
+          const symbols = optionalStringArray(args, "symbols");
+          const file = optionalString(args, "file");
+          if ((symbols === undefined) === (file === undefined)) throw new Error("osnova_tests needs exactly one of a non-empty symbols array or a file");
+          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: tests limit must be a nonnegative safe integer");
+          if (args.includeImportOnly !== undefined && typeof args.includeImportOnly !== "boolean") throw new Error("osnova_tests includeImportOnly must be a boolean");
+          const limit = optionalNumber(args, "limit");
+          const includeImportOnly = optionalBoolean(args, "includeImportOnly");
+          const available = maximumMcpTestsCodeUnits - prefix.length - 1;
+          const text = symbols !== undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit }));
+          return textResult(`${prefix}\n${boundText(text, available)}`);
+        }
+        case "osnova_unreferenced": {
+          const kinds = optionalStringArray(args, "kinds");
+          for (const kind of kinds ?? []) {
+            if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
+          }
+          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: unreferenced limit must be a nonnegative safe integer");
+          if (args.scope !== undefined && typeof args.scope !== "string") throw new Error("osnova_unreferenced scope must be a string path prefix");
+          if (args.includeExported !== undefined && typeof args.includeExported !== "boolean") throw new Error("osnova_unreferenced includeExported must be a boolean");
+          const result = unreferenced(index, {
+            scope: optionalString(args, "scope"), kinds: kinds?.filter(isSymbolKind), limit: optionalNumber(args, "limit"), includeExported: optionalBoolean(args, "includeExported"),
+          });
+          const available = maximumMcpUnreferencedCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${boundText(formatUnreferenced(result), available)}`);
         }
         default:
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
@@ -354,6 +437,8 @@ function toolErrorBudget(name: string): number | undefined {
     case "osnova_footing": return maximumMcpFootingCodeUnits;
     case "osnova_settle": return maximumMcpSettleCodeUnits;
     case "osnova_plumb": return maximumMcpPlumbCodeUnits;
+    case "osnova_tests": return maximumMcpTestsCodeUnits;
+    case "osnova_unreferenced": return maximumMcpUnreferencedCodeUnits;
     default: return undefined;
   }
 }

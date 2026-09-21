@@ -1,13 +1,16 @@
-import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { OsnovaIndex, OsnovaSymbol, SymbolKind, SymbolReach } from "../types.js";
 import { compareText, indexReceipt, isReliableEdge, relationshipEvidence, sourceReceipt } from "./impact.js";
 import type { DefinitionEvidence, IndexReceipt, RelationshipEvidence, SourceReceipt } from "./impact.js";
 import { inScope, normalizeScope } from "./scoped.js";
 import { askDetailed } from "./ask.js";
+import { isTestFile } from "./tests.js";
+import { reachCounter } from "./reach.js";
 
 export interface TaskContextOptions {
   readonly task: "understand" | "change" | "review";
   readonly question: string;
   readonly symbols?: readonly string[] | undefined;
+  readonly kinds?: readonly SymbolKind[] | undefined;
   readonly in?: string | undefined;
   readonly limit?: number | undefined;
   readonly maxDepth?: number | undefined;
@@ -19,6 +22,7 @@ export interface TaskContextOptions {
 
 export interface ContextDefinition extends DefinitionEvidence {
   readonly excerpt: string;
+  readonly reach?: SymbolReach | undefined;
 }
 
 export interface CandidateTest {
@@ -52,6 +56,11 @@ export interface TaskContextResult {
 
 const seedOverfetch = 4;
 
+const isTest = isTestFile;
+
+const isPreferredSeed = (symbol: OsnovaSymbol): boolean =>
+  !isTest(symbol.file) && !(symbol.span.endLine === symbol.span.startLine && (symbol.kind === "constant" || symbol.kind === "type"));
+
 export function taskContext(index: OsnovaIndex, options: TaskContextOptions): TaskContextResult {
   const maxCodeUnits = options.maxCodeUnits ?? 16_384;
   const maxDepth = options.maxDepth ?? 3;
@@ -73,14 +82,20 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   } else {
     const limit = options.limit ?? 8;
     if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError("osnova: task context limit must be a nonnegative safe integer");
+    if (options.kinds !== undefined && options.kinds.length === 0) throw new RangeError("osnova: task context kinds must be a non-empty array of symbol kinds");
     const retrieved = askDetailed(index, options.question, { in: scope, limit: limit * seedOverfetch });
+    const candidates = new Map<string, OsnovaSymbol>();
     for (const hit of retrieved.hits) {
-      if (hit.symbol !== null && seeds.length < limit) seeds.push(hit.symbol);
+      if (hit.symbol !== null && (options.kinds === undefined || options.kinds.includes(hit.symbol.kind))) candidates.set(hit.symbol.qualifiedName, hit.symbol);
     }
+    const preferred = [...candidates.values()].filter(isPreferredSeed);
+    const fallback = [...candidates.values()].filter((symbol) => !isPreferredSeed(symbol));
+    for (const symbol of [...preferred, ...fallback]) if (seeds.length < limit) seeds.push(symbol);
     retrievalHits = retrieved.totalCandidates - seeds.length;
   }
   const sources = [...new Set(seeds.map((symbol) => symbol.file))].sort(compareText).map((file) => sourceReceipt(index, file, receipt));
   const definitions = new Map<string, ContextDefinition>();
+  const reach = reachCounter(index);
   const addDefinition = (symbol: OsnovaSymbol, seed = false): void => {
     if (definitions.has(symbol.qualifiedName)) return;
     const lines = index.files.get(symbol.file)!.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine);
@@ -88,7 +103,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     const excerpt = !keepWhole && excerptLines !== undefined && lines.length > excerptLines
       ? `${lines.slice(0, excerptLines).join("\n")}\n[+${lines.length - excerptLines} more lines]`
       : lines.join("\n");
-    definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt });
+    definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt, ...(seed ? { reach: reach(symbol) } : {}) });
   };
   for (const seed of seeds) addDefinition(seed, true);
   const relationships = new Map<number, RelationshipEvidence>();
@@ -111,8 +126,6 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     const ins = inbound.get(to) ?? []; ins.push([key, evidence]); inbound.set(to, ins);
     const outs = outbound.get(from) ?? []; outs.push([key, evidence]); outbound.set(from, outs);
   }
-  const isTest = (file: string): boolean => /(?:^|\/)(?:tests?|__tests__)\//.test(file) ||
-    /(?:^|\/)test_[^/]+\.py$/.test(file) || /(?:\.(?:test|spec)\.[^/]+|_test\.(?:go|py))$/.test(file);
   for (const direction of options.task === "understand" ? ["out", "in"] as const : ["in", "out"] as const) {
     const seen = new Set(seeds.map((seed) => seed.qualifiedName));
     const queue = seeds.map((seed) => ({ node: seed.qualifiedName, path: [] as RelationshipEvidence[] }));

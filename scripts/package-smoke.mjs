@@ -22,6 +22,7 @@ const samples = {
   "Probe.cs": "class Probe { void Run() {} }\n",
   "probe.c": "int probe_c(void) { return 1; }\n",
   "probe.cpp": "int probe_cpp() { return 1; }\n",
+  "probe.m": "@implementation Probe\n- (int)probeObjc { return 1; }\n@end\n",
   "probe.rb": "def probe_ruby\n  1\nend\n",
   "probe.php": "<?php\nfunction probe_php() { return 1; }\n",
   "Probe.kt": "fun probeKotlin(): Int { return 1 }\n",
@@ -53,12 +54,16 @@ async function consumer() {
   const api = await import("@getdomovoi/osnova");
   for (const name of ["buildIndex", "loadIndex", "refreshWorkspace", "indexGeneration", "evidenceFingerprint", "applyChanges", "freshness", "scanFiles", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "impact", "scopedAsk", "taskContext", "doctor", "configureLspEnrichment", "loadLspEnrichment", "refreshLspEnrichment", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
   for (const entry of Object.keys(manifest.exports)) await import(entry === "." ? manifest.name : manifest.name + entry.slice(1));
+  assertRootImportSkipsMcpSdk(root, manifest.name);
   const workspace = path.join(root, "workspace");
   const cacheDir = path.join(root, "cache");
   await mkdir(workspace);
   for (const [file, source] of Object.entries(samples)) await writeFile(path.join(workspace, file), source);
   const before = await snapshot(workspace);
   const index = await api.buildIndex(workspace, { cacheDir });
+  const rootMcp = api.createOsnovaMcpServer(workspace, { cacheDir });
+  assert.equal(typeof rootMcp.server?.connect, "function", "createOsnovaMcpServer from the root entry must return a server");
+  await rootMcp.close();
   for (const file of Object.keys(samples)) assert(api.skeleton(index, file).entries.length > 0, `Grammar/extraction failed: ${file}`);
   assert(api.ask(index, "probe").hits.length > 0);
   const scanned = await api.scanFiles(workspace, cacheDir);
@@ -73,7 +78,13 @@ async function consumer() {
   const frames = await smokeStdio({ cliPath: path.join(packageRoot, manifest.bin.osnova), workspace, cacheDir, cwd: root });
   assert.deepEqual(await snapshot(packageRoot), packageBefore, "Core operations mutated installed package");
   assert.deepEqual((await readdir(root)).sort(), [...new Set([...rootBefore, "cache", "workspace"])].sort(), "Core operations wrote outside designated cache/workspace fixtures");
-  console.log(`packed consumer: exports, 20 WASM grammars, doctor, build/ask, 8 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
+  console.log(`packed consumer: exports, 21 WASM grammars, doctor, build/ask, 8 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
+}
+
+function assertRootImportSkipsMcpSdk(cwd, packageName) {
+  const hook = "export async function resolve(specifier, context, next) { const resolved = await next(specifier, context); if (resolved.url.includes('@modelcontextprotocol')) throw new Error('root import loaded ' + specifier); return resolved; }";
+  const code = `import { register } from "node:module"; register(${JSON.stringify("data:text/javascript," + encodeURIComponent(hook))}); await import(${JSON.stringify(packageName)});`;
+  execFileSync(process.execPath, ["--input-type=module", "-e", code], { cwd, stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
 }
 
 export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [], omitWorkspaceArg = false }) {
@@ -120,13 +131,15 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
       osnova_footing: { question: "probe" },
       osnova_settle: { diff: "--- a/probe.ts\n+++ b/probe.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" },
       osnova_plumb: { symbol: "probe", sites: ["probe.ts:2"] },
+      osnova_tests: { symbols: ["probe"] },
+      osnova_unreferenced: { includeExported: true },
     };
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), Object.keys(calls).sort());
     for (const [name, args] of Object.entries(calls)) {
       const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 10_000 });
       assert(!result.isError, `${name} returned an error`);
       assert(result.content.some((item) => item.type === "text" && item.text.length > 0), `${name} returned no text`);
-      if (name !== "osnova_groundwork") assert(JSON.stringify(result.content).includes(name === "osnova_warp" ? "caller" : name === "osnova_settle" ? "settle" : name === "osnova_plumb" ? "plumb" : "probe"), `${name} omitted expected evidence`);
+      if (name !== "osnova_groundwork") assert(JSON.stringify(result.content).includes(name === "osnova_warp" ? "caller" : name === "osnova_settle" ? "settle" : name === "osnova_plumb" ? "plumb" : name === "osnova_unreferenced" ? "unreferenced" : "probe"), `${name} omitted expected evidence`);
     }
     assert.deepEqual(await snapshot(workspace), before, "MCP tools mutated workspace");
     await writeFile(path.join(workspace, "probe.ts"), "export function refreshedProbe() { return 2; }\n");
@@ -184,7 +197,7 @@ async function packAndTest() {
       cwd: consumerRoot, encoding: "utf8", timeout: 60_000,
       env: { ...process.env, NODE_PATH: "", NODE_OPTIONS: "", HOME: home, USERPROFILE: home, OSNOVA_CACHE_DIR: path.join(consumerRoot, "cache") },
     });
-    assert(result.includes("packed consumer: exports, 20 WASM grammars"), "Consumer validation did not execute");
+    assert(result.includes("packed consumer: exports, 21 WASM grammars"), "Consumer validation did not execute");
     console.log(result.trim());
     console.log(`artifact: ${filename}; ${entries.length} archive entries; isolated consumer outside checkout with existing dependency links; no install/download/native compilation`);
     console.log("clean registry-backed install: run separately with scripts/clean-install-smoke.mjs");

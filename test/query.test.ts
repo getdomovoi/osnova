@@ -2,13 +2,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { ask } from "../src/query/ask.js";
-import { findText } from "../src/query/findText.js";
+import { findText, findTextDetailed } from "../src/query/findText.js";
+import { clipThreadText, formatAsk, formatFindText, formatFindTextResult } from "../src/query/format.js";
 import { skeleton } from "../src/query/skeleton.js";
 import { callers, callersDetailed } from "../src/query/callers.js";
 import { map } from "../src/query/map.js";
 import { renderMapCard } from "../src/query/mapCard.js";
 import { maximumOsnovaMapCardCodeUnits } from "../src/types.js";
-import type { OsnovaIndex } from "../src/types.js";
+import type { AskHit, AskResult, FindTextGroup, OsnovaIndex, OsnovaSymbol } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
 
@@ -42,6 +43,51 @@ describe("ask", () => {
   });
 });
 
+describe("ground formatting", () => {
+  function symbolAt(qualifiedName: string, startLine: number, endLine: number): OsnovaSymbol {
+    const name = qualifiedName.slice(qualifiedName.lastIndexOf(".") + 1);
+    return { name, qualifiedName, kind: "constant", file: "src/a.ts", span: { startLine, endLine, startCol: 0, endCol: 1 }, signature: name, lineCount: endLine - startLine + 1 };
+  }
+  function hitFor(qualifiedName: string, line: number, endLine = line): AskHit {
+    return { file: "src/a.ts", line, score: 1, symbol: symbolAt(qualifiedName, line, endLine), excerpt: `body of ${qualifiedName}`, excerptStartLine: line };
+  }
+  const parent = hitFor("src/a.ts#outer", 10);
+  const first = hitFor("src/a.ts#outer.first", 12);
+  const second = hitFor("src/a.ts#outer.second.deep", 20);
+  const other = hitFor("src/a.ts#other", 50);
+
+  it("folds hits nested under a shown parent into one also line", () => {
+    const result: AskResult = { hits: [parent, first, other, second], filesSearched: 1 };
+    const text = formatAsk(result);
+    expect(text).toBe([
+      "src/a.ts:10 constant src/a.ts#outer\nL10: body of src/a.ts#outer\nalso: .first L12, .second.deep L20",
+      "src/a.ts:50 constant src/a.ts#other\nL50: body of src/a.ts#other",
+    ].join("\n\n"));
+    expect(result.hits).toHaveLength(4);
+  });
+
+  it("prints a nested hit in full when its parent is not shown", () => {
+    const text = formatAsk({ hits: [other, first], filesSearched: 1 });
+    expect(text).toBe([
+      "src/a.ts:50 constant src/a.ts#other\nL50: body of src/a.ts#other",
+      "src/a.ts:12 constant src/a.ts#outer.first\nL12: body of src/a.ts#outer.first",
+    ].join("\n\n"));
+    expect(text).not.toContain("also:");
+  });
+
+  it("keeps a child that outranks its parent as its own hit", () => {
+    const text = formatAsk({ hits: [first, other, parent, second], filesSearched: 1 });
+    const blocks = text.split("\n\n");
+    expect(blocks.map((block) => block.split("\n")[0])).toEqual([
+      "src/a.ts:12 constant src/a.ts#outer.first",
+      "src/a.ts:50 constant src/a.ts#other",
+      "src/a.ts:10 constant src/a.ts#outer",
+    ]);
+    expect(blocks[2]).toContain("also: .second.deep L20");
+    expect(text).not.toContain("also: .first");
+  });
+});
+
 describe("findText", () => {
   it("groups matches by enclosing symbol ranked by incoming edges", () => {
     const groups = findText(index, "RetryTimer");
@@ -69,6 +115,61 @@ describe("findText", () => {
 
   it("rejects invalid regex with a clear error", () => {
     expect(() => findText(index, "[")).toThrow(/invalid pattern/);
+  });
+});
+
+describe("thread formatting", () => {
+  const long = "abcdefghij".repeat(30);
+
+  it("clips a long line to a window around the match", () => {
+    const near = clipThreadText(long, 5, 9);
+    expect(near.startsWith("abcde")).toBe(true);
+    expect(near.endsWith("…")).toBe(true);
+    expect(near.length).toBe(121);
+
+    const end = clipThreadText(long, 290, 295);
+    expect(end.startsWith("…")).toBe(true);
+    expect(end.endsWith("ghij")).toBe(true);
+    expect(end.length).toBe(121);
+
+    const middle = clipThreadText(long, 150, 154);
+    expect(middle.startsWith("…")).toBe(true);
+    expect(middle.endsWith("…")).toBe(true);
+    expect(middle.length).toBe(122);
+    expect(middle.slice(1, -1)).toBe(long.slice(92, 212));
+  });
+
+  it("never cuts inside a match longer than the window", () => {
+    const wide = clipThreadText(long, 10, 200);
+    expect(wide).toBe(`…${long.slice(10, 200)}…`);
+  });
+
+  it("keeps short lines whole and trims indentation", () => {
+    expect(clipThreadText("    const x = 1;", 10, 11)).toBe("const x = 1;");
+  });
+
+  it("merges same-line matches into one row listing the columns", () => {
+    const groups: FindTextGroup[] = [{
+      symbol: null,
+      file: "a.ts",
+      incomingEdges: 0,
+      matches: [
+        { line: 3, col: 2, length: 3, text: "  foo foo" },
+        { line: 3, col: 6, length: 3, text: "  foo foo" },
+        { line: 5, col: 0, length: 3, text: "foo" },
+      ],
+    }];
+    expect(formatFindText(groups)).toBe("<module> a.ts (0 in)\na.ts:3:3,7: foo foo\na.ts:5:1: foo");
+  });
+
+  it("keeps header counts equal to findTextDetailed totals after merging", () => {
+    const result = findTextDetailed(index, "\\w", { limit: 50, matchesPerGroup: 10 });
+    const shown = result.groups.reduce((n, g) => n + g.matches.length, 0);
+    const rows = result.groups.reduce((n, g) => n + new Set(g.matches.map((m) => m.line)).size, 0);
+    expect(shown).toBeGreaterThan(rows);
+    const text = formatFindTextResult(result);
+    expect(text).toContain(`indexed-text search: ${result.totalMatches - result.omittedMatches}/${result.totalMatches} matches`);
+    expect(text.split("\n").filter((l) => /^[^ ]+:\d+:\d+(,\d+)*: /.test(l)).length).toBe(rows);
   });
 });
 
@@ -126,7 +227,7 @@ describe("callers", () => {
 describe("map", () => {
   it("clusters directories and ranks hotspots", () => {
     const result = map(index);
-    expect(result.fileCount).toBe(27);
+    expect(result.fileCount).toBe(28);
     expect(result.clusters[0]?.dir).toBe("src/");
     expect(result.hotspots.length).toBeGreaterThan(0);
     expect(result.droppedHotspots).toBeGreaterThanOrEqual(0);

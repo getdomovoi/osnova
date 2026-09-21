@@ -1,15 +1,10 @@
-import path from "node:path";
 import type { DirCluster, HubEntry, MapOptions, MapResult, OsnovaIndex } from "../types.js";
+import { depthOneReach, dirOf } from "./reach.js";
 
 const DEFAULT_MAX_DIRS = 16;
 const HUBS_PER_DIR = 3;
 const HOTSPOT_LIMIT = 10;
 const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
-
-function dirOf(filePath: string): string {
-  const dir = path.posix.dirname(filePath);
-  return dir === "." ? "." : `${dir}/`;
-}
 
 export function map(index: OsnovaIndex, options?: MapOptions): MapResult {
   const maxDirs = Math.max(1, options?.maxDirs ?? DEFAULT_MAX_DIRS);
@@ -54,14 +49,15 @@ export function map(index: OsnovaIndex, options?: MapOptions): MapResult {
 
   const degreeOf = (qualifiedName: string): HubEntry => {
     const symbol = index.symbols.get(qualifiedName);
-    const inEdges = index.incoming(qualifiedName).length;
+    const reach = depthOneReach(index, qualifiedName);
     const outEdges = index.outgoing(qualifiedName).length;
     return {
       qualifiedName,
       kind: symbol?.kind ?? "function",
       file: symbol?.file ?? "",
       line: symbol?.span.startLine ?? 0,
-      inEdges,
+      inEdges: reach.edges,
+      inFiles: reach.files,
       outEdges,
     };
   };

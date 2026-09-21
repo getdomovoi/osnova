@@ -33,6 +33,11 @@ describe("osnova setup --apply", () => {
     const text = await fs.readFile(agents, "utf8");
     expect(text.startsWith("# Project\n\nRules.\n\n<!-- osnova:start -->")).toBe(true);
     expect(text).toContain("osnova_footing");
+    expect(text).not.toContain("osnova_thread");
+    expect(text).toContain("not proof of absence");
+    expect(text).toContain("an unresolved edge is a lead");
+    const block = /<!-- osnova:start -->[\s\S]*<!-- osnova:end -->/.exec(text)?.[0] ?? "";
+    expect(block.length).toBeLessThanOrEqual(480);
     expect(text.trimEnd().endsWith("<!-- osnova:end -->")).toBe(true);
     const backups = (await fs.readdir(path.join(home, ".claude"))).filter((name) => name.includes(".bak-osnova-"));
     expect(backups).toHaveLength(1);

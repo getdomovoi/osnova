@@ -8,6 +8,7 @@ export default defineConfig({
       diagnostics: "src/diagnostics/index.ts",
       enrichment: "src/enrichment/index.ts",
       bin: "src/cli/bin.ts",
+      extractWorker: "src/index/extractWorker.ts",
     },
     format: ["esm"],
     dts: true,
@@ -15,8 +16,5 @@ export default defineConfig({
     platform: "node",
     sourcemap: true,
     clean: true,
-    splitting: false,
-    banner: {
-      js: "#!/usr/bin/env node",
-    },
+    splitting: true,
 });

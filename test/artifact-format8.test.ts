@@ -77,7 +77,7 @@ describe("format 9 core envelope", () => {
     const core = serializeArtifact(index);
     const parsed = JSON.parse(core.toString("utf8")) as { formatVersion: number; textHash: string; textBytes: number; paths: string[]; files: Array<{ p: number; text?: unknown; to: number; tl: number }> };
     const layout = serializeText(index);
-    expect(parsed.formatVersion).toBe(9);
+    expect(parsed.formatVersion).toBe(10);
     expect(parsed.textHash).toBe(layout.hash);
     expect(parsed.textBytes).toBe(layout.bytes.length);
     for (const file of parsed.files) {

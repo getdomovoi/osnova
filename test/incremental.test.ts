@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { applyChanges, freshness } from "../src/index/incremental.js";
 import { saveArtifact, serializeArtifact, serializeSections } from "../src/index/serialize.js";
 import { previousTextFrom, serializeText } from "../src/index/textStore.js";
 import { loadIndex } from "../src/api.js";
+import { EXTRACT_POOL_MIN_FILES, EXTRACT_POOL_REFRESH_MIN_FILES, extractWorkerCount } from "../src/index/extractPool.js";
 import type { OsnovaIndex } from "../src/types.js";
 
 function copyFixture(): string {
@@ -59,7 +60,16 @@ describe("deterministic index", () => {
   });
 });
 
-describe("incremental equals full", () => {
+describe.each([["0"], ["3"]])("incremental equals full (OSNOVA_EXTRACT_WORKERS=%s)", (workers) => {
+  const previous = process.env.OSNOVA_EXTRACT_WORKERS;
+  beforeEach(() => {
+    process.env.OSNOVA_EXTRACT_WORKERS = workers;
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.OSNOVA_EXTRACT_WORKERS;
+    else process.env.OSNOVA_EXTRACT_WORKERS = previous;
+  });
+
   it("randomized edit sequences converge to identical artifacts", async () => {
     const dir = copyFixture();
     const incrementalCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-determinism-inc-"));
@@ -127,6 +137,66 @@ describe("incremental equals full", () => {
     }
   });
 
+});
+
+describe("extract worker pool", () => {
+  const previous = process.env.OSNOVA_EXTRACT_WORKERS;
+  afterEach(() => {
+    if (previous === undefined) delete process.env.OSNOVA_EXTRACT_WORKERS;
+    else process.env.OSNOVA_EXTRACT_WORKERS = previous;
+  });
+
+  it("stays sequential below the file threshold and honours the override", () => {
+    const env = (value: string | undefined): NodeJS.ProcessEnv => (value === undefined ? {} : { OSNOVA_EXTRACT_WORKERS: value });
+    expect(extractWorkerCount(EXTRACT_POOL_MIN_FILES - 1, env(undefined))).toBe(0);
+    expect(extractWorkerCount(EXTRACT_POOL_MIN_FILES, env(undefined))).toBeGreaterThan(0);
+    expect(extractWorkerCount(EXTRACT_POOL_MIN_FILES, env(undefined))).toBeLessThanOrEqual(8);
+    expect(extractWorkerCount(1000, env("0"))).toBe(0);
+    expect(extractWorkerCount(2, env("5"))).toBe(2);
+    expect(extractWorkerCount(1000, env("5"))).toBe(5);
+    expect(extractWorkerCount(1000, env("many"))).toBeLessThanOrEqual(8);
+  });
+
+  it("raises the pool threshold for a refresh", () => {
+    const env: NodeJS.ProcessEnv = {};
+    expect(EXTRACT_POOL_REFRESH_MIN_FILES).toBeGreaterThan(EXTRACT_POOL_MIN_FILES);
+    expect(extractWorkerCount(EXTRACT_POOL_REFRESH_MIN_FILES - 1, env, EXTRACT_POOL_REFRESH_MIN_FILES)).toBe(0);
+    expect(extractWorkerCount(EXTRACT_POOL_REFRESH_MIN_FILES, env, EXTRACT_POOL_REFRESH_MIN_FILES)).toBeGreaterThan(0);
+    expect(extractWorkerCount(EXTRACT_POOL_REFRESH_MIN_FILES - 1, { OSNOVA_EXTRACT_WORKERS: "3" }, EXTRACT_POOL_REFRESH_MIN_FILES)).toBe(3);
+  });
+
+  it("produces the same bytes as sequential extraction", async () => {
+    const dir = copyFixture();
+    try {
+      process.env.OSNOVA_EXTRACT_WORKERS = "0";
+      const sequential = await buildIndex(dir);
+      process.env.OSNOVA_EXTRACT_WORKERS = "3";
+      const pooled = await buildIndex(dir);
+      expect(pooled.files.size).toBe(sequential.files.size);
+      expect([...pooled.files.keys()]).toEqual([...sequential.files.keys()]);
+      expect(serializeArtifact(pooled).equals(serializeArtifact(sequential))).toBe(true);
+      expect(serializeText(pooled).bytes.equals(serializeText(sequential).bytes)).toBe(true);
+      expect(serializeSections(pooled).edges.bytes.equals(serializeSections(sequential).edges.bytes)).toBe(true);
+      expect([...pooled.files.values()].map((card) => card.diagnostics)).toEqual([...sequential.files.values()].map((card) => card.diagnostics));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("carries an indexing failure out of the worker with its diagnostic", async () => {
+    const dir = copyFixture();
+    try {
+      fs.chmodSync(path.join(dir, "src/util.ts"), 0o000);
+      process.env.OSNOVA_EXTRACT_WORKERS = "3";
+      await expect(buildIndex(dir)).rejects.toMatchObject({ diagnostic: { phase: "read", path: "src/util.ts", code: "file-unreadable" } });
+    } finally {
+      fs.chmodSync(path.join(dir, "src/util.ts"), 0o644);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("freshness", () => {
   it("freshness detects added, changed, and deleted files", async () => {
     const dir = copyFixture();
     try {
@@ -149,6 +219,46 @@ describe("incremental equals full", () => {
       expect(updated.files.has("src/added.ts")).toBe(true);
       expect(updated.files.has("src/app.ts")).toBe(false);
       expect(updated.symbols.has("src/util.ts#replaced")).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("partial re-resolution", () => {
+  const edgeLines = (index: OsnovaIndex): string => index.edges.map((edge) => JSON.stringify(edge)).join("\n");
+
+  it("matches a full rebuild when an edit changes only a body", async () => {
+    const dir = copyFixture();
+    try {
+      const index = await buildIndex(dir);
+      const file = path.join(dir, "src/util.ts");
+      fs.writeFileSync(file, `${fs.readFileSync(file, "utf8")}\n// trailing note\n`);
+
+      const report = await freshness(index, dir);
+      expect(report.changed).toEqual(["src/util.ts"]);
+
+      const refreshed = await applyChanges(index, dir, report.changed);
+      expect(edgeLines(refreshed)).toBe(edgeLines(await buildIndex(dir)));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches a full rebuild when an edit removes a symbol other files call", async () => {
+    const dir = copyFixture();
+    try {
+      const index = await buildIndex(dir);
+      expect(index.edges.some((edge) => edge.toSymbol === "src/util.ts#compute")).toBe(true);
+
+      const file = path.join(dir, "src/util.ts");
+      fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("export function compute", "function compute"));
+
+      const report = await freshness(index, dir);
+      expect(report.changed).toEqual(["src/util.ts"]);
+
+      const refreshed = await applyChanges(index, dir, report.changed);
+      expect(edgeLines(refreshed)).toBe(edgeLines(await buildIndex(dir)));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -12,3 +12,8 @@ export function rememberIndexGeneration(index: OsnovaIndex, serialized: Buffer |
   generations.set(index, generation);
   return generation;
 }
+
+export function bindIndexGeneration(index: OsnovaIndex, generation: string): string {
+  generations.set(index, generation);
+  return generation;
+}

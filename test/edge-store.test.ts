@@ -37,7 +37,7 @@ describe("edge store", () => {
     const lines = serializeEdges(index.edges, paths).bytes.toString("utf8").split("\n");
     expect(lines.at(-1)).toBe("");
     const header = JSON.parse(lines[0]!) as { formatVersion: number; count: number; evidence: unknown[]; bindings: unknown[] };
-    expect(header.formatVersion).toBe(9);
+    expect(header.formatVersion).toBe(10);
     expect(header.count).toBe(index.edges.length);
     expect(lines.length - 2).toBe(index.edges.length);
     const fileIndexes = lines.slice(1, -1).map((line) => (JSON.parse(line) as number[])[1]!);

@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
 import type { FileCard, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import { knownIndexGeneration, rememberIndexGeneration } from "../index/generation.js";
+import { serializeArtifact } from "../index/serialize.js";
 
 export interface IndexReceipt {
   readonly generation: string;
@@ -55,7 +56,7 @@ export interface ImpactResult {
   readonly changes: readonly SymbolChange[];
   readonly files: readonly { before: SourceReceipt | null; after: SourceReceipt | null }[];
   readonly dependents: readonly ImpactDependent[];
-  readonly omitted: { readonly dependentFrontier: number };
+  readonly omitted: { readonly dependentFrontier: number; readonly fileImporters: number };
   readonly uncertainty: { readonly unresolvedEdges: number; readonly notes: readonly string[] };
 }
 
@@ -63,30 +64,13 @@ export function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => compareText(a, b))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 const receipts = new WeakMap<OsnovaIndex, IndexReceipt>();
 
 export function indexReceipt(index: OsnovaIndex): IndexReceipt {
   const memoized = receipts.get(index);
   if (memoized !== undefined) return memoized;
-  const hash = createHash("sha256");
-  hash.update(canonical({ root: index.root, schema: "query-receipt-v1" }));
-  for (const [path, file] of [...index.files].sort(([a], [b]) => compareText(a, b))) {
-    hash.update(canonical({ path, hash: file.hash, language: file.language, diagnostics: file.diagnostics ?? [], reExports: file.reExports ?? [] }));
-  }
-  for (const [name, symbol] of [...index.symbols].sort(([a], [b]) => compareText(a, b))) hash.update(canonical({ name, symbol }));
-  for (const edge of index.edges.map(canonical).sort(compareText)) hash.update(edge);
-  const diagnostics = [...(index.diagnostics ?? [])].map(canonical).sort(compareText);
-  hash.update(canonical(diagnostics));
-  const receipt: IndexReceipt = { generation: hash.digest("hex"), basis: "indexed-content-sha256", files: index.files.size, diagnostics: diagnostics.length };
+  const generation = knownIndexGeneration(index) ?? rememberIndexGeneration(index, serializeArtifact(index));
+  const receipt: IndexReceipt = { generation, basis: "indexed-content-sha256", files: index.files.size, diagnostics: (index.diagnostics ?? []).length };
   receipts.set(index, receipt);
   return receipt;
 }
@@ -189,6 +173,18 @@ function parseDiff(diff: string): DiffFile[] & { tolerated?: number } {
   return Object.assign(files, { tolerated });
 }
 
+function innermostSymbolAt(symbols: readonly OsnovaSymbol[], line: number): OsnovaSymbol | undefined {
+  let best: OsnovaSymbol | undefined;
+  for (const symbol of symbols) {
+    if (line < symbol.span.startLine || line > symbol.span.endLine) continue;
+    if (best === undefined || symbol.span.startLine > best.span.startLine ||
+      (symbol.span.startLine === best.span.startLine && (symbol.span.startCol > best.span.startCol ||
+        (symbol.span.startCol === best.span.startCol && (symbol.span.endLine < best.span.endLine ||
+          (symbol.span.endLine === best.span.endLine && symbol.span.endCol < best.span.endCol)))))) best = symbol;
+  }
+  return best;
+}
+
 function symbolText(file: FileCard, symbol: OsnovaSymbol): string {
   const lines = file.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine);
   if (lines.length === 1) return (lines[0] ?? "").slice(symbol.span.startCol, symbol.span.endCol);
@@ -223,9 +219,28 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   const consumed = new Set<string>();
   const definition = (index: OsnovaIndex, symbol: OsnovaSymbol, receipt: IndexReceipt): DefinitionEvidence =>
     ({ symbol, receipt: sourceReceipt(index, symbol.file, receipt) });
-  const overlaps = (symbol: OsnovaSymbol, requested: "base" | "current"): boolean => diffs?.some((diff) =>
-    (requested === "base" && !sameIndex ? diff.before : diff.after) === symbol.file &&
-    [...(requested === "base" && !sameIndex ? diff.oldLines : diff.newLines)].some((line) => line >= symbol.span.startLine && line <= symbol.span.endLine)) ?? false;
+  const attributed = new Map<OsnovaIndex, Map<string, Set<string>>>();
+  const overlaps = (symbol: OsnovaSymbol, requested: "base" | "current"): boolean => {
+    if (diffs === null) return false;
+    const useBase = requested === "base" && !sameIndex;
+    const index = useBase ? base : current;
+    const perIndex = attributed.get(index) ?? new Map<string, Set<string>>();
+    attributed.set(index, perIndex);
+    let names = perIndex.get(symbol.file);
+    if (names === undefined) {
+      names = new Set();
+      perIndex.set(symbol.file, names);
+      const symbols = index.files.get(symbol.file)?.symbols ?? [];
+      for (const diff of diffs) {
+        if ((useBase ? diff.before : diff.after) !== symbol.file) continue;
+        for (const line of useBase ? diff.oldLines : diff.newLines) {
+          const innermost = innermostSymbolAt(symbols, line);
+          if (innermost !== undefined) names.add(innermost.qualifiedName);
+        }
+      }
+    }
+    return names.has(symbol.qualifiedName);
+  };
   for (const symbol of [...base.symbols.values()].sort((a, b) => compareText(a.qualifiedName, b.qualifiedName))) {
     const rename = renames.get(symbol.file);
     const local = symbol.qualifiedName.slice(symbol.file.length);
@@ -267,6 +282,23 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   }
   const dependents: ImpactDependent[] = [];
   let dependentFrontier = 0;
+  const unlistedImporters = new Set<string>();
+  const fullyAttributed = (index: OsnovaIndex, file: string, side: "base" | "current"): boolean => {
+    if (diffs === null) return false;
+    const card = index.files.get(file);
+    if (card === undefined) return false;
+    const text = card.text.split("\n");
+    let mentioned = false;
+    for (const diff of diffs) {
+      if ((side === "base" ? diff.before : diff.after) !== file) continue;
+      mentioned = true;
+      for (const line of side === "base" ? diff.oldLines : diff.newLines) {
+        if ((text[line - 1] ?? "").trim() === "") continue;
+        if (innermostSymbolAt(card.symbols, line) === undefined) return false;
+      }
+    }
+    return mentioned;
+  };
   const snapshots = sameIndex ? [["current", current, afterReceipt]] as const
     : [["base", base, beforeReceipt], ["current", current, afterReceipt]] as const;
   for (const [snapshot, index, receipt] of snapshots) {
@@ -275,9 +307,13 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
       const item = snapshot === "base" ? change.before : change.after;
       if (item !== null) seeds.add(item.symbol.qualifiedName);
     }
+    const importerOnlyFiles = new Set<string>();
     for (const file of files) {
       const item = snapshot === "base" ? file.before : file.after;
-      if (item !== null) seeds.add(item.file);
+      if (item === null) continue;
+      const inPlace = file.before !== null && file.after !== null && file.before.file === file.after.file;
+      if (inPlace && fullyAttributed(base, item.file, "base") && fullyAttributed(current, item.file, "current")) importerOnlyFiles.add(item.file);
+      else seeds.add(item.file);
     }
     const inbound = new Map<string, RelationshipEvidence[]>();
     for (const edge of index.edges) {
@@ -301,8 +337,15 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
         queue.push({ node, path });
       }
     }
+    for (const file of importerOnlyFiles) {
+      for (const evidence of inbound.get(file) ?? []) {
+        const node = evidence.edge.fromSymbol || evidence.edge.fromFile;
+        if (!visited.has(node)) unlistedImporters.add(node);
+      }
+    }
   }
-  return { base: beforeReceipt, current: afterReceipt, changes, files, dependents, omitted: { dependentFrontier },
+  for (const dependent of dependents) unlistedImporters.delete(dependent.symbol?.qualifiedName ?? dependent.file);
+  return { base: beforeReceipt, current: afterReceipt, changes, files, dependents, omitted: { dependentFrontier, fileImporters: unlistedImporters.size },
     uncertainty: { unresolvedEdges: (sameIndex ? [current] : [base, current]).reduce((sum, index) => sum + index.edges.filter((edge) =>
       relationshipEvidence(index, edge, index === base ? beforeReceipt : afterReceipt) === null).length, 0),
     notes: ["indexed-graph-only", ...(sameIndex ? ["base-snapshot-is-current-index", "deleted-symbols-not-visible"] : []), "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",

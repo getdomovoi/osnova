@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
+import { callers, callersDetailed } from "../src/query/callers.js";
+import { formatCallers, formatCallersDetailed } from "../src/query/format.js";
 import type { OsnovaIndex } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
@@ -138,6 +142,30 @@ describe("extraction adapters", () => {
     expect(index.outgoing("src/breadth/shape.cpp#describe").map((e) => e.toName)).toContain("area");
   });
 
+  it("extracts objective-c definitions and calls through the generic tier", () => {
+    expect(symbolsOf("src/breadth/greeter.m")).toEqual([
+      "type:src/breadth/greeter.m#Point",
+      "enum:src/breadth/greeter.m#Mode",
+      "interface:src/breadth/greeter.m#Named",
+      "method:src/breadth/greeter.m#Named.name",
+      "class:src/breadth/greeter.m#Greeter",
+      "method:src/breadth/greeter.m#Greeter.greet",
+      "method:src/breadth/greeter.m#Greeter.formatName",
+      "method:src/breadth/greeter.m#Greeter.shared",
+      "method:src/breadth/greeter.m#Greeter.name",
+      "function:src/breadth/greeter.m#helper",
+      "function:src/breadth/greeter.m#run",
+    ]);
+    expect(index.symbols.get("src/breadth/greeter.m#Greeter")?.span.startLine).toBe(18);
+    expect(index.outgoing("src/breadth/greeter.m#Greeter.greet").map((e) => e.toName)).toEqual(["formatName"]);
+    expect(index.outgoing("src/breadth/greeter.m#Greeter.formatName").map((e) => e.toName)).toEqual(["stringWithFormat", "uppercaseString"]);
+    expect(index.outgoing("src/breadth/greeter.m#Greeter.shared").map((e) => e.toName)).toEqual(["alloc", "init"]);
+    const runCalls = index.outgoing("src/breadth/greeter.m#run");
+    expect(runCalls.map((e) => e.toName)).toEqual(["shared", "NSLog", "greet", "helper"]);
+    expect(runCalls.find((e) => e.toName === "helper")?.toSymbol).toBe("src/breadth/greeter.m#helper");
+    expect(runCalls.find((e) => e.toName === "greet")?.toSymbol).toBe("src/breadth/greeter.m#Greeter.greet");
+  });
+
   it("extracts ruby definitions and calls through the generic tier", () => {
     expect(symbolsOf("src/breadth/greeter.rb")).toEqual([
       "module:src/breadth/greeter.rb#Greeting",
@@ -273,3 +301,327 @@ describe("extraction adapters", () => {
     expect(pad?.span.endLine).toBe(20);
   });
 });
+
+describe("typescript variance annotations", () => {
+  const frame = [
+    "export class Frame<out Shape = unknown> {",
+    "  constructor(readonly shape: Shape) {}",
+    "  measure() { return this.shape.area(); }",
+    "}",
+    "export class Sink<in Shape = unknown> {",
+    "  constructor(readonly shape: Shape) {}",
+    "  drain() { return this.shape.area(); }",
+    "}",
+    "export interface Box<",
+    "  out Shape extends object = object,",
+    "> {",
+    "  shape: Shape;",
+    "}",
+    "export function outline(frame: Frame<object>) { return frame.measure(); }",
+    "",
+  ].join("\n");
+  const shape = "export class Shape {\n  area(): number { return 1; }\n}\n";
+
+  it("keeps a type parameter the grammar cannot parse out of the field type hints", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-variance-"));
+    try {
+      fs.writeFileSync(path.join(dir, "frame.ts"), frame);
+      fs.writeFileSync(path.join(dir, "shape.ts"), shape);
+      const built = await buildIndex(dir);
+      expect((built.diagnostics ?? []).map((d) => `${d.code}:${d.path}`)).toEqual(["syntax-errors:frame.ts"]);
+      expect(symbolsIn(built, "frame.ts")).toEqual([
+        "class:frame.ts#Frame",
+        "method:frame.ts#Frame.constructor",
+        "method:frame.ts#Frame.measure",
+        "class:frame.ts#Sink",
+        "method:frame.ts#Sink.constructor",
+        "method:frame.ts#Sink.drain",
+        "interface:frame.ts#Box",
+        "function:frame.ts#outline",
+      ]);
+      expect(built.symbols.get("frame.ts#Frame")?.fieldTypes).toBeUndefined();
+      expect(built.symbols.get("frame.ts#Sink")?.fieldTypes).toBeUndefined();
+      expect(built.symbols.get("frame.ts#Box")?.fieldTypes).toBeUndefined();
+      const areaCalls = built.edges.filter((e) => e.kind === "calls" && e.toName === "area");
+      expect(areaCalls.map((e) => `${e.fromSymbol}->${e.toSymbol ?? "unresolved"}`)).toEqual([
+        "frame.ts#Frame.measure->unresolved",
+        "frame.ts#Sink.drain->unresolved",
+      ]);
+      const outline = built.edges.find((e) => e.fromSymbol === "frame.ts#outline" && e.toName === "measure");
+      expect(outline?.toSymbol).toBe("frame.ts#Frame.measure");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("function value references", () => {
+  const tsLib = [
+    "export function helper(): number { return 1; }",
+    "export function other(): number { return 2; }",
+    "export class Widget { constructor(readonly cb: unknown) {} }",
+    'export const NAME = "x";',
+    "",
+  ].join("\n");
+  const tsMain = [
+    'import { helper, other, Widget, NAME } from "./lib.js";',
+    "function local(): number { return 3; }",
+    "export function useAll(xs: number[], flag: boolean, cb = helper): unknown {",
+    "  const alias = local;",
+    "  let late; late = helper;",
+    "  const arr = [other];",
+    "  const obj = { run: helper, other };",
+    "  xs.sort(local);",
+    "  const pick = flag ? helper : other;",
+    "  const fall = late ?? helper;",
+    "  const fall2 = late || local;",
+    "  let acc; acc ??= helper;",
+    "  acc ||= other;",
+    "  acc &&= local;",
+    "  const both = flag && helper;",
+    "  const text = `${helper}`;",
+    "  const value = new Widget(helper);",
+    "  console.log(NAME, alias, arr, obj, pick, fall, fall2, acc, both, text, value, cb);",
+    "  return helper;",
+    "}",
+    "export function nonEmit(): void {",
+    "  helper();",
+    "  const t = typeof helper;",
+    "  const w = { helper: 1 }.helper;",
+    '  const s = "helper";',
+    "  unbound(helper2);",
+    "  void t; void w; void s;",
+    "}",
+    "",
+  ].join("\n");
+  const pyLib = [
+    "def helper():",
+    "    return 1",
+    "",
+    "def other():",
+    "    return 2",
+    "",
+    "class Widget:",
+    "    pass",
+    "",
+    "LIMIT = 3",
+    "",
+  ].join("\n");
+  const pyMain = [
+    "from lib import helper, other, Widget, LIMIT",
+    "",
+    "def local():",
+    "    return 3",
+    "",
+    "def use_all(xs, flag, cb=helper):",
+    "    alias = local",
+    "    arr = [other]",
+    "    pair = {\"run\": helper}",
+    "    tup = (other, 1)",
+    "    xs.sort(key=local)",
+    "    list(map(helper, xs))",
+    "    pick = helper if flag else other",
+    "    fall = alias or helper",
+    "    both = flag and helper",
+    "    xs += other",
+    "    text = f\"{helper}\"",
+    "    a, b = other, helper",
+    "    obj = isinstance(xs, Widget)",
+    "    print(LIMIT, alias, arr, pair, tup, pick, fall, both, text, a, b, obj, cb)",
+    "    return helper",
+    "",
+    "def non_emit(x):",
+    "    helper()",
+    "    y = x.helper",
+    "    s = \"helper\"",
+    "    unbound(helper2)",
+    "    return y, s",
+    "",
+    "class Child(Widget):",
+    "    pass",
+    "",
+  ].join("\n");
+
+  const references = (built: OsnovaIndex, file: string): string[] =>
+    built.edges.filter((e) => e.fromFile === file && e.kind === "references")
+      .map((e) => `${e.line}:${e.fromSymbol}->${e.toName}=${e.toSymbol ?? "unresolved"}[${e.evidence?.source === "syntax" && e.evidence.resolution.status === "resolved" ? e.evidence.resolution.method : e.evidence?.source === "syntax" ? e.evidence.resolution.status : "?"}]`);
+
+  it("emits a bound references edge for every typescript value position and none elsewhere", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-valueref-ts-"));
+    try {
+      fs.writeFileSync(path.join(dir, "lib.ts"), tsLib);
+      fs.writeFileSync(path.join(dir, "main.ts"), tsMain);
+      const built = await buildIndex(dir);
+      expect(references(built, "main.ts")).toEqual([
+        "3:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "4:main.ts#useAll->local=main.ts#local[lexical-definition]",
+        "5:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "6:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "7:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "7:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "8:main.ts#useAll->local=main.ts#local[lexical-definition]",
+        "9:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "9:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "10:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "11:main.ts#useAll->local=main.ts#local[lexical-definition]",
+        "12:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "13:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "14:main.ts#useAll->local=main.ts#local[lexical-definition]",
+        "15:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "16:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "17:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "18:main.ts#useAll->alias=main.ts#local[lexical-definition]",
+        "19:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+      ]);
+      const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.ts#nonEmit");
+      expect(nonEmit.map((e) => `${e.kind}:${e.toName}`).sort()).toEqual(["calls:helper", "calls:unbound"]);
+      expect(built.edges.some((e) => e.toName === "helper2" || e.toName === "NAME")).toBe(false);
+      expect(built.edges.some((e) => e.kind === "references" && e.binding === undefined)).toBe(false);
+      const detailed = callersDetailed(built, "lib.ts#helper");
+      expect(detailed.status).toBe("found");
+      if (detailed.status !== "found") return;
+      expect(detailed.reach?.d1.edges).toBe(11);
+      const text = formatCallersDetailed(detailed);
+      expect(text).toContain("d1 references main.ts#useAll:3,5,7,9,10,12,15,16,17,19 [import-binding]");
+      expect(text).toContain("d1 calls main.ts#nonEmit:22 [import-binding]");
+      expect(formatCallers(callers(built, "main.ts#local"))).toContain("d1 references function main.ts#useAll main.ts:4");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a bound references edge for every python value position and none elsewhere", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-valueref-py-"));
+    try {
+      fs.writeFileSync(path.join(dir, "lib.py"), pyLib);
+      fs.writeFileSync(path.join(dir, "main.py"), pyMain);
+      const built = await buildIndex(dir);
+      expect(references(built, "main.py").filter((line) => !line.startsWith("1:"))).toEqual([
+        "6:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "7:main.py#use_all->local=main.py#local[lexical-definition]",
+        "8:main.py#use_all->other=lib.py#other[import-binding]",
+        "9:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "10:main.py#use_all->other=lib.py#other[import-binding]",
+        "11:main.py#use_all->local=main.py#local[lexical-definition]",
+        "12:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "13:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "13:main.py#use_all->other=lib.py#other[import-binding]",
+        "14:main.py#use_all->alias=main.py#local[lexical-definition]",
+        "14:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "15:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "16:main.py#use_all->other=lib.py#other[import-binding]",
+        "17:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "18:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "18:main.py#use_all->other=lib.py#other[import-binding]",
+        "19:main.py#use_all->Widget=lib.py#Widget[import-binding]",
+        "20:main.py#use_all->alias=main.py#local[lexical-definition]",
+        "21:main.py#use_all->helper=lib.py#helper[import-binding]",
+      ]);
+      const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.py#non_emit");
+      expect(nonEmit.map((e) => `${e.kind}:${e.toName}`).sort()).toEqual(["calls:helper", "calls:unbound"]);
+      expect(built.edges.some((e) => e.toName === "helper2")).toBe(false);
+      expect(built.edges.some((e) => e.kind === "references" && e.toName === "LIMIT" && e.line !== 1)).toBe(false);
+      expect(built.edges.some((e) => e.kind === "references" && e.line === 30)).toBe(false);
+      expect(built.symbols.get("main.py#Child")?.heritage).toEqual([{ kind: "import", source: "lib", importedName: "Widget" }]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("constructor calls inside decorator arguments", () => {
+  const py = [
+    "class Top:",
+    "    def __init__(self):",
+    "        pass",
+    "",
+    "class Bare:",
+    "    pass",
+    "",
+    "def register(*args):",
+    "    return lambda f: f",
+    "",
+    "def outer():",
+    "    class Nested:",
+    "        def __init__(self):",
+    "            pass",
+    "",
+    "    direct = Nested()",
+    "",
+    "    @register(Nested(), Top(), Bare(), Unbound())",
+    "    def cmd():",
+    "        pass",
+    "",
+    "    return cmd, direct",
+    "",
+  ].join("\n");
+  const ts = [
+    "class Top {",
+    "  constructor() {}",
+    "}",
+    "class Bare {}",
+    "function register(...args: unknown[]) { return (t: unknown) => t; }",
+    "function outer() {",
+    "  class Nested {",
+    "    constructor() {}",
+    "  }",
+    "  const direct = new Nested();",
+    "  @register(new Nested(), new Top(), new Bare(), new Unbound())",
+    "  class Cmd {}",
+    "  return [Cmd, direct];",
+    "}",
+    "",
+  ].join("\n");
+
+  function callsFrom(built: OsnovaIndex, fromSymbol: string): string[] {
+    return built.edges
+      .filter((e) => e.kind === "calls" && e.fromSymbol === fromSymbol)
+      .map((e) => {
+        const resolution = e.evidence?.source === "syntax" ? e.evidence.resolution : undefined;
+        const outcome = resolution?.status === "unresolved" ? `unresolved:${resolution.reason}` : `unresolved:${resolution?.status ?? "unknown"}`;
+        return `${e.line}:${e.toName}->${e.toSymbol ?? outcome}`;
+      });
+  }
+
+  it("binds python constructor calls in decorator arguments to the class declaration", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-ctor-"));
+    try {
+      fs.writeFileSync(path.join(dir, "deco.py"), py);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(callsFrom(built, "deco.py#outer")).toEqual([
+        "16:Nested->deco.py#outer.Nested",
+        "18:Bare->deco.py#Bare",
+        "18:Nested->deco.py#outer.Nested",
+        "18:Top->deco.py#Top",
+        "18:Unbound->unresolved:unbound-global",
+      ]);
+      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([18]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("binds typescript new expressions in decorator arguments to the class declaration", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-ctor-"));
+    try {
+      fs.writeFileSync(path.join(dir, "deco.ts"), ts);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(callsFrom(built, "deco.ts#outer")).toEqual(["10:Nested->deco.ts#outer.Nested"]);
+      expect(callsFrom(built, "deco.ts#outer.Cmd")).toEqual([
+        "11:Bare->deco.ts#Bare",
+        "11:Nested->deco.ts#outer.Nested",
+        "11:Top->deco.ts#Top",
+        "11:Unbound->unresolved:unbound-global",
+      ]);
+      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([11]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+function symbolsIn(built: OsnovaIndex, file: string): string[] {
+  return (built.files.get(file)?.symbols ?? []).map((s) => `${s.kind}:${s.qualifiedName}`);
+}

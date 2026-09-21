@@ -1,4 +1,4 @@
-export const indexFormatVersion = 9 as const;
+export const indexFormatVersion = 10 as const;
 
 export type LanguageId =
   | "typescript"
@@ -11,6 +11,7 @@ export type LanguageId =
   | "c_sharp"
   | "c"
   | "cpp"
+  | "objc"
   | "ruby"
   | "php"
   | "kotlin"
@@ -77,7 +78,7 @@ export type EdgeResolution =
   | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
   | { readonly status: "resolved"; readonly method: "receiver-hint"; readonly receiver: { readonly classSymbol: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }; readonly via?: readonly ExportHop[] | undefined }
   | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
-  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" | "unbound-global" };
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "import-target-ambiguous" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" | "unbound-global"; readonly external?: string | undefined };
 
 export type ReExport =
   | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }
@@ -191,6 +192,7 @@ export interface AskDetailedResult extends AskResult {
 export interface FindTextMatch {
   readonly line: number;
   readonly col: number;
+  readonly length: number;
   readonly text: string;
 }
 
@@ -278,6 +280,7 @@ export type CallersDetailedResult =
       readonly target: OsnovaSymbol;
       readonly hits: readonly CallerEvidenceHit[];
       readonly unresolved: readonly UnresolvedCallerEdge[];
+      readonly reach?: SymbolReach | undefined;
     };
 
 export interface DirCluster {
@@ -290,12 +293,32 @@ export interface DirCluster {
   readonly droppedHubs: number;
 }
 
+export interface ReachSpread {
+  readonly edges: number;
+  readonly files: number;
+  readonly dirs: number;
+}
+
+export interface ReachDepthTwo {
+  readonly edges: number;
+  readonly files: number;
+  readonly capped: boolean;
+}
+
+export interface SymbolReach {
+  readonly d1: ReachSpread;
+  readonly d2?: ReachDepthTwo | undefined;
+  readonly unresolvedSameName: number;
+  readonly tests: number;
+}
+
 export interface HubEntry {
   readonly qualifiedName: string;
   readonly kind: SymbolKind;
   readonly file: string;
   readonly line: number;
   readonly inEdges: number;
+  readonly inFiles: number;
   readonly outEdges: number;
 }
 
@@ -331,9 +354,10 @@ export interface BuildOptions {
 }
 
 export interface ProgressEvent {
-  readonly phase: "scan" | "extract" | "resolve" | "save";
+  readonly phase: "scan" | "seed" | "extract" | "resolve" | "save";
   readonly done: number;
   readonly total: number;
+  readonly sibling?: string | undefined;
 }
 
 export interface LoadIndexOptions {

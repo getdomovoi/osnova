@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 import * as loader from "../src/grammar/loader.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
+import { withSequentialExtract } from "./support/extract.js";
 
 let temporary: string;
 let workspace: string;
@@ -34,13 +35,13 @@ afterEach(async () => {
   await fs.rm(temporary, { recursive: true, force: true });
 });
 
-it("all eight tools disclose partial foundation", async () => {
+it("all ten tools disclose partial foundation", async () => {
   await fs.writeFile(path.join(workspace, "broken.ts"), "export function broken( {");
   const tools: Array<[string, Record<string, unknown>]> = [
     ["osnova_ground", { question: "one" }], ["osnova_thread", { pattern: "one" }],
     ["osnova_outline", { file: "one.ts" }], ["osnova_warp", { symbol: "one" }], ["osnova_groundwork", {}],
     ["osnova_footing", { question: "one" }], ["osnova_settle", { diff: "--- a/one.ts\n+++ b/one.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" }],
-    ["osnova_plumb", { symbol: "one", sites: ["one.ts:1"] }],
+    ["osnova_plumb", { symbol: "one", sites: ["one.ts:1"] }], ["osnova_tests", { symbols: ["one"] }], ["osnova_unreferenced", {}],
   ];
   for (const [name, args] of tools) {
     const result = await client.callTool({ name, arguments: args });
@@ -66,7 +67,7 @@ it("ordinary query tools aggregate diagnostics instead of repeating file paths",
   }
 });
 
-it("retries initialization after a grammar failure", async () => {
+it("retries initialization after a grammar failure", () => withSequentialExtract(async () => {
   vi.spyOn(loader, "getParser").mockRejectedValueOnce(new Error("unavailable"));
   const request = { name: "osnova_outline", arguments: { file: "one.ts" } };
   const first = await client.callTool(request);
@@ -75,7 +76,7 @@ it("retries initialization after a grammar failure", async () => {
   const retry = await client.callTool(request);
   expect(retry.isError).toBeFalsy();
   expect(JSON.stringify(retry)).toContain("function one");
-});
+}));
 
 it("does not conceal a failed refresh write and can retry safely", async () => {
   const request = { name: "osnova_outline", arguments: { file: "one.ts" } };
