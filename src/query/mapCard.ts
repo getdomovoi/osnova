@@ -61,7 +61,7 @@ export async function renderMapCard(
     lines.push({ text: "hotspots:", rank: RANK_SECTION });
     for (const hotspot of mapResult.hotspots) {
       lines.push({
-        text: `  ${hotspot.qualifiedName} (in ${hotspot.inEdges}, out ${hotspot.outEdges}) ${hotspot.file}:${hotspot.line}`,
+        text: `  ${hotspot.qualifiedName} (in ${hotspot.inEdges} from ${hotspot.inFiles} files, out ${hotspot.outEdges}) ${hotspot.file}:${hotspot.line}`,
         rank: RANK_HOTSPOT,
       });
     }

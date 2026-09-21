@@ -18,6 +18,7 @@ import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
+import { formatReach } from "./reach.js";
 import type { SymbolsUnderTestResult, TestSite, TestsForResult } from "./tests.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
@@ -243,8 +244,9 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
     lines.push(`${result.target.qualifiedName}: no indexed relationships found`);
   } else {
     lines.push(`${result.target.kind} ${result.target.qualifiedName}: ${result.hits.length} indexed edges`);
-    for (const group of callerGroups(result.hits)) lines.push(...callerGroupLines(group));
   }
+  if (result.reach !== undefined) lines.push(formatReach(result.reach));
+  for (const group of callerGroups(result.hits)) lines.push(...callerGroupLines(group));
   lines.push("This does not prove absence of callers or that deletion is safe.");
   if (result.unresolved.length > 0) {
     lines.push(`unresolved evidence (${result.unresolved.length}); not confirmed relationships`);
@@ -422,9 +424,10 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
   const unresolvedBlocks = result.unresolved.map(({ edge, depth, nameMatches }) => unresolvedCallerLines(edge, depth, nameMatches));
   const footer = (shownEdges: number, shownUnresolved: number): string => `omitted: ${result.hits.length - shownEdges} of ${result.hits.length} confirmed edges; ${unresolvedBlocks.length - shownUnresolved} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
   const targetSuffix = `: ${result.hits.length} indexed edges`;
-  const fixedUnits = [...base, ...summary, ...hoistedLines, footer(0, 0)].join("\n").length + targetSuffix.length + 2;
+  const reachLines = result.reach === undefined ? [] : [formatReach(result.reach)];
+  const fixedUnits = [...base, ...reachLines, ...summary, ...hoistedLines, footer(0, 0)].join("\n").length + targetSuffix.length + 2;
   const target = `${result.target.kind} ${compactField(result.target.qualifiedName, Math.max(1, maxCodeUnits - fixedUnits - result.target.kind.length - 1))}${targetSuffix}`;
-  const header = [base[0] ?? "", target, base[1] ?? "", ...summary, ...hoistedLines];
+  const header = [base[0] ?? "", target, ...reachLines, base[1] ?? "", ...summary, ...hoistedLines];
   const unresolvedHeader = `unresolved evidence (${result.unresolved.length}); not confirmed relationships`;
   const folds = (tail: readonly CallerGroup[]): FoldLine[] => {
     const byFile = new Map<string, FoldLine>();
@@ -559,7 +562,7 @@ export function formatMap(result: MapResult): string {
   if (result.hotspots.length > 0) {
     lines.push("hotspots:");
     for (const hotspot of result.hotspots) {
-      lines.push(`  ${hotspot.qualifiedName} (in ${hotspot.inEdges}, out ${hotspot.outEdges}) ${hotspot.file}:${hotspot.line}`);
+      lines.push(`  ${hotspot.qualifiedName} (in ${hotspot.inEdges} from ${hotspot.inFiles} files, out ${hotspot.outEdges}) ${hotspot.file}:${hotspot.line}`);
     }
   }
   return lines.join("\n");
@@ -573,6 +576,7 @@ export function formatTaskContext(result: TaskContextResult): string {
   for (const definition of result.definitions) {
     const { symbol } = definition;
     lines.push(`- ${symbol.qualifiedName} ${symbol.kind} lines ${symbol.span.startLine}-${symbol.span.endLine}`);
+    if (definition.reach !== undefined) lines.push(`  ${formatReach(definition.reach)}`);
     for (const line of definition.excerpt.split("\n")) lines.push(`  ${line}`);
   }
   if (result.relationships.length > 0) lines.push("relationships:");

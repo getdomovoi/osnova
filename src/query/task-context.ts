@@ -1,9 +1,10 @@
-import type { OsnovaIndex, OsnovaSymbol, SymbolKind } from "../types.js";
+import type { OsnovaIndex, OsnovaSymbol, SymbolKind, SymbolReach } from "../types.js";
 import { compareText, indexReceipt, isReliableEdge, relationshipEvidence, sourceReceipt } from "./impact.js";
 import type { DefinitionEvidence, IndexReceipt, RelationshipEvidence, SourceReceipt } from "./impact.js";
 import { inScope, normalizeScope } from "./scoped.js";
 import { askDetailed } from "./ask.js";
 import { isTestFile } from "./tests.js";
+import { reachCounter } from "./reach.js";
 
 export interface TaskContextOptions {
   readonly task: "understand" | "change" | "review";
@@ -21,6 +22,7 @@ export interface TaskContextOptions {
 
 export interface ContextDefinition extends DefinitionEvidence {
   readonly excerpt: string;
+  readonly reach?: SymbolReach | undefined;
 }
 
 export interface CandidateTest {
@@ -93,6 +95,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   }
   const sources = [...new Set(seeds.map((symbol) => symbol.file))].sort(compareText).map((file) => sourceReceipt(index, file, receipt));
   const definitions = new Map<string, ContextDefinition>();
+  const reach = reachCounter(index);
   const addDefinition = (symbol: OsnovaSymbol, seed = false): void => {
     if (definitions.has(symbol.qualifiedName)) return;
     const lines = index.files.get(symbol.file)!.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine);
@@ -100,7 +103,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     const excerpt = !keepWhole && excerptLines !== undefined && lines.length > excerptLines
       ? `${lines.slice(0, excerptLines).join("\n")}\n[+${lines.length - excerptLines} more lines]`
       : lines.join("\n");
-    definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt });
+    definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt, ...(seed ? { reach: reach(symbol) } : {}) });
   };
   for (const seed of seeds) addDefinition(seed, true);
   const relationships = new Map<number, RelationshipEvidence>();
