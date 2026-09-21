@@ -46,27 +46,43 @@ interface LoadedEdges {
   readonly byFile: Map<string, OsnovaEdge[]>;
 }
 
-export class OsnovaIndexImpl implements OsnovaIndex {
-  readonly root: string;
+export interface DeferredBody {
+  readonly path: string;
+  readonly load: () => { files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource };
+}
+
+interface IndexBody {
   readonly files: Map<string, FileCard>;
   readonly symbols: Map<string, OsnovaSymbol>;
   readonly diagnostics: readonly IndexDiagnostic[];
-  private readonly source: EdgeSource | undefined;
-  private loaded: LoadedEdges | undefined;
+  readonly source: EdgeSource | undefined;
+  loaded: LoadedEdges | undefined;
+}
 
-  constructor(root: string, files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource) {
+export class OsnovaIndexImpl implements OsnovaIndex {
+  readonly root: string;
+  private body: IndexBody | undefined;
+  private readonly deferred: DeferredBody | undefined;
+
+  constructor(root: string, files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource);
+  constructor(root: string, deferred: DeferredBody);
+  constructor(root: string, files: Map<string, FileCard> | DeferredBody, edges?: readonly OsnovaEdge[] | EdgeSource) {
     this.root = root;
-    this.files = files;
-    this.symbols = buildSymbolTable(files);
-    this.diagnostics = [...files.values()].flatMap((file) => file.diagnostics ?? []).sort((a, b) =>
-      compareStr(a.path, b.path) || compareStr(a.phase, b.phase) || compareStr(a.code, b.code));
-    if (Array.isArray(edges)) {
-      this.source = undefined;
-      this.loaded = OsnovaIndexImpl.build(edges);
+    if (files instanceof Map) {
+      this.body = OsnovaIndexImpl.bodyOf(files, edges!);
+      this.deferred = undefined;
     } else {
-      this.source = edges as EdgeSource;
-      this.loaded = undefined;
+      this.body = undefined;
+      this.deferred = files;
     }
+  }
+
+  private static bodyOf(files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource): IndexBody {
+    const diagnostics = [...files.values()].flatMap((file) => file.diagnostics ?? []).sort((a, b) =>
+      compareStr(a.path, b.path) || compareStr(a.phase, b.phase) || compareStr(a.code, b.code));
+    return Array.isArray(edges)
+      ? { files, symbols: buildSymbolTable(files), diagnostics, source: undefined, loaded: OsnovaIndexImpl.build(edges) }
+      : { files, symbols: buildSymbolTable(files), diagnostics, source: edges as EdgeSource, loaded: undefined };
   }
 
   private static build(edges: readonly OsnovaEdge[]): LoadedEdges {
@@ -82,15 +98,40 @@ export class OsnovaIndexImpl implements OsnovaIndex {
     return { edges: sorted, incoming, outgoing, byFile };
   }
 
-  private ensure(): LoadedEdges {
-    if (this.loaded !== undefined) return this.loaded;
-    const source = this.source!;
+  private ensureBody(): IndexBody {
+    if (this.body !== undefined) return this.body;
+    const deferred = this.deferred!;
     try {
-      this.loaded = OsnovaIndexImpl.build(deserializeEdges(source.raw, source.paths, this.files));
+      const { files, edges } = deferred.load();
+      this.body = OsnovaIndexImpl.bodyOf(files, edges);
+    } catch (error) {
+      throw new IndexingError({ phase: "cache", path: deferred.path, code: "cache-read-failed" }, error);
+    }
+    return this.body;
+  }
+
+  private ensure(): LoadedEdges {
+    const body = this.ensureBody();
+    if (body.loaded !== undefined) return body.loaded;
+    const source = body.source!;
+    try {
+      body.loaded = OsnovaIndexImpl.build(deserializeEdges(source.raw, source.paths, body.files));
     } catch (error) {
       throw new IndexingError({ phase: "cache", path: source.path, code: "cache-read-failed" }, error);
     }
-    return this.loaded;
+    return body.loaded;
+  }
+
+  get files(): Map<string, FileCard> {
+    return this.ensureBody().files;
+  }
+
+  get symbols(): Map<string, OsnovaSymbol> {
+    return this.ensureBody().symbols;
+  }
+
+  get diagnostics(): readonly IndexDiagnostic[] {
+    return this.ensureBody().diagnostics;
   }
 
   get edges(): OsnovaEdge[] {
@@ -110,7 +151,7 @@ export class OsnovaIndexImpl implements OsnovaIndex {
   }
 
   edgesLoaded(): boolean {
-    return this.loaded !== undefined;
+    return this.body?.loaded !== undefined;
   }
 }
 
