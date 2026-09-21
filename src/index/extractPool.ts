@@ -59,11 +59,9 @@ async function extractSequential(
   onDone?: (done: number) => void,
 ): Promise<ExtractedFile[]> {
   const results: ExtractedFile[] = [];
-  for (let i = 0; i < paths.length; i += 1) {
-    const relPath = paths[i];
-    if (relPath === undefined) continue;
+  for (const relPath of paths) {
     results.push(await extractOne(absRoot, relPath));
-    onDone?.(i + 1);
+    onDone?.(results.length);
   }
   return results;
 }
@@ -88,15 +86,13 @@ async function extractWithPool(
   });
 
   const dispatch = (worker: Worker): void => {
-    if (failures.size === 0) {
-      while (next < paths.length && paths[next] === undefined) next += 1;
-      if (next < paths.length) {
-        const id = next;
-        next += 1;
-        current.set(worker, id);
-        worker.postMessage({ id, absRoot, relPath: paths[id] as string } satisfies ExtractRequest);
-        return;
-      }
+    const relPath = failures.size === 0 ? paths[next] : undefined;
+    if (relPath !== undefined) {
+      const id = next;
+      next += 1;
+      current.set(worker, id);
+      worker.postMessage({ id, absRoot, relPath } satisfies ExtractRequest);
+      return;
     }
     if (current.size === 0) settle?.();
   };
@@ -136,7 +132,7 @@ async function extractWithPool(
   const firstFailure = [...failures.keys()].sort((a, b) => a - b)[0];
   if (firstFailure !== undefined) throw failures.get(firstFailure);
   return results.map((entry, id) => {
-    if (entry === undefined) throw new Error(`osnova: extract worker returned no result for ${paths[id] ?? id}`);
+    if (entry === undefined) throw new Error(`osnova: extraction of ${paths[id] ?? String(id)} was never dispatched to a worker`);
     return entry;
   });
 }
