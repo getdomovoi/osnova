@@ -18,19 +18,66 @@ interface EdgeHeader {
 
 type Tuple = [kind: number, fromFile: number, fromSymbol: string, toName: string, line: number, toSymbol: string | null, toFile: number, evidence: number, binding: number];
 
-export function canonical(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) =>
-    typeof item === "object" && item !== null && !Array.isArray(item)
-      ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : item);
+const MAX_ARRAY_INDEX = 4294967294;
+
+function arrayIndexOf(key: string): number {
+  if (key === "0") return 0;
+  if (key.length === 0 || key.length > 10 || key.charCodeAt(0) < 49 || key.charCodeAt(0) > 57) return -1;
+  for (let i = 1; i < key.length; i += 1) {
+    const code = key.charCodeAt(i);
+    if (code < 48 || code > 57) return -1;
+  }
+  const index = Number(key);
+  return index <= MAX_ARRAY_INDEX ? index : -1;
 }
 
-function intern<T>(values: Iterable<T | undefined>): { table: T[]; indexOf: (value: T | undefined) => number } {
+function comparePropertyKeys(a: string, b: string): number {
+  const ia = arrayIndexOf(a);
+  const ib = arrayIndexOf(b);
+  if (ia >= 0 && ib >= 0) return ia - ib;
+  if (ia >= 0) return -1;
+  if (ib >= 0) return 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function canonicalValue(value: unknown, key: string): string | undefined {
+  if (typeof value === "object" && value !== null) {
+    const toJSON = (value as { toJSON?: unknown }).toJSON;
+    if (typeof toJSON === "function") return canonicalValue((toJSON as (k: string) => unknown).call(value, key), key);
+    if (Array.isArray(value)) {
+      let out = "[";
+      for (let i = 0; i < value.length; i += 1) {
+        if (i > 0) out += ",";
+        out += canonicalValue(value[i], String(i)) ?? "null";
+      }
+      return `${out}]`;
+    }
+    const keys = Object.keys(value).sort(comparePropertyKeys);
+    let out = "{";
+    let first = true;
+    for (const name of keys) {
+      const item = canonicalValue((value as Record<string, unknown>)[name], name);
+      if (item === undefined) continue;
+      if (!first) out += ",";
+      first = false;
+      out += `${JSON.stringify(name)}:${item}`;
+    }
+    return `${out}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function canonical(value: unknown): string {
+  return canonicalValue(value, "") as string;
+}
+
+function intern<T>(values: readonly (T | undefined)[]): { table: T[]; ids: number[] } {
+  const keys = values.map((value) => (value === undefined ? undefined : canonical(value)));
   const byKey = new Set<string>();
-  for (const value of values) if (value !== undefined) byKey.add(canonical(value));
-  const keys = [...byKey].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const position = new Map(keys.map((key, i) => [key, i]));
-  return { table: keys.map((key) => JSON.parse(key) as T), indexOf: (value) => value === undefined ? -1 : position.get(canonical(value))! };
+  for (const key of keys) if (key !== undefined) byKey.add(key);
+  const sorted = [...byKey].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const position = new Map(sorted.map((key, i) => [key, i]));
+  return { table: sorted.map((key) => JSON.parse(key) as T), ids: keys.map((key) => (key === undefined ? -1 : position.get(key)!)) };
 }
 
 export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly string[]): EdgeLayout {
@@ -39,14 +86,14 @@ export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly str
   const bindings = intern(edges.map((edge) => edge.binding));
   const header: EdgeHeader = { formatVersion: 9, count: edges.length, evidence: evidence.table, bindings: bindings.table };
   const lines = [JSON.stringify(header)];
-  for (const edge of edges) {
+  for (const [i, edge] of edges.entries()) {
     const fromFile = pathIndex.get(edge.fromFile);
     const toFile = edge.toFile === undefined ? -1 : pathIndex.get(edge.toFile);
     if (fromFile === undefined || toFile === undefined) throw new Error(`osnova: edge references unknown file ${edge.fromFile}`);
     const kind = edgeKinds.indexOf(edge.kind);
     if (kind < 0) throw new Error(`osnova: unknown edge kind ${JSON.stringify(edge.kind)}`);
     const tuple: Tuple = [kind, fromFile, edge.fromSymbol, edge.toName, edge.line, edge.toSymbol ?? null, toFile,
-      evidence.indexOf(edge.evidence ?? { source: "unknown" }), bindings.indexOf(edge.binding)];
+      evidence.ids[i]!, bindings.ids[i]!];
     lines.push(JSON.stringify(tuple));
   }
   const bytes = Buffer.from(`${lines.join("\n")}\n`, "utf8");
