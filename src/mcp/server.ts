@@ -20,7 +20,8 @@ import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor } from "../query/format.js";
+import { unreferenced } from "../query/unreferenced.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -37,7 +38,7 @@ const maximumMcpSkeletonCodeUnits = 4_096;
 // harness with an MCP client gets the tool contract without a hook.
 export const mcpInstructions = [
   "Osnova is a deterministic call graph of this repository with exact file:line, no type inference, no LLM. Use its tools before grep and file reads.",
-  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches.",
+  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
 const maximumMcpCallersCodeUnits = 2_048;
@@ -46,6 +47,7 @@ const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
 const maximumMcpPlumbCodeUnits = maximumPlumbCodeUnits;
 const maximumMcpTestsCodeUnits = 4_096;
+const maximumMcpUnreferencedCodeUnits = 4_096;
 const mcpFootingExcerptLines = 8;
 const mcpInlineShortDefinitions = 40;
 const mcpGenerationDigits = 16;
@@ -174,6 +176,20 @@ const toolDefinitions = [
         symbols: { type: "array", items: { type: "string" }, description: "Symbol names or qualified names (file#Class.method) to find tests for" },
         file: { type: "string", description: "Repo-relative test file whose symbols under test to list" },
         limit: { type: "number", description: "Maximum test files per symbol (default 20) or symbols per file (default 50)" },
+      },
+    },
+  },
+  {
+    name: "osnova_unreferenced",
+    description:
+      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        scope: { type: "string", description: "Repo-relative path prefix to examine (default: whole index)" },
+        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Symbol kinds to examine (default function, method, class: the kinds the index records edges to; constants, types and interfaces receive no edges, so asking for them lists nearly all of them)" },
+        limit: { type: "number", description: "Maximum candidates (default 50); the omitted count is exact" },
+        includeExported: { type: "boolean", description: "Also list exported definitions, which external consumers may reach (default false)" },
       },
     },
   },
@@ -381,6 +397,20 @@ export function createOsnovaMcpServer(
           const text = symbols !== undefined ? formatTestsFor(testsFor(index, symbols, { limit })) : formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit }));
           return textResult(`${prefix}\n${boundText(text, available)}`);
         }
+        case "osnova_unreferenced": {
+          const kinds = optionalStringArray(args, "kinds");
+          for (const kind of kinds ?? []) {
+            if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
+          }
+          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: unreferenced limit must be a nonnegative safe integer");
+          if (args.scope !== undefined && typeof args.scope !== "string") throw new Error("osnova_unreferenced scope must be a string path prefix");
+          if (args.includeExported !== undefined && typeof args.includeExported !== "boolean") throw new Error("osnova_unreferenced includeExported must be a boolean");
+          const result = unreferenced(index, {
+            scope: optionalString(args, "scope"), kinds: kinds?.filter(isSymbolKind), limit: optionalNumber(args, "limit"), includeExported: optionalBoolean(args, "includeExported"),
+          });
+          const available = maximumMcpUnreferencedCodeUnits - prefix.length - 1;
+          return textResult(`${prefix}\n${boundText(formatUnreferenced(result), available)}`);
+        }
         default:
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
@@ -405,6 +435,7 @@ function toolErrorBudget(name: string): number | undefined {
     case "osnova_settle": return maximumMcpSettleCodeUnits;
     case "osnova_plumb": return maximumMcpPlumbCodeUnits;
     case "osnova_tests": return maximumMcpTestsCodeUnits;
+    case "osnova_unreferenced": return maximumMcpUnreferencedCodeUnits;
     default: return undefined;
   }
 }

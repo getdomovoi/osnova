@@ -95,6 +95,25 @@ describe("cli", () => {
     expect(mapOut.lines.join("\n")).toContain("files 3");
   }, 60_000);
 
+  it("unreferenced lists candidates, honours scope, kinds, exported and limit", async () => {
+    write("src/alone.ts", "export function alone(): number { return 1; }\nfunction hidden(): number { return 2; }\nfunction shy(): number { return 3; }\n");
+    const out = capture();
+    expect(await runCli(["unreferenced", "--scope", "src/alone", "--workspace", workspace, ...cacheArgs], out.io)).toBe(0);
+    expect(out.lines.join("\n")).toContain("osnova unreferenced: scope src/alone, kinds class,function,method, 2 candidates listed of 2, 1 exported not listed");
+    expect(out.lines.join("\n")).toContain("- function src/alone.ts#hidden src/alone.ts:2:");
+    expect(out.lines.join("\n")).toContain("Candidates only: no indexed caller is not proof of no caller.");
+    const exported = capture();
+    expect(await runCli(["unreferenced", "--scope", "src/alone", "--kinds", "function,constant", "--exported", "-n", "1", "--workspace", workspace, ...cacheArgs], exported.io)).toBe(0);
+    expect(exported.lines.join("\n")).toContain("1 candidates listed of 3, 0 exported not listed");
+    expect(exported.lines.join("\n")).toContain("- function src/alone.ts#alone src/alone.ts:1 (exported):");
+    const twice = capture();
+    expect(await runCli(["unreferenced", "--scope", "src/alone", "--workspace", workspace, ...cacheArgs], twice.io)).toBe(0);
+    expect(twice.lines).toEqual(out.lines);
+    await expect(runCli(["unreferenced", "--kinds", "nope", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("symbol kinds");
+    await expect(runCli(["unreferenced", "--limit=-1", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow(RangeError);
+    fs.rmSync(path.join(workspace, "src/alone.ts"), { force: true });
+  }, 60_000);
+
   it("tests maps symbols to test files and back", async () => {
     write("test/two.test.ts", 'import { two } from "../src/two.js";\nexport const seen = two();\n');
     const bySymbol = capture();

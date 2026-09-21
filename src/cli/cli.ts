@@ -14,11 +14,12 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
-import type { OsnovaIndex } from "../types.js";
+import { unreferenced } from "../query/unreferenced.js";
+import type { OsnovaIndex, SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
@@ -53,6 +54,7 @@ usage:
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova tests <symbol...> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
@@ -62,6 +64,7 @@ usage:
 queries refresh the index first so answers describe current disk state.`;
 
 const EXIT_OK = 0;
+const cliSymbolKinds: readonly SymbolKind[] = ["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant", "module"];
 const cliCallersCodeUnits = 2_048;
 const EXIT_STALE = 1;
 const EXIT_ERROR = 2;
@@ -376,6 +379,22 @@ export async function runCli(
       const limit = numericOption(parsed.values.limit, "limit");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
+      return EXIT_OK;
+    }
+    case "unreferenced": {
+      const parsed = parseArgs({ args: rest, options: {
+        scope: { type: "string" }, kinds: { type: "string" }, exported: { type: "boolean" }, limit: { type: "string", short: "n" },
+        workspace: { type: "string" }, "cache-dir": { type: "string" },
+      } });
+      const kinds = parsed.values.kinds === undefined ? undefined : parsed.values.kinds.split(",").map((kind) => kind.trim()).filter((kind) => kind.length > 0);
+      for (const kind of kinds ?? []) {
+        if (!(cliSymbolKinds as readonly string[]).includes(kind)) throw new Error(`osnova unreferenced: --kinds must be symbol kinds (${cliSymbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
+      }
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
+      const result = unreferenced(index, {
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit"), includeExported: parsed.values.exported,
+      });
+      io.stdout(formatUnreferenced(result));
       return EXIT_OK;
     }
     case "coverage": {
