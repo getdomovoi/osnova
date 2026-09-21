@@ -123,7 +123,7 @@ export function validateEvidence(value: unknown): EdgeEvidence {
         resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
         return value as EdgeEvidence;
       }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved", "unbound-global"].includes(resolution.reason ?? "") &&
+      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "import-target-ambiguous", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved", "unbound-global"].includes(resolution.reason ?? "") &&
         (resolution.external === undefined || (typeof resolution.external === "string" && resolution.external.length > 0 && resolution.reason === "import-target-unresolved"))) {
         return value as EdgeEvidence;
       }
