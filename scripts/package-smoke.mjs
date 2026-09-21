@@ -54,12 +54,16 @@ async function consumer() {
   const api = await import("@getdomovoi/osnova");
   for (const name of ["buildIndex", "loadIndex", "refreshWorkspace", "indexGeneration", "evidenceFingerprint", "applyChanges", "freshness", "scanFiles", "ask", "findText", "skeleton", "callers", "map", "renderMapCard", "impact", "scopedAsk", "taskContext", "doctor", "configureLspEnrichment", "loadLspEnrichment", "refreshLspEnrichment", "runMcpStdio"]) assert.equal(typeof api[name], "function", `Missing API ${name}`);
   for (const entry of Object.keys(manifest.exports)) await import(entry === "." ? manifest.name : manifest.name + entry.slice(1));
+  assertRootImportSkipsMcpSdk(root, manifest.name);
   const workspace = path.join(root, "workspace");
   const cacheDir = path.join(root, "cache");
   await mkdir(workspace);
   for (const [file, source] of Object.entries(samples)) await writeFile(path.join(workspace, file), source);
   const before = await snapshot(workspace);
   const index = await api.buildIndex(workspace, { cacheDir });
+  const rootMcp = api.createOsnovaMcpServer(workspace, { cacheDir });
+  assert.equal(typeof rootMcp.server?.connect, "function", "createOsnovaMcpServer from the root entry must return a server");
+  await rootMcp.close();
   for (const file of Object.keys(samples)) assert(api.skeleton(index, file).entries.length > 0, `Grammar/extraction failed: ${file}`);
   assert(api.ask(index, "probe").hits.length > 0);
   const scanned = await api.scanFiles(workspace, cacheDir);
@@ -75,6 +79,12 @@ async function consumer() {
   assert.deepEqual(await snapshot(packageRoot), packageBefore, "Core operations mutated installed package");
   assert.deepEqual((await readdir(root)).sort(), [...new Set([...rootBefore, "cache", "workspace"])].sort(), "Core operations wrote outside designated cache/workspace fixtures");
   console.log(`packed consumer: exports, 21 WASM grammars, doctor, build/ask, 8 MCP tools, refresh, EOF shutdown; ${frames} clean stdout frames`);
+}
+
+function assertRootImportSkipsMcpSdk(cwd, packageName) {
+  const hook = "export async function resolve(specifier, context, next) { const resolved = await next(specifier, context); if (resolved.url.includes('@modelcontextprotocol')) throw new Error('root import loaded ' + specifier); return resolved; }";
+  const code = `import { register } from "node:module"; register(${JSON.stringify("data:text/javascript," + encodeURIComponent(hook))}); await import(${JSON.stringify(packageName)});`;
+  execFileSync(process.execPath, ["--input-type=module", "-e", code], { cwd, stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
 }
 
 export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs = [], omitWorkspaceArg = false }) {
