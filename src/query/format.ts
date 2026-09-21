@@ -1,4 +1,5 @@
 import type {
+  AskHit,
   AskResult,
   CallersResult,
   CallersDetailedResult,
@@ -44,10 +45,36 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
   return `osnova foundation: partial (${shown.join(", ")}); some files did not parse fully`;
 }
 
+function foldNestedHits(hits: readonly AskHit[]): Map<AskHit, string[]> {
+  const shown = new Map<string, AskHit>();
+  for (const hit of hits) {
+    if (hit.symbol !== null && !shown.has(hit.symbol.qualifiedName)) shown.set(hit.symbol.qualifiedName, hit);
+  }
+  const folded = new Map<AskHit, string[]>();
+  for (const hit of hits) {
+    if (hit.symbol === null) continue;
+    const name = hit.symbol.qualifiedName;
+    let ancestor: AskHit | undefined;
+    for (let dot = name.indexOf(".", name.indexOf("#") + 1); dot !== -1; dot = name.indexOf(".", dot + 1)) {
+      const candidate = shown.get(name.slice(0, dot));
+      if (candidate !== undefined && candidate !== hit) { ancestor = candidate; break; }
+    }
+    if (ancestor === undefined || ancestor.symbol === null) continue;
+    const entries = folded.get(ancestor) ?? [];
+    entries.push(`${name.slice(ancestor.symbol.qualifiedName.length)} L${hit.line}`);
+    folded.set(ancestor, entries);
+    folded.set(hit, []);
+  }
+  return folded;
+}
+
 export function formatAsk(result: AskResult): string {
   if (result.hits.length === 0) return "no matches";
+  const folded = foldNestedHits(result.hits);
   const blocks: string[] = [];
   for (const hit of result.hits) {
+    const also = folded.get(hit);
+    if (also !== undefined && also.length === 0) continue;
     const header = `${hit.file}:${hit.line}${hit.symbol !== null ? ` ${hit.symbol.kind} ${hit.symbol.qualifiedName}` : ""}`;
     const numbered = hit.excerpt
       .split("\n")
@@ -57,7 +84,8 @@ export function formatAsk(result: AskResult): string {
     const excerptNotice = hit.symbol !== null &&
       (hit.excerptStartLine > hit.symbol.span.startLine || endLine < hit.symbol.span.endLine)
       ? `\nexcerpt: lines ${hit.excerptStartLine}-${endLine} of definition lines ${hit.symbol.span.startLine}-${hit.symbol.span.endLine}` : "";
-    blocks.push(`${header}${excerptNotice}\n${numbered}`);
+    const alsoLine = also !== undefined ? `\nalso: ${also.join(", ")}` : "";
+    blocks.push(`${header}${excerptNotice}\n${numbered}${alsoLine}`);
   }
   return blocks.join("\n\n");
 }

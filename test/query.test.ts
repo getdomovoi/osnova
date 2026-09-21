@@ -3,13 +3,13 @@ import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { ask } from "../src/query/ask.js";
 import { findText, findTextDetailed } from "../src/query/findText.js";
-import { clipThreadText, formatFindText, formatFindTextResult } from "../src/query/format.js";
+import { clipThreadText, formatAsk, formatFindText, formatFindTextResult } from "../src/query/format.js";
 import { skeleton } from "../src/query/skeleton.js";
 import { callers, callersDetailed } from "../src/query/callers.js";
 import { map } from "../src/query/map.js";
 import { renderMapCard } from "../src/query/mapCard.js";
 import { maximumOsnovaMapCardCodeUnits } from "../src/types.js";
-import type { FindTextGroup, OsnovaIndex } from "../src/types.js";
+import type { AskHit, AskResult, FindTextGroup, OsnovaIndex, OsnovaSymbol } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
 
@@ -40,6 +40,49 @@ describe("ask", () => {
     expect(result.hits.every((h) => h.file.startsWith("src/"))).toBe(true);
     const python = ask(index, "Server start", { in: "src/server.py" });
     expect(python.hits.every((h) => h.file === "src/server.py")).toBe(true);
+  });
+});
+
+describe("ground formatting", () => {
+  function symbolAt(qualifiedName: string, startLine: number, endLine: number): OsnovaSymbol {
+    const name = qualifiedName.slice(qualifiedName.lastIndexOf(".") + 1);
+    return { name, qualifiedName, kind: "constant", file: "src/a.ts", span: { startLine, endLine, startCol: 0, endCol: 1 }, signature: name, lineCount: endLine - startLine + 1 };
+  }
+  function hitFor(qualifiedName: string, line: number, endLine = line): AskHit {
+    return { file: "src/a.ts", line, score: 1, symbol: symbolAt(qualifiedName, line, endLine), excerpt: `body of ${qualifiedName}`, excerptStartLine: line };
+  }
+  const parent = hitFor("src/a.ts#outer", 10);
+  const first = hitFor("src/a.ts#outer.first", 12);
+  const second = hitFor("src/a.ts#outer.second.deep", 20);
+  const other = hitFor("src/a.ts#other", 50);
+
+  it("folds hits nested under a shown parent into one also line", () => {
+    const result: AskResult = { hits: [parent, first, other, second], filesSearched: 1 };
+    const text = formatAsk(result);
+    expect(text).toBe([
+      "src/a.ts:10 constant src/a.ts#outer\nL10: body of src/a.ts#outer\nalso: .first L12, .second.deep L20",
+      "src/a.ts:50 constant src/a.ts#other\nL50: body of src/a.ts#other",
+    ].join("\n\n"));
+    expect(result.hits).toHaveLength(4);
+  });
+
+  it("prints a nested hit in full when its parent is not shown", () => {
+    const text = formatAsk({ hits: [other, first], filesSearched: 1 });
+    expect(text).toBe([
+      "src/a.ts:50 constant src/a.ts#other\nL50: body of src/a.ts#other",
+      "src/a.ts:12 constant src/a.ts#outer.first\nL12: body of src/a.ts#outer.first",
+    ].join("\n\n"));
+    expect(text).not.toContain("also:");
+  });
+
+  it("keeps result order when the parent ranks after its child", () => {
+    const text = formatAsk({ hits: [first, other, parent], filesSearched: 1 });
+    const blocks = text.split("\n\n");
+    expect(blocks.map((block) => block.split("\n")[0])).toEqual([
+      "src/a.ts:50 constant src/a.ts#other",
+      "src/a.ts:10 constant src/a.ts#outer",
+    ]);
+    expect(blocks[1]).toContain("also: .first L12");
   });
 });
 
