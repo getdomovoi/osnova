@@ -124,14 +124,22 @@ function pythonContentTypeNames(type: Node | null): Contents | undefined {
 }
 
 // A type parameter of an enclosing declaration (`class Box<T>`, `function f<T>()`) names no type the index can hold.
+// A variance annotation (`class Box<out T>`) is unknown to the grammar: `out T` recovers as a stray `out` beside a
+// parameter named `T`, and `<in T = never>` as a parameter named `in` with `T` inside its error node. Both still
+// declare `T`, so a recovered list is walked rather than skipped.
+const VARIANCE_KEYWORDS = new Set(["in", "out"]);
 function isTypeParameter(name: string, site: Node): boolean {
   for (let current: Node | null = site; current !== null; current = current.parent) {
     const parameters = current.childForFieldName("type_parameters") ?? childrenOf(current).find((child) => child.type === "type_parameters");
-    if (parameters === undefined || parameters === null || parameters.hasError) continue;
+    if (parameters === undefined || parameters === null) continue;
     for (const parameter of childrenOf(parameters)) {
       if (parameter.type !== "type_parameter") continue;
       const declared = parameter.childForFieldName("name") ?? childrenOf(parameter).find((child) => child.type === "type_identifier" || child.type === "identifier");
       if (declared?.text === name) return true;
+      if (declared === undefined || declared === null || !VARIANCE_KEYWORDS.has(declared.text)) continue;
+      for (const child of childrenOf(parameter)) {
+        if (child.type === "ERROR" && childrenOf(child).some((inner) => inner.type === "identifier" && inner.text === name)) return true;
+      }
     }
   }
   return false;

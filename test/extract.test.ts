@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import type { OsnovaIndex } from "../src/types.js";
@@ -273,3 +275,60 @@ describe("extraction adapters", () => {
     expect(pad?.span.endLine).toBe(20);
   });
 });
+
+describe("typescript variance annotations", () => {
+  const frame = [
+    "export class Frame<out Shape = unknown> {",
+    "  constructor(readonly shape: Shape) {}",
+    "  measure() { return this.shape.area(); }",
+    "}",
+    "export class Sink<in Shape = unknown> {",
+    "  constructor(readonly shape: Shape) {}",
+    "  drain() { return this.shape.area(); }",
+    "}",
+    "export interface Box<",
+    "  out Shape extends object = object,",
+    "> {",
+    "  shape: Shape;",
+    "}",
+    "export function outline(frame: Frame<object>) { return frame.measure(); }",
+    "",
+  ].join("\n");
+  const shape = "export class Shape {\n  area(): number { return 1; }\n}\n";
+
+  it("keeps a type parameter the grammar cannot parse out of the field type hints", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-variance-"));
+    try {
+      fs.writeFileSync(path.join(dir, "frame.ts"), frame);
+      fs.writeFileSync(path.join(dir, "shape.ts"), shape);
+      const built = await buildIndex(dir);
+      expect((built.diagnostics ?? []).map((d) => `${d.code}:${d.path}`)).toEqual(["syntax-errors:frame.ts"]);
+      expect(symbolsIn(built, "frame.ts")).toEqual([
+        "class:frame.ts#Frame",
+        "method:frame.ts#Frame.constructor",
+        "method:frame.ts#Frame.measure",
+        "class:frame.ts#Sink",
+        "method:frame.ts#Sink.constructor",
+        "method:frame.ts#Sink.drain",
+        "interface:frame.ts#Box",
+        "function:frame.ts#outline",
+      ]);
+      expect(built.symbols.get("frame.ts#Frame")?.fieldTypes).toBeUndefined();
+      expect(built.symbols.get("frame.ts#Sink")?.fieldTypes).toBeUndefined();
+      expect(built.symbols.get("frame.ts#Box")?.fieldTypes).toBeUndefined();
+      const areaCalls = built.edges.filter((e) => e.kind === "calls" && e.toName === "area");
+      expect(areaCalls.map((e) => `${e.fromSymbol}->${e.toSymbol ?? "unresolved"}`)).toEqual([
+        "frame.ts#Frame.measure->unresolved",
+        "frame.ts#Sink.drain->unresolved",
+      ]);
+      const outline = built.edges.find((e) => e.fromSymbol === "frame.ts#outline" && e.toName === "measure");
+      expect(outline?.toSymbol).toBe("frame.ts#Frame.measure");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+function symbolsIn(built: OsnovaIndex, file: string): string[] {
+  return (built.files.get(file)?.symbols ?? []).map((s) => `${s.kind}:${s.qualifiedName}`);
+}
