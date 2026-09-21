@@ -42,7 +42,15 @@ describe("osnova hook", () => {
       c = capture(JSON.stringify({ cwd: root }));
       expect(await runCli(["hook", "session", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out.join("\n")).toContain("osnova_footing");
-      expect(c.out.join("\n")).toMatch(/Indexed: 2 files, \d+ symbols\./);
+      expect(c.out.join("\n")).toMatch(/Indexed: 2 files, \d+ symbols/);
+      expect(c.out.join("\n")).not.toContain("osnova_thread");
+      expect(c.out.join("\n").split("\n")).toHaveLength(1);
+      expect(c.out.join("\n").length).toBeLessThanOrEqual(160);
+      c = capture(JSON.stringify({ cwd: root }));
+      expect(await runCli(["hook", "session", "--full-contract", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(c.out.join("\n")).toContain("- osnova_thread:");
+      expect(c.out.join("\n")).toContain("not proof of absence");
+      expect(c.out.join("\n")).toMatch(/\nIndexed: 2 files, \d+ symbols\.$/);
       c = capture(JSON.stringify({ prompt: "why does renderInvoice return the wrong total", cwd: path.join(temporary, "missing") }));
       expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(c.out).toEqual([]);
