@@ -9,6 +9,7 @@ import { runCli } from "../src/cli/cli.js";
 import { renderMapCard } from "../src/query/mapCard.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
 import { sha256Hex } from "../src/index/scan.js";
+import { withSequentialExtract } from "./support/extract.js";
 
 let temporary: string;
 let workspace: string;
@@ -81,7 +82,7 @@ describe("index health", () => {
     expect(serializeArtifact(updated)).toEqual(serializeArtifact(await buildIndex(workspace, { cacheDir })));
   });
 
-  it("reports extractor failures and releases the tree", async () => {
+  it("reports extractor failures and releases the tree", () => withSequentialExtract(async () => {
     const parser = await loader.getParser("typescript");
     const tree = parser.parse("export function one() {}\n");
     if (tree === null) throw new Error("expected parsed tree");
@@ -92,12 +93,12 @@ describe("index health", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(index.diagnostics).toContainEqual({ phase: "parse", path: "one.ts", code: "extraction-failed" });
     expect(index.files.get("one.ts")?.text).toContain("function one");
-  });
+  }));
 
-  it("does not disguise missing grammars as successful extraction", async () => {
+  it("does not disguise missing grammars as successful extraction", () => withSequentialExtract(async () => {
     vi.spyOn(loader, "getParser").mockRejectedValueOnce(new Error("grammar unavailable"));
     await expect(buildIndex(workspace, { cacheDir })).rejects.toThrow(/grammar-unavailable/);
-  });
+  }));
 
   it.each([1, 2, 3, 4, 5, 6])("refuses to reuse outdated analysis format %s", async (version) => {
     const index = await buildIndex(workspace, { cacheDir });

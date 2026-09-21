@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 import * as loader from "../src/grammar/loader.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
+import { withSequentialExtract } from "./support/extract.js";
 
 let temporary: string;
 let workspace: string;
@@ -66,7 +67,7 @@ it("ordinary query tools aggregate diagnostics instead of repeating file paths",
   }
 });
 
-it("retries initialization after a grammar failure", async () => {
+it("retries initialization after a grammar failure", () => withSequentialExtract(async () => {
   vi.spyOn(loader, "getParser").mockRejectedValueOnce(new Error("unavailable"));
   const request = { name: "osnova_outline", arguments: { file: "one.ts" } };
   const first = await client.callTool(request);
@@ -75,7 +76,7 @@ it("retries initialization after a grammar failure", async () => {
   const retry = await client.callTool(request);
   expect(retry.isError).toBeFalsy();
   expect(JSON.stringify(retry)).toContain("function one");
-});
+}));
 
 it("does not conceal a failed refresh write and can retry safely", async () => {
   const request = { name: "osnova_outline", arguments: { file: "one.ts" } };
