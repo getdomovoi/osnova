@@ -202,8 +202,9 @@ describe("mcp stdio server", () => {
       expect(text).toContain("also: .foldLeft L2, .foldRight L3");
       expect(text).not.toContain("constant src/fold.ts#foldRoot.foldLeft");
       const scoped = await callTool(client, "osnova_ground", { question: "foldLeft" });
-      expect(scoped).toContain("also: .foldLeft L2");
-      expect(scoped).not.toContain("constant src/fold.ts#foldRoot.foldLeft");
+      expect(scoped.indexOf("src/fold.ts:2 constant src/fold.ts#foldRoot.foldLeft")).toBeLessThan(scoped.indexOf("function src/fold.ts#foldRoot"));
+      expect(scoped).toContain("also: .foldRight L3");
+      expect(scoped).not.toContain("also: .foldLeft");
     } finally {
       await client.close();
     }

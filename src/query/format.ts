@@ -52,9 +52,6 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
 
 function foldNestedHits(hits: readonly AskHit[]): Map<AskHit, string[]> {
   const shown = new Map<string, AskHit>();
-  for (const hit of hits) {
-    if (hit.symbol !== null && !shown.has(hit.symbol.qualifiedName)) shown.set(hit.symbol.qualifiedName, hit);
-  }
   const folded = new Map<AskHit, string[]>();
   for (const hit of hits) {
     if (hit.symbol === null) continue;
@@ -62,9 +59,12 @@ function foldNestedHits(hits: readonly AskHit[]): Map<AskHit, string[]> {
     let ancestor: AskHit | undefined;
     for (let dot = name.indexOf(".", name.indexOf("#") + 1); dot !== -1; dot = name.indexOf(".", dot + 1)) {
       const candidate = shown.get(name.slice(0, dot));
-      if (candidate !== undefined && candidate !== hit) { ancestor = candidate; break; }
+      if (candidate !== undefined) { ancestor = candidate; break; }
     }
-    if (ancestor === undefined || ancestor.symbol === null) continue;
+    if (ancestor === undefined || ancestor.symbol === null) {
+      if (!shown.has(name)) shown.set(name, hit);
+      continue;
+    }
     const entries = folded.get(ancestor) ?? [];
     entries.push(`${name.slice(ancestor.symbol.qualifiedName.length)} L${hit.line}`);
     folded.set(ancestor, entries);

@@ -3,6 +3,10 @@ import { idf, matchInPath, queryContext, tokenize } from "./context.js";
 import type { QueryContext, SearchDocument } from "./context.js";
 
 const DEFAULT_LIMIT = 8;
+const ROLE_WORDS = new Set([
+  "definition", "definitions", "method", "methods", "function", "functions",
+  "class", "classes", "caller", "callers", "usage", "usages",
+]);
 const EXCERPT_LINES = 8;
 const FULL_EXCERPT_MAX_LINES = 400;
 
@@ -56,7 +60,9 @@ export function ask(index: OsnovaIndex, question: string, options?: AskOptions):
 export function askDetailed(index: OsnovaIndex, question: string, options?: AskOptions): AskDetailedResult {
   const limit = options?.limit ?? Infinity;
   if (options?.limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0)) throw new RangeError("osnova: ask limit must be a nonnegative safe integer");
-  const queryTokens = [...new Set(tokenize(question))];
+  const allTokens = [...new Set(tokenize(question))];
+  const contentTokens = allTokens.filter((token) => !ROLE_WORDS.has(token));
+  const queryTokens = contentTokens.length > 0 ? contentTokens : allTokens;
   const identifiers = identifierCandidates(question);
   const qualified = new Set((question.match(/[$A-Za-z_][$\w]*(?:\.[$A-Za-z_][$\w]*)+/g) ?? []).map((name) => name.toLowerCase()));
   const filter = options?.in ?? "";
