@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { Language, Parser } from "web-tree-sitter";
 import { getParser, loadLanguage, probeGrammars } from "../src/grammar/loader.js";
 import { languageForPath, genericLanguages, languageTier, grammarFile } from "../src/grammar/languages.js";
 import { queryFor, queriesFingerprint } from "../src/grammar/queries/index.js";
 import { adapterFor } from "../src/extract/adapters.js";
+
+const require = createRequire(import.meta.url);
 
 describe("grammar loader", () => {
   it("probes the typescript grammar without ABI errors", async () => {
@@ -108,6 +113,25 @@ describe("breadth registry", () => {
       const loaded = await loadLanguage(language);
       expect(loaded.abiVersion, language).toBeGreaterThanOrEqual(13);
     }
+  });
+
+  it.skip("lua is bundled but disabled: tree-sitter-lua.wasm 0.1.13 corrupts after its first parse in a process (fresh Parser, fresh Language.load and a dedicated worker thread all reproduce it; unskip when a bundle bump passes this test)", async () => {
+    const source = "local M = {}\nfunction M.greet(name)\n  return format(name)\nend\nreturn M\n";
+    const wasmPath = path.join(path.dirname(require.resolve("tree-sitter-wasms/package.json")), "out", "tree-sitter-lua.wasm");
+    await probeGrammars();
+    const lua = await Language.load(wasmPath);
+    const trees: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const parser = new Parser();
+      parser.setLanguage(lua);
+      const tree = parser.parse(source);
+      expect(tree, `parse ${i}`).not.toBeNull();
+      expect(tree!.rootNode.hasError, `parse ${i}`).toBe(false);
+      trees.push(tree!.rootNode.toString());
+      tree!.delete();
+      parser.delete();
+    }
+    expect(new Set(trees).size).toBe(1);
   });
 
   it("compiles a fresh breadth-tier query without the deprecated Language.query warning", async () => {
