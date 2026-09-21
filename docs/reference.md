@@ -48,6 +48,8 @@ The structured APIs return complete results with omission counts. The text budge
 
 Camel-case, acronym and snake-case words are searchable, while exact matching preserves whole identifier boundaries, including short names. Multiple relevant definitions from one file may appear; duplicate logical symbol IDs do not. Module-level text and prose files remain searchable as fallback documents. Body text is assigned to its innermost indexed definition rather than repeated into every enclosing class.
 
+`osnova_ground` with `lean: true` (`osnova ground --lean`) answers in a no-source shape: one header per hit with `file:line`, the symbol kind, the qualified name and the definition's own line span, then the indexed signature on the next line, collapsed to one line and clipped at 200 code units. It drops only the inlined source body and the excerpt notice that described it; the definition span that notice carried stays in the header, and hit order, ranking, limits, the `also:` fold and every omission count are unchanged. A hit with no definition keeps its single matching line. `lean` overrides `full`, and the default shape is unchanged. Measured warm over MCP at limit five: on a 160-file Python package the payload fell from 2,333 to 699 bytes (635 to 191 tokens, 70 percent); on a 702-file TypeScript monorepo whose matching definitions are one to three lines each, from 1,096 to 986 bytes (304 to 276 tokens, 9 percent). The saving is the source body, so it tracks the size of the matched definitions. Use it when the question is where something lives; leave it off when the next step is reading that body, since a follow-up file read costs more than the inlined excerpt.
+
 Excerpts retain exact source line numbers and may include an associated leading comment when it supplies the relevant evidence. Documentation recognition is bounded to adjacent comment-like lines and leading Python docstrings, including common multiline signatures; it is not a complete documentation parser. Query documents are cached per index instance and rebuilt for a new incremental index. `filesSearched` counts eligible indexed files, not only files with hits. API result limits must be nonnegative safe integers.
 
 An experimental graph adjustment was measured and rejected after improving authored tie cases but reducing a pinned real-repository development ranking score. `ask` remains fielded lexical definition retrieval. The [experiment record](../benchmarks/results/graph-ranking-experiment-2026-09-14.json) preserves the positive and negative evidence; no graph-ranking option is shipped.
@@ -292,7 +294,7 @@ It reads the client's real config file, proposes the one entry as a unified diff
 
 ```sh
 osnova build <root>            # build and cache the index
-osnova ground "<question>"     # keyword search with exact file:line hits (--scoped ranks per package)
+osnova ground "<question>"     # keyword search with exact file:line hits (--lean drops the source, --scoped ranks per package)
 osnova thread "<pattern>"      # regex or literal search grouped by symbol
 osnova outline <file>          # every definition's signature and span
 osnova warp <symbol>           # direct or transitive callers or callees
