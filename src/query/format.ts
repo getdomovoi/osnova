@@ -18,6 +18,7 @@ import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
+import type { SymbolsUnderTestResult, TestSite, TestsForResult } from "./tests.js";
 
 export function formatIndexDiagnostics(index: OsnovaIndex): string {
   if (index.diagnostics === undefined) return "osnova foundation: unverified; index health could not be checked";
@@ -654,5 +655,45 @@ export function formatPlumb(result: PlumbResult, symbol?: string): string {
   if (result.missing.length > 0) lines.push("missing:");
   for (const edge of result.missing) lines.push(`${edge.fromFile}:${edge.line} ${result.direction === "in" ? edge.fromSymbol || edge.fromFile : edge.toSymbol ?? edge.toName}`);
   lines.push(`limitations: ${result.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+const testsNotice = "No indexed test is not proof of no test: unindexed files, dynamic calls and name-heuristic references are invisible; a listed test references the symbol, it does not prove coverage.";
+
+function testSiteText(file: string, sites: readonly TestSite[], omitted: number): string {
+  const groups = new Map<string, number[]>();
+  for (const site of sites) {
+    const key = `${site.kind} ${site.method}`;
+    groups.set(key, [...(groups.get(key) ?? []), site.line]);
+  }
+  const text = [...groups].map(([key, lines]) => `${file}:${lines.join(",")} ${key}`).join("; ");
+  return omitted > 0 ? `${text}; +${omitted} more sites` : text;
+}
+
+export function formatTestsFor(result: TestsForResult): string {
+  const total = result.symbols.reduce((sum, item) => sum + item.tests.length, 0);
+  const lines = [`osnova tests: ${result.symbols.length} symbols, ${total} test files listed`];
+  for (const item of result.symbols) {
+    const { symbol } = item;
+    lines.push(`${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}: ${item.tests.length} test files${item.omittedTests > 0 ? `, ${item.omittedTests} omitted` : ""}`);
+    for (const test of item.tests) {
+      const basis = test.basis === "test-path-and-resolved-edge" ? "resolved edge" : "imports the file only";
+      lines.push(`- ${test.file} (${basis}): ${testSiteText(test.file, test.sites, test.omittedSites)}`);
+    }
+  }
+  if (result.unknownSymbols.length > 0) lines.push(`unknown symbols: ${result.unknownSymbols.join(", ")}`);
+  lines.push(testsNotice, `limitations: ${result.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+export function formatSymbolsUnderTest(result: SymbolsUnderTestResult): string {
+  const lines = [`osnova tests: ${result.file}${result.isTestPath ? "" : " (not a test path)"}: ${result.symbols.length} symbols under test${result.omittedSymbols > 0 ? `, ${result.omittedSymbols} omitted` : ""}, ${result.imports.length} imported files, ${result.unresolvedEdges} unresolved edges not listed`];
+  for (const item of result.symbols) {
+    const { symbol } = item;
+    lines.push(`- ${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}: ${testSiteText(result.file, item.sites, item.omittedSites)}`);
+  }
+  if (result.imports.length > 0) lines.push("imports:");
+  for (const item of result.imports) lines.push(`- ${item.file} at ${item.lines.map((line) => `${result.file}:${line}`).join(", ")}`);
+  lines.push(testsNotice, `limitations: ${result.limitations.join(", ")}`);
   return lines.join("\n");
 }

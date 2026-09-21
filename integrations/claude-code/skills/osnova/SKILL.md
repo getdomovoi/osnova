@@ -13,7 +13,8 @@ The `osnova_*` tools are a deterministic call graph with exact `file:line` and n
 2. `osnova_ground` when footing found no seed; narrow with `in`.
 3. `osnova_warp` for every caller or callee: a `resolved` edge is a fact, an `unresolved` edge a lead whose `nameMatches` are candidates, not relationships.
 4. `osnova_plumb` on every list of call sites before acting on it, at the `depth` the claim was made.
-5. `osnova_settle` with `git diff HEAD` before finishing; read or test each dependent.
+5. `osnova_tests` with `symbols` before editing to find the tests to run, or with `file` to see what one test reaches; a listed test is not coverage.
+6. `osnova_settle` with `git diff HEAD` before finishing; read or test each dependent.
 
 ## Rules
 

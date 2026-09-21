@@ -120,6 +120,7 @@ export async function smokeStdio({ cliPath, workspace, cacheDir, cwd, nodeArgs =
       osnova_footing: { question: "probe" },
       osnova_settle: { diff: "--- a/probe.ts\n+++ b/probe.ts\n@@ -1,1 +1,1 @@\n-x\n+y\n" },
       osnova_plumb: { symbol: "probe", sites: ["probe.ts:2"] },
+      osnova_tests: { symbols: ["probe"] },
     };
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), Object.keys(calls).sort());
     for (const [name, args] of Object.entries(calls)) {

@@ -72,6 +72,8 @@ export { detectScopes, scopedAsk } from "./query/scoped.js";
 export type { PackageScope, ScopedAskHit, ScopedAskResult } from "./query/scoped.js";
 export { taskContext } from "./query/task-context.js";
 export type { TaskContextOptions, TaskContextResult, ContextDefinition, CandidateTest } from "./query/task-context.js";
+export { testsFor, symbolsUnderTest, isTestFile } from "./query/tests.js";
+export type { TestsForOptions, TestsForResult, SymbolTests, TestFileEvidence, TestSite, SymbolsUnderTestOptions, SymbolsUnderTestResult, SymbolUnderTest, ImportUnderTest } from "./query/tests.js";
 export { createOsnovaMcpServer, runMcpStdio } from "./mcp/server.js";
 export type { OsnovaMcpOptions } from "./mcp/server.js";
 export { runCli } from "./cli/cli.js";

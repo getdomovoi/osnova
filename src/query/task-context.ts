@@ -3,6 +3,7 @@ import { compareText, indexReceipt, isReliableEdge, relationshipEvidence, source
 import type { DefinitionEvidence, IndexReceipt, RelationshipEvidence, SourceReceipt } from "./impact.js";
 import { inScope, normalizeScope } from "./scoped.js";
 import { askDetailed } from "./ask.js";
+import { isTestFile } from "./tests.js";
 
 export interface TaskContextOptions {
   readonly task: "understand" | "change" | "review";
@@ -53,8 +54,7 @@ export interface TaskContextResult {
 
 const seedOverfetch = 4;
 
-const isTest = (file: string): boolean => /(?:^|\/)(?:tests?|__tests__)\//.test(file) ||
-  /(?:^|\/)test_[^/]+\.py$/.test(file) || /(?:\.(?:test|spec)\.[^/]+|_test\.(?:go|py))$/.test(file);
+const isTest = isTestFile;
 
 const isPreferredSeed = (symbol: OsnovaSymbol): boolean =>
   !isTest(symbol.file) && !(symbol.span.endLine === symbol.span.startLine && (symbol.kind === "constant" || symbol.kind === "type"));
