@@ -122,7 +122,7 @@ describe("edge provenance", () => {
     const text = formatCallersDetailed(result);
     expect(text).toContain("imported-file-name");
     expect(text).toContain("entry.ts:3");
-    expect(text).toContain("a.ts:10");
+    expect(text).toContain("a.ts#work:10");
     expect(callers(graph, "entry", { direction: "out" }).hits[0]).not.toHaveProperty("edge");
   });
 });
