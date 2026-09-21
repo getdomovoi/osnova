@@ -7,7 +7,7 @@ import { applyChanges, freshness } from "../src/index/incremental.js";
 import { saveArtifact, serializeArtifact, serializeSections } from "../src/index/serialize.js";
 import { previousTextFrom, serializeText } from "../src/index/textStore.js";
 import { loadIndex } from "../src/api.js";
-import { EXTRACT_POOL_MIN_FILES, extractWorkerCount } from "../src/index/extractPool.js";
+import { EXTRACT_POOL_MIN_FILES, EXTRACT_POOL_REFRESH_MIN_FILES, extractWorkerCount } from "../src/index/extractPool.js";
 import type { OsnovaIndex } from "../src/types.js";
 
 function copyFixture(): string {
@@ -155,6 +155,14 @@ describe("extract worker pool", () => {
     expect(extractWorkerCount(2, env("5"))).toBe(2);
     expect(extractWorkerCount(1000, env("5"))).toBe(5);
     expect(extractWorkerCount(1000, env("many"))).toBeLessThanOrEqual(8);
+  });
+
+  it("raises the pool threshold for a refresh", () => {
+    const env: NodeJS.ProcessEnv = {};
+    expect(EXTRACT_POOL_REFRESH_MIN_FILES).toBeGreaterThan(EXTRACT_POOL_MIN_FILES);
+    expect(extractWorkerCount(EXTRACT_POOL_REFRESH_MIN_FILES - 1, env, EXTRACT_POOL_REFRESH_MIN_FILES)).toBe(0);
+    expect(extractWorkerCount(EXTRACT_POOL_REFRESH_MIN_FILES, env, EXTRACT_POOL_REFRESH_MIN_FILES)).toBeGreaterThan(0);
+    expect(extractWorkerCount(EXTRACT_POOL_REFRESH_MIN_FILES - 1, { OSNOVA_EXTRACT_WORKERS: "3" }, EXTRACT_POOL_REFRESH_MIN_FILES)).toBe(3);
   });
 
   it("produces the same bytes as sequential extraction", async () => {

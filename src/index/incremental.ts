@@ -3,7 +3,7 @@ import type { FreshnessReport, OsnovaIndex } from "../types.js";
 import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
-import { extractCards } from "./extractPool.js";
+import { EXTRACT_POOL_REFRESH_MIN_FILES, extractCards } from "./extractPool.js";
 import type { EdgeReuse } from "./resolve.js";
 import type { FileCard } from "../types.js";
 import { scanFiles, sameFileMetadata, sha256Hex } from "./scan.js";
@@ -168,7 +168,7 @@ export async function applyFreshnessReport(
     }
     if (report.added.includes(relPath) || report.changed.includes(relPath)) pending.push(relPath);
   }
-  for (const { card, rawEdges: fileEdges } of await extractCards(absRoot, pending, extractCard)) {
+  for (const { card, rawEdges: fileEdges } of await extractCards(absRoot, pending, extractCard, undefined, EXTRACT_POOL_REFRESH_MIN_FILES)) {
     files.set(card.path, card);
     if (fileEdges.length > 0) rawEdges.set(card.path, fileEdges);
     else rawEdges.delete(card.path);

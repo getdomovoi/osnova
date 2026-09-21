@@ -24,14 +24,15 @@ export interface ExtractedFile {
 export type ExtractOne = (absRoot: string, relPath: string) => Promise<ExtractedFile>;
 
 export const EXTRACT_POOL_MIN_FILES = 32;
+export const EXTRACT_POOL_REFRESH_MIN_FILES = 64;
 const EXTRACT_POOL_MAX_WORKERS = 8;
 
-export function extractWorkerCount(fileCount: number, env: NodeJS.ProcessEnv = process.env): number {
+export function extractWorkerCount(fileCount: number, env: NodeJS.ProcessEnv = process.env, minFiles: number = EXTRACT_POOL_MIN_FILES): number {
   const raw = env.OSNOVA_EXTRACT_WORKERS;
   let requested: number;
   if (raw !== undefined && /^\d+$/.test(raw.trim())) {
     requested = Number(raw.trim());
-  } else if (fileCount < EXTRACT_POOL_MIN_FILES) {
+  } else if (fileCount < minFiles) {
     return 0;
   } else {
     requested = Math.min(os.availableParallelism() - 1, EXTRACT_POOL_MAX_WORKERS);
@@ -142,8 +143,9 @@ export async function extractCards(
   paths: readonly string[],
   extractOne: ExtractOne,
   onDone?: (done: number) => void,
+  minFiles: number = EXTRACT_POOL_MIN_FILES,
 ): Promise<ExtractedFile[]> {
-  const workerCount = extractWorkerCount(paths.length);
+  const workerCount = extractWorkerCount(paths.length, process.env, minFiles);
   const script = workerCount > 0 ? workerScript() : undefined;
   if (workerCount === 0 || script === undefined) return extractSequential(absRoot, paths, extractOne, onDone);
   return extractWithPool(absRoot, paths, script, workerCount, onDone);
