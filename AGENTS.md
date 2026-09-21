@@ -6,6 +6,7 @@ Conventions for agent sessions working in this repository.
 
 - Run the code review skill before every push to remote. No push happens without a review pass first.
 - Never commit, push, or publish without an explicit request.
+- Commit messages and PR text carry no AI, session or co-author attribution; `.githooks/commit-msg` rejects such trailers and session links.
 - Run `pnpm lint && pnpm typecheck && pnpm test && pnpm build` before claiming done; `pnpm perf` when the engine or serialization changed.
 
 ## Invariants
