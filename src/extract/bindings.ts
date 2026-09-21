@@ -170,12 +170,35 @@ export const FIELD_NODES = new Set(["public_field_definition", "field_definition
 const THIS_TYPE = "\0this";
 const fieldNameOf = (member: Node): Node | null => member.childForFieldName("name") ?? member.childForFieldName("property");
 
+// Decorators that return a plain function or the function itself keep the declared calling shape of a method.
+// Each name is trusted only when it is imported from the module that defines it.
+const SHAPE_PRESERVING_DECORATORS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["contextmanager", ["contextlib"]],
+  ["asynccontextmanager", ["contextlib"]],
+  ["lru_cache", ["functools"]],
+  ["cache", ["functools"]],
+  ["final", ["typing", "typing_extensions"]],
+  ["override", ["typing", "typing_extensions"]],
+  ["abstractmethod", ["abc"]],
+]);
+
+function decoratorPath(text: string): readonly string[] | undefined {
+  const bare = text.trim().replace(/^@/, "").replace(/\(.*$/s, "").trim();
+  return /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(bare) ? bare.split(".") : undefined;
+}
+
+function isShapePreserving(text: string): boolean {
+  const name = decoratorPath(text)?.at(-1);
+  return name !== undefined && SHAPE_PRESERVING_DECORATORS.has(name);
+}
+
 export function memberKindOf(node: Node, python: boolean, decoratorTexts?: readonly string[]): MemberKind {
   if (!python) {
     if (node.children.some((child) => child?.type === "get" || child?.type === "set") || node.childForFieldName("name")?.text === "constructor") return "property";
     return node.children.some((child) => child?.type === "static") ? "static" : "instance";
   }
-  const decorators = decoratorTexts ?? (node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : []);
+  const all = decoratorTexts ?? (node.parent?.type === "decorated_definition" ? childrenOf(node.parent).filter((child) => child.type === "decorator").map((child) => child.text.trim()) : []);
+  const decorators = all.filter((decorator) => !isShapePreserving(decorator));
   if (decorators.length === 0) return "instance";
   if (decorators.length !== 1) return "unknown";
   if (decorators[0] === "@staticmethod") return "static";
@@ -777,6 +800,18 @@ export function collectBindings(root: Node, python: boolean): {
     if (binding?.kind !== "import" || !["typing", "typing_extensions"].includes(binding.source)) return false;
     return member === undefined ? binding.importedName === "overload" : member === "overload" && binding.importedName === "*";
   };
+  // An allowlisted decorator name that does not bind to an import from its defining module could be anything.
+  const isUntrustedShapeDecorator = (decorator: Node): boolean => {
+    const segments = decoratorPath(decorator.text);
+    const name = segments?.at(-1);
+    const modules = name === undefined ? undefined : SHAPE_PRESERVING_DECORATORS.get(name);
+    if (segments === undefined || name === undefined || modules === undefined) return false;
+    const [head, member, extra] = segments;
+    if (head === undefined || extra !== undefined) return true;
+    const binding = lookup(head, decorator);
+    if (binding?.kind !== "import" || !modules.includes(binding.source)) return true;
+    return member === undefined ? binding.importedName !== name : binding.importedName !== "*";
+  };
   const memberKind = (node: Node): MemberKind => {
     if (!python || node.parent?.type !== "decorated_definition") return memberKindOf(node, python);
     const decorators = childrenOf(node.parent).filter((child) => child.type === "decorator");
@@ -784,6 +819,7 @@ export function collectBindings(root: Node, python: boolean): {
     for (const decorator of decorators) {
       const name = decorator.text.trim().slice(1);
       if (["staticmethod", "classmethod", "property"].includes(name) && lookup(name, decorator) !== undefined) return "unknown";
+      if (isUntrustedShapeDecorator(decorator)) return "unknown";
     }
     return kind;
   };
