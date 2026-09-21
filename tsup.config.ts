@@ -8,6 +8,7 @@ export default defineConfig({
       diagnostics: "src/diagnostics/index.ts",
       enrichment: "src/enrichment/index.ts",
       bin: "src/cli/bin.ts",
+      extractWorker: "src/index/extractWorker.ts",
     },
     format: ["esm"],
     dts: true,

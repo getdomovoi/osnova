@@ -3,6 +3,7 @@ import type { FreshnessReport, OsnovaIndex } from "../types.js";
 import { localOfQualifiedName } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
+import { extractCards } from "./extractPool.js";
 import type { EdgeReuse } from "./resolve.js";
 import type { FileCard } from "../types.js";
 import { scanFiles, sameFileMetadata, sha256Hex } from "./scan.js";
@@ -158,17 +159,19 @@ export async function applyFreshnessReport(
   if (normalized.length === 0) return index;
   const deleted = new Set(report.deleted);
 
+  const pending: string[] = [];
   for (const relPath of normalized) {
     if (deleted.has(relPath)) {
       files.delete(relPath);
       rawEdges.delete(relPath);
       continue;
     }
-    if (!report.added.includes(relPath) && !report.changed.includes(relPath)) continue;
-    const { card, rawEdges: fileEdges } = await extractCard(absRoot, relPath);
-    files.set(relPath, card);
-    if (fileEdges.length > 0) rawEdges.set(relPath, fileEdges);
-    else rawEdges.delete(relPath);
+    if (report.added.includes(relPath) || report.changed.includes(relPath)) pending.push(relPath);
+  }
+  for (const { card, rawEdges: fileEdges } of await extractCards(absRoot, pending, extractCard)) {
+    files.set(card.path, card);
+    if (fileEdges.length > 0) rawEdges.set(card.path, fileEdges);
+    else rawEdges.delete(card.path);
   }
 
   const touched = normalized.filter((file) => report.changed.includes(file));
