@@ -595,8 +595,9 @@ describe("constructor calls inside decorator arguments", () => {
         "18:Nested->deco.py#outer.Nested",
         "18:Top->deco.py#Top",
         "18:Unbound->unresolved:unbound-global",
+        "18:register->deco.py#register",
       ]);
-      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([18]);
+      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -753,6 +754,78 @@ describe("inheritance edges", () => {
       expect(detailed.status).toBe("found");
       if (detailed.status !== "found") return;
       expect(formatCallersDetailed(detailed)).toContain("d1 extends main.ts#Leaf:3 [import-binding]");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("python decorator factory calls", () => {
+  const regmod = [
+    "def make(option):",
+    "    return lambda f: f",
+    "",
+    "def plain(f):",
+    "    return f",
+    "",
+  ].join("\n");
+
+  const deco = [
+    "import regmod",
+    "from regmod import make, plain",
+    "",
+    "def local_factory(name):",
+    "    return lambda f: f",
+    "",
+    "def outer(runtime):",
+    "    @make('a')",
+    "    @local_factory('b')",
+    "    @regmod.make('c')",
+    "    @plain",
+    "    @runtime.build('d')",
+    "    @missing('e')",
+    "    def hello():",
+    "        pass",
+    "",
+    "    @local_factory('cls')",
+    "    class Thing:",
+    "        pass",
+    "",
+    "    return hello, Thing",
+    "",
+  ].join("\n");
+
+  function edgesOf(built: OsnovaIndex, kind: string, file: string): string[] {
+    return built.edges
+      .filter((e) => e.kind === kind && e.fromSymbol?.startsWith(file) === true)
+      .map((e) => {
+        const resolution = e.evidence?.source === "syntax" ? e.evidence.resolution : undefined;
+        const outcome = e.toSymbol ?? `unresolved:${resolution?.status === "unresolved" ? resolution.reason : (resolution?.status ?? "unknown")}`;
+        return `${e.line}:${e.fromSymbol}:${e.toName}->${outcome}`;
+      })
+      .sort();
+  }
+
+  it("emits a resolved calls edge for a python decorator factory and leaves a bare decorator a reference", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-pydeco-"));
+    try {
+      fs.writeFileSync(path.join(dir, "regmod.py"), regmod);
+      fs.writeFileSync(path.join(dir, "deco.py"), deco);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(edgesOf(built, "calls", "deco.py")).toEqual([
+        "10:deco.py#outer:make->regmod.py#make",
+        "12:deco.py#outer:build->unresolved:receiver-unresolved",
+        "13:deco.py#outer:missing->unresolved:unbound-global",
+        "17:deco.py#outer:local_factory->deco.py#local_factory",
+        "8:deco.py#outer:make->regmod.py#make",
+        "9:deco.py#outer:local_factory->deco.py#local_factory",
+      ]);
+      expect(edgesOf(built, "references", "deco.py")).toEqual([
+        "11:deco.py#outer:plain->regmod.py#plain",
+        "21:deco.py#outer:Thing->deco.py#outer.Thing",
+        "21:deco.py#outer:hello->deco.py#outer.hello",
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
