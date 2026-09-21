@@ -199,32 +199,75 @@ function patternNames(node: Node | null): string[] {
   return containers.has(node.type) ? childrenOf(node).flatMap(patternNames) : [];
 }
 
-function reassigns(body: Node, name: string, except?: number): boolean {
-  const stack: Node[] = [body];
+interface ReassignScope {
+  bodyId: number | null;
+  params: readonly string[] | null;
+  next: ReassignScope | null;
+}
+interface ReassignHit {
+  id: number | null;
+  scope: ReassignScope;
+}
+interface ReassignIndex {
+  byName: Map<string, ReassignHit[]>;
+  anyName: ReassignHit[];
+}
+
+const reassignNodes = new Set(["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression", "as_pattern", "global_statement", "nonlocal_statement",
+  "assignment_expression", "augmented_assignment_expression", "update_expression", "for_in_statement"]);
+
+// One walk per file records every write with the function scopes between it and the module, so each
+// body/name query answers from the record instead of re-walking the body.
+function buildReassignIndex(root: Node): ReassignIndex {
+  const index: ReassignIndex = { byName: new Map(), anyName: [] };
+  const record = (name: string, hit: ReassignHit): void => {
+    const hits = index.byName.get(name);
+    if (hits === undefined) index.byName.set(name, [hit]); else hits.push(hit);
+  };
+  const stack: Array<{ node: Node; scope: ReassignScope }> = [{ node: root, scope: { bodyId: root.id, params: null, next: null } }];
   while (stack.length > 0) {
-    const node = stack.pop()!;
+    const { node, scope: outer } = stack.pop()!;
+    let scope = outer;
+    let bodyId: number | null = null;
+    if (functions.has(node.type)) {
+      bodyId = node.childForFieldName("body")?.id ?? null;
+      if (bodyId === null) scope = { bodyId: node.id, params: null, next: scope };
+      scope = { bodyId: null, params: patternNames(node.childForFieldName("parameters") ?? node.childForFieldName("parameter")), next: scope };
+    }
     // A block-scoped loop declaration (`for (const x of xs)`) declares, it does not reassign.
     const declares = node.type === "for_in_statement" && node.childForFieldName("kind") !== null && node.childForFieldName("kind")?.type !== "var";
-    if (node.id !== except && !declares && ["assignment", "augmented_assignment", "for_statement", "for_in_clause", "named_expression", "as_pattern", "global_statement", "nonlocal_statement",
-      "assignment_expression", "augmented_assignment_expression", "update_expression", "for_in_statement"].includes(node.type)) {
-      const target = node.childForFieldName("left") ?? node.childForFieldName("name") ?? node.childForFieldName("alias") ?? node.childForFieldName("argument");
-      if (target !== null && patternNames(unwrap(target) ?? target).includes(name)) return true;
-      if (node.type === "global_statement" || node.type === "nonlocal_statement") return true;
+    if (!declares && reassignNodes.has(node.type)) {
+      const hit: ReassignHit = { id: node.id, scope };
+      if (node.type === "global_statement" || node.type === "nonlocal_statement") index.anyName.push(hit);
+      else {
+        const target = node.childForFieldName("left") ?? node.childForFieldName("name") ?? node.childForFieldName("alias") ?? node.childForFieldName("argument");
+        if (target !== null) for (const name of new Set(patternNames(unwrap(target) ?? target))) record(name, hit);
+      }
     }
     if (node.type === "delete_statement") {
+      const hit: ReassignHit = { id: null, scope };
+      const seen = new Set<string>();
       const inner: Node[] = [...childrenOf(node)];
       while (inner.length > 0) {
         const item = inner.pop()!;
-        if (item.type === "identifier" && item.text === name) return true;
+        if (item.type === "identifier") { if (!seen.has(item.text)) { seen.add(item.text); record(item.text, hit); } continue; }
         if (item.type === "attribute" || item.type === "subscript") continue;
         inner.push(...childrenOf(item));
       }
     }
-    if (functions.has(node.type) && node.id !== body.parent?.id) {
-      const params = patternNames(node.childForFieldName("parameters") ?? node.childForFieldName("parameter"));
-      if (params.includes(name)) continue;
+    for (const child of childrenOf(node)) stack.push({ node: child, scope: child.id === bodyId ? { bodyId, params: null, next: scope } : scope });
+  }
+  return index;
+}
+
+function reassignsIn(index: ReassignIndex, body: Node, name: string, except?: number): boolean {
+  const hits = [...(index.byName.get(name) ?? []), ...index.anyName];
+  for (const hit of hits) {
+    if (hit.id !== null && hit.id === except) continue;
+    for (let scope: ReassignScope | null = hit.scope; scope !== null; scope = scope.next) {
+      if (scope.bodyId === body.id) return true;
+      if (scope.params !== null && scope.params.includes(name)) break;
     }
-    for (const child of childrenOf(node)) stack.push(child);
   }
   return false;
 }
@@ -245,6 +288,8 @@ export function collectBindings(root: Node, python: boolean): {
   reExports: readonly ReExport[];
   memberKind: (node: Node) => MemberKind;
 } {
+  let reassignIndex: ReassignIndex | undefined;
+  const reassigns = (body: Node, name: string, except?: number): boolean => reassignsIn(reassignIndex ??= buildReassignIndex(root), body, name, except);
   const module: Scope = { kind: "module", owner: "", parent: null, names: new Map(), thisBinding: null };
   const scopes = new Map<number, Scope>();
   const exports = new Map<string, Map<string, number>>();
