@@ -70,6 +70,26 @@ describe("osnova hook", () => {
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
+  it("prompt prints the named definitions and the omitted counts, never relationship lines", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-lean-"));
+    try {
+      const root = path.join(temporary, "ws"); await fs.mkdir(root);
+      await fs.writeFile(path.join(root, "billing.ts"), "export function total() { return 1; }\nexport function renderInvoice() { return total(); }\n");
+      await fs.writeFile(path.join(root, "use.ts"), "import { renderInvoice } from \"./billing\";\nexport function report() { return renderInvoice(); }\nexport function again() { return renderInvoice(); }\n");
+      const cacheDir = path.join(temporary, "cache");
+      const { buildIndex } = await import("../src/index.js");
+      await buildIndex(root, { cacheDir });
+      const c = capture(JSON.stringify({ prompt: "what does `renderInvoice` return here", cwd: root }));
+      expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0);
+      const text = c.out.join("\n");
+      expect(text).toContain("- function billing.ts#renderInvoice billing.ts:2");
+      expect(text).not.toContain("billing.ts#total billing.ts:1");
+      expect(text).not.toContain("use.ts#report use.ts:2");
+      expect(text).not.toMatch(/ -> /);
+      expect(text).toMatch(/\n {2}omitted: 3 definitions, 3 relationships$/);
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+
   it("tool nudges once per session when a grep names an indexed symbol with resolved callers, and stays silent otherwise", async () => {
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-"));
     try {
