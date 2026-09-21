@@ -169,13 +169,14 @@ const toolDefinitions = [
   {
     name: "osnova_tests",
     description:
-      "Tests: given symbols, the indexed test files that reference each one (a resolved call or reference edge, or an import of its file) with exact file:line and the resolution basis; given one test file, the non-test symbols it calls and the files it imports. Exactly one of symbols or file. Use before editing to find the tests to run. No indexed test is not proof of no test, and a listed test is not coverage.",
+      "Tests: given symbols, the indexed test files for each one in two separate tiers with separate counts: files with a resolved call or reference edge to the symbol (exact file:line and resolution basis), then files that only import the symbol's file and contain no indexed call or reference to it. An empty resolved tier is stated on its own line; import-only files are leads, not tests of the symbol. Given one test file, the non-test symbols it calls and the files it imports. Exactly one of symbols or file. Use before editing to find the tests to run. No indexed test is not proof of no test, and a listed test is not coverage.",
     inputSchema: {
       type: "object" as const,
       properties: {
         symbols: { type: "array", items: { type: "string" }, description: "Symbol names or qualified names (file#Class.method) to find tests for" },
         file: { type: "string", description: "Repo-relative test file whose symbols under test to list" },
         limit: { type: "number", description: "Maximum test files per symbol (default 20) or symbols per file (default 50)" },
+        includeImportOnly: { type: "boolean", description: "With symbols: also list test files that only import the symbol's file (default true); false lists only files with a resolved edge" },
       },
     },
   },
@@ -392,9 +393,11 @@ export function createOsnovaMcpServer(
           const file = optionalString(args, "file");
           if ((symbols === undefined) === (file === undefined)) throw new Error("osnova_tests needs exactly one of a non-empty symbols array or a file");
           if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: tests limit must be a nonnegative safe integer");
+          if (args.includeImportOnly !== undefined && typeof args.includeImportOnly !== "boolean") throw new Error("osnova_tests includeImportOnly must be a boolean");
           const limit = optionalNumber(args, "limit");
+          const includeImportOnly = optionalBoolean(args, "includeImportOnly");
           const available = maximumMcpTestsCodeUnits - prefix.length - 1;
-          const text = symbols !== undefined ? formatTestsFor(testsFor(index, symbols, { limit })) : formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit }));
+          const text = symbols !== undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit }));
           return textResult(`${prefix}\n${boundText(text, available)}`);
         }
         case "osnova_unreferenced": {

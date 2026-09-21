@@ -30,12 +30,14 @@ export interface SymbolTests {
 export interface TestsForOptions {
   readonly limit?: number | undefined;
   readonly sitesPerFile?: number | undefined;
+  readonly includeImportOnly?: boolean | undefined;
 }
 
 export interface TestsForResult {
   readonly receipt: IndexReceipt;
   readonly symbols: readonly SymbolTests[];
   readonly unknownSymbols: readonly string[];
+  readonly includeImportOnly: boolean;
   readonly limitations: readonly string[];
 }
 
@@ -126,6 +128,7 @@ export function testsFor(index: OsnovaIndex, symbols: readonly string[], options
   if (symbols.length === 0) throw new Error("osnova: tests needs at least one symbol name");
   const limit = checkLimit(options.limit, "limit") ?? defaultTestFiles;
   const sitesPerFile = checkLimit(options.sitesPerFile, "sites per file") ?? defaultSites;
+  const includeImportOnly = options.includeImportOnly ?? true;
   const receipt = indexReceipt(index);
   const targets = new Map<string, OsnovaSymbol>();
   const unknown: string[] = [];
@@ -149,7 +152,7 @@ export function testsFor(index: OsnovaIndex, symbols: readonly string[], options
       const { kept, omitted } = clip(sites.sort(compareSites), sitesPerFile);
       files.push({ file, receipt: sourceReceipt(index, file, receipt), basis: "test-path-and-resolved-edge", sites: kept, omittedSites: omitted });
     }
-    for (const [file, lines] of importsByFile.get(symbol.file) ?? []) {
+    for (const [file, lines] of includeImportOnly ? importsByFile.get(symbol.file) ?? [] : []) {
       if (byTest.has(file)) continue;
       const sites = lines.sort((a, b) => a - b).map((line): TestSite => ({ line, kind: "imports", method: "import-path", fromSymbol: null }));
       const { kept, omitted } = clip(sites, sitesPerFile);
@@ -159,7 +162,7 @@ export function testsFor(index: OsnovaIndex, symbols: readonly string[], options
     const { kept, omitted } = clip(files, limit);
     result.push({ symbol, receipt: sourceReceipt(index, symbol.file, receipt), tests: kept, omittedTests: omitted });
   }
-  return { receipt, symbols: result, unknownSymbols: unknown, limitations: [...testsLimitations] };
+  return { receipt, symbols: result, unknownSymbols: unknown, includeImportOnly, limitations: [...testsLimitations] };
 }
 
 export function symbolsUnderTest(index: OsnovaIndex, testFile: string, options: SymbolsUnderTestOptions = {}): SymbolsUnderTestResult {

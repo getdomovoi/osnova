@@ -118,7 +118,10 @@ describe("cli", () => {
     write("test/two.test.ts", 'import { two } from "../src/two.js";\nexport const seen = two();\n');
     const bySymbol = capture();
     expect(await runCli(["tests", "two", "--workspace", workspace, ...cacheArgs], bySymbol.io)).toBe(0);
-    expect(bySymbol.lines.join("\n")).toContain("- test/two.test.ts (resolved edge): test/two.test.ts:2 calls import-binding");
+    expect(bySymbol.lines.join("\n")).toContain("resolved edge (calls or references the symbol):\n- test/two.test.ts (resolved edge): test/two.test.ts:2 calls import-binding");
+    const noImportOnly = capture();
+    expect(await runCli(["tests", "two", "--no-import-only", "--workspace", workspace, ...cacheArgs], noImportOnly.io)).toBe(0);
+    expect(noImportOnly.lines.join("\n")).toContain("1 test files with a resolved edge; import-only files excluded");
     const byFile = capture();
     expect(await runCli(["tests", "--file", "test/two.test.ts", "--workspace", workspace, ...cacheArgs], byFile.io)).toBe(0);
     expect(byFile.lines.join("\n")).toContain("- function src/two.ts#two src/two.ts:2: test/two.test.ts:2 calls import-binding");

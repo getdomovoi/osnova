@@ -63,12 +63,43 @@ describe("testsFor", () => {
 
   it("formats exact file:line with the notice", () => {
     const text = formatTestsFor(testsFor(index, ["add"]));
-    expect(text).toContain("osnova tests: 1 symbols, 2 test files listed");
-    expect(text).toContain("function src/math.ts#add src/math.ts:1: 2 test files");
+    expect(text).toContain("osnova tests: 1 symbols; 1 test files with a resolved edge; 1 import the file only");
+    expect(text).toContain("function src/math.ts#add src/math.ts:1: 1 test files with a resolved edge; 1 import the file only");
     expect(text).toContain("- test/direct.test.ts (resolved edge): test/direct.test.ts:3,4 calls import-binding");
     expect(text).toContain("- test/import-only.test.ts (imports the file only): test/import-only.test.ts:1 imports import-path");
     expect(text).toContain("No indexed test is not proof of no test");
     expect(text).not.toContain("string-only");
+  });
+
+  it("prints the two evidence tiers under separate headings and names an empty resolved tier", () => {
+    const both = formatTestsFor(testsFor(index, ["add"])).split("\n");
+    expect(both.slice(0, 6)).toEqual([
+      "osnova tests: 1 symbols; 1 test files with a resolved edge; 1 import the file only",
+      "function src/math.ts#add src/math.ts:1: 1 test files with a resolved edge; 1 import the file only",
+      "resolved edge (calls or references the symbol):",
+      "- test/direct.test.ts (resolved edge): test/direct.test.ts:3,4 calls import-binding",
+      "imports the file only (no indexed call or reference to the symbol):",
+      "- test/import-only.test.ts (imports the file only): test/import-only.test.ts:1 imports import-path",
+    ]);
+    const importOnly = formatTestsFor(testsFor(index, ["mul"])).split("\n");
+    expect(importOnly.slice(0, 6)).toEqual([
+      "osnova tests: 1 symbols; 0 test files with a resolved edge; 2 import the file only",
+      "function src/math.ts#mul src/math.ts:2: 0 test files with a resolved edge; 2 import the file only",
+      "no indexed test file has a resolved call or reference edge to src/math.ts#mul",
+      "imports the file only (no indexed call or reference to the symbol):",
+      "- test/direct.test.ts (imports the file only): test/direct.test.ts:1 imports import-path",
+      "- test/import-only.test.ts (imports the file only): test/import-only.test.ts:1 imports import-path",
+    ]);
+    expect(importOnly.at(-2)).toContain("No indexed test is not proof of no test");
+    expect(importOnly.at(-1)).toMatch(/^limitations: /);
+    const excluded = testsFor(index, ["add", "mul"], { includeImportOnly: false });
+    expect(excluded.symbols.map((entry) => entry.tests.map((test) => test.basis))).toEqual([["test-path-and-resolved-edge"], []]);
+    expect(excluded.symbols.map((entry) => entry.omittedTests)).toEqual([0, 0]);
+    const excludedText = formatTestsFor(excluded).split("\n");
+    expect(excludedText[0]).toBe("osnova tests: 2 symbols; 1 test files with a resolved edge; import-only files excluded");
+    expect(excludedText).toContain("function src/math.ts#mul src/math.ts:2: 0 test files with a resolved edge; import-only files excluded");
+    expect(excludedText).toContain("no indexed test file has a resolved call or reference edge to src/math.ts#mul");
+    expect(excludedText.join("\n")).not.toContain("imports the file only (");
   });
 });
 
