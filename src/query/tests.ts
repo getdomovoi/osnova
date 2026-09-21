@@ -106,6 +106,22 @@ function clip<T>(items: readonly T[], limit: number): { kept: T[]; omitted: numb
   return { kept: items.slice(0, limit), omitted: Math.max(0, items.length - limit) };
 }
 
+export const isIndexedTestEdge = (index: OsnovaIndex, edge: OsnovaEdge): boolean =>
+  isTestFile(edge.fromFile) && isReliableEdge(edge) && index.files.has(edge.fromFile);
+
+export function collectTestImports(index: OsnovaIndex): Map<string, Map<string, number[]>> {
+  const importsByFile = new Map<string, Map<string, number[]>>();
+  for (const edge of index.edges) {
+    if (edge.kind !== "imports" || edge.toFile === undefined || !isIndexedTestEdge(index, edge)) continue;
+    const byTest = importsByFile.get(edge.toFile) ?? new Map<string, number[]>();
+    const lines = byTest.get(edge.fromFile) ?? [];
+    lines.push(edge.line);
+    byTest.set(edge.fromFile, lines);
+    importsByFile.set(edge.toFile, byTest);
+  }
+  return importsByFile;
+}
+
 export function testsFor(index: OsnovaIndex, symbols: readonly string[], options: TestsForOptions = {}): TestsForResult {
   if (symbols.length === 0) throw new Error("osnova: tests needs at least one symbol name");
   const limit = checkLimit(options.limit, "limit") ?? defaultTestFiles;
@@ -118,20 +134,12 @@ export function testsFor(index: OsnovaIndex, symbols: readonly string[], options
     if (found.length === 0) unknown.push(name);
     for (const symbol of found) targets.set(symbol.qualifiedName, symbol);
   }
-  const importsByFile = new Map<string, Map<string, number[]>>();
-  for (const edge of index.edges) {
-    if (edge.kind !== "imports" || edge.toFile === undefined || !isTestFile(edge.fromFile) || !isReliableEdge(edge) || !index.files.has(edge.fromFile)) continue;
-    const byTest = importsByFile.get(edge.toFile) ?? new Map<string, number[]>();
-    const lines = byTest.get(edge.fromFile) ?? [];
-    lines.push(edge.line);
-    byTest.set(edge.fromFile, lines);
-    importsByFile.set(edge.toFile, byTest);
-  }
+  const importsByFile = collectTestImports(index);
   const result: SymbolTests[] = [];
   for (const symbol of [...targets.values()].sort((a, b) => compareText(a.qualifiedName, b.qualifiedName))) {
     const byTest = new Map<string, TestSite[]>();
     for (const edge of index.incoming(symbol.qualifiedName)) {
-      if (!isTestFile(edge.fromFile) || !isReliableEdge(edge) || !index.files.has(edge.fromFile)) continue;
+      if (!isIndexedTestEdge(index, edge)) continue;
       const sites = byTest.get(edge.fromFile) ?? [];
       sites.push(site(edge));
       byTest.set(edge.fromFile, sites);

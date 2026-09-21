@@ -129,7 +129,7 @@ describe("footing formatting", () => {
     const text = formatTaskContext(result);
     const lines = text.split("\n");
     expect(lines[0]).toBe("osnova footing: change, scope ., 3 definitions, 2 relationships, 1 candidate tests");
-    expect(text).toContain("- a.ts#target function lines 1-1\n  function target() { return 1; }");
+    expect(text).toContain("- a.ts#target function lines 1-1\n  reach: d1 callers 1 in 1 files (1 dirs); unresolved same-name 0; tests 0\n  function target() { return 1; }");
     expect(text).toContain("- b.ts#middle -> a.ts#target calls line 1");
     expect(text).toContain("candidate tests:\n- c.test.ts via c.test.ts#check");
     expect(text).toContain("omitted: 0 definitions, 0 relationships, 0 candidate tests, 0 lower-ranked candidates, 0 uncertain edges, 0 out-of-scope edges, 0 depth frontier, 0 unknown symbols");
@@ -216,7 +216,7 @@ describe("footing formatting", () => {
       span: { startLine: 1, startCol: 0, endLine: 1, endCol: 30 }, signature: "function tiny()", lineCount: 1 };
     const callerFile: FileCard = { ...card("tiny.ts", [], "function tiny() { return big(); }\n"), language: "typescript", symbols: [caller] };
     const walked = formatTaskContext(taskContext(index([file, callerFile], [edge("tiny.ts#tiny", "big.ts#big")]), { task: "understand", question: "", symbols: ["tiny.ts#tiny"], excerptLines: 8, inlineShortDefinitions: 40 }));
-    expect(walked).toContain("- tiny.ts#tiny function lines 1-1\n  function tiny() { return big(); }");
+    expect(walked).toContain("- tiny.ts#tiny function lines 1-1\n  reach: d1 callers 0; unresolved same-name 0; tests 0\n  function tiny() { return big(); }");
     expect(walked).toContain("  const v6 = 6;\n  [+6 more lines]");
   });
 });

@@ -279,6 +279,7 @@ export type CallersDetailedResult =
       readonly target: OsnovaSymbol;
       readonly hits: readonly CallerEvidenceHit[];
       readonly unresolved: readonly UnresolvedCallerEdge[];
+      readonly reach?: SymbolReach | undefined;
     };
 
 export interface DirCluster {
@@ -291,12 +292,32 @@ export interface DirCluster {
   readonly droppedHubs: number;
 }
 
+export interface ReachSpread {
+  readonly edges: number;
+  readonly files: number;
+  readonly dirs: number;
+}
+
+export interface ReachDepthTwo {
+  readonly edges: number;
+  readonly files: number;
+  readonly capped: boolean;
+}
+
+export interface SymbolReach {
+  readonly d1: ReachSpread;
+  readonly d2?: ReachDepthTwo | undefined;
+  readonly unresolvedSameName: number;
+  readonly tests: number;
+}
+
 export interface HubEntry {
   readonly qualifiedName: string;
   readonly kind: SymbolKind;
   readonly file: string;
   readonly line: number;
   readonly inEdges: number;
+  readonly inFiles: number;
   readonly outEdges: number;
 }
 
