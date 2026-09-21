@@ -6,11 +6,11 @@ import { spawn } from "node:child_process";
 
 const executable = process.env.OSNOVA_BIN ?? "osnova";
 
-function hook(event: string, payload: unknown, cwd: string): Promise<string> {
+function hook(event: string, payload: unknown, cwd: string, ...flags: readonly string[]): Promise<string> {
   return new Promise((resolve) => {
     let out = "";
     try {
-      const child = spawn(executable, ["hook", event], { cwd, stdio: ["pipe", "pipe", "ignore"] });
+      const child = spawn(executable, ["hook", event, ...flags], { cwd, stdio: ["pipe", "pipe", "ignore"] });
       const timer = setTimeout(() => { child.kill(); resolve(""); }, 15_000);
       child.stdout.on("data", (chunk: Buffer | string) => { out += chunk; });
       child.on("error", () => { clearTimeout(timer); resolve(""); });
@@ -28,7 +28,7 @@ export default function osnova(pi: PiApi): void {
   let contract: string | undefined;
   pi.on("before_agent_start", async (event, ctx) => {
     const cwd = ctx?.cwd ?? process.cwd();
-    contract ??= await hook("session", { cwd }, cwd);
+    contract ??= await hook("session", { cwd }, cwd, "--full-contract");
     const points = typeof event.prompt === "string" ? await hook("prompt", { prompt: event.prompt, cwd }, cwd) : "";
     const extra = [contract, points].filter((part) => part.length > 0).join("\n\n");
     return extra.length === 0 ? undefined : { systemPrompt: `${event.systemPrompt}\n\n${extra}` };

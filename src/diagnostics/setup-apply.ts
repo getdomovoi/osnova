@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
-import { hookSettingsObject, hookToolContract } from "../cli/hook.js";
+import { hookSettingsObject } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
 
 // Applying a setup: every file change is planned first (path, action, diff), then written with a
@@ -118,8 +118,16 @@ export async function planSkill(options: { home?: string | undefined; source?: s
 }
 
 // The instructions block for an AGENTS.md or CLAUDE.md, appended once between markers and never rewritten.
+// A pointer and the two reading rules only; the MCP server's `instructions` carry the tool list.
 export function instructionsBlock(): string {
-  return [instructionsStart, "## Osnova", "", hookToolContract.replace(/^\[osnova\] /, ""), instructionsEnd].join("\n");
+  return [
+    instructionsStart,
+    "## Osnova",
+    "",
+    "This repository is indexed by Osnova, an MCP server of `osnova_*` tools: a deterministic call graph with exact file:line, no type inference. Use them before grep and file reads; start with osnova_footing, finish a change with osnova_settle.",
+    "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
+    instructionsEnd,
+  ].join("\n");
 }
 
 export async function planInstructions(file: string): Promise<PlannedChange> {
