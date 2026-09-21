@@ -5,7 +5,7 @@ import { FIELD_NODES, FUNCTION_VALUE_NODES, collectBindings, memberKindOf } from
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const VALUE_WRAPPERS = new Set(["parenthesized_expression", "as_expression", "satisfies_expression", "non_null_expression"]);
-const VALUE_OPERATORS = new Set(["??", "||"]);
+const VALUE_OPERATORS = new Set(["??", "||", "&&"]);
 
 class TsExtractor {
   readonly out = new Extractor();
@@ -67,7 +67,7 @@ function valuePosition(node: Node): boolean {
   switch (parent.type) {
     case "arguments": case "array": case "return_statement": case "template_substitution": case "object": return true;
     case "pair": case "variable_declarator": case "required_parameter": case "optional_parameter": return inField("value");
-    case "assignment_expression": case "assignment_pattern": case "object_assignment_pattern": return inField("right");
+    case "assignment_expression": case "augmented_assignment_expression": case "assignment_pattern": case "object_assignment_pattern": return inField("right");
     case "arrow_function": return inField("body");
     case "binary_expression": return VALUE_OPERATORS.has(parent.childForFieldName("operator")?.text ?? "");
     case "ternary_expression": return inField("consequence") || inField("alternative");

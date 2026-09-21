@@ -375,9 +375,13 @@ describe("function value references", () => {
     "  const pick = flag ? helper : other;",
     "  const fall = late ?? helper;",
     "  const fall2 = late || local;",
+    "  let acc; acc ??= helper;",
+    "  acc ||= other;",
+    "  acc &&= local;",
+    "  const both = flag && helper;",
     "  const text = `${helper}`;",
     "  const value = new Widget(helper);",
-    "  console.log(NAME, alias, arr, obj, pick, fall, fall2, text, value, cb);",
+    "  console.log(NAME, alias, arr, obj, pick, fall, fall2, acc, both, text, value, cb);",
     "  return helper;",
     "}",
     "export function nonEmit(): void {",
@@ -418,10 +422,12 @@ describe("function value references", () => {
     "    list(map(helper, xs))",
     "    pick = helper if flag else other",
     "    fall = alias or helper",
+    "    both = flag and helper",
+    "    xs += other",
     "    text = f\"{helper}\"",
     "    a, b = other, helper",
     "    obj = isinstance(xs, Widget)",
-    "    print(LIMIT, alias, arr, pair, tup, pick, fall, text, a, b, obj, cb)",
+    "    print(LIMIT, alias, arr, pair, tup, pick, fall, both, text, a, b, obj, cb)",
     "    return helper",
     "",
     "def non_emit(x):",
@@ -459,9 +465,13 @@ describe("function value references", () => {
         "10:main.ts#useAll->helper=lib.ts#helper[import-binding]",
         "11:main.ts#useAll->local=main.ts#local[lexical-definition]",
         "12:main.ts#useAll->helper=lib.ts#helper[import-binding]",
-        "13:main.ts#useAll->helper=lib.ts#helper[import-binding]",
-        "14:main.ts#useAll->alias=main.ts#local[lexical-definition]",
+        "13:main.ts#useAll->other=lib.ts#other[import-binding]",
+        "14:main.ts#useAll->local=main.ts#local[lexical-definition]",
         "15:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "16:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "17:main.ts#useAll->helper=lib.ts#helper[import-binding]",
+        "18:main.ts#useAll->alias=main.ts#local[lexical-definition]",
+        "19:main.ts#useAll->helper=lib.ts#helper[import-binding]",
       ]);
       const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.ts#nonEmit");
       expect(nonEmit.map((e) => `${e.kind}:${e.toName}`).sort()).toEqual(["calls:helper", "calls:unbound"]);
@@ -470,10 +480,10 @@ describe("function value references", () => {
       const detailed = callersDetailed(built, "lib.ts#helper");
       expect(detailed.status).toBe("found");
       if (detailed.status !== "found") return;
-      expect(detailed.reach?.d1.edges).toBe(9);
+      expect(detailed.reach?.d1.edges).toBe(11);
       const text = formatCallersDetailed(detailed);
-      expect(text).toContain("d1 references main.ts#useAll:3,5,7,9,10,12,13,15 [import-binding]");
-      expect(text).toContain("d1 calls main.ts#nonEmit:18 [import-binding]");
+      expect(text).toContain("d1 references main.ts#useAll:3,5,7,9,10,12,15,16,17,19 [import-binding]");
+      expect(text).toContain("d1 calls main.ts#nonEmit:22 [import-binding]");
       expect(formatCallers(callers(built, "main.ts#local"))).toContain("d1 references function main.ts#useAll main.ts:4");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -499,17 +509,19 @@ describe("function value references", () => {
         "14:main.py#use_all->alias=main.py#local[lexical-definition]",
         "14:main.py#use_all->helper=lib.py#helper[import-binding]",
         "15:main.py#use_all->helper=lib.py#helper[import-binding]",
-        "16:main.py#use_all->helper=lib.py#helper[import-binding]",
         "16:main.py#use_all->other=lib.py#other[import-binding]",
-        "17:main.py#use_all->Widget=lib.py#Widget[import-binding]",
-        "18:main.py#use_all->alias=main.py#local[lexical-definition]",
-        "19:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "17:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "18:main.py#use_all->helper=lib.py#helper[import-binding]",
+        "18:main.py#use_all->other=lib.py#other[import-binding]",
+        "19:main.py#use_all->Widget=lib.py#Widget[import-binding]",
+        "20:main.py#use_all->alias=main.py#local[lexical-definition]",
+        "21:main.py#use_all->helper=lib.py#helper[import-binding]",
       ]);
       const nonEmit = built.edges.filter((e) => e.fromSymbol === "main.py#non_emit");
       expect(nonEmit.map((e) => `${e.kind}:${e.toName}`).sort()).toEqual(["calls:helper", "calls:unbound"]);
       expect(built.edges.some((e) => e.toName === "helper2")).toBe(false);
       expect(built.edges.some((e) => e.kind === "references" && e.toName === "LIMIT" && e.line !== 1)).toBe(false);
-      expect(built.edges.some((e) => e.kind === "references" && e.line === 28)).toBe(false);
+      expect(built.edges.some((e) => e.kind === "references" && e.line === 30)).toBe(false);
       expect(built.symbols.get("main.py#Child")?.heritage).toEqual([{ kind: "import", source: "lib", importedName: "Widget" }]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

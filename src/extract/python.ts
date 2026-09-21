@@ -31,8 +31,8 @@ function valuePosition(node: Node): boolean {
     case "argument_list": return parent.parent?.type === "call";
     case "list": case "tuple": case "set": case "expression_list": case "return_statement": case "interpolation": return true;
     case "keyword_argument": case "pair": case "default_parameter": case "typed_default_parameter": return inField("value");
-    case "assignment": return inField("right");
-    case "boolean_operator": return parent.childForFieldName("operator")?.text === "or";
+    case "assignment": case "augmented_assignment": return inField("right");
+    case "boolean_operator": return true;
     case "conditional_expression": { const parts = childrenOf(parent); return parts[0]?.id === child.id || parts[2]?.id === child.id; }
     default: return false;
   }
