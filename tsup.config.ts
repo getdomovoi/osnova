@@ -15,8 +15,5 @@ export default defineConfig({
     platform: "node",
     sourcemap: true,
     clean: true,
-    splitting: false,
-    banner: {
-      js: "#!/usr/bin/env node",
-    },
+    splitting: true,
 });
