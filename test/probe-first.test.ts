@@ -40,7 +40,7 @@ describe("probe-first refresh", () => {
     await expect(loadIndex(repo, { cacheDir })).resolves.toBeDefined();
   });
 
-  it("returns undefined for a checksum-less format 8 cache and rejects a checksum-less format 9 cache", async () => {
+  it("returns undefined for a checksum-less format 8 cache and rejects a checksum-less current-format cache", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-probe-legacy-")); dirs.push(dir);
     const repo = path.join(dir, "repo"); const cacheDir = path.join(dir, "cache");
     await fs.cp(FIXTURE, repo, { recursive: true });
@@ -53,7 +53,7 @@ describe("probe-first refresh", () => {
     await expect(loadIndex(repo, { cacheDir })).resolves.toBeUndefined();
     await fs.writeFile(path.join(ws, "index.json"), "{not json");
     await expect(loadIndex(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
-    for (const malformed of ['{"formatVersion":8,', '{"metadata":{"formatVersion":8},"formatVersion":9}', '{"formatVersion":8.9}']) {
+    for (const malformed of ['{"formatVersion":8,', '{"metadata":{"formatVersion":8},"formatVersion":10}', '{"formatVersion":8.9}']) {
       await fs.writeFile(path.join(ws, "index.json"), malformed);
       await expect(loadIndex(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
     }

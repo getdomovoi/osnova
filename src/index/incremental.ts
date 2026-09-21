@@ -97,7 +97,7 @@ export async function applyChanges(
   return applyFreshnessReport(index, root, paths, inspection.report);
 }
 
-const CROSS_FILE_TEXT = /(?:\.d\.ts|\.go|\.rs|package\.json|go\.mod|Cargo\.toml)$/;
+const CROSS_FILE_TEXT = /(?:\.d\.ts|\.go|\.rs|package\.json|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|uv\.lock|poetry\.lock|Pipfile\.lock|requirements[^/]*\.txt|pyproject\.toml|setup\.py|setup\.cfg)$/;
 
 function crossFileShape(card: FileCard, raws: readonly RawEdgeItem[]): string {
   const routes = raws

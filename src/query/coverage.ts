@@ -19,6 +19,8 @@ export interface LanguageCoverage {
   readonly unboundGlobalCalls: number;
   readonly resolvedShareExcludingUnresolvedImports: number;
   readonly resolvedShareExcludingExternal: number;
+  readonly externalImportCalls: number;
+  readonly byExternal: Readonly<Record<string, number>>;
 }
 
 export interface CoverageReport {
@@ -30,10 +32,10 @@ export interface CoverageReport {
 
 interface Tally {
   files: number; symbols: number; calls: number; resolved: number; ambiguous: number; unresolved: number; imports: number; importsResolved: number;
-  byMethod: Map<string, number>; byReason: Map<string, number>;
+  byMethod: Map<string, number>; byReason: Map<string, number>; byExternal: Map<string, number>;
 }
 
-const tally = (): Tally => ({ files: 0, symbols: 0, calls: 0, resolved: 0, ambiguous: 0, unresolved: 0, imports: 0, importsResolved: 0, byMethod: new Map(), byReason: new Map() });
+const tally = (): Tally => ({ files: 0, symbols: 0, calls: 0, resolved: 0, ambiguous: 0, unresolved: 0, imports: 0, importsResolved: 0, byMethod: new Map(), byReason: new Map(), byExternal: new Map() });
 const bump = (map: Map<string, number>, key: string): void => { map.set(key, (map.get(key) ?? 0) + 1); };
 const sortedRecord = (map: Map<string, number>): Record<string, number> =>
   Object.fromEntries([...map].sort(([a], [b]) => compareText(a, b)));
@@ -46,6 +48,7 @@ const finish = (language: string, t: Tally): LanguageCoverage => {
     imports: t.imports, importsResolved: t.importsResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
     unresolvedImportCalls, unboundGlobalCalls, resolvedShareExcludingUnresolvedImports: share(t.resolved, t.calls - unresolvedImportCalls),
     resolvedShareExcludingExternal: share(t.resolved, t.calls - unresolvedImportCalls - unboundGlobalCalls),
+    externalImportCalls: [...t.byExternal.values()].reduce((sum, count) => sum + count, 0), byExternal: sortedRecord(t.byExternal),
   };
 };
 
@@ -72,7 +75,7 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
       if (resolution === undefined) { row.unresolved++; bump(row.byReason, "unknown-provenance"); }
       else if (resolution.status === "resolved") { row.resolved++; bump(row.byMethod, resolution.method); }
       else if (resolution.status === "ambiguous") row.ambiguous++;
-      else { row.unresolved++; bump(row.byReason, resolution.reason); }
+      else { row.unresolved++; bump(row.byReason, resolution.reason); if (resolution.external !== undefined) bump(row.byExternal, resolution.external); }
     }
   }
   const languages = [...perLanguage].sort(([a], [b]) => compareText(a, b)).map(([language, row]) => finish(language, row));
