@@ -613,15 +613,21 @@ export async function seedArtifactFrom(cacheDir: string, siblingRoot: string, ta
       if ((await fs.lstat(target)).isSymbolicLink()) return undefined;
       const textPath = path.join(target, "text.bin");
       const edgesPath = path.join(target, "edges.json");
-      await copyIntoWorkspace(textSource, textPath);
-      await copyIntoWorkspace(edgesSource, edgesPath);
-      const textCopy = await fs.readFile(textPath);
-      if (textCopy.length !== envelope.textBytes || sha256Hex(textCopy) !== envelope.textHash) return undefined;
-      const index = deserializeParsedArtifact(parsed, content, textPath, { path: edgesPath, raw: edgesRaw }, undefined, undefined, targetRoot);
+      let index: OsnovaIndexImpl | undefined;
+      try {
+        await copyIntoWorkspace(textSource, textPath);
+        await copyIntoWorkspace(edgesSource, edgesPath);
+        const textCopy = await fs.readFile(textPath);
+        if (textCopy.length === envelope.textBytes && sha256Hex(textCopy) === envelope.textHash) {
+          index = deserializeParsedArtifact(parsed, content, textPath, { path: edgesPath, raw: edgesRaw }, undefined, undefined, targetRoot);
+        }
+      } finally {
+        if (index === undefined) await Promise.all([textPath, edgesPath].map((file) => fs.rm(file, { force: true }).catch(() => {})));
+      }
+      if (index === undefined) return undefined;
       return { index: bindIndexCache(index, cacheDir), generation: sha };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return undefined;
-      throw new IndexingError({ phase: "cache", path: source, code: "cache-read-failed" }, error);
+    } catch {
+      return undefined;
     }
   }, { lockTimeoutMs: options.lockTimeoutMs ?? 0, lockPollMs: options.lockPollMs });
 }
