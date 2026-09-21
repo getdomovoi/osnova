@@ -166,6 +166,10 @@ export async function runCli(
       const started = Date.now();
       const index = await buildIndex(root, { cacheDir, onProgress: (event) => {
         if (event.phase === "seed") io.stdout(`seeded from sibling worktree cache ${event.sibling ?? ""}: ${event.done} of ${event.total} files reused`);
+        const skipped = event.skippedSymlinkedDirectories;
+        if (skipped !== undefined && skipped.length > 0) {
+          io.stderr(`osnova build: skipped ${skipped.length} symlinked director${skipped.length === 1 ? "y" : "ies"}; symlinks are not followed: ${skipped.join(", ")}`);
+        }
       } });
       const diagnostics = formatIndexDiagnostics(index);
       if (diagnostics.length > 0) io.stderr(diagnostics);
@@ -351,7 +355,7 @@ export async function runCli(
       if (baseCache === undefined && baseRef === undefined) throw new Error("osnova settle: --base-ref or --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const maxDepth = numericOption(parsed.values.depth, "depth", 1);
+      const maxDepth = numericOption(parsed.values.depth, "depth", 1) ?? 1;
       let result;
       if (baseRef !== undefined) {
         const base = await materializeBaseRef(root, baseRef, { cacheDir });

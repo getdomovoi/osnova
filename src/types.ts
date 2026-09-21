@@ -358,6 +358,7 @@ export interface ProgressEvent {
   readonly done: number;
   readonly total: number;
   readonly sibling?: string | undefined;
+  readonly skippedSymlinkedDirectories?: readonly string[] | undefined;
 }
 
 export interface LoadIndexOptions {
