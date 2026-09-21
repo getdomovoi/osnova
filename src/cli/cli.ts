@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatCoverage, formatFindTextResult, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import type { OsnovaIndex } from "../types.js";
@@ -324,8 +324,8 @@ export async function runCli(
         `base ${result.base.generation}\ncurrent ${result.current.generation}`,
         `${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
         ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
-        ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
-        `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
+        ...result.dependents.map(formatImpactDependent),
+        formatImpactUncertainty(result.uncertainty),
       ].join("\n"));
       return EXIT_OK;
     }
