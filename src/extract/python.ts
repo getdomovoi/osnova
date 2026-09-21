@@ -61,16 +61,19 @@ export const pythonAdapter: LanguageAdapter = {
             for (const deco of decos) {
               const inner = childrenOf(deco)[0];
               if (inner === undefined) continue;
+              if (inner.type === "call") {
+                const target = callTarget(inner);
+                if (target !== null) out.addEdge("calls", target, inner, bindings.at(inner.childForFieldName("function"), inner));
+                for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
+                continue;
+              }
               const name =
                 inner.type === "identifier"
                   ? inner.text
-                  : inner.type === "call"
-                    ? callTarget(inner)
-                    : inner.type === "attribute"
-                      ? (inner.childForFieldName("attribute")?.text ?? null)
-                      : null;
+                  : inner.type === "attribute"
+                    ? (inner.childForFieldName("attribute")?.text ?? null)
+                    : null;
               if (name !== null && name.length > 0) out.addEdge("references", name, deco);
-              if (inner.type === "call") for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
             }
           }
           return;
