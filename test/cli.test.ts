@@ -139,7 +139,7 @@ describe("cli", () => {
     expect(stray.lines.join("\n")).toContain(`osnova ground: ${JSON.stringify(workspace)} looks like a directory; pass the workspace with --workspace <path>`);
 
     const dot = capture();
-    expect(await runCli(["warp", "one", ".", "--workspace", workspace, ...cacheArgs], dot.io)).toBe(2);
+    expect(await runCli(["warp", "one", ".", ...cacheArgs], dot.io)).toBe(2);
     expect(dot.lines.join("\n")).toContain("osnova warp: \".\" looks like a directory");
 
     const word = capture();
@@ -149,6 +149,39 @@ describe("cli", () => {
     expect(await runCli(["outline", "src/two.ts", "--workspace", workspace, ...cacheArgs], file.io)).toBe(0);
     expect(file.lines.join("\n")).toContain("function two");
   });
+
+  it("keeps directory-shaped tokens as queries when --workspace is given, in regex patterns, and in relative paths", async () => {
+    write("src/util/four.ts", "export function four(): number { return 4; }\n");
+    const previousCwd = process.cwd();
+    process.chdir(workspace);
+    try {
+      const explicit = capture();
+      expect(await runCli(["footing", "how", "does", "src/util", "resolve", "names", "--workspace", ".", ...cacheArgs], explicit.io)).toBe(0);
+
+      const absoluteExplicit = capture();
+      expect(await runCli(["ground", "four", path.join(workspace, "src"), "--workspace", workspace, ...cacheArgs], absoluteExplicit.io)).toBe(0);
+
+      const pattern = capture();
+      expect(await runCli(["thread", "src/", ...cacheArgs], pattern.io)).toBe(0);
+
+      const relative = capture();
+      expect(await runCli(["ground", "four", "src/util", ...cacheArgs], relative.io)).toBe(0);
+
+      const bare = capture();
+      expect(await runCli(["ground", "src", ...cacheArgs], bare.io)).toBe(0);
+
+      const trailing = capture();
+      expect(await runCli(["ground", "four", "src/util/", ...cacheArgs], trailing.io)).toBe(2);
+      expect(trailing.lines.join("\n")).toContain("osnova ground: \"src/util/\" looks like a directory");
+
+      const trap = capture();
+      expect(await runCli(["ground", "four", workspace, ...cacheArgs], trap.io)).toBe(2);
+      expect(trap.lines.join("\n")).toContain(`osnova ground: ${JSON.stringify(workspace)} looks like a directory; pass the workspace with --workspace <path>`);
+    } finally {
+      process.chdir(previousCwd);
+      fs.rmSync(path.join(workspace, "src/util"), { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it("rejects unknown commands with exit 2", async () => {
     const { lines, io } = capture();

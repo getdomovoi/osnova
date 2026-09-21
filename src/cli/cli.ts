@@ -62,7 +62,7 @@ usage:
   osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
 queries refresh the index first so answers describe current disk state.
-a query, symbol or file positional that names an existing directory (absolute, ., .., or containing a path separator) exits 2: pass the workspace with --workspace <path>.`;
+without --workspace, a query or symbol positional that names an existing directory (absolute, ., .., or ending with a path separator) exits 2: pass the workspace with --workspace <path>.`;
 
 const EXIT_OK = 0;
 const cliSymbolKinds: readonly SymbolKind[] = ["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant", "module"];
@@ -90,7 +90,7 @@ async function readStdin(): Promise<string> {
 
 function strayDirectoryPositional(values: readonly string[]): string | undefined {
   for (const value of values) {
-    const pathLike = value === "." || value === ".." || path.isAbsolute(value) || value.includes("/") || value.includes(path.sep);
+    const pathLike = value === "." || value === ".." || path.isAbsolute(value) || value.endsWith("/") || value.endsWith(path.sep);
     if (!pathLike) continue;
     try {
       if (statSync(path.resolve(value)).isDirectory()) return value;
@@ -101,7 +101,8 @@ function strayDirectoryPositional(values: readonly string[]): string | undefined
   return undefined;
 }
 
-function rejectStrayDirectory(values: readonly string[], command: string, io: CliIo): boolean {
+function rejectStrayDirectory(values: readonly string[], workspace: string | undefined, command: string, io: CliIo): boolean {
+  if (workspace !== undefined) return false;
   const stray = strayDirectoryPositional(values);
   if (stray === undefined) return false;
   io.stderr(`osnova ${command}: ${JSON.stringify(stray)} looks like a directory; pass the workspace with --workspace <path>`);
@@ -216,7 +217,7 @@ export async function runCli(
       });
       const question = parsed.positionals.join(" ").trim();
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
-      if (rejectStrayDirectory(parsed.positionals, "ground", io)) return EXIT_ERROR;
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit");
       if (parsed.values.scoped === true) {
@@ -247,7 +248,6 @@ export async function runCli(
         },
       });
       const pattern = requirePositional(parsed.positionals, "pattern", "grep");
-      if (rejectStrayDirectory(parsed.positionals, "thread", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit");
       const result = findTextDetailed(index, pattern, {
@@ -267,7 +267,6 @@ export async function runCli(
         options: { workspace: { type: "string" }, "cache-dir": { type: "string" } },
       });
       const file = requirePositional(parsed.positionals, "file", "skeleton");
-      if (rejectStrayDirectory(parsed.positionals, "outline", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(formatSkeleton(skeleton(index, file)));
       return EXIT_OK;
@@ -285,7 +284,7 @@ export async function runCli(
         },
       });
       const symbol = requirePositional(parsed.positionals, "symbol", "callers");
-      if (rejectStrayDirectory(parsed.positionals, "warp", io)) return EXIT_ERROR;
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "warp", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const depthValue = numericOption(parsed.values.depth, "depth", 1);
       const direction = parsed.values.direction;
@@ -328,7 +327,7 @@ export async function runCli(
       } });
       const task = parsed.values.task;
       if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
-      if (rejectStrayDirectory(parsed.positionals, "footing", io)) return EXIT_ERROR;
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
@@ -386,7 +385,7 @@ export async function runCli(
       } });
       const symbol = parsed.positionals.join(" ").trim();
       if (symbol.length === 0) throw new Error("osnova plumb: missing <symbol> argument");
-      if (rejectStrayDirectory(parsed.positionals, "plumb", io)) return EXIT_ERROR;
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "plumb", io)) return EXIT_ERROR;
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`osnova plumb: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
       const fromFile = parsed.values["sites-file"] === undefined ? [] : (await fs.readFile(parsed.values["sites-file"], "utf8")).split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
@@ -402,7 +401,7 @@ export async function runCli(
         file: { type: "string" }, "no-import-only": { type: "boolean" }, limit: { type: "string", short: "n" }, workspace: { type: "string" }, "cache-dir": { type: "string" },
       } });
       const symbols = parsed.positionals.filter((name) => name.length > 0);
-      if (rejectStrayDirectory(parsed.positionals, "tests", io)) return EXIT_ERROR;
+      if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "tests", io)) return EXIT_ERROR;
       const file = parsed.values.file;
       if ((symbols.length === 0) === (file === undefined)) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
       const limit = numericOption(parsed.values.limit, "limit");
