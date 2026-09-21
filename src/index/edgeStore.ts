@@ -10,7 +10,7 @@ export interface EdgeLayout {
 }
 
 interface EdgeHeader {
-  readonly formatVersion: 9;
+  readonly formatVersion: 10;
   readonly count: number;
   readonly evidence: readonly EdgeEvidence[];
   readonly bindings: readonly EdgeBinding[];
@@ -84,7 +84,7 @@ export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly str
   const pathIndex = new Map(paths.map((p, i) => [p, i]));
   const evidence = intern(edges.map((edge) => edge.evidence ?? { source: "unknown" as const }));
   const bindings = intern(edges.map((edge) => edge.binding));
-  const header: EdgeHeader = { formatVersion: 9, count: edges.length, evidence: evidence.table, bindings: bindings.table };
+  const header: EdgeHeader = { formatVersion: 10, count: edges.length, evidence: evidence.table, bindings: bindings.table };
   const lines = [JSON.stringify(header)];
   for (const [i, edge] of edges.entries()) {
     const fromFile = pathIndex.get(edge.fromFile);
@@ -123,7 +123,8 @@ export function validateEvidence(value: unknown): EdgeEvidence {
         resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
         return value as EdgeEvidence;
       }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved", "unbound-global"].includes(resolution.reason ?? "")) {
+      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "binding-blocked", "bound-symbol-missing", "re-export-incomplete", "re-export-cycle", "receiver-unresolved", "unbound-global"].includes(resolution.reason ?? "") &&
+        (resolution.external === undefined || (typeof resolution.external === "string" && resolution.external.length > 0 && resolution.reason === "import-target-unresolved"))) {
         return value as EdgeEvidence;
       }
     }
@@ -180,7 +181,7 @@ export function deserializeEdges(bytes: Buffer, paths: readonly string[], files:
   if (!text.endsWith("\n")) throw new Error("osnova: corrupt edge section");
   const lines = text.slice(0, -1).split("\n");
   const header = JSON.parse(lines[0] ?? "null") as Partial<EdgeHeader> | null;
-  if (header === null || header.formatVersion !== 9 || !Array.isArray(header.evidence) || !Array.isArray(header.bindings) ||
+  if (header === null || header.formatVersion !== 10 || !Array.isArray(header.evidence) || !Array.isArray(header.bindings) ||
     !integerIn(header.count, 0, Number.MAX_SAFE_INTEGER) || header.count !== lines.length - 1) throw new Error("osnova: corrupt edge header");
   const evidenceTable = header.evidence.map((entry) => validateEvidence(entry));
   const bindingTable = header.bindings.map((entry) => validateBinding(entry));

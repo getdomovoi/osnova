@@ -379,7 +379,8 @@ function callerGroupLines(group: CallerGroup, cap = Number.POSITIVE_INFINITY): s
 function unresolvedCallerLines(edge: OsnovaEdge, depth: number, matches?: NameMatches): string[] {
   const lines = [`d${depth} ${edge.kind} ${edge.toName} ${edge.fromFile}:${edge.line}`];
   if (edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "unresolved") {
-    lines.push(`  reason: ${edge.evidence.resolution.reason}`);
+    const external = edge.evidence.resolution.external;
+    lines.push(`  reason: ${edge.evidence.resolution.reason}${external === undefined ? "" : ` (external:${external})`}`);
   }
   if (matches !== undefined && matches.total > 0) {
     const more = matches.total - matches.candidates.length;
@@ -631,7 +632,11 @@ export function formatCoverage(report: CoverageReport): string {
     `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve, ${report.total.unboundGlobalCalls} call a name with no binding in the file`,
     ...report.languages.map(row),
   ];
-  if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}`));
+  const external = report.total.externalImportCalls;
+  const detail = (reason: string, count: number): string => reason === "import-target-unresolved" && external > 0 ? ` (external ${external}, in-repo ${count - external})` : "";
+  if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}${detail(reason, count)}`));
+  const packages = Object.entries(report.total.byExternal).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1)).slice(0, 10);
+  if (packages.length > 0) lines.push("external packages (top 10):", ...packages.map(([name, count]) => `- ${name}: ${count}`));
   lines.push(`limitations: ${report.limitations.join(", ")}`);
   return lines.join("\n");
 }
