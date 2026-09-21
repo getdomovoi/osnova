@@ -35,6 +35,16 @@ describe("ask", () => {
     expect(hit?.excerptStartLine).toBe(hit?.symbol?.span.startLine);
   });
 
+  it("answers a lean ground query in fewer bytes than the inlined shape", () => {
+    const result = ask(index, "pad string width", { limit: 3 });
+    const inlined = formatAsk(result);
+    const lean = formatAsk(result, { lean: true });
+    expect(lean.length).toBeLessThan(inlined.length);
+    expect(lean).toContain("src/util.ts:");
+    expect(lean).toContain("src/util.ts#pad");
+    expect(lean).not.toMatch(/^L\d+: {2}/m);
+  });
+
   it("filters by path with in", () => {
     const result = ask(index, "Server start", { in: "src" });
     expect(result.hits.every((h) => h.file.startsWith("src/"))).toBe(true);
@@ -73,6 +83,36 @@ describe("ground formatting", () => {
       "src/a.ts:12 constant src/a.ts#outer.first\nL12: body of src/a.ts#outer.first",
     ].join("\n\n"));
     expect(text).not.toContain("also:");
+  });
+
+  it("drops inlined source in the lean shape and keeps file:line, kind and signature", () => {
+    const signed: AskHit = {
+      file: "src/a.ts", line: 10, score: 1, excerpt: "body of outer\nsecond line", excerptStartLine: 10,
+      symbol: { ...symbolAt("src/a.ts#outer", 10, 14), signature: "export const outer = (value: string): number" },
+    };
+    const text = formatAsk({ hits: [signed, first], filesSearched: 1 }, { lean: true });
+    expect(text).toBe([
+      "src/a.ts:10 constant src/a.ts#outer lines 10-14",
+      "export const outer = (value: string): number",
+      "also: .first L12",
+    ].join("\n"));
+  });
+
+  it("clips a long lean signature without splitting a surrogate pair", () => {
+    const long = `${"x".repeat(198)}\u{1F9F1}rest`;
+    const hit: AskHit = {
+      file: "src/a.ts", line: 3, score: 1, excerpt: long, excerptStartLine: 3,
+      symbol: { ...symbolAt("src/a.ts#wide", 3, 3), signature: long },
+    };
+    const signature = formatAsk({ hits: [hit], filesSearched: 1 }, { lean: true }).split("\n")[1] ?? "";
+    expect(signature.length).toBeLessThanOrEqual(200);
+    expect(signature).toBe(`${"x".repeat(198)}…`);
+    expect(signature).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it("keeps the matching line for a lean hit that has no definition", () => {
+    const textHit: AskHit = { file: "src/a.ts", line: 8, score: 1, symbol: null, excerpt: "  alpha\n  beta\n  gamma", excerptStartLine: 7 };
+    expect(formatAsk({ hits: [textHit], filesSearched: 1 }, { lean: true })).toBe("src/a.ts:8\nL8: beta");
   });
 
   it("keeps a child that outranks its parent as its own hit", () => {

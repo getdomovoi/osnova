@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, leanAskBody, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
@@ -43,7 +43,7 @@ usage:
   osnova --version
   osnova build <root> [--cache-dir <path>]
   osnova check <root> [--cache-dir <path>]
-  osnova ground "<question>" [--in <path>] [-n <n>] [--full] [--scoped] [--workspace <path>] [--cache-dir <path>]
+  osnova ground "<question>" [--in <path>] [-n <n>] [--full] [--lean] [--scoped] [--workspace <path>] [--cache-dir <path>]
   osnova thread "<pattern>" [--fixed] [-i] [--in <path>] [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova outline <file> [--workspace <path>] [--cache-dir <path>]
   osnova warp <symbol> [--direction in|out] [--depth <n>] [--full] [--workspace <path>] [--cache-dir <path>]
@@ -210,6 +210,7 @@ export async function runCli(
           in: { type: "string" },
           limit: { type: "string", short: "n" },
           full: { type: "boolean" },
+          lean: { type: "boolean" },
           scoped: { type: "boolean" },
           workspace: { type: "string" },
           "cache-dir": { type: "string" },
@@ -220,18 +221,23 @@ export async function runCli(
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit");
+      const lean = parsed.values.lean === true;
       if (parsed.values.scoped === true) {
-        const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: parsed.values.full });
+        const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: lean ? false : parsed.values.full });
         io.stdout(`osnova generation ${result.receipt.generation}; ${result.scopes.length} scopes; ${result.omittedHits} hits omitted\n` +
-          result.hits.map((hit) => `[${hit.scope || "."}] ${hit.file}:${hit.line} ${hit.symbol?.qualifiedName ?? "<file>"}\n${hit.excerpt}`).join("\n\n"));
+          result.hits.map((hit) => {
+            const where = `[${hit.scope || "."}] ${hit.file}:${hit.line}`;
+            if (!lean) return `${where} ${hit.symbol?.qualifiedName ?? "<file>"}\n${hit.excerpt}`;
+            return `${where}${hit.symbol === null ? "" : ` ${hit.symbol.kind} ${hit.symbol.qualifiedName}`}${leanAskBody(hit)}`;
+          }).join("\n\n"));
         return EXIT_OK;
       }
       const result = ask(index, question, {
         in: parsed.values.in,
         limit: limitValue,
-        full: parsed.values.full,
+        full: lean ? false : parsed.values.full,
       });
-      io.stdout(formatAsk(result));
+      io.stdout(formatAsk(result, { lean }));
       return EXIT_OK;
     }
     case "thread": {

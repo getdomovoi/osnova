@@ -183,6 +183,38 @@ describe("cli", () => {
     }
   }, 60_000);
 
+  it("ground --lean keeps headers, spans and signatures without inlining source", async () => {
+    write("src/lean-target.ts", [
+      "export function assembleReport(rows: readonly string[], title: string): string {",
+      "  const header = `# ${title}`;",
+      "  const body = rows.map((row) => `- ${row}`).join(\"\\n\");",
+      "  return `${header}\\n\\n${body}`;",
+      "}",
+    ].join("\n") + "\n");
+    try {
+      const lean = capture();
+      expect(await runCli(["ground", "assembleReport rows title", "--lean", "--workspace", workspace, ...cacheArgs], lean.io)).toBe(0);
+      const leanText = lean.lines.join("\n");
+      expect(leanText).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
+      expect(leanText).not.toContain("const header =");
+
+      const inlined = capture();
+      expect(await runCli(["ground", "assembleReport rows title", "--workspace", workspace, ...cacheArgs], inlined.io)).toBe(0);
+      const inlinedText = inlined.lines.join("\n");
+      expect(inlinedText).toContain("const header =");
+      expect(leanText.length).toBeLessThan(inlinedText.length);
+
+      const scoped = capture();
+      expect(await runCli(["ground", "assembleReport rows title", "--lean", "--scoped", "--workspace", workspace, ...cacheArgs], scoped.io)).toBe(0);
+      const scopedText = scoped.lines.join("\n");
+      expect(scopedText).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
+      expect(scopedText).toContain("function assembleReport(rows: readonly string[], title: string): string");
+      expect(scopedText).not.toContain("const header =");
+    } finally {
+      fs.rmSync(path.join(workspace, "src/lean-target.ts"), { force: true });
+    }
+  }, 60_000);
+
   it("rejects unknown commands with exit 2", async () => {
     const { lines, io } = capture();
     const code = await runCli(["frobnicate"], io);

@@ -373,4 +373,32 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("offers a lean ground shape that drops inlined source but keeps file:line, span and signature", async () => {
+    write("src/lean-target.ts", [
+      "export function assembleReport(rows: readonly string[], title: string): string {",
+      "  const header = `# ${title}`;",
+      "  const body = rows.map((row) => `- ${row}`).join(\"\\n\");",
+      "  return `${header}\\n\\n${body}`;",
+      "}",
+      "",
+    ].join("\n"));
+
+    const client = await connect();
+    try {
+      const { tools } = await client.listTools();
+      const ground = tools.find((tool) => tool.name === "osnova_ground");
+      expect(ground?.inputSchema.properties).toHaveProperty("lean");
+
+      const question = "assembleReport rows title";
+      const inlined = await callTool(client, "osnova_ground", { question });
+      const lean = await callTool(client, "osnova_ground", { question, lean: true });
+      expect(lean.length).toBeLessThan(inlined.length);
+      expect(lean).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
+      expect(lean).not.toContain("const header =");
+      expect(inlined).toContain("const header =");
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
 });
