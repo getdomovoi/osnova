@@ -115,6 +115,53 @@ describe("settle line attribution", () => {
       .toEqual(["renamed: k.ts#Box.a -> k.ts#Box.c"]);
     expect(result.dependents.map((hit) => [hit.snapshot, hit.symbol?.qualifiedName])).toEqual([["base", "u.ts#useA"], ["current", "u.ts#useA"]]);
   });
+
+  it("seeds a diffed two-index comparison from symbol changes and counts importers of the changed file instead of listing them", () => {
+    const imports = (from: string): OsnovaEdge => ({ kind: "imports", fromFile: from, fromSymbol: from, toName: "./k", toFile: "k.ts", line: 1,
+      evidence: { source: "syntax", resolution: { status: "resolved", method: "import-path" } } });
+    const other = card("w.ts", ["useW"]);
+    const base = index([boxCard(["a", "b"]), users, other], [...edges("a"), imports("u.ts"), imports("w.ts")]);
+    const next = index([boxCard(["c", "b"]), users, other], [...edges("c"), imports("u.ts"), imports("w.ts")]);
+    const diff = "--- a/k.ts\n+++ b/k.ts\n@@ -1,5 +1,5 @@\n class Box {\n-  a() {\n+  c() {\n     return 1;\n   }\n   b() {\n";
+    const result = impact(base, next, { diff, maxDepth: 1 });
+    expect(result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName} -> ${change.after?.symbol.qualifiedName}`)).toEqual(["renamed: k.ts#Box.a -> k.ts#Box.c"]);
+    expect(result.dependents.map((hit) => [hit.snapshot, hit.symbol?.qualifiedName ?? hit.file])).toEqual([["base", "u.ts#useA"], ["current", "u.ts#useA"]]);
+    expect(result.files.map((file) => file.after?.file)).toEqual(["k.ts"]);
+    expect(result.omitted.fileImporters).toBe(2);
+    const text = formatImpact(result);
+    expect(text.split("\n")[0]).toBe("osnova settle: 1 symbol changes; 2 dependents; 0 frontier items omitted");
+    expect(text).toContain("files changed: 1; importers of changed files: 2 (not listed; module-level edits attribute to no symbol)");
+    expect(text).not.toContain("w.ts");
+  });
+
+  it("still lists the importers of a changed file when no symbol-level change was found", () => {
+    const imports = (from: string): OsnovaEdge => ({ kind: "imports", fromFile: from, fromSymbol: from, toName: "./k", toFile: "k.ts", line: 1,
+      evidence: { source: "syntax", resolution: { status: "resolved", method: "import-path" } } });
+    const other = card("w.ts", ["useW"]);
+    const base = index([boxCard(["a", "b"]), users, other], [...edges("a"), imports("u.ts"), imports("w.ts")]);
+    const grown = { ...boxCard(["a", "b"]), text: `${boxCard(["a", "b"]).text}const X = 1;\n`, lineCount: 10 };
+    const next = index([{ ...grown, hash: createHash("sha256").update(grown.text).digest("hex") }, users, other], [...edges("a"), imports("u.ts"), imports("w.ts")]);
+    const diff = "--- a/k.ts\n+++ b/k.ts\n@@ -8,1 +8,2 @@\n }\n+const X = 1;\n";
+    const result = impact(base, next, { diff, maxDepth: 1 });
+    expect(result.changes).toEqual([]);
+    expect(result.dependents.map((hit) => [hit.snapshot, hit.symbol?.qualifiedName ?? hit.file])).toEqual([["base", "u.ts"], ["base", "w.ts"], ["current", "u.ts"], ["current", "w.ts"]]);
+    expect(result.omitted.fileImporters).toBe(0);
+    expect(formatImpact(result)).toContain("files changed: 1; importers of changed files: 0 (not listed; module-level edits attribute to no symbol)");
+  });
+
+  it("keeps the file seed when a symbol rename and a module-level edit share one file", () => {
+    const imports = (from: string): OsnovaEdge => ({ kind: "imports", fromFile: from, fromSymbol: from, toName: "./k", toFile: "k.ts", line: 1,
+      evidence: { source: "syntax", resolution: { status: "resolved", method: "import-path" } } });
+    const other = card("w.ts", ["useW"]);
+    const base = index([boxCard(["a", "b"]), users, other], [...edges("a"), imports("u.ts"), imports("w.ts")]);
+    const grown = { ...boxCard(["c", "b"]), text: `${boxCard(["c", "b"]).text}const X = 1;\n`, lineCount: 10 };
+    const next = index([{ ...grown, hash: createHash("sha256").update(grown.text).digest("hex") }, users, other], [...edges("c"), imports("u.ts"), imports("w.ts")]);
+    const diff = "--- a/k.ts\n+++ b/k.ts\n@@ -1,5 +1,5 @@\n class Box {\n-  a() {\n+  c() {\n     return 1;\n   }\n   b() {\n@@ -8,1 +8,2 @@\n }\n+const X = 1;\n";
+    const result = impact(base, next, { diff, maxDepth: 1 });
+    expect(result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName}`)).toEqual(["renamed: k.ts#Box.a -> k.ts#Box.c"]);
+    expect(result.dependents.map((hit) => [hit.snapshot, hit.symbol?.qualifiedName ?? hit.file])).toEqual([["base", "u.ts"], ["base", "w.ts"], ["base", "u.ts#useA"], ["current", "u.ts"], ["current", "w.ts"], ["current", "u.ts#useA"]]);
+    expect(result.omitted.fileImporters).toBe(0);
+  });
 });
 
 describe("footing seeds", () => {

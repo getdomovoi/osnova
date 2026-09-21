@@ -56,7 +56,7 @@ export interface ImpactResult {
   readonly changes: readonly SymbolChange[];
   readonly files: readonly { before: SourceReceipt | null; after: SourceReceipt | null }[];
   readonly dependents: readonly ImpactDependent[];
-  readonly omitted: { readonly dependentFrontier: number };
+  readonly omitted: { readonly dependentFrontier: number; readonly fileImporters: number };
   readonly uncertainty: { readonly unresolvedEdges: number; readonly notes: readonly string[] };
 }
 
@@ -282,6 +282,23 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   }
   const dependents: ImpactDependent[] = [];
   let dependentFrontier = 0;
+  const unlistedImporters = new Set<string>();
+  const fullyAttributed = (index: OsnovaIndex, file: string, side: "base" | "current"): boolean => {
+    if (diffs === null) return false;
+    const card = index.files.get(file);
+    if (card === undefined) return false;
+    const text = card.text.split("\n");
+    let mentioned = false;
+    for (const diff of diffs) {
+      if ((side === "base" ? diff.before : diff.after) !== file) continue;
+      mentioned = true;
+      for (const line of side === "base" ? diff.oldLines : diff.newLines) {
+        if ((text[line - 1] ?? "").trim() === "") continue;
+        if (innermostSymbolAt(card.symbols, line) === undefined) return false;
+      }
+    }
+    return mentioned;
+  };
   const snapshots = sameIndex ? [["current", current, afterReceipt]] as const
     : [["base", base, beforeReceipt], ["current", current, afterReceipt]] as const;
   for (const [snapshot, index, receipt] of snapshots) {
@@ -290,9 +307,13 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
       const item = snapshot === "base" ? change.before : change.after;
       if (item !== null) seeds.add(item.symbol.qualifiedName);
     }
+    const importerOnlyFiles = new Set<string>();
     for (const file of files) {
       const item = snapshot === "base" ? file.before : file.after;
-      if (item !== null) seeds.add(item.file);
+      if (item === null) continue;
+      const inPlace = file.before !== null && file.after !== null && file.before.file === file.after.file;
+      if (inPlace && fullyAttributed(base, item.file, "base") && fullyAttributed(current, item.file, "current")) importerOnlyFiles.add(item.file);
+      else seeds.add(item.file);
     }
     const inbound = new Map<string, RelationshipEvidence[]>();
     for (const edge of index.edges) {
@@ -316,8 +337,15 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
         queue.push({ node, path });
       }
     }
+    for (const file of importerOnlyFiles) {
+      for (const evidence of inbound.get(file) ?? []) {
+        const node = evidence.edge.fromSymbol || evidence.edge.fromFile;
+        if (!visited.has(node)) unlistedImporters.add(node);
+      }
+    }
   }
-  return { base: beforeReceipt, current: afterReceipt, changes, files, dependents, omitted: { dependentFrontier },
+  for (const dependent of dependents) unlistedImporters.delete(dependent.symbol?.qualifiedName ?? dependent.file);
+  return { base: beforeReceipt, current: afterReceipt, changes, files, dependents, omitted: { dependentFrontier, fileImporters: unlistedImporters.size },
     uncertainty: { unresolvedEdges: (sameIndex ? [current] : [base, current]).reduce((sum, index) => sum + index.edges.filter((edge) =>
       relationshipEvidence(index, edge, index === base ? beforeReceipt : afterReceipt) === null).length, 0),
     notes: ["indexed-graph-only", ...(sameIndex ? ["base-snapshot-is-current-index", "deleted-symbols-not-visible"] : []), "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",
