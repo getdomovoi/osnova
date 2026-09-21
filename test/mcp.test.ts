@@ -251,8 +251,12 @@ describe("mcp stdio server", () => {
     const client = await connect();
     try {
       const bySymbol = await callTool(client, "osnova_tests", { symbols: ["shout"] });
-      expect(bySymbol).toMatch(/^osnova generation [a-f0-9]{16}\nosnova tests: 1 symbols, 1 test files listed\n/);
-      expect(bySymbol).toContain("function src/loud.ts#shout src/loud.ts:1: 1 test files");
+      expect(bySymbol).toMatch(/^osnova generation [a-f0-9]{16}\nosnova tests: 1 symbols; 1 test files with a resolved edge; 0 import the file only\n/);
+      expect(bySymbol).toContain("function src/loud.ts#shout src/loud.ts:1: 1 test files with a resolved edge; 0 import the file only");
+      expect(bySymbol).toContain("resolved edge (calls or references the symbol):\n- test/loud.test.ts");
+      const greetOnly = await callTool(client, "osnova_tests", { symbols: ["greet"], includeImportOnly: false });
+      expect(greetOnly).toContain("import-only files excluded");
+      expect(greetOnly).not.toContain("loud.test.ts");
       expect(bySymbol).toContain("- test/loud.test.ts (resolved edge): test/loud.test.ts:2 calls import-binding");
       expect(bySymbol).not.toContain("greet.test.ts");
       expect(bySymbol).toContain("No indexed test is not proof of no test");
@@ -262,7 +266,7 @@ describe("mcp stdio server", () => {
       expect(byFile).toContain("imports:\n- src/greet.ts at test/greet.test.ts:1");
       const again = await callTool(client, "osnova_tests", { symbols: ["shout"] });
       expect(again).toBe(bySymbol);
-      for (const args of [{}, { symbols: ["shout"], file: "test/loud.test.ts" }, { symbols: [] }, { file: "test/none.test.ts" }, { symbols: ["shout"], limit: "2" }]) {
+      for (const args of [{}, { symbols: ["shout"], file: "test/loud.test.ts" }, { symbols: [] }, { file: "test/none.test.ts" }, { symbols: ["shout"], limit: "2" }, { symbols: ["shout"], includeImportOnly: "no" }]) {
         const rejected = await client.callTool({ name: "osnova_tests", arguments: args });
         expect(rejected.isError, JSON.stringify(args)).toBe(true);
       }

@@ -52,7 +52,7 @@ usage:
   osnova settle <--base-ref <ref> | --base-cache <path>> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
-  osnova tests <symbol...> [-n <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova tests <symbol...> [--no-import-only] [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--workspace <path>] [--cache-dir <path>]
@@ -371,14 +371,15 @@ export async function runCli(
     }
     case "tests": {
       const parsed = parseArgs({ args: rest, allowPositionals: true, options: {
-        file: { type: "string" }, limit: { type: "string", short: "n" }, workspace: { type: "string" }, "cache-dir": { type: "string" },
+        file: { type: "string" }, "no-import-only": { type: "boolean" }, limit: { type: "string", short: "n" }, workspace: { type: "string" }, "cache-dir": { type: "string" },
       } });
       const symbols = parsed.positionals.filter((name) => name.length > 0);
       const file = parsed.values.file;
       if ((symbols.length === 0) === (file === undefined)) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
       const limit = numericOption(parsed.values.limit, "limit");
+      const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
+      io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
       return EXIT_OK;
     }
     case "unreferenced": {

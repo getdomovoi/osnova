@@ -19,7 +19,7 @@ import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 import { formatReach } from "./reach.js";
-import type { SymbolsUnderTestResult, TestSite, TestsForResult } from "./tests.js";
+import type { SymbolsUnderTestResult, TestFileEvidence, TestSite, TestsForResult } from "./tests.js";
 import type { UnreferencedResult } from "./unreferenced.js";
 import { entryPointRuleText, unreferencedNotice } from "./unreferenced.js";
 
@@ -676,16 +676,25 @@ function testSiteText(file: string, sites: readonly TestSite[], omitted: number)
   return omitted > 0 ? `${text}; +${omitted} more sites` : text;
 }
 
+const testTierCounts = (resolved: number, importOnly: number, includeImportOnly: boolean): string =>
+  `${resolved} test files with a resolved edge; ${includeImportOnly ? `${importOnly} import the file only` : "import-only files excluded"}`;
+
 export function formatTestsFor(result: TestsForResult): string {
-  const total = result.symbols.reduce((sum, item) => sum + item.tests.length, 0);
-  const lines = [`osnova tests: ${result.symbols.length} symbols, ${total} test files listed`];
+  const isResolved = (test: TestFileEvidence): boolean => test.basis === "test-path-and-resolved-edge";
+  const totalResolved = result.symbols.reduce((sum, item) => sum + item.tests.filter(isResolved).length, 0);
+  const totalImportOnly = result.symbols.reduce((sum, item) => sum + item.tests.length, 0) - totalResolved;
+  const lines = [`osnova tests: ${result.symbols.length} symbols; ${testTierCounts(totalResolved, totalImportOnly, result.includeImportOnly)}`];
   for (const item of result.symbols) {
     const { symbol } = item;
-    lines.push(`${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}: ${item.tests.length} test files${item.omittedTests > 0 ? `, ${item.omittedTests} omitted` : ""}`);
-    for (const test of item.tests) {
-      const basis = test.basis === "test-path-and-resolved-edge" ? "resolved edge" : "imports the file only";
-      lines.push(`- ${test.file} (${basis}): ${testSiteText(test.file, test.sites, test.omittedSites)}`);
-    }
+    const resolved = item.tests.filter(isResolved);
+    const importOnly = item.tests.filter((test) => !isResolved(test));
+    lines.push(`${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}: ${testTierCounts(resolved.length, importOnly.length, result.includeImportOnly)}${item.omittedTests > 0 ? `; ${item.omittedTests} omitted` : ""}`);
+    if (resolved.length === 0) lines.push(`no indexed test file has a resolved call or reference edge to ${symbol.qualifiedName}`);
+    else lines.push("resolved edge (calls or references the symbol):");
+    for (const test of resolved) lines.push(`- ${test.file} (resolved edge): ${testSiteText(test.file, test.sites, test.omittedSites)}`);
+    if (importOnly.length === 0) continue;
+    lines.push("imports the file only (no indexed call or reference to the symbol):");
+    for (const test of importOnly) lines.push(`- ${test.file} (imports the file only): ${testSiteText(test.file, test.sites, test.omittedSites)}`);
   }
   if (result.unknownSymbols.length > 0) lines.push(`unknown symbols: ${result.unknownSymbols.join(", ")}`);
   lines.push(testsNotice, `limitations: ${result.limitations.join(", ")}`);
