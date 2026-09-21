@@ -107,9 +107,10 @@ it("counts omitted edges, not omitted groups, in the bounded footer", () => {
   };
   const text = formatCallersDetailedBounded(many, 2_048);
   expect(text.length).toBeLessThanOrEqual(2_048);
-  const shownGroups = text.split("\n").filter((line) => line.startsWith("d1 calls ")).length;
-  expect(shownGroups).toBeGreaterThan(0);
-  expect(text).toContain(`omitted: ${300 - shownGroups * 3} of 300 confirmed edges; 0 of 0 unresolved evidence items`);
+  const shownGroups = text.split("\n").filter((line) => /^d1 calls caller-\d+\.ts#/.test(line)).length;
+  const foldedEdges = [...text.matchAll(/^d1 calls caller-\d+\.ts: \+\d+ symbols?, (\d+) edges$/gm)].reduce((sum, match) => sum + Number(match[1]), 0);
+  expect(shownGroups + foldedEdges).toBeGreaterThan(0);
+  expect(text).toContain(`omitted: ${300 - shownGroups * 3 - foldedEdges} of 300 confirmed edges; 0 of 0 unresolved evidence items`);
 });
 
 it("keeps the unresolved evidence section one row per edge", () => {
@@ -124,4 +125,85 @@ it("keeps the unresolved evidence section one row per edge", () => {
     "d1 calls unknown1 caller-1.ts:2",
     "  reason: no-matching-symbol",
   ].join("\n"));
+});
+
+function fileHit(file: string, name: string, line: number, via?: readonly { file: string; line: number }[]): CallerEvidenceHit {
+  const base = siteHit(0, line, via);
+  return { ...base, symbol: symbol(name, file), qualifiedName: `${file}#${name}`, file, edge: { ...base.edge, fromFile: file, fromSymbol: `${file}#${name}` } };
+}
+
+it("renders under-budget results without a summary header", () => {
+  const small: CallersDetailedResult = { ...result, hits: [siteHit(1, 7), siteHit(0, 4)], unresolved: [] };
+  const text = formatCallersDetailedBounded(small, 2_048);
+  expect(text).toBe(formatCallersDetailed(small));
+  expect(text).not.toContain("summary");
+  expect(text).not.toContain("via (all)");
+});
+
+it("puts non-test groups before test groups and summarizes sites per directory when the budget overflows", () => {
+  const hits: CallerEvidenceHit[] = [];
+  for (let index = 0; index < 12; index += 1) {
+    for (let line = 1; line <= 20; line += 1) hits.push(fileHit(`a/spec-${index}.test.ts`, "run", line * 4));
+  }
+  for (let index = 0; index < 6; index += 1) hits.push(fileHit(`z/src-${index}.ts`, "use", 5));
+  const text = formatCallersDetailedBounded({ ...result, hits, unresolved: [] }, 1_536);
+  expect(text.length).toBeLessThanOrEqual(1_536);
+  const lines = text.split("\n");
+  const summary = lines.find((line) => line.startsWith("summary"));
+  expect(summary).toBe("summary: z/: 6 sites in 6 files; a/: 240 sites in 12 files");
+  const firstTest = lines.findIndex((line) => line.startsWith("d1 calls a/"));
+  const lastSource = lines.map((line) => line.startsWith("d1 calls z/")).lastIndexOf(true);
+  expect(lastSource).toBeGreaterThanOrEqual(0);
+  expect(lastSource).toBeLessThan(firstTest);
+  expect(text).toContain("omitted: 0 of 246 confirmed edges");
+  expect(text).toMatch(/d1 calls a\/spec-0\.test\.ts#run:4,(\d+,)*\+\d+ more \[import-binding\]/);
+});
+
+it("caps long site lists with +N more and keeps every edge represented", () => {
+  const hits: CallerEvidenceHit[] = [];
+  for (let line = 1; line <= 500; line += 1) hits.push(fileHit("src/wide.ts", "wide", line * 7));
+  for (let index = 0; index < 4; index += 1) hits.push(fileHit(`src/narrow-${index}.ts`, "narrow", 2));
+  const text = formatCallersDetailedBounded({ ...result, hits, unresolved: [] }, 2_048);
+  expect(text.length).toBeLessThanOrEqual(2_048);
+  expect(text).toMatch(/d1 calls src\/wide\.ts#wide:7,14,(\d+,)+\+\d+ more \[import-binding\]/);
+  expect(text).toMatch(/capped: \d+ line numbers per symbol; \d+ sites not listed/);
+  expect(text).toContain("omitted: 0 of 504 confirmed edges");
+  for (let index = 0; index < 4; index += 1) expect(text).toContain(`d1 calls src/narrow-${index}.ts#narrow:2 [import-binding]`);
+});
+
+it("folds groups into file lines when one line per group cannot fit", () => {
+  const hits: CallerEvidenceHit[] = [];
+  for (let index = 0; index < 120; index += 1) hits.push(fileHit(`src/file-${index % 6}.ts`, `symbol${index}`, index + 1), fileHit(`src/file-${index % 6}.ts`, `symbol${index}`, index + 500));
+  const text = formatCallersDetailedBounded({ ...result, hits, unresolved: [] }, 1_024);
+  expect(text.length).toBeLessThanOrEqual(1_024);
+  expect(text).toMatch(/d1 calls src\/file-\d\.ts: \+\d+ symbols, \d+ edges/);
+  const shown = (text.match(/^d1 calls src\/file-\d\.ts#symbol\d+:/gm) ?? []).length;
+  const folded = [...text.matchAll(/: \+(\d+) symbols, (\d+) edges/g)].reduce((sum, match) => sum + Number(match[2]), 0);
+  expect(shown).toBeGreaterThan(0);
+  expect(folded).toBeGreaterThan(0);
+  expect(text).toContain(`omitted: ${240 - shown * 2 - folded} of 240 confirmed edges`);
+});
+
+it("hoists a via shared by every re-exporting group once under the header", () => {
+  const hop = { file: "barrel.ts", line: 1 };
+  const hits: CallerEvidenceHit[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    for (let line = 1; line <= 8; line += 1) hits.push(fileHit(`src/mod-${index}.ts`, "use", line * 3, [hop]));
+  }
+  hits.push(fileHit("src/direct.ts", "direct", 4));
+  const text = formatCallersDetailedBounded({ ...result, hits, unresolved: [] }, 2_048);
+  expect(text.length).toBeLessThanOrEqual(2_048);
+  expect(text.match(/barrel\.ts:1/g)).toHaveLength(1);
+  expect(text).toContain("via (all): barrel.ts:1 target -> target.ts (export target)");
+  expect(text.indexOf("via (all)")).toBeLessThan(text.indexOf("d1 calls "));
+  expect(text).toContain("omitted: 0 of 241 confirmed edges");
+});
+
+it("does not hoist a via when another group carries a different hop", () => {
+  const hits: CallerEvidenceHit[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    for (let line = 1; line <= 8; line += 1) hits.push(fileHit(`src/mod-${index}.ts`, "use", line * 3, [{ file: index === 0 ? "other.ts" : "barrel.ts", line: 1 }]));
+  }
+  const text = formatCallersDetailedBounded({ ...result, hits, unresolved: [] }, 2_048);
+  expect(text).not.toContain("via (all)");
 });

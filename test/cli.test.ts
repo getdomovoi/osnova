@@ -86,6 +86,10 @@ describe("cli", () => {
     expect(await runCli(["warp", "one", "--workspace", workspace, ...cacheArgs], callersOut.io)).toBe(0);
     expect(callersOut.lines.join("\n")).toContain("src/two.ts#two");
 
+    const fullOut = capture();
+    expect(await runCli(["warp", "one", "--full", "--workspace", workspace, ...cacheArgs], fullOut.io)).toBe(0);
+    expect(fullOut.lines.join("\n")).toBe(callersOut.lines.join("\n"));
+
     const mapOut = capture();
     expect(await runCli(["groundwork", "--workspace", workspace, ...cacheArgs], mapOut.io)).toBe(0);
     expect(mapOut.lines.join("\n")).toContain("files 3");
