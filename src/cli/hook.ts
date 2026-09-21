@@ -1,9 +1,10 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import path from "node:path";
-import os from "node:os";
 import { promises as fs } from "node:fs";
 import { loadIndex, refreshWorkspace } from "../api.js";
+import { resolveCacheDir } from "../cache/cache.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { boundText } from "../query/budget.js";
@@ -17,12 +18,17 @@ import type { CliIo } from "./cli.js";
 // All read the hook payload from stdin, never touch repository files, and exit 0 on every failure
 // so a hook can never block a prompt. A repository with no cache yet is indexed in the background
 // from the session hook; the prompt and stop hooks answer only from an existing cache.
+// The stop hook continues the turn at most once per diff per session, and only when the dependents
+// outnumber OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1); otherwise it warns the user without continuing.
+// Its once-per-diff and once-per-nudge state lives under the cache directory, the one place the
+// hooks may write.
 export type HookEvent = "prompt" | "session" | "stop" | "tool" | "install-preview";
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
 const minimumPromptLength = 12;
 const maximumDiffBytes = 4 * 1024 * 1024;
+const defaultSettleContinueThreshold = 1;
 const execFileAsync = promisify(execFile);
 
 export function hookFileDescription(client: HookClient): string {
@@ -61,7 +67,7 @@ export function parseHookInput(raw: string): HookInput {
     prompt: typeof record.prompt === "string" ? record.prompt : undefined,
     cwd: typeof record.cwd === "string" ? record.cwd : undefined,
     stopHookActive: typeof record.stop_hook_active === "boolean" ? record.stop_hook_active : undefined,
-    sessionId: typeof record.session_id === "string" ? record.session_id : undefined,
+    sessionId: typeof record.session_id === "string" ? record.session_id : typeof record.conversation_id === "string" ? record.conversation_id : undefined,
     toolName: typeof record.tool_name === "string" ? record.tool_name : undefined,
     toolInput: record.tool_input !== null && typeof record.tool_input === "object" && !Array.isArray(record.tool_input) ? (record.tool_input as Record<string, unknown>) : undefined,
   };
@@ -97,7 +103,7 @@ export type HookClient = "claude-code" | "codex" | "cursor";
 export const hookClients: readonly HookClient[] = ["claude-code", "codex", "cursor"];
 
 export interface HookOptions {
-  /** Which harness reads the output: Claude Code takes plain text, Codex takes additionalContext JSON, Cursor takes followup_message on stop. */
+  /** Which harness reads the output: Claude Code takes plain text, Codex takes additionalContext JSON, Cursor takes followup_message on stop. On stop, Claude Code continues through hookSpecificOutput.additionalContext, Codex through decision block; both warn through systemMessage otherwise. */
   readonly client?: HookClient | undefined;
   readonly workspace?: string | undefined;
   readonly cacheDir?: string | undefined;
@@ -124,9 +130,22 @@ function emitContext(io: CliIo, client: HookClient, event: "prompt" | "session",
   io.stdout(text);
 }
 
-function emitStop(io: CliIo, client: HookClient, reason: string): void {
-  if (client === "cursor") { io.stdout(JSON.stringify({ followup_message: reason })); return; }
-  io.stdout(JSON.stringify({ decision: "block", reason }));
+// Stop output per harness. Continuing the turn: Claude Code honors hookSpecificOutput.additionalContext on
+// Stop as non-error feedback that continues the conversation; Codex honors only decision "block" with a reason;
+// Cursor auto-submits followup_message as the next user message. Not continuing: systemMessage is a user-facing
+// warning for Claude Code and Codex; Cursor has no such field, so it gets nothing.
+function emitStop(io: CliIo, client: HookClient, text: string, continues: boolean): void {
+  if (client === "cursor") { if (continues) io.stdout(JSON.stringify({ followup_message: text })); return; }
+  if (!continues) { io.stdout(JSON.stringify({ systemMessage: text })); return; }
+  if (client === "codex") { io.stdout(JSON.stringify({ decision: "block", reason: text })); return; }
+  io.stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: "Stop", additionalContext: text } }));
+}
+
+function settleContinueThreshold(): number {
+  const raw = process.env.OSNOVA_HOOK_SETTLE_BLOCK_AT;
+  if (raw === undefined || raw.trim().length === 0) return defaultSettleContinueThreshold;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : defaultSettleContinueThreshold;
 }
 
 export async function runHook(event: HookEvent, raw: string, io: CliIo, options: HookOptions): Promise<void> {
@@ -134,6 +153,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
   if (event === "install-preview") {
     io.stdout([
       `osnova hook preview for ${client}: add these hooks to ${hookFileDescription(client)}, or run osnova setup --apply --hooks --client ${client}.`,
+      `The stop hook continues the turn at most once per diff per session${client === "cursor" ? "" : ", and only when more than OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1) indexed dependents lie outside the change; otherwise it warns through systemMessage"}; its state lives under the osnova cache directory.`,
       hookSettingsSnippet(options.command ?? ["osnova"], client, options.nudge === true),
     ].join("\n"));
     return;
@@ -173,7 +193,12 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       const result = impact(index, index, { diff, maxDepth: 1 });
       const dependents = result.dependents.filter((dependent) => dependent.snapshot === "current");
       if (dependents.length === 0) return;
-      emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits));
+      const digest = createHash("sha256").update(diff).digest("hex").slice(0, 16);
+      const stateFile = input.sessionId === undefined ? undefined : hookStateFile(options.cacheDir, input.sessionId);
+      const state = stateFile === undefined ? emptyHookState : await readHookState(stateFile);
+      const continues = !state.settled.includes(digest) && (client === "cursor" || dependents.length > settleContinueThreshold());
+      if (continues && stateFile !== undefined) await writeHookState(stateFile, { ...state, settled: [...state.settled, digest] });
+      emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits), continues);
     } catch (error) { fail(error); }
     return;
   }
@@ -181,13 +206,15 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     const name = grepName(input.toolName, input.toolInput);
     if (name === null || input.sessionId === undefined) return;
     try {
-      if (await nudgedBefore(input.sessionId, name)) return;
+      const stateFile = hookStateFile(options.cacheDir, input.sessionId);
+      const state = await readHookState(stateFile);
+      if (state.nudges.includes(name)) return;
       const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
       if (cached === undefined) return;
       const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
       const text = formatGrepNudge(index, name);
       if (text === null) return;
-      await rememberNudge(input.sessionId, name);
+      await writeHookState(stateFile, { ...state, nudges: [...state.nudges, name] });
       io.stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } }));
     } catch (error) { fail(error); }
     return;
@@ -341,16 +368,25 @@ export function formatGrepNudge(index: OsnovaIndex, name: string): string | null
   return `[osnova] ${target} is indexed: ${resolved} resolved call sites in ${files.size} files; osnova_warp ${symbols.length === 1 ? symbols[0]!.qualifiedName : name} lists them with exact file:line${unresolved > 0 ? ` and ${unresolved} unresolved same-name calls` : ""}.`;
 }
 
-function nudgeFile(sessionId: string): string {
-  return path.join(os.tmpdir(), "osnova-hook-nudges", `${sessionId.replace(/[^\w.-]/g, "_")}.json`);
+// Per-session hook state, one file per session under the cache directory: the grep names already nudged
+// and the diff digests the stop hook already continued on. A missing or unreadable file is an empty state.
+interface HookState {
+  readonly nudges: readonly string[];
+  readonly settled: readonly string[];
 }
-async function nudgedBefore(sessionId: string, name: string): Promise<boolean> {
-  try { return (JSON.parse(await fs.readFile(nudgeFile(sessionId), "utf8")) as string[]).includes(name); } catch { return false; }
+const emptyHookState: HookState = { nudges: [], settled: [] };
+
+function hookStateFile(cacheDir: string | undefined, sessionId: string): string {
+  return path.join(resolveCacheDir(cacheDir), "hook-state", `${sessionId.replace(/[^\w.-]/g, "_")}.json`);
 }
-async function rememberNudge(sessionId: string, name: string): Promise<void> {
-  const file = nudgeFile(sessionId);
-  let names: string[] = [];
-  try { names = JSON.parse(await fs.readFile(file, "utf8")) as string[]; } catch { /* first nudge of the session */ }
+async function readHookState(file: string): Promise<HookState> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<Record<keyof HookState, unknown>>;
+    const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled) };
+  } catch { return emptyHookState; }
+}
+async function writeHookState(file: string, state: HookState): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify([...new Set([...names, name])]));
+  await fs.writeFile(file, JSON.stringify({ nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)] }));
 }
