@@ -11,6 +11,7 @@ import type {
   CallerEvidenceHit,
   NameMatches,
   OsnovaEdge,
+  EdgeKind,
 } from "../types.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
@@ -213,9 +214,7 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
     lines.push(`${result.target.qualifiedName}: no indexed relationships found`);
   } else {
     lines.push(`${result.target.kind} ${result.target.qualifiedName}: ${result.hits.length} indexed edges`);
-    for (const hit of result.hits) {
-      lines.push(...callerHitLines(hit));
-    }
+    for (const group of callerGroups(result.hits)) lines.push(...callerGroupLines(group));
   }
   lines.push("This does not prove absence of callers or that deletion is safe.");
   if (result.unresolved.length > 0) {
@@ -227,19 +226,109 @@ export function formatCallersDetailed(result: CallersDetailedResult): string {
   return lines.join("\n");
 }
 
-function callerHitLines(hit: CallerEvidenceHit): string[] {
+interface CallerGroup {
+  readonly depth: number;
+  readonly kind: EdgeKind;
+  readonly file: string;
+  readonly label: string;
+  readonly basis: string;
+  readonly definitionLine: number | null;
+  readonly sites: CallerSite[];
+  edges: number;
+}
+
+interface CallerSite {
+  readonly file: string;
+  readonly line: number;
+  readonly detail: string[];
+}
+
+function edgeBasis(hit: CallerEvidenceHit): string {
   const evidence = hit.edge.evidence;
-  const basis = evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
+  return evidence?.source === "syntax" ? evidence.resolution.status === "resolved"
     ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
-  // The source suffix repeats the hit's own location for `in` results, so it is printed only when it differs.
-  const source = hit.file === hit.edge.fromFile && hit.line === hit.edge.line ? "" : `; source ${hit.edge.fromFile}:${hit.edge.line}`;
-  const lines = [`d${hit.depth} ${hit.kind} ${hit.qualifiedName || "<module>"} ${hit.file ?? "?"}:${hit.line ?? 0} [${basis}${source}]`];
+}
+
+function edgeDetail(hit: CallerEvidenceHit): string[] {
+  const evidence = hit.edge.evidence;
+  const lines: string[] = [];
   if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
     if (evidence.resolution.method === "receiver-hint") {
       const receiver = evidence.resolution.receiver;
-      lines.push(`  receiver hint: ${receiver.classSymbol} (${receiver.mode}, ${receiver.basis}); not runtime type proof`);
+      lines.push(`receiver hint: ${receiver.classSymbol} (${receiver.mode}, ${receiver.basis}); not runtime type proof`);
     }
-    for (const hop of evidence.resolution.via ?? []) lines.push(`  via ${hop.file}:${hop.line} ${hop.exportedName} -> ${hop.targetFile} (export ${hop.importedName})`);
+    for (const hop of evidence.resolution.via ?? []) lines.push(`via ${hop.file}:${hop.line} ${hop.exportedName} -> ${hop.targetFile} (export ${hop.importedName})`);
+  }
+  return lines;
+}
+
+function compareGroups(a: CallerGroup, b: CallerGroup): number {
+  return a.depth - b.depth || compareText(a.file, b.file) || compareText(a.label, b.label) || compareText(a.basis, b.basis)
+    || (a.definitionLine ?? 0) - (b.definitionLine ?? 0) || compareSites(a.sites[0], b.sites[0]);
+}
+
+function compareSites(a: CallerSite | undefined, b: CallerSite | undefined): number {
+  if (a === undefined || b === undefined) return 0;
+  return compareText(a.file, b.file) || a.line - b.line;
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function callerGroups(hits: readonly CallerEvidenceHit[]): CallerGroup[] {
+  const groups = new Map<string, CallerGroup>();
+  for (const hit of hits) {
+    const file = hit.file ?? "?";
+    const label = hit.qualifiedName.length > 0
+      ? hit.qualifiedName.startsWith(`${file}#`) ? hit.qualifiedName : `${hit.qualifiedName} ${file}`
+      : `${file}#<module>`;
+    const basis = edgeBasis(hit);
+    const sameSite = hit.file === hit.edge.fromFile && hit.line === hit.edge.line;
+    const definitionLine = sameSite ? null : hit.line ?? 0;
+    const key = [hit.depth, hit.kind, file, label, basis, definitionLine ?? ""].join("\0");
+    const group = groups.get(key) ?? { depth: hit.depth, kind: hit.kind, file, label, basis, definitionLine, sites: [], edges: 0 };
+    const site = { file: sameSite ? file : hit.edge.fromFile, line: sameSite ? hit.line ?? 0 : hit.edge.line, detail: edgeDetail(hit) };
+    const existing = group.sites.find((candidate) => candidate.file === site.file && candidate.line === site.line && candidate.detail.join("\n") === site.detail.join("\n"));
+    if (existing === undefined) group.sites.push(site);
+    group.edges += 1;
+    groups.set(key, group);
+  }
+  const sorted = [...groups.values()];
+  for (const group of sorted) group.sites.sort(compareSites);
+  sorted.sort(compareGroups);
+  return sorted;
+}
+
+function siteList(sites: readonly CallerSite[], file: string): string {
+  const byFile = new Map<string, number[]>();
+  for (const site of sites) {
+    const lines = byFile.get(site.file) ?? [];
+    if (!lines.includes(site.line)) lines.push(site.line);
+    byFile.set(site.file, lines);
+  }
+  const single = byFile.get(file);
+  if (byFile.size === 1 && single !== undefined) return single.join(",");
+  return [...byFile].map(([siteFile, lines]) => `${siteFile}:${lines.join(",")}`).join("; ");
+}
+
+function callerGroupLines(group: CallerGroup): string[] {
+  const header = group.definitionLine === null
+    ? `d${group.depth} ${group.kind} ${group.label}:${siteList(group.sites, group.file)} [${group.basis}]`
+    : `d${group.depth} ${group.kind} ${group.label}:${group.definitionLine} [${group.basis}; source ${siteList(group.sites, "")}]`;
+  const details = new Map<string, CallerSite[]>();
+  for (const site of group.sites) {
+    const key = site.detail.join("\n");
+    details.set(key, [...(details.get(key) ?? []), site]);
+  }
+  const lines = [header];
+  if (details.size === 1) {
+    for (const line of group.sites[0]?.detail ?? []) lines.push(`  ${line}`);
+    return lines;
+  }
+  for (const [, sites] of details) {
+    const where = siteList(sites, group.file);
+    for (const line of sites[0]?.detail ?? []) lines.push(`  ${where}: ${line}`);
   }
   return lines;
 }
@@ -280,11 +369,12 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
     "indexed-graph results; relationships use heuristic resolution, not type inference",
     "This does not prove absence of callers or that deletion is safe.",
   ];
-  const hitBlocks = result.hits.map(callerHitLines);
+  const hitBlocks = callerGroups(result.hits).map((group) => ({ lines: callerGroupLines(group), edges: group.edges }));
   const unresolvedBlocks = result.unresolved.map(({ edge, depth, nameMatches }) => unresolvedCallerLines(edge, depth, nameMatches));
   const selectedHits: string[][] = [];
   const selectedUnresolved: string[][] = [];
-  const footer = (): string => `omitted: ${hitBlocks.length - selectedHits.length} of ${hitBlocks.length} confirmed relationships; ${unresolvedBlocks.length - selectedUnresolved.length} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
+  let shownEdges = 0;
+  const footer = (): string => `omitted: ${result.hits.length - shownEdges} of ${result.hits.length} confirmed edges; ${unresolvedBlocks.length - selectedUnresolved.length} of ${unresolvedBlocks.length} unresolved evidence items. Use callersDetailed API for complete structured results.`;
   const targetSuffix = `: ${result.hits.length} indexed edges`;
   const fixedUnits = [...base, footer()].join("\n").length + targetSuffix.length + 2;
   const target = `${result.target.kind} ${compactField(result.target.qualifiedName, Math.max(1, maxCodeUnits - fixedUnits - result.target.kind.length - 1))}${targetSuffix}`;
@@ -295,7 +385,11 @@ export function formatCallersDetailedBounded(result: CallersDetailedResult, maxC
     ...(selectedUnresolved.length > 0 || unresolved ? [unresolvedHeader] : []),
     ...selectedUnresolved.flat(), ...block, footer(),
   ].join("\n").length <= maxCodeUnits;
-  for (const block of hitBlocks) if (fits(block, false)) selectedHits.push(block);
+  for (const block of hitBlocks) {
+    if (!fits(block.lines, false)) continue;
+    selectedHits.push(block.lines);
+    shownEdges += block.edges;
+  }
   for (const block of unresolvedBlocks) if (fits(block, true)) selectedUnresolved.push(block);
   return [
     ...fixed, ...selectedHits.flat(),

@@ -28,7 +28,7 @@ it("prioritizes confirmed relationships and reports exact caller omissions", () 
   expect(text.length).toBeLessThanOrEqual(2_048);
   expect(text).toContain("function target.ts#target: 100 indexed edges");
   expect(text).toContain("does not prove absence");
-  expect(text).toMatch(/omitted: \d+ of 100 confirmed relationships; 100 of 100 unresolved evidence items/);
+  expect(text).toMatch(/omitted: \d+ of 100 confirmed edges; 100 of 100 unresolved evidence items/);
   expect(text).toContain("Use callersDetailed API for complete structured results");
   expect(text).not.toContain("[output truncated:");
   expect(formatCallersDetailedBounded(result, 2_048)).toBe(text);
@@ -61,5 +61,67 @@ it("compacts hostile target names while preserving exact omissions", () => {
   const hostile: CallersDetailedResult = { ...result, target: { ...target, qualifiedName: "x".repeat(5_000) } };
   const text = formatCallersDetailedBounded(hostile, 512);
   expect(text.length).toBeLessThanOrEqual(512);
-  expect(text).toContain("omitted: 100 of 100 confirmed relationships; 100 of 100 unresolved evidence items");
+  expect(text).toContain("omitted: 100 of 100 confirmed edges; 100 of 100 unresolved evidence items");
+});
+
+function siteHit(index: number, line: number, via?: readonly { file: string; line: number }[]): CallerEvidenceHit {
+  const resolution = via === undefined
+    ? { status: "resolved" as const, method: "import-binding" as const }
+    : { status: "resolved" as const, method: "re-export-binding" as const, via: via.map((hop) => ({ ...hop, kind: "named" as const, source: "./target.js", exportedName: "target", targetFile: target.file, importedName: "target" })) };
+  return {
+    symbol: symbol(`caller${index}`, `caller-${index}.ts`), qualifiedName: `caller-${index}.ts#caller${index}`,
+    file: `caller-${index}.ts`, line, kind: "calls", depth: 1, resolved: true,
+    edge: { ...edge(index, true), line, evidence: { source: "syntax", resolution } },
+  };
+}
+
+it("groups edges from one caller into a single line list", () => {
+  const grouped: CallersDetailedResult = { ...result, hits: [siteHit(1, 7), siteHit(0, 4), siteHit(1, 3), siteHit(1, 3)], unresolved: [] };
+  expect(formatCallersDetailed(grouped)).toBe([
+    "indexed-graph results; relationships use heuristic resolution, not type inference",
+    "function target.ts#target: 4 indexed edges",
+    "d1 calls caller-0.ts#caller0:4 [import-binding]",
+    "d1 calls caller-1.ts#caller1:3,7 [import-binding]",
+    "This does not prove absence of callers or that deletion is safe.",
+  ].join("\n"));
+});
+
+it("hoists via hops once per group only when every edge shares them", () => {
+  const hop = { file: "barrel.ts", line: 1 };
+  const shared: CallersDetailedResult = { ...result, hits: [siteHit(2, 5, [hop]), siteHit(2, 9, [hop])], unresolved: [] };
+  const sharedText = formatCallersDetailed(shared);
+  expect(sharedText).toContain("d1 calls caller-2.ts#caller2:5,9 [re-export-binding]\n  via barrel.ts:1 target -> target.ts (export target)");
+  expect(sharedText.match(/via barrel/g)).toHaveLength(1);
+  const mixed: CallersDetailedResult = { ...result, hits: [siteHit(2, 5, [hop]), siteHit(2, 9, [{ file: "other.ts", line: 2 }]), siteHit(2, 12, [hop])], unresolved: [] };
+  expect(formatCallersDetailed(mixed)).toContain([
+    "d1 calls caller-2.ts#caller2:5,9,12 [re-export-binding]",
+    "  5,12: via barrel.ts:1 target -> target.ts (export target)",
+    "  9: via other.ts:2 target -> target.ts (export target)",
+  ].join("\n"));
+});
+
+it("counts omitted edges, not omitted groups, in the bounded footer", () => {
+  const many: CallersDetailedResult = {
+    ...result, unresolved: [],
+    hits: Array.from({ length: 300 }, (_, index) => siteHit(index % 100, index + 1)),
+  };
+  const text = formatCallersDetailedBounded(many, 2_048);
+  expect(text.length).toBeLessThanOrEqual(2_048);
+  const shownGroups = text.split("\n").filter((line) => line.startsWith("d1 calls ")).length;
+  expect(shownGroups).toBeGreaterThan(0);
+  expect(text).toContain(`omitted: ${300 - shownGroups * 3} of 300 confirmed edges; 0 of 0 unresolved evidence items`);
+});
+
+it("keeps the unresolved evidence section one row per edge", () => {
+  const unresolvedOnly: CallersDetailedResult = { ...result, hits: [], unresolved: unresolved.slice(0, 2) };
+  expect(formatCallersDetailed(unresolvedOnly)).toBe([
+    "indexed-graph results; relationships use heuristic resolution, not type inference",
+    "target.ts#target: no indexed relationships found",
+    "This does not prove absence of callers or that deletion is safe.",
+    "unresolved evidence (2); not confirmed relationships",
+    "d1 calls unknown0 caller-0.ts:1",
+    "  reason: no-matching-symbol",
+    "d1 calls unknown1 caller-1.ts:2",
+    "  reason: no-matching-symbol",
+  ].join("\n"));
 });
