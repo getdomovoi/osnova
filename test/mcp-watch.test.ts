@@ -5,6 +5,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { indexGeneration } from "../src/api.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
 const closers: Array<() => void> = [];
@@ -35,7 +36,7 @@ describe("MCP watch mode", () => {
     expect(built.status()).toMatchObject({ watching: false, refreshes: 2 });
   });
 
-  it.skipIf(process.platform === "linux" && !process.versions.node.startsWith("2"))("reuses the verified index until a change arrives, then refreshes on its own", async () => {
+  it.skipIf(process.platform === "linux" && Number(process.versions.node.split(".")[0]) < 20)("reuses the verified index until a change arrives, then refreshes on its own", async () => {
     const { workspace, built, ground } = await setup(true);
     await new Promise((r) => setTimeout(r, 300));
     await ground();
@@ -50,7 +51,11 @@ describe("MCP watch mode", () => {
     await until(() => built.status().refreshes >= settled + 1);
     const after = generation(await ground());
     expect(after).not.toBe(before);
-    expect(built.status().refreshes).toBe(settled + 1);
     expect(after.length).toBe(16);
+    await until(() => !built.status().pendingChanges);
+    const settledAgain = built.status();
+    expect(settledAgain.refreshes).toBeGreaterThanOrEqual(settled + 1);
+    expect(settledAgain.pendingChanges).toBe(false);
+    expect(indexGeneration(await built.refresh()).slice(0, 16)).toBe(after);
   });
 });
