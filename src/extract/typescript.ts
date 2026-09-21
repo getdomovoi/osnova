@@ -99,6 +99,7 @@ function handleVariableDeclaration(node: Node, ex: TsExtractor): void {
 function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node) => void): void {
   ex.out.addDef(name, "class", node, undefined, undefined, ex.bindings.heritage(node), ex.bindings.ownFields(node), undefined, undefined, ex.bindings.fieldTypes(node), undefined, undefined, ex.bindings.elementTypes(node), undefined, ex.bindings.valueTypes(node));
   ex.pushFrame(name);
+  for (const base of ex.bindings.heritageRefs(node)) ex.out.addEdge("extends", base.name, base.node, base.binding);
   for (const child of childrenOf(node)) {
     if (child.type === "class_body" || child.type === "declaration_list") {
       for (const member of childrenOf(child)) {
@@ -182,6 +183,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
             }
             ex.out.addDef(name, "interface", node, undefined, undefined, ex.bindings.heritage(node), fields, undefined, undefined, ex.bindings.fieldTypes(node), undefined, undefined, ex.bindings.elementTypes(node), undefined, ex.bindings.valueTypes(node));
             ex.pushFrame(name);
+            for (const base of ex.bindings.heritageRefs(node)) ex.out.addEdge("extends", base.name, base.node, base.binding);
             for (const member of methods) ex.out.addDef(member.childForFieldName("name")!.text, "method", member, undefined, "instance", undefined, undefined, ex.bindings.returns(member), undefined, undefined, undefined, ex.bindings.elements(member), undefined, ex.bindings.values(member));
             ex.popFrame();
           }

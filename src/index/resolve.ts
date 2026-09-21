@@ -9,6 +9,8 @@ import { TsConfigs, probeNodeFile } from "./tsconfig.js";
 const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
 const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
 const VALUE_REFERENCE_KINDS: ReadonlySet<string> = new Set(["function", "method", "class"]);
+// A declared base is a type, never a value: a same-named function or constant is not the base.
+const HERITAGE_KINDS: ReadonlySet<string> = new Set(["class", "interface", "struct", "trait"]);
 // Languages whose receiver hints name a type without an import binding; a type not declared in the
 // file may still be the single declaration of that name in the same language family.
 const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
@@ -862,6 +864,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           }
         }
         if (raw.kind === "references") candidates = candidates.filter((symbol) => VALUE_REFERENCE_KINDS.has(symbol.kind));
+        if (raw.kind === "extends") candidates = candidates.filter((symbol) => HERITAGE_KINDS.has(symbol.kind));
         const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
         const resolved = names.length === 1 ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };

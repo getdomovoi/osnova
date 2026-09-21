@@ -305,11 +305,18 @@ function reassignsIn(index: ReassignIndex, body: Node, name: string, except?: nu
   return false;
 }
 
+export interface HeritageRef {
+  readonly name: string;
+  readonly node: Node;
+  readonly binding: EdgeBinding;
+}
+
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
   boundValue: (name: string, site: Node) => SymbolBinding | undefined;
   aliasCallee: (node: Node) => Callee | undefined;
   heritage: (node: Node) => SymbolBinding[];
+  heritageRefs: (node: Node) => HeritageRef[];
   returns: (node: Node) => ReturnBinding | undefined;
   ownFields: (node: Node) => string[];
   unwrapped: (node: Node) => ReturnBinding | undefined;
@@ -1282,6 +1289,36 @@ export function collectBindings(root: Node, python: boolean): {
     const binding = lookup(name, site);
     return binding?.kind === "local" || binding?.kind === "import" ? binding : undefined;
   };
+  // The declared bases of a class or interface, in source order, each with the node that names it.
+  // Python lists every base in the superclass list; TypeScript separates an extends clause from an
+  // implements clause, and only the extends clause carries members to an inheriting receiver.
+  const heritageItems = (node: Node): { name: string; node: Node; relation: "extends" | "implements" }[] => {
+    const out: { name: string; node: Node; relation: "extends" | "implements" }[] = [];
+    if (python) {
+      // Without a superclass list there are no bases; the class node itself holds its own name.
+      const superclasses = node.childForFieldName("superclasses");
+      for (const arg of superclasses === null ? [] : childrenOf(superclasses)) {
+        // A subscripted base (`Base[int]`, `Protocol[T]`) is still that base.
+        const base = arg.type === "subscript" ? arg.childForFieldName("value") : arg;
+        if (base !== null && (base.type === "identifier" || base.type === "attribute")) out.push({ name: base.text, node: base, relation: "extends" });
+      }
+      return out;
+    }
+    const container = node.type === "class_declaration" || node.type === "abstract_class_declaration" ? childOfType(node, "class_heritage") ?? node : node;
+    for (const clause of childrenOf(container)) {
+      const relation = clause.type === "extends_clause" || clause.type === "extends_type_clause" ? "extends"
+        : clause.type === "implements_clause" ? "implements" : undefined;
+      if (relation === undefined) continue;
+      for (const item of childrenOf(clause)) {
+        if (["identifier", "member_expression", "type_identifier", "nested_type_identifier"].includes(item.type)) out.push({ name: item.text, node: item, relation });
+        else if (item.type === "generic_type") {
+          const base = childrenOf(item)[0];
+          if (base !== undefined && ["type_identifier", "nested_type_identifier"].includes(base.type)) out.push({ name: base.text, node: base, relation });
+        }
+      }
+    }
+    return out;
+  };
   return {
     at,
     boundValue,
@@ -1289,23 +1326,22 @@ export function collectBindings(root: Node, python: boolean): {
     returns,
     heritage: (node) => {
       const out: SymbolBinding[] = [];
-      const push = (text: string | undefined) => { if (text === undefined) return; const owner = ownerFor(text, node); if (owner !== undefined && !out.some((item) => canonical(item) === canonical(owner))) out.push(owner); };
-      if (python) {
-        for (const arg of childrenOf(node.childForFieldName("superclasses") ?? node)) {
-          if (arg.type === "identifier" || arg.type === "attribute") push(arg.text);
-        }
-        return out;
-      }
-      for (const clause of childrenOf(node.type === "class_declaration" || node.type === "abstract_class_declaration" ? childOfType(node, "class_heritage") ?? node : node)) {
-        if (clause.type === "extends_clause" || clause.type === "extends_type_clause") {
-          for (const item of childrenOf(clause)) {
-            if (["identifier", "member_expression", "type_identifier", "nested_type_identifier"].includes(item.type)) push(item.text);
-            if (item.type === "generic_type") { const base = childrenOf(item)[0]; if (base !== undefined && ["type_identifier", "nested_type_identifier"].includes(base.type)) push(base.text); }
-          }
-        }
+      for (const item of heritageItems(node)) {
+        if (item.relation !== "extends") continue;
+        const owner = ownerFor(item.name, node);
+        if (owner !== undefined && !out.some((entry) => canonical(entry) === canonical(owner))) out.push(owner);
       }
       return out;
     },
+    // A base name with no binding in the file is unbound, exactly as an unbound call target is:
+    // ownerFor would invent a local binding for it, which would read as a missing symbol instead.
+    heritageRefs: (node) => heritageItems(node).map((item) => {
+      const head = item.name.split(".")[0]!;
+      const bound = lookup(head, node) ?? typeLookup(head, node);
+      const binding: EdgeBinding = bound === undefined ? { kind: "blocked", reason: "unbound" }
+        : ownerFor(item.name, node) ?? { kind: "blocked", reason: "unsupported" };
+      return { name: item.name, node: item.node, binding };
+    }),
     unwrapped,
     elements: (node) => returnedContents(node).element,
     values: (node) => returnedContents(node).value,

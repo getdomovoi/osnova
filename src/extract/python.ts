@@ -61,16 +61,19 @@ export const pythonAdapter: LanguageAdapter = {
             for (const deco of decos) {
               const inner = childrenOf(deco)[0];
               if (inner === undefined) continue;
+              if (inner.type === "call") {
+                const target = callTarget(inner);
+                if (target !== null) out.addEdge("calls", target, inner, bindings.at(inner.childForFieldName("function"), inner));
+                for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
+                continue;
+              }
               const name =
                 inner.type === "identifier"
                   ? inner.text
-                  : inner.type === "call"
-                    ? callTarget(inner)
-                    : inner.type === "attribute"
-                      ? (inner.childForFieldName("attribute")?.text ?? null)
-                      : null;
+                  : inner.type === "attribute"
+                    ? (inner.childForFieldName("attribute")?.text ?? null)
+                    : null;
               if (name !== null && name.length > 0) out.addEdge("references", name, deco);
-              if (inner.type === "call") for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
             }
           }
           return;
@@ -96,6 +99,7 @@ export const pythonAdapter: LanguageAdapter = {
           if (name !== null && IDENTIFIER_RE.test(name)) {
             out.addDef(name, "class", node, undefined, undefined, bindings.heritage(node), bindings.ownFields(node), undefined, undefined, bindings.fieldTypes(node), undefined, undefined, bindings.elementTypes(node), undefined, bindings.valueTypes(node));
             out.push(name);
+            for (const base of bindings.heritageRefs(node)) out.addEdge("extends", base.name, base.node, base.binding);
             inClassDepth += 1;
             for (const child of childrenOf(node)) visit(child);
             inClassDepth -= 1;

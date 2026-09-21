@@ -56,7 +56,7 @@ const toolDefinitions = [
   {
     name: "osnova_ground",
     description:
-      "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Start here when you do not know where code lives.",
+      "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Use lean=true when you only need where things are: it keeps file:line, kind, definition span and signature and drops the source lines. Start here when you do not know where code lives.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -64,6 +64,7 @@ const toolDefinitions = [
         in: { type: "string", description: "Restrict to a file or directory path (repo-relative)" },
         limit: { type: "number", description: "Maximum hits (default 8)" },
         full: { type: "boolean", description: "Inline whole definitions instead of 8-line excerpts" },
+        lean: { type: "boolean", description: "Drop the inlined source and keep file:line, kind, definition span and signature; overrides full" },
       },
       required: ["question"],
     },
@@ -286,6 +287,9 @@ export function createOsnovaMcpServer(
         case "osnova_ground": {
           const question = requireString(args, "question");
           const askOptions = { in: optionalString(args, "in"), limit: optionalNumber(args, "limit"), full: optionalBoolean(args, "full") };
+          if (optionalBoolean(args, "lean") === true) {
+            return textResult(`${prefix}\n${formatAsk(ask(index, question, { ...askOptions, full: false }), { lean: true })}`);
+          }
           let text = `${prefix}\n${formatAsk(ask(index, question, { ...askOptions, inlineShortDefinitions: mcpInlineShortDefinitions }))}`;
           if (text.length > maximumTextResponseCodeUnits) text = `${prefix}\n${formatAsk(ask(index, question, askOptions))}`;
           return textResult(text);

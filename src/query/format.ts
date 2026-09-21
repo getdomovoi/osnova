@@ -73,14 +73,41 @@ function foldNestedHits(hits: readonly AskHit[]): Map<AskHit, string[]> {
   return folded;
 }
 
-export function formatAsk(result: AskResult): string {
+const leanLineCodeUnits = 200;
+
+function leanLine(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= leanLineCodeUnits) return flat;
+  let end = leanLineCodeUnits - 1;
+  const last = flat.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${flat.slice(0, end)}…`;
+}
+
+export function leanAskBody(hit: AskHit): string {
+  if (hit.symbol !== null) {
+    const span = ` lines ${hit.symbol.span.startLine}-${hit.symbol.span.endLine}`;
+    const signature = leanLine(hit.symbol.signature);
+    return signature.length === 0 ? span : `${span}\n${signature}`;
+  }
+  const lines = hit.excerpt.split("\n");
+  const text = leanLine(lines[hit.line - hit.excerptStartLine] ?? lines[0] ?? "");
+  return text.length === 0 ? "" : `\nL${hit.line}: ${text}`;
+}
+
+export function formatAsk(result: AskResult, options?: { readonly lean?: boolean | undefined }): string {
   if (result.hits.length === 0) return "no matches";
+  const lean = options?.lean ?? false;
   const folded = foldNestedHits(result.hits);
   const blocks: string[] = [];
   for (const hit of result.hits) {
     const also = folded.get(hit);
     if (also !== undefined && also.length === 0) continue;
     const header = `${hit.file}:${hit.line}${hit.symbol !== null ? ` ${hit.symbol.kind} ${hit.symbol.qualifiedName}` : ""}`;
+    if (lean) {
+      blocks.push(`${header}${leanAskBody(hit)}${also !== undefined ? `\nalso: ${also.join(", ")}` : ""}`);
+      continue;
+    }
     const numbered = hit.excerpt
       .split("\n")
       .map((line, i) => `L${hit.excerptStartLine + i}: ${line}`)

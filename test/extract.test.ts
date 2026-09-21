@@ -595,8 +595,9 @@ describe("constructor calls inside decorator arguments", () => {
         "18:Nested->deco.py#outer.Nested",
         "18:Top->deco.py#Top",
         "18:Unbound->unresolved:unbound-global",
+        "18:register->deco.py#register",
       ]);
-      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([18]);
+      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -625,3 +626,208 @@ describe("constructor calls inside decorator arguments", () => {
 function symbolsIn(built: OsnovaIndex, file: string): string[] {
   return (built.files.get(file)?.symbols ?? []).map((s) => `${s.kind}:${s.qualifiedName}`);
 }
+
+describe("inheritance edges", () => {
+  const tsLib = [
+    "export class Base {}",
+    "export interface Reader { read(): string }",
+    "export interface Closer { close(): void }",
+    "export type Alias = { tag: string };",
+    "",
+  ].join("\n");
+
+  const tsMain = [
+    'import { Base, Closer, Reader } from "./lib.js";',
+    "",
+    "export class Leaf extends Base implements Reader, Closer {",
+    "  read(): string { return \"\"; }",
+    "  close(): void {}",
+    "}",
+    "",
+    "export interface Both extends Reader, Closer {}",
+    "",
+    "class Local {}",
+    "class Near extends Local {}",
+    "class Ambient extends Error {}",
+    "",
+  ].join("\n");
+
+  const pyBase = ["class Widget:", "    pass", ""].join("\n");
+
+  const pyApp = [
+    "from base import Widget",
+    "",
+    "class Child(Widget):",
+    "    pass",
+    "",
+    "class Local:",
+    "    pass",
+    "",
+    "class Near(Local):",
+    "    pass",
+    "",
+    "class Deep(Widget, Local):",
+    "    pass",
+    "",
+    "class Gen(Widget[int]):",
+    "    pass",
+    "",
+    "class Outside(Missing):",
+    "    pass",
+    "",
+  ].join("\n");
+
+  const heritage = (built: OsnovaIndex, file: string): string[] =>
+    built.edges.filter((e) => e.fromFile === file && e.kind === "extends")
+      .map((e) => {
+        const resolution = e.evidence?.source === "syntax" ? e.evidence.resolution : undefined;
+        const basis = resolution?.status === "resolved" ? resolution.method : resolution?.status === "unresolved" ? `unresolved:${resolution.reason}` : resolution?.status ?? "?";
+        return `${e.line}:${e.fromSymbol}->${e.toName}=${e.toSymbol ?? "unresolved"}[${basis}]`;
+      });
+
+  it("records typescript extends and implements clauses as extends edges", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-extends-ts-"));
+    try {
+      fs.writeFileSync(path.join(dir, "lib.ts"), tsLib);
+      fs.writeFileSync(path.join(dir, "main.ts"), tsMain);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(heritage(built, "main.ts")).toEqual([
+        "3:main.ts#Leaf->Base=lib.ts#Base[import-binding]",
+        "3:main.ts#Leaf->Closer=lib.ts#Closer[import-binding]",
+        "3:main.ts#Leaf->Reader=lib.ts#Reader[import-binding]",
+        "8:main.ts#Both->Closer=lib.ts#Closer[import-binding]",
+        "8:main.ts#Both->Reader=lib.ts#Reader[import-binding]",
+        "11:main.ts#Near->Local=main.ts#Local[lexical-definition]",
+        "12:main.ts#Ambient->Error=unresolved[unresolved:unbound-global]",
+      ]);
+      expect(built.incoming("lib.ts#Base").map((e) => e.kind)).toContain("extends");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records python base class lists as extends edges", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-extends-py-"));
+    try {
+      fs.writeFileSync(path.join(dir, "base.py"), pyBase);
+      fs.writeFileSync(path.join(dir, "app.py"), pyApp);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(heritage(built, "app.py")).toEqual([
+        "3:app.py#Child->Widget=base.py#Widget[import-binding]",
+        "9:app.py#Near->Local=app.py#Local[lexical-definition]",
+        "12:app.py#Deep->Local=app.py#Local[lexical-definition]",
+        "12:app.py#Deep->Widget=base.py#Widget[import-binding]",
+        "15:app.py#Gen->Widget=base.py#Widget[import-binding]",
+        "18:app.py#Outside->Missing=unresolved[unresolved:unbound-global]",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never binds a heritage name to a non-type candidate", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-extends-kind-"));
+    try {
+      fs.writeFileSync(path.join(dir, "main.ts"), [
+        "function Shadow() {}",
+        "class Uses extends Shadow {}",
+        "",
+      ].join("\n"));
+      const built = await buildIndex(dir);
+      expect(heritage(built, "main.ts")).toEqual([
+        "2:main.ts#Uses->Shadow=unresolved[unresolved:bound-symbol-missing]",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints an extends edge in warp output with its basis", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-extends-warp-"));
+    try {
+      fs.writeFileSync(path.join(dir, "lib.ts"), tsLib);
+      fs.writeFileSync(path.join(dir, "main.ts"), tsMain);
+      const built = await buildIndex(dir);
+      const detailed = callersDetailed(built, "lib.ts#Base");
+      expect(detailed.status).toBe("found");
+      if (detailed.status !== "found") return;
+      expect(formatCallersDetailed(detailed)).toContain("d1 extends main.ts#Leaf:3 [import-binding]");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("python decorator factory calls", () => {
+  const regmod = [
+    "def make(option):",
+    "    return lambda f: f",
+    "",
+    "def plain(f):",
+    "    return f",
+    "",
+  ].join("\n");
+
+  const deco = [
+    "import regmod",
+    "from regmod import make, plain",
+    "",
+    "def local_factory(name):",
+    "    return lambda f: f",
+    "",
+    "def outer(runtime):",
+    "    @make('a')",
+    "    @local_factory('b')",
+    "    @regmod.make('c')",
+    "    @plain",
+    "    @runtime.build('d')",
+    "    @missing('e')",
+    "    def hello():",
+    "        pass",
+    "",
+    "    @local_factory('cls')",
+    "    class Thing:",
+    "        pass",
+    "",
+    "    return hello, Thing",
+    "",
+  ].join("\n");
+
+  function edgesOf(built: OsnovaIndex, kind: string, file: string): string[] {
+    return built.edges
+      .filter((e) => e.kind === kind && e.fromSymbol?.startsWith(file) === true)
+      .map((e) => {
+        const resolution = e.evidence?.source === "syntax" ? e.evidence.resolution : undefined;
+        const outcome = e.toSymbol ?? `unresolved:${resolution?.status === "unresolved" ? resolution.reason : (resolution?.status ?? "unknown")}`;
+        return `${e.line}:${e.fromSymbol}:${e.toName}->${outcome}`;
+      })
+      .sort();
+  }
+
+  it("emits a resolved calls edge for a python decorator factory and leaves a bare decorator a reference", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-pydeco-"));
+    try {
+      fs.writeFileSync(path.join(dir, "regmod.py"), regmod);
+      fs.writeFileSync(path.join(dir, "deco.py"), deco);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(edgesOf(built, "calls", "deco.py")).toEqual([
+        "10:deco.py#outer:make->regmod.py#make",
+        "12:deco.py#outer:build->unresolved:receiver-unresolved",
+        "13:deco.py#outer:missing->unresolved:unbound-global",
+        "17:deco.py#outer:local_factory->deco.py#local_factory",
+        "8:deco.py#outer:make->regmod.py#make",
+        "9:deco.py#outer:local_factory->deco.py#local_factory",
+      ]);
+      expect(edgesOf(built, "references", "deco.py")).toEqual([
+        "11:deco.py#outer:plain->regmod.py#plain",
+        "21:deco.py#outer:Thing->deco.py#outer.Thing",
+        "21:deco.py#outer:hello->deco.py#outer.hello",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
