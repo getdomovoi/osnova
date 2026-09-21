@@ -14,9 +14,10 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
+import { symbolsUnderTest, testsFor } from "../query/tests.js";
 import type { OsnovaIndex } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
@@ -50,6 +51,8 @@ usage:
   osnova settle <--base-ref <ref> | --base-cache <path>> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova tests <symbol...> [-n <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
@@ -359,6 +362,18 @@ export async function runCli(
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", 1) });
       io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
+      return EXIT_OK;
+    }
+    case "tests": {
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: {
+        file: { type: "string" }, limit: { type: "string", short: "n" }, workspace: { type: "string" }, "cache-dir": { type: "string" },
+      } });
+      const symbols = parsed.positionals.filter((name) => name.length > 0);
+      const file = parsed.values.file;
+      if ((symbols.length === 0) === (file === undefined)) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
+      const limit = numericOption(parsed.values.limit, "limit");
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
+      io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
       return EXIT_OK;
     }
     case "coverage": {

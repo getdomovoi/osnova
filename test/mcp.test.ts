@@ -39,7 +39,7 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 describe("mcp stdio server", () => {
-  it("exposes exactly the eight foundation tools", async () => {
+  it("exposes exactly the nine foundation tools", async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
@@ -52,12 +52,13 @@ describe("mcp stdio server", () => {
         "osnova_footing",
         "osnova_settle",
         "osnova_plumb",
+        "osnova_tests",
       ]);
       const byName = new Map(tools.map((t) => [t.name, t]));
       for (const [name, verb] of [
         ["osnova_ground", "Search:"], ["osnova_thread", "Text search:"], ["osnova_outline", "Outline:"],
         ["osnova_warp", "Call graph:"], ["osnova_groundwork", "Repository map:"],
-        ["osnova_footing", "Task context:"], ["osnova_settle", "Change impact:"], ["osnova_plumb", "Check claims:"],
+        ["osnova_footing", "Task context:"], ["osnova_settle", "Change impact:"], ["osnova_plumb", "Check claims:"], ["osnova_tests", "Tests:"],
       ] as const) {
         expect(byName.get(name)?.description?.startsWith(verb) ?? false, name).toBe(true);
       }
@@ -241,6 +242,35 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+  it("maps tests to symbols and symbols to tests", async () => {
+    write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
+    write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
+    write("test/loud.test.ts", 'import { shout } from "../src/loud.js";\nexport const seen = shout("x");\n');
+    write("test/greet.test.ts", 'import { greet } from "../src/greet.js";\nexport const name = "shout";\nexport const seenGreet = greet("x");\n');
+    const client = await connect();
+    try {
+      const bySymbol = await callTool(client, "osnova_tests", { symbols: ["shout"] });
+      expect(bySymbol).toMatch(/^osnova generation [a-f0-9]{16}\nosnova tests: 1 symbols, 1 test files listed\n/);
+      expect(bySymbol).toContain("function src/loud.ts#shout src/loud.ts:1: 1 test files");
+      expect(bySymbol).toContain("- test/loud.test.ts (resolved edge): test/loud.test.ts:2 calls import-binding");
+      expect(bySymbol).not.toContain("greet.test.ts");
+      expect(bySymbol).toContain("No indexed test is not proof of no test");
+      const byFile = await callTool(client, "osnova_tests", { file: "test/greet.test.ts" });
+      expect(byFile).toContain("osnova tests: test/greet.test.ts: 1 symbols under test, 1 imported files, 0 unresolved edges not listed");
+      expect(byFile).toContain("- function src/greet.ts#greet src/greet.ts:2: test/greet.test.ts:3 calls import-binding");
+      expect(byFile).toContain("imports:\n- src/greet.ts at test/greet.test.ts:1");
+      const again = await callTool(client, "osnova_tests", { symbols: ["shout"] });
+      expect(again).toBe(bySymbol);
+      for (const args of [{}, { symbols: ["shout"], file: "test/loud.test.ts" }, { symbols: [] }, { file: "test/none.test.ts" }, { symbols: ["shout"], limit: "2" }]) {
+        const rejected = await client.callTool({ name: "osnova_tests", arguments: args });
+        expect(rejected.isError, JSON.stringify(args)).toBe(true);
+      }
+    } finally {
+      await client.close();
+      fs.rmSync(path.join(workspace, "test"), { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("returns isError for tool failures without crashing the server", async () => {
     const client = await connect();
     try {
@@ -257,7 +287,7 @@ describe("mcp stdio server", () => {
       const text = content.map((c) => (c.type === "text" ? c.text : "")).join("");
       expect(text).toContain("osnova error");
       const still = await client.listTools();
-      expect(still.tools).toHaveLength(8);
+      expect(still.tools).toHaveLength(9);
     } finally {
       await client.close();
     }

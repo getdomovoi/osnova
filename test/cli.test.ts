@@ -95,6 +95,22 @@ describe("cli", () => {
     expect(mapOut.lines.join("\n")).toContain("files 3");
   }, 60_000);
 
+  it("tests maps symbols to test files and back", async () => {
+    write("test/two.test.ts", 'import { two } from "../src/two.js";\nexport const seen = two();\n');
+    const bySymbol = capture();
+    expect(await runCli(["tests", "two", "--workspace", workspace, ...cacheArgs], bySymbol.io)).toBe(0);
+    expect(bySymbol.lines.join("\n")).toContain("- test/two.test.ts (resolved edge): test/two.test.ts:2 calls import-binding");
+    const byFile = capture();
+    expect(await runCli(["tests", "--file", "test/two.test.ts", "--workspace", workspace, ...cacheArgs], byFile.io)).toBe(0);
+    expect(byFile.lines.join("\n")).toContain("- function src/two.ts#two src/two.ts:2: test/two.test.ts:2 calls import-binding");
+    const twice = capture();
+    expect(await runCli(["tests", "two", "--workspace", workspace, ...cacheArgs], twice.io)).toBe(0);
+    expect(twice.lines).toEqual(bySymbol.lines);
+    await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("either <symbol...> or --file");
+    await expect(runCli(["tests", "two", "--file", "test/two.test.ts", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("not both");
+    fs.rmSync(path.join(workspace, "test"), { recursive: true, force: true });
+  }, 60_000);
+
   it("rejects unknown commands with exit 2", async () => {
     const { lines, io } = capture();
     const code = await runCli(["frobnicate"], io);

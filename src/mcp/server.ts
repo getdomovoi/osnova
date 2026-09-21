@@ -19,7 +19,8 @@ import { renderMapCard } from "../query/mapCard.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatTaskContext } from "../query/format.js";
+import { symbolsUnderTest, testsFor } from "../query/tests.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -36,7 +37,7 @@ const maximumMcpSkeletonCodeUnits = 4_096;
 // harness with an MCP client gets the tool contract without a hook.
 export const mcpInstructions = [
   "Osnova is a deterministic call graph of this repository with exact file:line, no type inference, no LLM. Use its tools before grep and file reads.",
-  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites.",
+  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
 const maximumMcpCallersCodeUnits = 2_048;
@@ -44,6 +45,7 @@ const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
 const maximumMcpSettleCodeUnits = 4_096;
 const maximumMcpPlumbCodeUnits = maximumPlumbCodeUnits;
+const maximumMcpTestsCodeUnits = 4_096;
 const mcpFootingExcerptLines = 8;
 const mcpInlineShortDefinitions = 40;
 const mcpGenerationDigits = 16;
@@ -160,6 +162,19 @@ const toolDefinitions = [
         depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
       },
       required: ["symbol", "sites"],
+    },
+  },
+  {
+    name: "osnova_tests",
+    description:
+      "Tests: given symbols, the indexed test files that reference each one (a resolved call or reference edge, or an import of its file) with exact file:line and the resolution basis; given one test file, the non-test symbols it calls and the files it imports. Exactly one of symbols or file. Use before editing to find the tests to run. No indexed test is not proof of no test, and a listed test is not coverage.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        symbols: { type: "array", items: { type: "string" }, description: "Symbol names or qualified names (file#Class.method) to find tests for" },
+        file: { type: "string", description: "Repo-relative test file whose symbols under test to list" },
+        limit: { type: "number", description: "Maximum test files per symbol (default 20) or symbols per file (default 50)" },
+      },
     },
   },
 ] as const;
@@ -356,6 +371,16 @@ export function createOsnovaMcpServer(
           const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
         }
+        case "osnova_tests": {
+          const symbols = optionalStringArray(args, "symbols");
+          const file = optionalString(args, "file");
+          if ((symbols === undefined) === (file === undefined)) throw new Error("osnova_tests needs exactly one of a non-empty symbols array or a file");
+          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: tests limit must be a nonnegative safe integer");
+          const limit = optionalNumber(args, "limit");
+          const available = maximumMcpTestsCodeUnits - prefix.length - 1;
+          const text = symbols !== undefined ? formatTestsFor(testsFor(index, symbols, { limit })) : formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit }));
+          return textResult(`${prefix}\n${boundText(text, available)}`);
+        }
         default:
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
@@ -379,6 +404,7 @@ function toolErrorBudget(name: string): number | undefined {
     case "osnova_footing": return maximumMcpFootingCodeUnits;
     case "osnova_settle": return maximumMcpSettleCodeUnits;
     case "osnova_plumb": return maximumMcpPlumbCodeUnits;
+    case "osnova_tests": return maximumMcpTestsCodeUnits;
     default: return undefined;
   }
 }
