@@ -676,6 +676,7 @@ export function collectBindings(root: Node, python: boolean): {
       recordMemberWrite(target, scope, node.type === "assignment" ? node.childForFieldName("right") : null);
       const binding = node.type === "assignment" && target?.type === "identifier" ? construction(node.childForFieldName("right"), node, node.childForFieldName("type") === null) ?? localValue : localValue;
       bindPattern(scope, target, binding);
+      for (const name of patternNames(target)) (scope.reassigned ??= new Set()).add(name);
       const iterated = node.type === "for_statement" || node.type === "for_in_clause" ? node.childForFieldName("right") : null;
       if (iterated !== null && target?.type === "identifier") loops.push({ scope, name: target.text, source: iterated, site: node });
       const right = node.type === "assignment" ? unwrap(node.childForFieldName("right")) : null;
@@ -683,8 +684,8 @@ export function collectBindings(root: Node, python: boolean): {
       if (binding === localValue && node.childForFieldName("type") === null && target?.type === "identifier" && right?.type === "identifier") nameAliases.push({ scope, name: target.text, value: right, site: node });
       if (binding.kind === "instance") initializers.set(binding, { end: node.endIndex, scope: nearestFunction(scope) });
     }
-    if (python && node.type === "as_pattern") bindPattern(scope, node.childForFieldName("alias"));
-    if (python && node.type === "delete_statement") for (const child of childrenOf(node)) { bindPattern(scope, child); recordMemberWrite(child, scope); }
+    if (python && node.type === "as_pattern") { bindPattern(scope, node.childForFieldName("alias")); for (const name of patternNames(node.childForFieldName("alias"))) (scope.reassigned ??= new Set()).add(name); }
+    if (python && node.type === "delete_statement") for (const child of childrenOf(node)) { bindPattern(scope, child); for (const name of patternNames(child)) (scope.reassigned ??= new Set()).add(name); recordMemberWrite(child, scope); }
     if (python && node.type === "match_statement") bind(scope, "*", { kind: "blocked", reason: "unsupported" });
     if (!python && node.type === "for_in_statement") {
       const kind = node.childForFieldName("kind");
@@ -696,7 +697,7 @@ export function collectBindings(root: Node, python: boolean): {
     }
     if (python && ["global_statement", "nonlocal_statement"].includes(node.type)) {
       for (const name of childrenOf(node).filter((child) => child.type === "identifier").map((child) => child.text)) {
-        for (let current: Scope | null = scope; current !== null; current = current.parent) bind(current, name, { kind: "blocked", reason: "unsupported" });
+        for (let current: Scope | null = scope; current !== null; current = current.parent) { bind(current, name, { kind: "blocked", reason: "unsupported" }); (current.reassigned ??= new Set()).add(name); }
       }
     }
     if (!python && ["assignment_expression", "augmented_assignment_expression", "update_expression"].includes(node.type)) {
@@ -744,8 +745,9 @@ export function collectBindings(root: Node, python: boolean): {
         // only an inference engine could recover. The declaration is the one the source states outright.
         const declared = bindings.length === 1 ? bindings : bindings.filter((candidate) => candidate?.kind === "local");
         if (declared.length !== 1) return { kind: "blocked", reason: "ambiguous" };
-        // A declaration the file later assigns over (Python rebinds by assignment) no longer names what a call reaches.
-        if (bindings.length > 1 && (python || scope.reassigned?.has(name) === true)) return { kind: "blocked", reason: "ambiguous" };
+        // A declaration the same scope assigns over no longer names what a call reaches; a conditional import
+        // beside the one declaration still takes the declaration.
+        if (bindings.length > 1 && scope.reassigned?.has(name) === true) return { kind: "blocked", reason: "ambiguous" };
         const binding = declared[0];
         const initializer = binding === undefined ? undefined : initializers.get(binding);
         if (initializer !== undefined && site.startIndex < initializer.end &&

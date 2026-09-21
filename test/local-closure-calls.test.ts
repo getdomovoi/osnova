@@ -169,6 +169,28 @@ describe("calls to a nested Python function", () => {
     expect(resolution(index, "closures.py", 28, "cls")).toMatchObject({ status: "unresolved", reason: "binding-blocked", toSymbol: undefined });
   });
 
+  it("prefers a def over a conditional import of the same name and blocks a def a prior assignment rebinds", async () => {
+    const index = await build({
+      "cond.py": [
+        /* 1 */ "import sys",
+        /* 2 */ "if sys.platform == \"win32\":",
+        /* 3 */ "    from lib import helper as pick",
+        /* 4 */ "else:",
+        /* 5 */ "    def pick():",
+        /* 6 */ "        pass",
+        /* 7 */ "pick()",
+        /* 8 */ "maybe = None",
+        /* 9 */ "def maybe():",
+        /* 10 */ "    pass",
+        /* 11 */ "maybe()",
+        "",
+      ].join("\n"),
+      "lib.py": lib,
+    });
+    expect(resolution(index, "cond.py", 7, "pick")).toMatchObject({ status: "resolved", method: "lexical-definition", toSymbol: "cond.py#pick" });
+    expect(resolution(index, "cond.py", 11, "maybe")).toMatchObject({ status: "unresolved", reason: "binding-blocked", toSymbol: undefined });
+  });
+
   it("keeps an alias of a def declared later in the same body unresolved", async () => {
     const index = await build({ "closures.py": closures, "lib.py": lib });
     expect(resolution(index, "closures.py", 32, "fwd")).toMatchObject({ status: "unresolved", reason: "binding-blocked", toSymbol: undefined });
