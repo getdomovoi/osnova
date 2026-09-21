@@ -57,30 +57,17 @@ Each confirmed line names the caller, its lines and the evidence that tied the c
 
 A call site counts as resolved when the index ties it to one definition through evidence it can name; everything else stays unresolved with a reason. These are the shares on the pinned checkouts under `benchmarks/corpora/`, recorded in [`benchmarks/results/resolution-coverage-2026-09-18a.json`](benchmarks/results/resolution-coverage-2026-09-18a.json); the last column leaves out calls through packages outside the repository and calls to builtins, which can never resolve locally, and the [reference](docs/reference.md#resolution-coverage-and-claim-checking) defines every column.
 
-| Corpus | Language | Call sites | Resolved | Share | Excluding externals |
+| Corpus | Languages | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | python | 5022 | 1932 | 38.5% | 57.2% |
 | click | all | 5022 | 1932 | 38.5% | 57.2% |
-| cobra | go | 4374 | 1980 | 45.3% | 88.9% |
 | cobra | all | 4374 | 1980 | 45.3% | 88.9% |
-| gson | java | 23382 | 8473 | 36.2% | 56.7% |
 | gson | all | 23382 | 8473 | 36.2% | 56.7% |
-| humanizer | c_sharp | 28786 | 7654 | 26.6% | 52.4% |
-| humanizer | javascript | 927 | 132 | 14.2% | 55.5% |
-| humanizer | tsx | 120 | 14 | 11.7% | 23.3% |
-| humanizer | typescript | 684 | 4 | 0.6% | 1.3% |
 | humanizer | all | 30517 | 7804 | 25.6% | 51.3% |
-| pyright | python | 11617 | 3326 | 28.6% | 66.7% |
-| pyright | typescript | 46812 | 26716 | 57.1% | 74.4% |
 | pyright | all | 58461 | 30042 | 51.4% | 73.4% |
-| ripgrep | rust | 13371 | 6117 | 45.8% | 71.7% |
 | ripgrep | all | 13385 | 6121 | 45.7% | 71.6% |
-| zod | javascript | 29 | 10 | 34.5% | 83.3% |
-| zod | tsx | 150 | 7 | 4.7% | 10.1% |
-| zod | typescript | 53238 | 21166 | 39.8% | 71.4% |
 | zod | all | 53417 | 21183 | 39.7% | 71.3% |
 
-`osnova coverage` reports these numbers for your own repository, per language and per reason.
+Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 
 ## Grep versus the graph
 
@@ -109,13 +96,13 @@ The names play on the foundation image. The CLI uses the same names without the 
 | `osnova_ground` | the ground you stand on | Keyword search: ranked definitions with exact `file:line` |
 | `osnova_thread` | the thread you follow through the cloth | Text search: regex or literal matches grouped by symbol |
 | `osnova_outline` | the outline of one part | Signatures and line spans for one file |
-| `osnova_warp` | the warp threads that hold the weave | Call graph: callers and callees, direct or transitive |
+| `osnova_warp` | the threads that hold the weave | Call graph: callers and callees, direct or transitive |
 | `osnova_groundwork` | the groundwork under everything | Repository map: directory clusters, hubs and hotspots |
 | `osnova_footing` | the footing you build on | Task context: definitions, relationships and candidate tests around a question |
 | `osnova_settle` | how the ground settles after a change | Change impact: the symbols a diff touches and their indexed dependents |
-| `osnova_plumb` | the plumb line that tests true vertical | Check claims: which listed call sites the index confirms, and which dependents were left out |
-| `osnova_tests` | the load test before the floor is trusted | Tests: the test files that reference a symbol, or the symbols one test file reaches |
-| `osnova_unreferenced` | the stone no wall rests on | Definitions with no indexed caller, each with its leads; candidates, never proof |
+| `osnova_plumb` | the plumb line dropped straight through | Check claims: which listed call sites the index confirms, and which dependents were left out |
+| `osnova_tests` | the cloth pulled to see what holds | Tests: the test files that reference a symbol, or the symbols one test file reaches |
+| `osnova_unreferenced` | threads left loose at the edge | Definitions with no indexed caller, each with its leads; candidates, never proof |
 
 Every response opens with its index generation, says when the index is partial, and counts what its budget left out; the budgets are in the [reference](docs/reference.md#presentation-budget).
 

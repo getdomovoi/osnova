@@ -139,6 +139,32 @@ src/click/decorators.py:119 src/click/decorators.py#pass_meta_key.decorator.new_
 
 `confirmed` means the index holds a resolved call edge at that line; it is not a runtime proof. `missing` covers indexed resolved edges only, so a call the index could not resolve, such as `super().invoke(ctx)`, does not appear in either list; `osnova_warp` shows those as unresolved evidence with same-name candidates. Over MCP the same check is `osnova_plumb` with `symbol`, `sites` and `depth`.
 
+
+Resolved share per corpus and language on the pinned checkouts:
+
+| Corpus | Language | Call sites | Resolved | Share | Excluding externals |
+|---|---|---:|---:|---:|---:|
+| click | python | 5022 | 1932 | 38.5% | 57.2% |
+| click | all | 5022 | 1932 | 38.5% | 57.2% |
+| cobra | go | 4374 | 1980 | 45.3% | 88.9% |
+| cobra | all | 4374 | 1980 | 45.3% | 88.9% |
+| gson | java | 23382 | 8473 | 36.2% | 56.7% |
+| gson | all | 23382 | 8473 | 36.2% | 56.7% |
+| humanizer | c_sharp | 28786 | 7654 | 26.6% | 52.4% |
+| humanizer | javascript | 927 | 132 | 14.2% | 55.5% |
+| humanizer | tsx | 120 | 14 | 11.7% | 23.3% |
+| humanizer | typescript | 684 | 4 | 0.6% | 1.3% |
+| humanizer | all | 30517 | 7804 | 25.6% | 51.3% |
+| pyright | python | 11617 | 3326 | 28.6% | 66.7% |
+| pyright | typescript | 46812 | 26716 | 57.1% | 74.4% |
+| pyright | all | 58461 | 30042 | 51.4% | 73.4% |
+| ripgrep | rust | 13371 | 6117 | 45.8% | 71.7% |
+| ripgrep | all | 13385 | 6121 | 45.7% | 71.6% |
+| zod | javascript | 29 | 10 | 34.5% | 83.3% |
+| zod | tsx | 150 | 7 | 4.7% | 10.1% |
+| zod | typescript | 53238 | 21166 | 39.8% | 71.4% |
+| zod | all | 53417 | 21183 | 39.7% | 71.3% |
+
 ### Tests and symbols
 
 `testsFor(index, symbols, { limit, sitesPerFile })` maps symbol names or qualified names (a bare name that matches several definitions lists each one; an unknown name goes to `unknownSymbols`) to the indexed test files that reference them. A test file is one whose path matches the same pattern `taskContext` uses for candidate tests (`test/`, `tests/`, `__tests__/`, `*.test.*`, `*.spec.*`, `*_test.go`, `test_*.py`). Evidence is one of two bases: `test-path-and-resolved-edge`, a resolved call or reference edge from the test file into the symbol that is not a name heuristic, listed as sites with line, edge kind, resolution method and the enclosing test symbol; or `test-path-and-file-import`, a resolved import of the symbol's file by a test that has no direct edge to the symbol. A string that merely spells the symbol's name is not evidence. Files with a resolved edge sort before file-only imports, then by path; sites sort by line. `limit` caps test files per symbol (default 20) and `sitesPerFile` caps sites per file (default 10); both omissions are counted exactly. `includeImportOnly` (default true) set to false drops the `test-path-and-file-import` tier from the result entirely, so `limit` and `omittedTests` then count resolved-edge files only; the result echoes the setting as `includeImportOnly`.
