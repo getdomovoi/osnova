@@ -27,6 +27,8 @@ beforeAll(async () => {
     "export function outer(): number { function twin(): number { return 9; } return twin(); }",
     "export function other(): number { function twin(): number { return 10; } return 11; }",
     "export class Widget { constructor() { void 0; } render(): number { return this.size(); } size(): number { return 5; } }",
+    "function comparator(a: number, b: number): number { return a - b; }",
+    "export function sorted(xs: number[]): number[] { return xs.sort(comparator); }",
   ].join("\n"));
   write("src/main.ts", 'import { used } from "./lib.js";\nexport function main(): number { return used(); }\n');
   write("src/other.ts", 'export function run(): number { return leadOnly(); }\nexport const label = "mentionedInString";\n');
@@ -53,7 +55,8 @@ describe("unreferenced", () => {
     ]);
     const twins = unreferenced(index, { includeExported: true }).candidates.filter((c) => c.symbol.name === "twin");
     expect(twins.map((c) => [c.symbol.qualifiedName, c.mentions])).toEqual([["src/lib.ts#other.twin", 2]]);
-    expect(result.exportedNotListed).toBe(7);
+    expect(result.exportedNotListed).toBe(8);
+    expect(index.edges.filter((e) => e.kind === "references" && e.toSymbol === "src/lib.ts#comparator").map((e) => `${e.fromSymbol}:${e.line}`)).toEqual(["src/lib.ts#sorted:10"]);
     expect(result.entryPoints).toEqual({ main: 1, "default-export": 1, "index-file": 1, "package-bin": 1, "test-file": 1, constructor: 1 });
     expect(result.mentionsScanned).toBe(true);
     expect(result.withoutLeads).toBe(1);
@@ -62,7 +65,7 @@ describe("unreferenced", () => {
       ["src/lib.ts#unusedExported", true, 1], ["src/lib.ts#unusedLocal", false, 0], ["src/lib.ts#leadOnly", false, 0],
       ["src/lib.ts#mentionedInString", false, 0], ["src/lib.ts#outer", true, 0], ["src/lib.ts#other", true, 0],
       ["src/lib.ts#other.twin", true, 0], ["src/lib.ts#Widget", true, 0], ["src/lib.ts#Widget.render", true, 0],
-      ["src/other.ts#run", true, 0],
+      ["src/lib.ts#sorted", true, 0], ["src/other.ts#run", true, 0],
     ]);
     expect(withExported.kinds).toEqual(["class", "function", "method"]);
     const constants = unreferenced(index, { kinds: ["constant"], includeExported: true });
@@ -88,7 +91,7 @@ describe("unreferenced", () => {
 
   it("formats candidates with leads, the exclusion rule and the not-proof notice", () => {
     const text = formatUnreferenced(unreferenced(index));
-    expect(text).toMatch(/^osnova unreferenced: scope \., kinds class,function,method, 3 candidates listed of 3, 7 exported not listed/);
+    expect(text).toMatch(/^osnova unreferenced: scope \., kinds class,function,method, 3 candidates listed of 3, 8 exported not listed/);
     expect(text).toContain("- function src/lib.ts#unusedLocal src/lib.ts:3: 0 unresolved same-name sites, 0 test sites, 0 text mentions in non-test files; no leads");
     expect(text).toContain("1 of 3 listed candidates have no lead at all");
     expect(text).toContain("- function src/lib.ts#leadOnly src/lib.ts:4: 1 unresolved same-name sites, 0 test sites, 1 text mentions in non-test files");

@@ -8,6 +8,7 @@ import type { Lockfiles } from "./external.js";
 const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
 const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
+const VALUE_REFERENCE_KINDS: ReadonlySet<string> = new Set(["function", "method", "class"]);
 // Languages whose receiver hints name a type without an import binding; a type not declared in the
 // file may still be the single declaration of that name in the same language family.
 const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
@@ -866,10 +867,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             resolution = { status: "unresolved", reason: "receiver-unresolved" };
           }
         }
+        if (raw.kind === "references") candidates = candidates.filter((symbol) => VALUE_REFERENCE_KINDS.has(symbol.kind));
         const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
         const resolved = names.length === 1 ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
         else if (resolved === undefined && resolution.status === "resolved") resolution = { status: "unresolved", reason: "bound-symbol-missing" };
+        // A value reference is recorded only when it names an indexed callable or class; a bound name that
+        // reaches a constant, a type or an import the index cannot follow leaves no edge.
+        if (raw.kind === "references" && resolution.status === "unresolved") continue;
         const via = resolved === undefined ? undefined : namespaceVia ?? exportResult?.routes.get(owner?.qualifiedName ?? resolved.qualifiedName);
         if (via !== undefined && via.length > 0) resolution = resolution.status === "resolved" && resolution.method === "receiver-hint"
           ? { ...resolution, via } : { status: "resolved", method: "re-export-binding", via };

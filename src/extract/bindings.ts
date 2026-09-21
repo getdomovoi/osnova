@@ -282,6 +282,7 @@ function reassignsIn(index: ReassignIndex, body: Node, name: string, except?: nu
 
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
+  boundValue: (name: string, site: Node) => SymbolBinding | undefined;
   aliasCallee: (node: Node) => Callee | undefined;
   heritage: (node: Node) => SymbolBinding[];
   returns: (node: Node) => ReturnBinding | undefined;
@@ -1208,8 +1209,13 @@ export function collectBindings(root: Node, python: boolean): {
     if (reassigns(enclosingBody(node, root), target.text, node.id)) return undefined;
     return calleeOf(value, node);
   };
+  const boundValue = (name: string, site: Node): SymbolBinding | undefined => {
+    const binding = lookup(name, site);
+    return binding?.kind === "local" || binding?.kind === "import" ? binding : undefined;
+  };
   return {
     at,
+    boundValue,
     aliasCallee,
     returns,
     heritage: (node) => {
