@@ -15,10 +15,10 @@ const temporary: string[] = [];
 const artifactNames = ["index.json", "index.sha", "edges.json", "text.bin"] as const;
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "user.name=osnova", "-c", "user.email=osnova@example.invalid", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  return execFileSync("git", ["-c", "user.name=osnova", "-c", "user.email=osnova@example.invalid", "-c", "core.autocrlf=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
-async function fixture() {
+async function fixture(checkout: { readonly autocrlf: boolean } = { autocrlf: false }) {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "osnova-worktree-cache-")));
   temporary.push(dir);
   const main = path.join(dir, "main");
@@ -29,7 +29,11 @@ async function fixture() {
   git(main, "add", ".");
   git(main, "commit", "-q", "-m", "seed");
   const linked = path.join(dir, "linked");
-  git(main, "worktree", "add", "-q", "--detach", linked, "HEAD");
+  git(main, "-c", `core.autocrlf=${checkout.autocrlf}`, "worktree", "add", "-q", "--detach", linked, "HEAD");
+  for (const name of ["a.ts", "c.ts"]) {
+    const same = (await fs.readFile(path.join(main, name))).equals(await fs.readFile(path.join(linked, name)));
+    expect(same, `${name} checkout bytes`).toBe(!checkout.autocrlf);
+  }
   const plain = path.join(dir, "plain");
   await fs.mkdir(plain);
   await fs.writeFile(path.join(plain, "a.ts"), "export const a = 1;\n");
@@ -105,6 +109,18 @@ it("produces the same artifact bytes when seeded from a sibling as when built co
   expect(seeds(cliCold)).toEqual([]);
   const c = await artifacts(path.join(cacheB, "..", "cacheC"), linked);
   for (const name of artifactNames) expect(a[name]!.equals(c[name]!), name).toBe(true);
+});
+
+it("reuses nothing from a sibling whose checkout converted line endings and still matches a cold build", async () => {
+  const { main, linked, cacheA, cacheB } = await fixture({ autocrlf: true });
+  await buildIndex(main, { cacheDir: cacheA });
+  const progress = vi.fn();
+  await refreshWorkspace(linked, { cacheDir: cacheA, onProgress: progress });
+  expect(seeds(progress)).toEqual([{ phase: "seed", done: 0, total: 2, sibling: main }]);
+  await refreshWorkspace(linked, { cacheDir: cacheB, seedFromSiblings: false });
+  const a = await artifacts(cacheA, linked);
+  const b = await artifacts(cacheB, linked);
+  for (const name of artifactNames) expect(a[name]!.equals(b[name]!), name).toBe(true);
 });
 
 it("keeps one cache directory and one lock per worktree", async () => {
