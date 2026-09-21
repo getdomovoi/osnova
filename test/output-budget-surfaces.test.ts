@@ -18,7 +18,11 @@ beforeAll(async () => {
   workspace = path.join(temporary, "workspace");
   cacheDir = path.join(temporary, "cache");
   await fs.mkdir(workspace);
-  await fs.writeFile(path.join(workspace, "long.txt"), source);
+  await fs.writeFile(path.join(workspace, "a-long.txt"), source);
+  const wide = Array(10).fill(`needle ${"y".repeat(200)}`).join("\n");
+  for (let i = 0; i < 49; i += 1) {
+    await fs.writeFile(path.join(workspace, `file-${String(i).padStart(2, "0")}.txt`), wide);
+  }
 });
 
 afterAll(async () => {
@@ -33,7 +37,9 @@ it("caps CLI text without changing the structured search result", async () => {
   expect(output[0]?.length).toBeLessThanOrEqual(16_384);
   expect(output[0]).toContain("[output truncated:");
   const index = await buildIndex(workspace, { cacheDir });
-  expect(findTextDetailed(index, "needle").groups[0]?.matches[0]?.text).toBe(source);
+  const detailed = findTextDetailed(index, "needle");
+  expect(detailed.groups[0]?.file).toBe("a-long.txt");
+  expect(detailed.groups[0]?.matches[0]?.text).toBe(source);
 });
 
 it("caps MCP success and error responses with an explicit clipping notice", async () => {

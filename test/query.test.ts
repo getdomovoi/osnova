@@ -2,13 +2,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 import path from "node:path";
 import { buildIndex } from "../src/index/build.js";
 import { ask } from "../src/query/ask.js";
-import { findText } from "../src/query/findText.js";
+import { findText, findTextDetailed } from "../src/query/findText.js";
+import { clipThreadText, formatFindText, formatFindTextResult } from "../src/query/format.js";
 import { skeleton } from "../src/query/skeleton.js";
 import { callers, callersDetailed } from "../src/query/callers.js";
 import { map } from "../src/query/map.js";
 import { renderMapCard } from "../src/query/mapCard.js";
 import { maximumOsnovaMapCardCodeUnits } from "../src/types.js";
-import type { OsnovaIndex } from "../src/types.js";
+import type { FindTextGroup, OsnovaIndex } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
 
@@ -69,6 +70,61 @@ describe("findText", () => {
 
   it("rejects invalid regex with a clear error", () => {
     expect(() => findText(index, "[")).toThrow(/invalid pattern/);
+  });
+});
+
+describe("thread formatting", () => {
+  const long = "abcdefghij".repeat(30);
+
+  it("clips a long line to a window around the match", () => {
+    const near = clipThreadText(long, 5, 9);
+    expect(near.startsWith("abcde")).toBe(true);
+    expect(near.endsWith("…")).toBe(true);
+    expect(near.length).toBe(121);
+
+    const end = clipThreadText(long, 290, 295);
+    expect(end.startsWith("…")).toBe(true);
+    expect(end.endsWith("ghij")).toBe(true);
+    expect(end.length).toBe(121);
+
+    const middle = clipThreadText(long, 150, 154);
+    expect(middle.startsWith("…")).toBe(true);
+    expect(middle.endsWith("…")).toBe(true);
+    expect(middle.length).toBe(122);
+    expect(middle.slice(1, -1)).toBe(long.slice(92, 212));
+  });
+
+  it("never cuts inside a match longer than the window", () => {
+    const wide = clipThreadText(long, 10, 200);
+    expect(wide).toBe(`…${long.slice(10, 200)}…`);
+  });
+
+  it("keeps short lines whole and trims indentation", () => {
+    expect(clipThreadText("    const x = 1;", 10, 11)).toBe("const x = 1;");
+  });
+
+  it("merges same-line matches into one row listing the columns", () => {
+    const groups: FindTextGroup[] = [{
+      symbol: null,
+      file: "a.ts",
+      incomingEdges: 0,
+      matches: [
+        { line: 3, col: 2, length: 3, text: "  foo foo" },
+        { line: 3, col: 6, length: 3, text: "  foo foo" },
+        { line: 5, col: 0, length: 3, text: "foo" },
+      ],
+    }];
+    expect(formatFindText(groups)).toBe("<module> a.ts (0 in)\na.ts:3:3,7: foo foo\na.ts:5:1: foo");
+  });
+
+  it("keeps header counts equal to findTextDetailed totals after merging", () => {
+    const result = findTextDetailed(index, "\\w", { limit: 50, matchesPerGroup: 10 });
+    const shown = result.groups.reduce((n, g) => n + g.matches.length, 0);
+    const rows = result.groups.reduce((n, g) => n + new Set(g.matches.map((m) => m.line)).size, 0);
+    expect(shown).toBeGreaterThan(rows);
+    const text = formatFindTextResult(result);
+    expect(text).toContain(`indexed-text search: ${result.totalMatches - result.omittedMatches}/${result.totalMatches} matches`);
+    expect(text.split("\n").filter((l) => /^[^ ]+:\d+:\d+(,\d+)*: /.test(l)).length).toBe(rows);
   });
 });
 
