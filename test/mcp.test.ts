@@ -149,6 +149,11 @@ describe("mcp stdio server", () => {
       expect(settle).toContain("base = current index, deletions invisible");
       const bad = await client.callTool({ name: "osnova_settle", arguments: { diff: "not a diff" } });
       expect(bad.isError).toBe(true);
+      const kinds = await callTool(client, "osnova_footing", { question: "shout", kinds: ["function"] });
+      expect(kinds).toContain("src/loud.ts#shout");
+      const badKind = await client.callTool({ name: "osnova_footing", arguments: { question: "shout", kinds: ["variable"] } });
+      expect(badKind.isError).toBe(true);
+      expect(JSON.stringify(badKind.content)).toContain("kinds must be symbol kinds");
       const missing = await client.callTool({ name: "osnova_footing", arguments: {} });
       expect(missing.isError).toBe(true);
       for (const args of [{ symbols: [] }, { question: "shout", task: 42 }, { question: "shout", task: "" }, { question: "shout", task: null }, { question: "shout", depth: "bad" },

@@ -92,6 +92,34 @@ describe("footing seeds", () => {
   });
 });
 
+describe("footing seed filter", () => {
+  const typed = (path: string, name: string, kind: OsnovaSymbol["kind"], text: string): FileCard => ({
+    ...card(path, []), language: "typescript", text, hash: createHash("sha256").update(text).digest("hex"), size: text.length, lineCount: text.split("\n").length,
+    symbols: [{ name, qualifiedName: `${path}#${name}`, file: path, kind, signature: text.split("\n")[0]!, lineCount: text.split("\n").length - 1,
+      span: { startLine: 1, endLine: text.split("\n").length - 1, startCol: 0, endCol: 0 } }],
+  });
+  const fn = typed("src/lock.ts", "lock", "function", "export function lock(dir: string) {\n  return dir;\n}\n");
+  const constant = typed("src/paths.ts", "lock", "constant", "const lock = \"lock\";\n");
+  const alias = typed("src/kinds.ts", "lock", "type", "type lock = string;\n");
+  const inTest = typed("test/lock.test.ts", "lock", "function", "function lock() {\n  return 1;\n}\n");
+  it("seeds real definitions before 1-line constants, type aliases and test-file symbols", () => {
+    const result = taskContext(index([constant, alias, inTest, fn]), { task: "understand", question: "lock", limit: 1 });
+    expect(result.definitions.map((definition) => definition.symbol.qualifiedName)).toEqual(["src/lock.ts#lock"]);
+    expect(result.omitted.retrievalHits).toBe(5);
+  });
+  it("falls back to filtered hits when nothing else matches", () => {
+    const result = taskContext(index([constant, alias, inTest]), { task: "understand", question: "lock", limit: 3 });
+    expect(result.definitions.map((definition) => definition.symbol.qualifiedName).sort()).toEqual(["src/kinds.ts#lock", "src/paths.ts#lock", "test/lock.test.ts#lock"]);
+    expect(result.omitted.retrievalHits).toBe(1);
+  });
+  it("restricts seeds to the requested kinds", () => {
+    const result = taskContext(index([constant, alias, inTest, fn]), { task: "understand", question: "lock", limit: 4, kinds: ["constant"] });
+    expect(result.definitions.map((definition) => definition.symbol.qualifiedName)).toEqual(["src/paths.ts#lock"]);
+    expect(result.omitted.retrievalHits).toBe(5);
+    expect(() => taskContext(index([fn]), { task: "understand", question: "lock", kinds: [] })).toThrow("kinds must be a non-empty array");
+  });
+});
+
 describe("footing formatting", () => {
   const current = index([card("a.ts", ["target"]), card("b.ts", ["middle"]), card("c.test.ts", ["check"])],
     [edge("b.ts#middle", "a.ts#target"), edge("c.test.ts#check", "b.ts#middle")]);
