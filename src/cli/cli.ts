@@ -136,7 +136,9 @@ export async function runCli(
       const root = requirePositional(parsed.positionals, "root", "build");
       const cacheDir = parsed.values["cache-dir"];
       const started = Date.now();
-      const index = await buildIndex(root, { cacheDir });
+      const index = await buildIndex(root, { cacheDir, onProgress: (event) => {
+        if (event.phase === "seed") io.stdout(`seeded from sibling worktree cache ${event.sibling ?? ""}: ${event.done} of ${event.total} files reused`);
+      } });
       const diagnostics = formatIndexDiagnostics(index);
       if (diagnostics.length > 0) io.stderr(diagnostics);
       const ms = Date.now() - started;

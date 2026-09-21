@@ -25,10 +25,12 @@ import type { EdgeLayout } from "./edgeStore.js";
 import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits } from "../cache/cache.js";
 import type { CachePolicy } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
+import type { LockOptions } from "../cache/lock.js";
 import { IndexingError, SectionError } from "./diagnostics.js";
 import { rememberIndexGeneration } from "./generation.js";
 import { bindIndexCache, validRelativePath, workspaceIdentity } from "./workspace.js";
 import { sha256Hex } from "./scan.js";
+import { loadVerification } from "./verification.js";
 import { lazyTextCard, previousTextFrom, rebindPublishedText, serializeText } from "./textStore.js";
 import type { PreviousText, TextLayout } from "./textStore.js";
 import { grammarFile } from "../grammar/languages.js";
@@ -192,6 +194,7 @@ function deserializeParsedArtifact(
   edgeSource: { path: string; raw: Buffer } | undefined,
   textBytes?: Buffer,
   edgeBytes?: Buffer,
+  rootOverride?: string,
 ): OsnovaIndexImpl {
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error("osnova: corrupt index artifact");
@@ -334,8 +337,8 @@ function deserializeParsedArtifact(
   } else {
     throw new Error("osnova: edge source required");
   }
-  const index = new OsnovaIndexImpl(artifact.root, files, edges);
-  rememberIndexGeneration(index, data);
+  const index = new OsnovaIndexImpl(rootOverride ?? artifact.root, files, edges);
+  if (rootOverride === undefined) rememberIndexGeneration(index, data);
   return index;
 }
 
@@ -514,6 +517,68 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       throw new IndexingError({ phase: "cache", path: dir, code: "cache-read-failed" }, error);
     }
   });
+}
+
+async function copyIntoWorkspace(source: string, target: string): Promise<void> {
+  const temporary = `${target}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await fs.copyFile(source, temporary, fs.constants.COPYFILE_EXCL);
+    await fs.rename(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+export interface SeededArtifact {
+  readonly index: OsnovaIndexImpl;
+  readonly generation: string;
+}
+
+export async function seedArtifactFrom(cacheDir: string, siblingRoot: string, targetRoot: string, options: LockOptions = {}): Promise<SeededArtifact | undefined> {
+  const source = workspaceDirFor(cacheDir, siblingRoot);
+  const target = workspaceDirFor(cacheDir, targetRoot);
+  if (source === target) return undefined;
+  return withCacheLock(workspaceLockPath(cacheDir, siblingRoot), async () => {
+    try {
+      if ((await fs.lstat(source)).isSymbolicLink()) return undefined;
+      const corePath = path.join(source, "index.json");
+      const coreStat = await fs.lstat(corePath);
+      if (!coreStat.isFile() || coreStat.size > MAX_ARTIFACT_BYTES) return undefined;
+      const data = await fs.readFile(corePath);
+      const raw = data[0] === 0x1f && data[1] === 0x8b ? gunzipSync(data, { maxOutputLength: MAX_ARTIFACT_BYTES }) : data;
+      const sha = (await fs.readFile(path.join(source, "index.sha"), "utf8")).trim();
+      if (!/^[a-f0-9]{64}$/.test(sha) || sha256Hex(raw) !== sha) return undefined;
+      if ((await loadVerification(cacheDir, siblingRoot, sha)) === undefined) return undefined;
+      const content = raw.toString("utf8");
+      const parsed: unknown = JSON.parse(content);
+      const envelope = parsed as { formatVersion?: unknown; extractionVersion?: unknown; root?: unknown; textHash?: unknown; textBytes?: unknown; edgesHash?: unknown; edgesBytes?: unknown };
+      if (envelope.formatVersion !== indexFormatVersion || envelope.extractionVersion !== extractionVersion || envelope.root !== siblingRoot) return undefined;
+      if (typeof envelope.textHash !== "string" || !nonnegativeInteger(envelope.textBytes)) return undefined;
+      if (typeof envelope.edgesHash !== "string" || !nonnegativeInteger(envelope.edgesBytes)) return undefined;
+      const textSource = path.join(source, "text.bin");
+      const textStat = await fs.lstat(textSource);
+      if (!textStat.isFile() || textStat.size !== envelope.textBytes) return undefined;
+      const edgesSource = path.join(source, "edges.json");
+      const edgesStat = await fs.lstat(edgesSource);
+      if (!edgesStat.isFile() || edgesStat.size > MAX_ARTIFACT_BYTES) return undefined;
+      const edgesData = await fs.readFile(edgesSource);
+      const edgesRaw = edgesData[0] === 0x1f && edgesData[1] === 0x8b ? gunzipSync(edgesData, { maxOutputLength: MAX_ARTIFACT_BYTES }) : edgesData;
+      if (edgesRaw.length !== envelope.edgesBytes || sha256Hex(edgesRaw) !== envelope.edgesHash) return undefined;
+      await fs.mkdir(target, { recursive: true });
+      if ((await fs.lstat(target)).isSymbolicLink()) return undefined;
+      const textPath = path.join(target, "text.bin");
+      const edgesPath = path.join(target, "edges.json");
+      await copyIntoWorkspace(textSource, textPath);
+      await copyIntoWorkspace(edgesSource, edgesPath);
+      const textCopy = await fs.readFile(textPath);
+      if (textCopy.length !== envelope.textBytes || sha256Hex(textCopy) !== envelope.textHash) return undefined;
+      const index = deserializeParsedArtifact(parsed, content, textPath, { path: edgesPath, raw: edgesRaw }, undefined, undefined, targetRoot);
+      return { index: bindIndexCache(index, cacheDir), generation: sha };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return undefined;
+      throw new IndexingError({ phase: "cache", path: source, code: "cache-read-failed" }, error);
+    }
+  }, { lockTimeoutMs: options.lockTimeoutMs ?? 0, lockPollMs: options.lockPollMs });
 }
 
 export function isSectionInconsistency(error: unknown): boolean {
