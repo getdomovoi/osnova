@@ -147,7 +147,7 @@ Inputs and the local form are in the [reference](docs/reference.md#settle-in-ci)
 
 ## What osnova does not do
 
-- No type inference and no dynamic dispatch. Edges come from syntax: direct calls, imports, exports and name references, with lexical binding and receiver hints for TypeScript, JavaScript and Python. Resolution is heuristic and says so.
+- No type inference and no dynamic dispatch. Edges come from syntax: direct calls, imports, exports, name references and declared heritage (a written superclass or interface name), with lexical binding and receiver hints for TypeScript, JavaScript and Python. Resolution is heuristic and says so.
 - No semantic search. `osnova_ground` is fielded lexical ranking over definitions. It is fast, deterministic and explainable, and it will not match a paraphrase.
 - No proof of safety. An empty caller list means the index found no caller, not that none exists.
 - No cost claims. Agent trials so far show correctness parity with and without the graph on small tasks. A benchmark that separates the two is in progress.

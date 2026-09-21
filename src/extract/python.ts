@@ -96,6 +96,7 @@ export const pythonAdapter: LanguageAdapter = {
           if (name !== null && IDENTIFIER_RE.test(name)) {
             out.addDef(name, "class", node, undefined, undefined, bindings.heritage(node), bindings.ownFields(node), undefined, undefined, bindings.fieldTypes(node), undefined, undefined, bindings.elementTypes(node), undefined, bindings.valueTypes(node));
             out.push(name);
+            for (const base of bindings.heritageRefs(node)) out.addEdge("extends", base.name, base.node, base.binding);
             inClassDepth += 1;
             for (const child of childrenOf(node)) visit(child);
             inClassDepth -= 1;

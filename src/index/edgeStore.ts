@@ -1,7 +1,7 @@
 import type { EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, FileCard, OsnovaEdge } from "../types.js";
 import { sha256Hex } from "./scan.js";
 
-export const edgeKinds: readonly EdgeKind[] = ["calls", "references", "imports"];
+export const edgeKinds: readonly EdgeKind[] = ["calls", "references", "imports", "extends"];
 
 export interface EdgeLayout {
   readonly bytes: Buffer;

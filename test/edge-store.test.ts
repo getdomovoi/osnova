@@ -42,7 +42,7 @@ describe("edge store", () => {
     expect(lines.length - 2).toBe(index.edges.length);
     const fileIndexes = lines.slice(1, -1).map((line) => (JSON.parse(line) as number[])[1]!);
     expect([...fileIndexes]).toEqual([...fileIndexes].sort((a, b) => a - b));
-    expect(edgeKinds).toEqual(["calls", "references", "imports"]);
+    expect(edgeKinds).toEqual(["calls", "references", "imports", "extends"]);
   });
 
   it("keeps the interned tables byte-identical across a lazy reload and an unrelated incremental edit", async () => {

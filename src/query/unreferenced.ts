@@ -42,7 +42,7 @@ const maximumMentionCorpusCodeUnits = 32 * 1024 * 1024;
 const symbolKinds: readonly SymbolKind[] = ["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant", "module"];
 
 export const unreferencedLimitations = [
-  "resolved-call-and-reference-edges-only",
+  "resolved-call-reference-and-extends-edges-only",
   "default-kinds-function-method-class-because-other-kinds-receive-no-edges",
   "no-indexed-caller-is-not-proof-of-no-caller",
   "export-detection-typescript-javascript-python-only",
