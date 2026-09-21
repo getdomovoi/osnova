@@ -8,6 +8,7 @@ import {
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspace, indexGeneration } from "../api.js";
+import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -135,14 +136,14 @@ const toolDefinitions = [
   {
     name: "osnova_settle",
     description:
-      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Compares against the current index only, so deleted symbols are not visible.",
+      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Without baseRef it compares against the current index only, so deleted symbols are not visible; with baseRef (a git commit or ref) it indexes that commit's tree under the cache and compares it with the current index, computing the diff with git when none is given.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths" },
+        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths (required unless baseRef is given)" },
+        baseRef: { type: "string", description: "Git commit or ref to compare against; its tree is indexed under the cache without a checkout" },
         depth: { type: "number", description: "Dependent walk depth (default 1)" },
       },
-      required: ["diff"],
     },
   },
   {
@@ -324,11 +325,20 @@ export function createOsnovaMcpServer(
           return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);
         }
         case "osnova_settle": {
-          const diff = requireString(args, "diff");
+          const baseRef = optionalString(args, "baseRef");
+          const diff = optionalString(args, "diff");
+          if (baseRef === undefined && diff === undefined) throw new Error("osnova_settle needs diff or baseRef");
           if (args.depth !== undefined && typeof args.depth !== "number") {
             throw new RangeError("osnova: settle depth must be a nonnegative safe integer");
           }
-          const result = impact(index, index, { diff, maxDepth: optionalNumber(args, "depth") ?? 1 });
+          const maxDepth = optionalNumber(args, "depth") ?? 1;
+          let result;
+          if (baseRef === undefined) result = impact(index, index, { diff, maxDepth });
+          else {
+            const base = await materializeBaseRef(absRoot, baseRef, { cacheDir });
+            const computed = diff ?? await baseDiff(absRoot, base.sha);
+            result = impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth });
+          }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
         }

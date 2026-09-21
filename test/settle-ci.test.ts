@@ -8,7 +8,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" } }).trim();
 
 describe.skipIf(process.platform === "win32")("settle-ci.sh", () => {
-  it("indexes base and head at the same path and reports the dependents of the changed symbols", async () => {
+  it("indexes the base commit without a checkout and reports the dependents of the changed symbols", async () => {
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-settle-ci-"));
     const repo = path.join(temporary, "repo"); await fs.mkdir(repo);
     git(repo, "init", "-q"); git(repo, "config", "commit.gpgsign", "false");

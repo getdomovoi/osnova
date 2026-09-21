@@ -121,13 +121,13 @@ export async function evictLru(cacheDir: string, policy: number | CachePolicy = 
       try {
         await withCacheLock(`${victim.dir}.lock`, async () => {
           const names = await fs.readdir(victim.dir);
-          const owned = names.filter((name) => ["index.json", "index.json.gz", "text.bin", "edges.json", "index.sha", "access", "verification.json"].includes(name));
+          const owned = names.filter((name) => ["index.json", "index.json.gz", "text.bin", "edges.json", "index.sha", "access", "verification.json", "base"].includes(name));
           const access = Number(await fs.readFile(path.join(victim.dir, "access"), "utf8").catch((error: unknown) => {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") return "0";
             throw error;
           }));
           if (access > victim.access) return;
-          for (const name of owned) await fs.unlink(path.join(victim.dir, name));
+          for (const name of owned) await fs.rm(path.join(victim.dir, name), { recursive: name === "base", force: true });
           if (owned.length === names.length) await fs.rmdir(victim.dir);
           count -= 1;
           bytes -= victim.bytes;

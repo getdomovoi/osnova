@@ -167,7 +167,9 @@ What the text search got wrong: a comment that mentioned the method, Javadoc exa
 
 ## In CI
 
-The same check runs on every pull request without an agent. The action indexes the base commit and the head at the same path, then lists every indexed dependent of the symbols the pull request changed in the job summary, and as a comment when asked:
+Locally, `osnova settle --base-ref <ref>` compares the working tree with any commit: it exports the commit's tree with `git archive` into the cache directory (no checkout, no worktree), indexes it there once per commit (the two most recent base trees per workspace are kept), takes `git diff <ref>` as the changed spans and lists every indexed dependent of the changed symbols. Over MCP the same comparison is `osnova_settle` with `baseRef`; without `baseRef` the tool compares against the current index only. It fails closed when `git` is missing, the ref is unknown or the workspace is not a git repository.
+
+The same check runs on every pull request without an agent. The action runs `osnova settle --base-ref` against the pull request base, then lists every indexed dependent of the symbols the pull request changed in the job summary, and as a comment when asked:
 
 ```yaml
 - uses: actions/checkout@v4
@@ -219,7 +221,7 @@ osnova outline <file>          # every definition's signature and span
 osnova warp <symbol>           # direct or transitive callers or callees
 osnova groundwork              # directory clusters, hubs, hotspots
 osnova footing "<question>"    # task context as JSON
-osnova settle --base-cache ... # compare two preserved indexes
+osnova settle --base-ref <ref> # dependents of the symbols changed since a git commit (--base-cache compares two preserved indexes)
 osnova plumb <symbol> --site <path:line> ...  # check claimed call sites against the index
 osnova coverage [--json]       # call-site resolution coverage per language and reason
 osnova check <root>            # staleness gate for CI (exit 1 when stale)

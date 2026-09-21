@@ -21,6 +21,7 @@ import type { OsnovaIndex } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
+import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
 import { taskContext } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
 import { doctor, setupClients } from "../diagnostics/index.js";
@@ -46,7 +47,7 @@ usage:
   osnova warp <symbol> [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova groundwork [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
   osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
-  osnova settle --base-cache <path> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
+  osnova settle <--base-ref <ref> | --base-cache <path>> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova doctor [--workspace <path>] [--cache-dir <path>]
@@ -302,24 +303,36 @@ export async function runCli(
       return EXIT_OK;
     }
     case "settle": {
-      const parsed = parseArgs({ args: rest, options: { "base-cache": { type: "string" }, depth: { type: "string" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
+      const parsed = parseArgs({ args: rest, options: { "base-ref": { type: "string" }, "base-cache": { type: "string" }, depth: { type: "string" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
       const baseCache = parsed.values["base-cache"];
-      if (baseCache === undefined) throw new Error("osnova settle: --base-cache is required");
+      const baseRef = parsed.values["base-ref"];
+      if (baseCache !== undefined && baseRef !== undefined) throw new Error("osnova settle: use either --base-ref or --base-cache");
+      if (baseCache === undefined && baseRef === undefined) throw new Error("osnova settle: --base-ref or --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const baseReal = await fs.realpath(baseCache).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") throw new Error(`osnova settle: baseline cache does not exist: ${baseCache}`);
-        throw error;
-      });
-      const currentReal = await fs.realpath(cacheDir).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw error;
-        return path.resolve(cacheDir);
-      });
-      if (baseReal === currentReal) throw new Error("osnova settle: base and current caches must be distinct");
-      const base = await loadArtifact(root, baseCache);
-      if (base === undefined) throw new Error("osnova settle: baseline index is missing or incompatible");
-      const current = await ensureIndex(root, cacheDir, io.stderr);
-      const result = impact(base, current, { maxDepth: numericOption(parsed.values.depth, "depth", 1) });
+      const maxDepth = numericOption(parsed.values.depth, "depth", 1);
+      let result;
+      if (baseRef !== undefined) {
+        const base = await materializeBaseRef(root, baseRef, { cacheDir });
+        io.stderr(`osnova settle: base ${baseRef} = ${base.sha} ${base.reused ? "reused" : "built"} at ${base.dir}`);
+        const diff = await baseDiff(root, base.sha);
+        const current = await ensureIndex(root, cacheDir, io.stderr);
+        result = impact(base.index, current, { diff: diff.trim().length === 0 ? undefined : diff, maxDepth });
+      } else {
+        const baseReal = await fs.realpath(baseCache!).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") throw new Error(`osnova settle: baseline cache does not exist: ${baseCache}`);
+          throw error;
+        });
+        const currentReal = await fs.realpath(cacheDir).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+          return path.resolve(cacheDir);
+        });
+        if (baseReal === currentReal) throw new Error("osnova settle: base and current caches must be distinct");
+        const base = await loadArtifact(root, baseCache!);
+        if (base === undefined) throw new Error("osnova settle: baseline index is missing or incompatible");
+        const current = await ensureIndex(root, cacheDir, io.stderr);
+        result = impact(base, current, { maxDepth });
+      }
       io.stdout([
         `base ${result.base.generation}\ncurrent ${result.current.generation}`,
         `${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
