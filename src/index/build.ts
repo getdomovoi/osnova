@@ -27,6 +27,7 @@ import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
 import type { WorkspaceOptions } from "./workspace.js";
 import { inspectFreshness, isStale } from "./incremental.js";
+import { extractCards } from "./extractPool.js";
 
 function languageOf(relPath: string): CardLanguage {
   return languageForPath(relPath) ?? "fallback";
@@ -176,13 +177,12 @@ export async function buildIndexSnapshot(absRoot: string, onProgress?: Workspace
   const scan = await scanFiles(absRoot, cacheDir);
   const files = new Map<string, FileCard>();
   const rawEdges = new Map<string, RawEdgeItem[]>();
-  for (let i = 0; i < scan.paths.length; i += 1) {
-    const relPath = scan.paths[i];
-    if (relPath === undefined) continue;
-    const { card, rawEdges: fileEdges } = await extractCard(absRoot, relPath);
-    files.set(relPath, card);
-    if (fileEdges.length > 0) rawEdges.set(relPath, fileEdges);
-    onProgress?.({ phase: "extract", done: i + 1, total: scan.paths.length } satisfies ProgressEvent);
+  const extracted = await extractCards(absRoot, scan.paths, extractCard, (done) => {
+    onProgress?.({ phase: "extract", done, total: scan.paths.length } satisfies ProgressEvent);
+  });
+  for (const { card, rawEdges: fileEdges } of extracted) {
+    files.set(card.path, card);
+    if (fileEdges.length > 0) rawEdges.set(card.path, fileEdges);
   }
   onProgress?.({ phase: "resolve", done: 0, total: 0 } satisfies ProgressEvent);
   return bindIndexCache(finalizeIndex(absRoot, files, rawEdges), cacheDir);
