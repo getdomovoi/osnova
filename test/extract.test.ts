@@ -514,6 +514,99 @@ describe("function value references", () => {
   });
 });
 
+describe("constructor calls inside decorator arguments", () => {
+  const py = [
+    "class Top:",
+    "    def __init__(self):",
+    "        pass",
+    "",
+    "class Bare:",
+    "    pass",
+    "",
+    "def register(*args):",
+    "    return lambda f: f",
+    "",
+    "def outer():",
+    "    class Nested:",
+    "        def __init__(self):",
+    "            pass",
+    "",
+    "    direct = Nested()",
+    "",
+    "    @register(Nested(), Top(), Bare(), Unbound())",
+    "    def cmd():",
+    "        pass",
+    "",
+    "    return cmd, direct",
+    "",
+  ].join("\n");
+  const ts = [
+    "class Top {",
+    "  constructor() {}",
+    "}",
+    "class Bare {}",
+    "function register(...args: unknown[]) { return (t: unknown) => t; }",
+    "function outer() {",
+    "  class Nested {",
+    "    constructor() {}",
+    "  }",
+    "  const direct = new Nested();",
+    "  @register(new Nested(), new Top(), new Bare(), new Unbound())",
+    "  class Cmd {}",
+    "  return [Cmd, direct];",
+    "}",
+    "",
+  ].join("\n");
+
+  function callsFrom(built: OsnovaIndex, fromSymbol: string): string[] {
+    return built.edges
+      .filter((e) => e.kind === "calls" && e.fromSymbol === fromSymbol)
+      .map((e) => {
+        const resolution = e.evidence?.source === "syntax" ? e.evidence.resolution : undefined;
+        const outcome = resolution?.status === "unresolved" ? `unresolved:${resolution.reason}` : `unresolved:${resolution?.status ?? "unknown"}`;
+        return `${e.line}:${e.toName}->${e.toSymbol ?? outcome}`;
+      });
+  }
+
+  it("binds python constructor calls in decorator arguments to the class declaration", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-ctor-"));
+    try {
+      fs.writeFileSync(path.join(dir, "deco.py"), py);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(callsFrom(built, "deco.py#outer")).toEqual([
+        "16:Nested->deco.py#outer.Nested",
+        "18:Bare->deco.py#Bare",
+        "18:Nested->deco.py#outer.Nested",
+        "18:Top->deco.py#Top",
+        "18:Unbound->unresolved:unbound-global",
+      ]);
+      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([18]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("binds typescript new expressions in decorator arguments to the class declaration", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-ctor-"));
+    try {
+      fs.writeFileSync(path.join(dir, "deco.ts"), ts);
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(callsFrom(built, "deco.ts#outer")).toEqual(["10:Nested->deco.ts#outer.Nested"]);
+      expect(callsFrom(built, "deco.ts#outer.Cmd")).toEqual([
+        "11:Bare->deco.ts#Bare",
+        "11:Nested->deco.ts#outer.Nested",
+        "11:Top->deco.ts#Top",
+        "11:Unbound->unresolved:unbound-global",
+      ]);
+      expect(built.edges.filter((e) => e.kind === "references" && e.toName === "register").map((e) => e.line)).toEqual([11]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 function symbolsIn(built: OsnovaIndex, file: string): string[] {
   return (built.files.get(file)?.symbols ?? []).map((s) => `${s.kind}:${s.qualifiedName}`);
 }

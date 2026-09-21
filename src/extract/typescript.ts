@@ -227,6 +227,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
           if (inner !== undefined) {
             const name = inner.type === "identifier" ? inner.text : lastIdentifier(inner);
             if (name !== null) ex.out.addEdge("references", name, node);
+            if (inner.type === "call_expression") for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
           }
           return;
         }
