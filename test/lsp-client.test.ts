@@ -1,13 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { LspClient } from "../src/enrichment/client.js";
+import { LspClient, lspLimits } from "../src/enrichment/client.js";
 
 const worker = path.join(import.meta.dirname, "fixtures/lsp/server.mjs");
 const dirs: string[] = [];
-afterEach(async () => { for (const dir of dirs.splice(0)) await fs.rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { vi.useRealTimers(); for (const dir of dirs.splice(0)) await fs.rm(dir, { recursive: true, force: true }); });
 
 async function start(mode = "normal", limits = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-lsp-client-"));
@@ -38,12 +38,16 @@ describe("bounded LSP stdio", () => {
   });
 
   it("cancels timed-out requests and remains usable", async () => {
-    const { client, uri } = await start("timeout", { requestTimeoutMs: 100 });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { client, uri } = await start("timeout");
     try {
-      await expect(client.request("textDocument/references", { textDocument: { uri } })).rejects.toThrow("timeout");
+      const pending = client.request("textDocument/references", { textDocument: { uri } });
+      const rejected = expect(pending).rejects.toThrow("request-timeout");
+      await vi.advanceTimersByTimeAsync(lspLimits.requestTimeoutMs);
+      await rejected;
       const result = await client.request("test/events", {}) as { events: string[] };
       expect(result.events).toContain("$/cancelRequest");
-    } finally { await client.close(); }
+    } finally { vi.useRealTimers(); await client.close(); }
   });
 
   it("cancels on caller abort, rejects server errors, and recovers", async () => {
@@ -87,13 +91,15 @@ describe("bounded LSP stdio", () => {
         await expect(noisy.client.request("test/events", {})).rejects.toThrow("session-byte-limit");
       }
     } finally { await noisy.client.close(); }
-    const slow = await start("timeout", { maxPending: 1, requestTimeoutMs: 100 });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const slow = await start("timeout", { maxPending: 1 });
     try {
       const pending = slow.client.request("textDocument/references", { textDocument: { uri: slow.uri } });
       const rejected = expect(pending).rejects.toThrow("request-timeout");
       await expect(slow.client.request("test/events", {})).rejects.toThrow("pending-limit");
+      await vi.advanceTimersByTimeAsync(lspLimits.requestTimeoutMs);
       await rejected;
-    } finally { await slow.client.close(); }
+    } finally { vi.useRealTimers(); await slow.client.close(); }
     const hung = await start("hang-shutdown", { shutdownTimeoutMs: 30 });
     await hung.client.close();
     await expect(hung.client.request("test/events", {})).rejects.toThrow();
