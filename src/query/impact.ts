@@ -173,6 +173,18 @@ function parseDiff(diff: string): DiffFile[] & { tolerated?: number } {
   return Object.assign(files, { tolerated });
 }
 
+function innermostSymbolAt(symbols: readonly OsnovaSymbol[], line: number): OsnovaSymbol | undefined {
+  let best: OsnovaSymbol | undefined;
+  for (const symbol of symbols) {
+    if (line < symbol.span.startLine || line > symbol.span.endLine) continue;
+    if (best === undefined || symbol.span.startLine > best.span.startLine ||
+      (symbol.span.startLine === best.span.startLine && (symbol.span.startCol > best.span.startCol ||
+        (symbol.span.startCol === best.span.startCol && (symbol.span.endLine < best.span.endLine ||
+          (symbol.span.endLine === best.span.endLine && symbol.span.endCol < best.span.endCol)))))) best = symbol;
+  }
+  return best;
+}
+
 function symbolText(file: FileCard, symbol: OsnovaSymbol): string {
   const lines = file.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine);
   if (lines.length === 1) return (lines[0] ?? "").slice(symbol.span.startCol, symbol.span.endCol);
@@ -207,9 +219,28 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   const consumed = new Set<string>();
   const definition = (index: OsnovaIndex, symbol: OsnovaSymbol, receipt: IndexReceipt): DefinitionEvidence =>
     ({ symbol, receipt: sourceReceipt(index, symbol.file, receipt) });
-  const overlaps = (symbol: OsnovaSymbol, requested: "base" | "current"): boolean => diffs?.some((diff) =>
-    (requested === "base" && !sameIndex ? diff.before : diff.after) === symbol.file &&
-    [...(requested === "base" && !sameIndex ? diff.oldLines : diff.newLines)].some((line) => line >= symbol.span.startLine && line <= symbol.span.endLine)) ?? false;
+  const attributed = new Map<OsnovaIndex, Map<string, Set<string>>>();
+  const overlaps = (symbol: OsnovaSymbol, requested: "base" | "current"): boolean => {
+    if (diffs === null) return false;
+    const useBase = requested === "base" && !sameIndex;
+    const index = useBase ? base : current;
+    const perIndex = attributed.get(index) ?? new Map<string, Set<string>>();
+    attributed.set(index, perIndex);
+    let names = perIndex.get(symbol.file);
+    if (names === undefined) {
+      names = new Set();
+      perIndex.set(symbol.file, names);
+      const symbols = index.files.get(symbol.file)?.symbols ?? [];
+      for (const diff of diffs) {
+        if ((useBase ? diff.before : diff.after) !== symbol.file) continue;
+        for (const line of useBase ? diff.oldLines : diff.newLines) {
+          const innermost = innermostSymbolAt(symbols, line);
+          if (innermost !== undefined) names.add(innermost.qualifiedName);
+        }
+      }
+    }
+    return names.has(symbol.qualifiedName);
+  };
   for (const symbol of [...base.symbols.values()].sort((a, b) => compareText(a.qualifiedName, b.qualifiedName))) {
     const rename = renames.get(symbol.file);
     const local = symbol.qualifiedName.slice(symbol.file.length);

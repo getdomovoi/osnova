@@ -77,6 +77,46 @@ describe("settle on a single index", () => {
   });
 });
 
+describe("settle line attribution", () => {
+  const boxText = "class Box {\n  a() {\n    return 1;\n  }\n  b() {\n    return 2;\n  }\n}\n";
+  const boxCard = (methods: readonly [string, string]): FileCard => {
+    const text = boxText.replace("  a()", `  ${methods[0]}()`).replace("  b()", `  ${methods[1]}()`);
+    const method = (name: string, startLine: number): OsnovaSymbol => ({ name, qualifiedName: `k.ts#Box.${name}`, file: "k.ts", kind: "method",
+      signature: `${name}()`, lineCount: 3, span: { startLine, endLine: startLine + 2, startCol: 2, endCol: 3 } });
+    const symbols: OsnovaSymbol[] = [{ name: "Box", qualifiedName: "k.ts#Box", file: "k.ts", kind: "class", signature: "class Box", lineCount: 8,
+      span: { startLine: 1, endLine: 8, startCol: 0, endCol: 1 } }, method(methods[0], 2), method(methods[1], 5)];
+    return { path: "k.ts", symbols, text, hash: createHash("sha256").update(text).digest("hex"), language: "typescript", size: text.length, lineCount: 9 };
+  };
+  const users = card("u.ts", ["useA", "useB", "useBox"]);
+  const edges = (first: string): OsnovaEdge[] => [edge("u.ts#useA", `k.ts#Box.${first}`), edge("u.ts#useB", "k.ts#Box.b"), edge("u.ts#useBox", "k.ts#Box")];
+  const current = index([boxCard(["a", "b"]), users], edges("a"));
+
+  it("attributes a body edit to the innermost symbol even when hunk context spans its neighbours", () => {
+    const diff = "--- a/k.ts\n+++ b/k.ts\n@@ -3,6 +3,6 @@\n     return 1;\n   }\n   b() {\n-    return 2;\n+    return 3;\n   }\n }\n";
+    const result = impact(current, current, { diff, maxDepth: 1 });
+    expect(result.changes.map((change) => `${change.kind}: ${change.after?.symbol.qualifiedName}`)).toEqual(["changed: k.ts#Box.b"]);
+    expect(result.dependents.map((hit) => hit.symbol?.qualifiedName)).toEqual(["u.ts#useB"]);
+    expect(result.omitted.dependentFrontier).toBe(0);
+  });
+
+  it("attributes a class-level edit to the class, not its methods", () => {
+    const diff = "--- a/k.ts\n+++ b/k.ts\n@@ -1,3 +1,3 @@\n-class Box {\n+class Box extends Base {\n   a() {\n     return 1;\n";
+    const result = impact(current, current, { diff, maxDepth: 1 });
+    expect(result.changes.map((change) => change.after?.symbol.qualifiedName)).toEqual(["k.ts#Box"]);
+    expect(result.dependents.map((hit) => hit.symbol?.qualifiedName)).toEqual(["u.ts#useBox"]);
+  });
+
+  it("reports a method rename across indexes without attributing the change to the class", () => {
+    const base = current;
+    const next = index([boxCard(["c", "b"]), users], edges("c"));
+    const diff = "--- a/k.ts\n+++ b/k.ts\n@@ -1,5 +1,5 @@\n class Box {\n-  a() {\n+  c() {\n     return 1;\n   }\n   b() {\n";
+    const result = impact(base, next, { diff, maxDepth: 1 });
+    expect(result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`))
+      .toEqual(["renamed: k.ts#Box.a -> k.ts#Box.c"]);
+    expect(result.dependents.map((hit) => [hit.snapshot, hit.symbol?.qualifiedName])).toEqual([["base", "u.ts#useA"], ["current", "u.ts#useA"]]);
+  });
+});
+
 describe("footing seeds", () => {
   it("skips prose documents and keeps looking for definitions", () => {
     const prose = Array.from({ length: 6 }, (_, i) => ({ ...card(`docs/guide-${i}.md`, [], `# How the resolver walks a package on disk\n\nThe resolver walks the package on disk. ${i}\n`), language: "fallback" as const }));
