@@ -113,17 +113,15 @@ it("counts omitted edges, not omitted groups, in the bounded footer", () => {
   expect(text).toContain(`omitted: ${300 - shownGroups * 3 - foldedEdges} of 300 confirmed edges; 0 of 0 unresolved evidence items`);
 });
 
-it("keeps the unresolved evidence section one row per edge", () => {
+it("keeps the unresolved evidence section one row per name and basis", () => {
   const unresolvedOnly: CallersDetailedResult = { ...result, hits: [], unresolved: unresolved.slice(0, 2) };
   expect(formatCallersDetailed(unresolvedOnly)).toBe([
     "indexed-graph results; relationships use heuristic resolution, not type inference",
     "target.ts#target: no indexed relationships found",
     "This does not prove absence of callers or that deletion is safe.",
     "unresolved evidence (2); not confirmed relationships",
-    "d1 calls unknown0 caller-0.ts:1",
-    "  reason: no-matching-symbol",
-    "d1 calls unknown1 caller-1.ts:2",
-    "  reason: no-matching-symbol",
+    "d1 calls unknown0 caller-0.ts:1 [no-matching-symbol]",
+    "d1 calls unknown1 caller-1.ts:2 [no-matching-symbol]",
   ].join("\n"));
 });
 
@@ -206,4 +204,48 @@ it("does not hoist a via when another group carries a different hop", () => {
   }
   const text = formatCallersDetailedBounded({ ...result, hits, unresolved: [] }, 2_048);
   expect(text).not.toContain("via (all)");
+});
+
+const hitMatches = { candidates: ["a.ts#A.hit", "b.ts#B.hit"], total: 2 };
+function unresolvedSite(file: string, line: number, depth = 1, name = "hit", nameMatches = hitMatches): UnresolvedCallerEdge {
+  return { depth, nameMatches, edge: { ...edge(0, false), toName: name, fromFile: file, fromSymbol: `${file}#caller`, line } };
+}
+
+it("prints each distinct candidate list once and groups unresolved sites by name and file", () => {
+  const many: CallersDetailedResult = { ...result, hits: [], unresolved: [
+    unresolvedSite("y.ts", 12, 2), unresolvedSite("x.ts", 9), unresolvedSite("x.ts", 3), unresolvedSite("y.ts", 4),
+    unresolvedSite("z.ts", 8, 1, "other", { candidates: ["o.ts#other"], total: 1 }),
+    unresolvedSite("z.ts", 2, 1, "bare", { candidates: [], total: 0 }),
+  ] };
+  const text = formatCallersDetailed(many);
+  expect(text).toBe([
+    "indexed-graph results; relationships use heuristic resolution, not type inference",
+    "target.ts#target: no indexed relationships found",
+    "This does not prove absence of callers or that deletion is safe.",
+    "unresolved evidence (6); not confirmed relationships",
+    "d1 calls bare z.ts:2 [no-matching-symbol]",
+    "candidates for hit (2, unverified): a.ts#A.hit, b.ts#B.hit",
+    "d1 calls hit x.ts:3,9; y.ts:4 [no-matching-symbol]",
+    "d2 calls hit y.ts:12 [no-matching-symbol]",
+    "candidates for other (1, unverified): o.ts#other",
+    "d1 calls other z.ts:8 [no-matching-symbol]",
+  ].join("\n"));
+  expect(formatCallersDetailedBounded(many, 2_048)).toBe(text);
+});
+
+it("keeps candidate lists once and unresolved counts exact under a budget", () => {
+  const sites = Array.from({ length: 400 }, (_, index) => unresolvedSite(`file-${index % 40}.ts`, index + 1, 1 + (index % 2), "hit",
+    { candidates: ["a.ts#A.hit", "b.ts#B.hit", "c.ts#C.hit", "d.ts#D.hit", "e.ts#E.hit"], total: 9 }));
+  const many: CallersDetailedResult = { ...result, hits: hits.slice(0, 3), unresolved: sites };
+  const full = formatCallersDetailed(many);
+  expect(full.length).toBeLessThan(16_384);
+  expect(full.match(/candidates for hit \(9, unverified\): a\.ts#A\.hit, b\.ts#B\.hit, c\.ts#C\.hit, d\.ts#D\.hit, e\.ts#E\.hit and 4 more/g)).toHaveLength(1);
+  expect(full.match(/^d[12] calls hit .* \[no-matching-symbol\]$/gm)).toHaveLength(2);
+  const text = formatCallersDetailedBounded(many, 2_048);
+  expect(text.length).toBeLessThanOrEqual(2_048);
+  expect(text.match(/candidates for hit/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  const shownRows = text.match(/^d[12] calls hit .* \[no-matching-symbol\]$/gm) ?? [];
+  const omitted = Number(/(\d+) of 400 unresolved evidence items/.exec(text)?.[1]);
+  expect(omitted).toBe(400 - shownRows.length * 200);
+  if (shownRows.length > 0) expect(text.match(/candidates for hit/g)).toHaveLength(1);
 });
