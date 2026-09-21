@@ -53,7 +53,27 @@ describe("settle on a single index", () => {
     expect(text.split("\n")[0]).toBe("osnova settle: 1 symbol changes; 1 dependents; 1 frontier items omitted");
     expect(text).toContain("changed: a.ts#target -> a.ts#target");
     expect(text).toContain("current d1 b.ts#middle");
-    expect(text).toContain("uncertainty: 0 unresolved edges;");
+    expect(text).toContain("uncertainty: 0 unresolved edges not listed");
+  });
+
+  it("prints a 16-hex receipt prefix per dependent while the API keeps the full hash", () => {
+    const result = impact(current, current, { diff, maxDepth: 1 });
+    const hash = result.dependents[0]!.receipt.hash;
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    const line = formatImpact(result).split("\n").find((item) => item.startsWith("current d1 b.ts#middle"));
+    expect(line).toBe(`current d1 b.ts#middle [source ${hash.slice(0, 16)}]`);
+  });
+
+  it("states every settle limit once in short prose", () => {
+    const short = "--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,3 @@\n-function target() { return 1; }\n+function target() { return 2; }\n";
+    const result = impact(current, current, { diff: short, maxDepth: 1 });
+    expect(result.uncertainty.notes).toEqual(["indexed-graph-only", "base-snapshot-is-current-index", "deleted-symbols-not-visible",
+      "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",
+      "provided-diff-ranges-not-verified-against-source", "diff-short-by-2-context-lines-treated-as-unchanged"]);
+    const line = formatImpact(result).split("\n").at(-1)!;
+    expect(line).toBe("uncertainty: 0 unresolved edges not listed; a missing dependent is not proof of absence; base = current index, deletions invisible; " +
+      "receipts = indexed content, not disk or runtime; renames unproven; one shortest path each; diff ranges unverified; diff 2 context lines short, treated unchanged");
+    expect(line.length).toBeLessThan(300);
   });
 });
 

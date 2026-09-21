@@ -304,12 +304,37 @@ export function formatTaskContext(result: TaskContextResult): string {
   return lines.join("\n");
 }
 
+export const impactReceiptDigits = 16;
+
+const impactNoteText: Readonly<Record<string, string>> = {
+  "indexed-graph-only": "",
+  "base-snapshot-is-current-index": "base = current index, deletions invisible",
+  "deleted-symbols-not-visible": "",
+  "receipts-identify-indexed-content-not-disk-freshness": "receipts = indexed content, not disk or runtime",
+  "rename-identity-is-not-proven": "renames unproven",
+  "one-shortest-path-per-dependent": "one shortest path each",
+  "provided-diff-ranges-not-verified-against-source": "diff ranges unverified",
+  "index-diagnostics-present": "diagnostics present",
+};
+
+export function formatImpactDependent(dependent: ImpactResult["dependents"][number]): string {
+  return `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash.slice(0, impactReceiptDigits)}]`;
+}
+
+export function formatImpactUncertainty(uncertainty: ImpactResult["uncertainty"]): string {
+  const phrases = uncertainty.notes.map((note) => {
+    const short = note.match(/^diff-short-by-(\d+)-context-lines-treated-as-unchanged$/);
+    return short === null ? impactNoteText[note] ?? note : `diff ${short[1]} context lines short, treated unchanged`;
+  }).filter((text) => text !== "");
+  return [`uncertainty: ${uncertainty.unresolvedEdges} unresolved edges not listed; a missing dependent is not proof of absence`, ...phrases].join("; ");
+}
+
 export function formatImpact(result: ImpactResult): string {
   return [
     `osnova settle: ${result.changes.length} symbol changes; ${result.dependents.length} dependents; ${result.omitted.dependentFrontier} frontier items omitted`,
     ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
-    ...result.dependents.map((dependent) => `${dependent.snapshot} d${dependent.depth} ${dependent.symbol?.qualifiedName ?? dependent.file} [source ${dependent.receipt.hash}]`),
-    `uncertainty: ${result.uncertainty.unresolvedEdges} unresolved edges; ${result.uncertainty.notes.join(", ")}`,
+    ...result.dependents.map(formatImpactDependent),
+    formatImpactUncertainty(result.uncertainty),
   ].join("\n");
 }
 

@@ -145,7 +145,8 @@ describe("mcp stdio server", () => {
       expect(settle).toContain("osnova settle: 1 symbol changes; 1 dependents; 0 frontier items omitted");
       expect(settle).toContain("changed: src/loud.ts#shout -> src/loud.ts#shout");
       expect(settle).toContain("current d1 src/greet.ts#greet");
-      expect(settle).toContain("base-snapshot-is-current-index");
+      expect(settle).toMatch(/current d1 src\/greet\.ts#greet \[source [0-9a-f]{16}\]\n/);
+      expect(settle).toContain("base = current index, deletions invisible");
       const bad = await client.callTool({ name: "osnova_settle", arguments: { diff: "not a diff" } });
       expect(bad.isError).toBe(true);
       const missing = await client.callTool({ name: "osnova_footing", arguments: {} });
