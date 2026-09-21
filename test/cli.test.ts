@@ -133,6 +133,23 @@ describe("cli", () => {
     fs.rmSync(path.join(workspace, "test"), { recursive: true, force: true });
   }, 60_000);
 
+  it("rejects a stray directory positional and points at --workspace", async () => {
+    const stray = capture();
+    expect(await runCli(["ground", "three", workspace, ...cacheArgs], stray.io)).toBe(2);
+    expect(stray.lines.join("\n")).toContain(`osnova ground: ${JSON.stringify(workspace)} looks like a directory; pass the workspace with --workspace <path>`);
+
+    const dot = capture();
+    expect(await runCli(["warp", "one", ".", "--workspace", workspace, ...cacheArgs], dot.io)).toBe(2);
+    expect(dot.lines.join("\n")).toContain("osnova warp: \".\" looks like a directory");
+
+    const word = capture();
+    expect(await runCli(["ground", "src", "--workspace", workspace, ...cacheArgs], word.io)).toBe(0);
+
+    const file = capture();
+    expect(await runCli(["outline", "src/two.ts", "--workspace", workspace, ...cacheArgs], file.io)).toBe(0);
+    expect(file.lines.join("\n")).toContain("function two");
+  });
+
   it("rejects unknown commands with exit 2", async () => {
     const { lines, io } = capture();
     const code = await runCli(["frobnicate"], io);
