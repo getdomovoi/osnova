@@ -1,4 +1,4 @@
-import type { CardLanguage, FileCard, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { CardLanguage, FileCard, OsnovaIndex, OsnovaSymbol, RouteSite } from "../types.js";
 
 const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "of", "in", "to", "for", "and", "or", "how",
@@ -120,9 +120,9 @@ interface FileDocuments {
 const fileCache = new Map<string, FileDocuments>();
 const contextCache = new WeakMap<OsnovaIndex, QueryContext>();
 
-const cacheKey = (card: FileCard, routes: number): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}\0${routes}`;
+const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}\0${card.routes?.length ?? 0}`;
 
-function buildFileDocuments(file: string, card: FileCard, routes: readonly OsnovaEdge[]): FileDocuments {
+function buildFileDocuments(file: string, card: FileCard): FileDocuments {
   const lines = card.text.length > 0 ? card.text.split("\n") : [];
   const pathTokens = new Set(tokenize(file));
   const create = (symbol: OsnovaSymbol | null): SearchDocument => {
@@ -160,29 +160,27 @@ function buildFileDocuments(file: string, card: FileCard, routes: readonly Osnov
   // path are literal in this file, so the entry stays valid under the card's own cache key; the handler
   // symbol is attached only when it lives in this file.
   // A controller prefix and a method path declared in the same file compose into one label at query
-  // time only (`cats` + `:id` is searchable as `/cats/:id`); the artifact keeps the two edges apart.
-  const prefixOf = (edge: OsnovaEdge): string | undefined => {
-    if (edge.toSymbol === undefined || edge.toFile !== file) return undefined;
-    const local = edge.toSymbol.slice(file.length + 1);
-    if (!local.includes(".")) return undefined;
-    const owner = `${file}#${local.slice(0, local.lastIndexOf("."))}`;
-    const mount = routes.find((candidate) => candidate.route?.method === "ANY" && candidate.toSymbol === owner && candidate.toFile === file && candidate.route.path !== undefined);
-    return mount?.route?.path;
+  // time only (`cats` + `:id` is searchable as `/cats/:id`); the artifact keeps the two sites apart.
+  const routes = card.routes ?? [];
+  const prefixOf = (site: RouteSite): string | undefined => {
+    if (site.handler === undefined || !site.handler.includes(".")) return undefined;
+    const owner = site.handler.slice(0, site.handler.lastIndexOf("."));
+    return routes.find((mount) => mount.method === "ANY" && mount.handler === owner && mount.path !== undefined)?.path;
   };
-  const routeDocuments = routes.map((edge) => {
-    const prefix = edge.route?.path === undefined ? undefined : prefixOf(edge);
-    const composed = prefix === undefined ? undefined : `/${prefix}/${edge.route?.path ?? ""}`.replace(/\/+/g, "/");
-    const label = `${edge.route?.method ?? ""} ${edge.route?.path ?? ""} ${composed ?? ""}`;
-    const symbol = edge.toFile === file && edge.toSymbol !== undefined ? card.symbols.find((candidate) => candidate.qualifiedName === edge.toSymbol) ?? null : null;
-    const tokens = tokenize(lines[edge.line - 1] ?? "");
+  const routeDocuments = routes.map((site) => {
+    const prefix = site.path === undefined ? undefined : prefixOf(site);
+    const composed = prefix === undefined ? undefined : `/${prefix}/${site.path ?? ""}`.replace(/\/+/g, "/");
+    const label = `${site.method} ${site.path ?? ""} ${composed ?? ""}`;
+    const symbol = site.handler === undefined ? null : card.symbols.find((candidate) => candidate.qualifiedName === `${file}#${site.handler}`) ?? null;
+    const tokens = tokenize(lines[site.line - 1] ?? "");
     return {
       file, symbol, path: pathTokens,
       name: new Set(tokenize(label)),
-      signature: new Set(tokenize(`${label} ${edge.toName} route`)),
+      signature: new Set(tokenize(`${label} ${site.handler ?? ""} route`)),
       documentation: new Set<string>(), documentationRange: null,
-      ranges: [{ start: edge.line, end: edge.line }],
+      ranges: [{ start: site.line, end: site.line }],
       body: new Map(tokens.map((token) => [token, tokens.filter((other) => other === token).length])), length: tokens.length,
-      route: { method: edge.route?.method ?? "", path: edge.route?.path, line: edge.line },
+      route: { method: site.method, path: site.path, line: site.line },
     } satisfies SearchDocument;
   });
   const documents = [module, ...definitions, ...routeDocuments];
@@ -204,12 +202,11 @@ export function queryContext(index: OsnovaIndex): QueryContext {
   let totalLength = 0;
   const live = new Set<string>();
   for (const [file, card] of index.files) {
-    const routes = index.edgesForFile(file).filter((edge) => edge.kind === "routes" && edge.fromFile === file);
-    const key = cacheKey(card, routes.length);
+    const key = cacheKey(card);
     live.add(key);
     let entry = fileCache.get(key);
     if (entry === undefined) {
-      entry = buildFileDocuments(file, card, routes);
+      entry = buildFileDocuments(file, card);
       fileCache.set(key, entry);
     }
     documents.push(...entry.documents);
@@ -229,7 +226,7 @@ export function queryContext(index: OsnovaIndex): QueryContext {
 
 export function fileDocumentsCached(index: OsnovaIndex, file: string): boolean {
   const card = index.files.get(file);
-  return card !== undefined && fileCache.has(cacheKey(card, index.edgesForFile(file).filter((edge) => edge.kind === "routes" && edge.fromFile === file).length));
+  return card !== undefined && fileCache.has(cacheKey(card));
 }
 
 export function idf(ctx: QueryContext, term: string): number {

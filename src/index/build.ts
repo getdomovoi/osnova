@@ -13,6 +13,7 @@ import type {
   ProgressEvent,
   IndexDiagnostic,
   ReExport,
+  RouteSite,
 } from "../types.js";
 import { OsnovaIndexImpl, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
@@ -133,6 +134,10 @@ export async function extractCard(
     };
   });
 
+  const routes: RouteSite[] = rawEdges.flatMap((edge) => edge.kind !== "routes" || edge.route === undefined ? [] : [{
+    method: edge.route.method, ...(edge.route.path === undefined ? {} : { path: edge.route.path }), line: edge.line,
+    ...(edge.binding?.kind === "local" ? { handler: edge.binding.name } : {}),
+  }]);
   const card: FileCard = {
     path: relPath,
     language,
@@ -143,6 +148,7 @@ export async function extractCard(
     symbols,
     diagnostics,
     reExports,
+    ...(routes.length === 0 ? {} : { routes }),
   };
   return { card, rawEdges };
 }
