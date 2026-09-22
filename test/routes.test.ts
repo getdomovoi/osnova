@@ -190,6 +190,10 @@ describe("route edges", () => {
     expect(imported[0]?.line).toBe(13);
     const cats = ask(index, "POST :id").hits;
     expect(cats[0]?.symbol?.qualifiedName).toBe("src/cats.controller.ts#CatsController.create");
+    const composed = ask(index, "POST /cats/:id").hits;
+    expect(composed[0]?.symbol?.qualifiedName).toBe("src/cats.controller.ts#CatsController.create");
+    const listing = ask(index, "GET /cats").hits;
+    expect(listing[0]?.symbol?.qualifiedName).toBe("src/cats.controller.ts#CatsController.findAll");
   });
 
   it("prints the route on warp rows", async () => {

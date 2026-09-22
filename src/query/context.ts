@@ -159,8 +159,20 @@ function buildFileDocuments(file: string, card: FileCard, routes: readonly Osnov
   // One document per route registration, so "GET /users" ranks the site and its handler. The verb and
   // path are literal in this file, so the entry stays valid under the card's own cache key; the handler
   // symbol is attached only when it lives in this file.
+  // A controller prefix and a method path declared in the same file compose into one label at query
+  // time only (`cats` + `:id` is searchable as `/cats/:id`); the artifact keeps the two edges apart.
+  const prefixOf = (edge: OsnovaEdge): string | undefined => {
+    if (edge.toSymbol === undefined || edge.toFile !== file) return undefined;
+    const local = edge.toSymbol.slice(file.length + 1);
+    if (!local.includes(".")) return undefined;
+    const owner = `${file}#${local.slice(0, local.lastIndexOf("."))}`;
+    const mount = routes.find((candidate) => candidate.route?.method === "ANY" && candidate.toSymbol === owner && candidate.toFile === file && candidate.route.path !== undefined);
+    return mount?.route?.path;
+  };
   const routeDocuments = routes.map((edge) => {
-    const label = `${edge.route?.method ?? ""} ${edge.route?.path ?? ""}`;
+    const prefix = edge.route?.path === undefined ? undefined : prefixOf(edge);
+    const composed = prefix === undefined ? undefined : `/${prefix}/${edge.route?.path ?? ""}`.replace(/\/+/g, "/");
+    const label = `${edge.route?.method ?? ""} ${edge.route?.path ?? ""} ${composed ?? ""}`;
     const symbol = edge.toFile === file && edge.toSymbol !== undefined ? card.symbols.find((candidate) => candidate.qualifiedName === edge.toSymbol) ?? null : null;
     const tokens = tokenize(lines[edge.line - 1] ?? "");
     return {
