@@ -1,6 +1,6 @@
 {
   "name": "@getdomovoi/osnova",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Deterministic code map for AI coding agents: a tree-sitter symbol and call graph served over MCP and a CLI, with no embeddings, network or telemetry.",
   "type": "module",
   "license": "Apache-2.0",

@@ -53,7 +53,7 @@ describe("probe-first refresh", () => {
     await expect(loadIndex(repo, { cacheDir })).resolves.toBeUndefined();
     await fs.writeFile(path.join(ws, "index.json"), "{not json");
     await expect(loadIndex(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
-    for (const malformed of ['{"formatVersion":8,', '{"metadata":{"formatVersion":8},"formatVersion":10}', '{"formatVersion":8.9}']) {
+    for (const malformed of ['{"formatVersion":8,', '{"metadata":{"formatVersion":8},"formatVersion":11}', '{"formatVersion":8.9}']) {
       await fs.writeFile(path.join(ws, "index.json"), malformed);
       await expect(loadIndex(repo, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "cache-read-failed" } });
     }

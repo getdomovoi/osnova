@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "nest-v1",
+  "source": { "kind": "checkout", "revision": "2dfba680522ddf74ace234f02b4022782c031a71", "repository": "https://github.com/nestjs/nest" },
+  "purpose": "route edges (NestJS controller and method decorators, express platform tests) and resolution coverage; no retrieval cases"
+}

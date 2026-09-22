@@ -102,7 +102,7 @@ export function askDetailed(index: OsnovaIndex, question: string, options?: AskO
   const seen = new Set<string>();
   for (const { document, score, exact } of scored) {
     const symbol = document.symbol;
-    const key = symbol === null ? `file:${document.file}` : `symbol:${symbol.qualifiedName}`;
+    const key = document.route !== undefined && symbol === null ? `route:${document.file}:${document.route.line}` : symbol === null ? `file:${document.file}` : `symbol:${symbol.qualifiedName}`;
     if (seen.has(key)) continue;
     seen.add(key);
     candidates.push({ document, score, exact });

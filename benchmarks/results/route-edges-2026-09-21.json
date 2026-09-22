@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "measured": "routes edges on pinned checkouts, scored at the registration site against a runtime route table where one exists",
+  "osnova": {
+    "commit": "aa44ad705a35de9725db8eb9177b6d33e533330b",
+    "version": "0.7.0"
+  },
+  "corpora": [
+    {
+      "corpus": "fastapi-template-v1",
+      "repository": "https://github.com/fastapi/full-stack-fastapi-template",
+      "revision": "cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7",
+      "routeEdges": 29,
+      "resolved": 23,
+      "literalPath": 23,
+      "mounts": 6,
+      "byBasis": {
+        "lexical-definition": 23,
+        "unresolved:bound-symbol-missing": 1,
+        "unresolved:receiver-unresolved": 5
+      },
+      "oracle": {
+        "kind": "runtime route table",
+        "routes": 23,
+        "scoredEdges": 23,
+        "truePositive": 23,
+        "falsePositive": 0,
+        "recall": 1,
+        "falseSamples": [],
+        "missed": []
+      }
+    },
+    {
+      "corpus": "flask-v1",
+      "repository": "https://github.com/pallets/flask",
+      "revision": "d73fa1cdcbd8b1465c151db8924ba58b1dd14e35",
+      "routeEdges": 137,
+      "resolved": 113,
+      "literalPath": 124,
+      "mounts": 123,
+      "byBasis": {
+        "lexical-definition": 113,
+        "unresolved:bound-symbol-missing": 13,
+        "unresolved:import-target-unresolved": 2,
+        "unresolved:receiver-unresolved": 3,
+        "unresolved:route-handler-wrapped": 6
+      },
+      "handVerified": {
+        "sample": 25,
+        "seed": "deterministic shuffle, seed 7",
+        "true": 25,
+        "false": 0,
+        "note": "Registration sites are inside test functions, so no runtime route table exists; 25 edges were read against their source lines and targets. Unresolved edges in the sample were an attribute-chain blueprint (receiver-unresolved), lower-case module variables passed to register_blueprint (bound-symbol-missing) and a class-based view built by as_view (route-handler-wrapped), each stated rather than guessed."
+      }
+    },
+    {
+      "corpus": "nest-v1",
+      "repository": "https://github.com/nestjs/nest",
+      "revision": "2dfba680522ddf74ace234f02b4022782c031a71",
+      "routeEdges": 431,
+      "resolved": 424,
+      "literalPath": 413,
+      "mounts": 109,
+      "byBasis": {
+        "lexical-definition": 424,
+        "unresolved:bound-symbol-missing": 2,
+        "unresolved:route-handler-inline": 1,
+        "unresolved:shadowed-declaration": 4
+      },
+      "handVerified": {
+        "sample": 25,
+        "seed": "deterministic shuffle, seed 7",
+        "true": 25,
+        "false": 0,
+        "note": "No runtime route table without booting each integration app; 25 edges were read against their source lines and targets. Object-literal @Controller arguments record no path, and a controller class declared in several describe blocks of one spec refuses with shadowed-declaration."
+      }
+    }
+  ],
+  "reading": "An edge is recorded only when the receiver binds to the framework import, the member is a listed verb, and the handler is a bound name or the decorated definition; a literal first argument becomes the path. On the one corpus with a runtime route table every osnova verb edge is true and every runtime route is covered."
+}

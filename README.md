@@ -66,17 +66,17 @@ Each confirmed line names the caller, its lines and the evidence that tied the c
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name; everything else stays unresolved with a reason. These are the shares on the pinned checkouts under `benchmarks/corpora/`, recorded in [`benchmarks/results/resolution-coverage-2026-09-21.json`](benchmarks/results/resolution-coverage-2026-09-21.json); the last column leaves out calls through packages outside the repository and calls to builtins, which can never resolve locally, and the [reference](docs/reference.md#resolution-coverage-and-claim-checking) defines every column.
+A call site counts as resolved when the index ties it to one definition through evidence it can name; everything else stays unresolved with a reason. These are the shares on the pinned checkouts under `benchmarks/corpora/`, recorded in [`benchmarks/results/resolution-coverage-2026-09-21b.json`](benchmarks/results/resolution-coverage-2026-09-21b.json); the last column leaves out calls through packages outside the repository and calls to builtins, which can never resolve locally, and the [reference](docs/reference.md#resolution-coverage-and-claim-checking) defines every column.
 
 | Corpus | Languages | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | all | 5488 | 2118 | 38.6% | 59.7% |
+| click | all | 6593 | 2903 | 44.0% | 62.4% |
 | cobra | all | 4374 | 1980 | 45.3% | 88.9% |
 | gson | all | 23382 | 8473 | 36.2% | 56.7% |
-| humanizer | all | 30517 | 7804 | 25.6% | 51.3% |
-| pyright | all | 58462 | 30057 | 51.4% | 74.5% |
+| humanizer | all | 30517 | 7798 | 25.6% | 51.3% |
+| pyright | all | 58578 | 30070 | 51.3% | 74.5% |
 | ripgrep | all | 13387 | 6121 | 45.7% | 71.6% |
-| zod | all | 53417 | 21679 | 40.6% | 73.4% |
+| zod | all | 53417 | 21630 | 40.5% | 73.2% |
 
 Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 
@@ -147,7 +147,9 @@ Inputs and the local form are in the [reference](docs/reference.md#settle-in-ci)
 
 ## What osnova does not do
 
-- No type inference and no dynamic dispatch. Edges come from syntax: direct calls, imports, exports, name references and declared heritage (a written superclass or interface name), with lexical binding and receiver hints for TypeScript, JavaScript and Python. Resolution is heuristic and says so.
+- No type inference and no dynamic dispatch. Edges come from syntax: direct calls, imports, exports, name references, declared heritage (a written superclass or interface name) and framework routes (a registration whose receiver binds to a listed framework import, with the verb and the literal path written at the site), with lexical binding and receiver hints for TypeScript, JavaScript and Python. Resolution is heuristic and says so.
+- No route table. A `routes` edge is one registration site tied to one handler; prefixes from mounts, blueprints and controllers are recorded on their own edges and never composed into a full path, a computed path records no path, and an inline closure or a wrapped handler records the route with no target. Express, NestJS, Flask and FastAPI are read; gin, axum, Django, Spring, ASP.NET, Rails and file-based routers are not.
+- That boundary has a measured price. Scored against a type checker on two pinned corpora, the calls osnova does not resolve are mostly calls whose receiver type is never written down: 2945 of 6359 missed sites on zod and 164 of 307 on click are a plain name carrying no annotation, and another 1478 on zod are a call result or a property chain. Only 349 missed sites on zod and 10 on click have a type written at the receiver's declaration, and 248 of those 349 are a single library idiom. Resolving every one of them would move recall from 76.9% to 78.2% on zod and from 90.4% to 90.7% on click, so the boundary costs roughly one recall point rather than ten. The full census is in [`benchmarks/results/receiver-boundary-census-2026-09-21.json`](benchmarks/results/receiver-boundary-census-2026-09-21.json).
 - No semantic search. `osnova_ground` is fielded lexical ranking over definitions. It is fast, deterministic and explainable, and it will not match a paraphrase.
 - No proof of safety. An empty caller list means the index found no caller, not that none exists.
 - No cost claims. Agent trials so far show correctness parity with and without the graph on small tasks. A benchmark that separates the two is in progress.
