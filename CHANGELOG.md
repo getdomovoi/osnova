@@ -7,6 +7,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 ### Added
 
 - `integrations/claude-code/` is a Claude Code plugin: `.claude-plugin/plugin.json`, `.mcp.json` and `hooks/hooks.json` beside the existing skill, listed by `.claude-plugin/marketplace.json` at the repository root, so `/plugin marketplace add getdomovoi/osnova` and `/plugin install osnova@osnova` install the MCP entry, the session, prompt and stop hooks and the skill together, each run as `npx -y @getdomovoi/osnova` with no global install. `test/distribution-manifests.test.ts` holds the plugin hooks to what `osnova setup` writes and pins every manifest version to the package version.
+- `assets/demo/warp.gif`, embedded at the top of the README's "What you get back": `osnova warp` and `osnova plumb` on the pinned click checkout, recorded with the tape and ffmpeg command beside it.
 - `server.json` describes the server for the MCP registry (schema 2025-12-11) as `io.github.getdomovoi/osnova`, matched by `mcpName` in `package.json`, and the test validates it against a vendored copy of that schema; the npm keywords add `code-graph`, `repo-map`, `code-intelligence`, `cursor`, `kilo` and `pi`.
 
 ## 0.8.0 (2026-09-21)

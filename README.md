@@ -46,6 +46,8 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 
 ## What you get back
 
+<img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/demo/warp.gif" width="1600" alt="A terminal recording: osnova warp lists the five resolved callers of click Context.invoke, each with its receiver hint; grep finds twelve .invoke( lines; osnova plumb checks those twelve and reports five confirmed, six name-only matches on other invoke methods and one line inside a docstring.">
+
 `osnova warp refreshWorkspace` on this repository, cut to twelve lines:
 
 ```text
