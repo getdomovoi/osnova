@@ -689,7 +689,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           // The declared type of a field, own declarations first, then the single-base heritage walk.
           const fieldTypeOf = (holder: OsnovaSymbol, member: string, depth: number, visited: Set<string>, table: "fieldTypes" | "elementTypes" | "valueTypes" = "fieldTypes"): { file: string; binding: SymbolBinding } | undefined => {
             const declarations = declarationsOf(holder);
-            const own = declarations.flatMap((declaration) => { const binding = declaration[table]?.[member]; return binding === undefined ? [] : [{ file: declaration.file, binding }]; });
+            // A persisted field table is a plain object, so `this.constructor.name` must not read Object.prototype.
+            const own = declarations.flatMap((declaration) => { const record = declaration[table]; const binding = record !== undefined && Object.hasOwn(record, member) ? record[member] : undefined; return binding === undefined ? [] : [{ file: declaration.file, binding }]; });
             if (own.length > 0) return new Set(own.map((item) => JSON.stringify(item))).size === 1 ? own[0] : undefined;
             if (declarations.some((declaration) => declaration.fields?.includes(member)) || depth >= 8) return undefined;
             let result: { file: string; binding: SymbolBinding } | undefined;

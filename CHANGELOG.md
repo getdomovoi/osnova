@@ -4,6 +4,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Fixed
+
+- A member chain through a field named like an `Object.prototype` member (`this.constructor.name`, `this.toString`) crashed resolution with `Cannot read properties of undefined (reading 'startsWith')`, because the persisted field-type table is a plain object and the lookup read the prototype. The lookup now takes own properties only. Reproduced on a public NestJS checkout, where 0.6.2 and 0.7.0 fail to build the index at all.
+
 ### Added
 
 - `scripts/parse-profile.ts` splits a full build on the pinned checkouts into its phases (scan, grammar load, read and hash, tree-sitter parse, adapter walk, symbol assembly, resolve, serialize, save), timed on one thread in steady state with the wall clock beside them, and refuses a checkout whose revision differs from its manifest. The first record, `benchmarks/results/parse-profile-2026-09-21.json`, answers the question the script was written for: the WASM parse is 17 to 39 percent of build time across the seven corpora and the TypeScript adapter walk is 35 to 57 percent, so native grammar bindings would not be the lever and were not priced.
