@@ -21,8 +21,22 @@ function isScope(node: Node): boolean {
 
 function scopeIds(tree: Tree, lines: ReadonlySet<number>): Map<number, number> {
   const found = new Map<number, number>();
+  const sorted = [...lines].sort((a, b) => a - b);
+  // A subtree that spans no contested line has nothing to classify; skipping it keeps the walk
+  // proportional to the contested declarations rather than to the file.
+  const holdsTarget = (node: Node): boolean => {
+    const first = node.startPosition.row + 1, last = node.endPosition.row + 1;
+    let low = 0, high = sorted.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const line = sorted[mid]!;
+      if (line < first) low = mid + 1; else if (line > last) high = mid - 1; else return true;
+    }
+    return false;
+  };
   const descend = (node: Node, scope: number): void => {
     for (const child of childrenOf(node)) {
+      if (!holdsTarget(child)) continue;
       const startLine = child.startPosition.row + 1;
       const inner = isScope(child) ? child.startIndex : scope;
       if (lines.has(startLine) && !found.has(startLine)) found.set(startLine, scope);
