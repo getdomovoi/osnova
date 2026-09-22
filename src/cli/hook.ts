@@ -49,7 +49,7 @@ export interface HookInput {
 export const hookToolContract = [
   "[osnova] This repository is indexed by Osnova: a deterministic call graph with exact file:line, no type inference, no LLM. Use its tools before grep and file reads:",
   "- osnova_footing: task context for a question or named symbols (definitions, callers, candidate tests). Start here.",
-  "- osnova_ground: symbol and text search ranked by definition evidence.",
+  "- osnova_ground: symbol and text search ranked by definition evidence; a verb and path (GET /users) finds the route and its handler.",
   "- osnova_thread: exhaustive regex search grouped by enclosing symbol.",
   "- osnova_outline: one file's signatures and spans.",
   "- osnova_warp: callers or callees of one symbol, direct or transitive, with the resolution basis of every edge; unresolved edges list same-name candidates.",
