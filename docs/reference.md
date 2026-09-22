@@ -293,6 +293,8 @@ osnova setup --preview --client codex
 It reads the client's real config file, proposes the one entry as a unified diff, and stops. Nothing is written. Other entries, comments and formatting stay as they are. If an `osnova` entry already exists it says so instead of proposing anything. Clients: `claude-code`, `codex`, `opencode`, `kilo`, `cursor`, `pi`. Add `--command npx --command -y --command @getdomovoi/osnova` for the no-install form.
 
 `osnova doctor` checks the runtime, the cache and every packaged grammar.
+The same wiring ships as a Claude Code plugin at `integrations/claude-code/` (`.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json` and the skill), listed by the marketplace manifest at `.claude-plugin/marketplace.json`, so `/plugin marketplace add getdomovoi/osnova` followed by `/plugin install osnova@osnova` installs the MCP entry, the three hooks and the skill together, each command run as `npx -y @getdomovoi/osnova`, which fetches the package on first use and then runs from the npm cache. `test/distribution-manifests.test.ts` holds the plugin hooks to exactly what `osnova setup` writes and pins every manifest version, including `server.json` for the MCP registry (`io.github.getdomovoi/osnova`, the `mcpName` in `package.json`), to the package version, and validates `server.json` against the registry schema it names, vendored at `test/fixtures/schemas/`. The plugin writes nothing inside the repository; hook state and the index live under the cache directory as before.
+
 
 ## CLI
 

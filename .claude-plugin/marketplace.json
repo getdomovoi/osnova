@@ -1,0 +1,20 @@
+{
+  "name": "osnova",
+  "owner": { "name": "getdomovoi", "url": "https://github.com/getdomovoi" },
+  "metadata": {
+    "description": "Osnova, a deterministic code map for AI coding agents.",
+    "version": "0.8.0"
+  },
+  "plugins": [
+    {
+      "name": "osnova",
+      "source": "./integrations/claude-code",
+      "description": "Deterministic symbol and call graph with exact file:line over MCP, plus session, prompt and stop hooks and a skill.",
+      "version": "0.8.0",
+      "category": "Code intelligence",
+      "keywords": ["mcp", "call-graph", "tree-sitter", "code-intelligence"],
+      "homepage": "https://github.com/getdomovoi/osnova#readme",
+      "license": "Apache-2.0"
+    }
+  ]
+}
