@@ -5,7 +5,7 @@ description: Use when the osnova_* tools are available and the task asks how cod
 
 # Osnova
 
-The `osnova_*` tools are a deterministic call graph with exact `file:line` and no type inference; the tool list is in the server instructions. What they return was resolved from syntax; what they do not return is unknown, not absent.
+The `osnova_*` tools are a deterministic call graph with exact `file:line` and no type inference; the tool list is in the server instructions. What they return was resolved from syntax; what they do not return is unknown, not absent. Edges are calls, references, imports, declared heritage and framework routes; `osnova_ground` answers a verb and path such as `GET /users` with the registration and its handler.
 
 ## Order of work
 
