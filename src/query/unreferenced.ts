@@ -31,6 +31,7 @@ export interface UnreferencedResult {
   readonly omitted: number;
   readonly withoutLeads: number;
   readonly exportedNotListed: number;
+  readonly shadowedNotListed: number;
   readonly entryPoints: Readonly<Record<EntryPointRule, number>>;
   readonly mentionsScanned: boolean;
   readonly limitations: readonly string[];
@@ -48,6 +49,7 @@ export const unreferencedLimitations = [
   "export-detection-typescript-javascript-python-only",
   "no-decorator-or-framework-hook-metadata",
   "text-mentions-are-identifier-tokens-not-references",
+  "shadowed-declarations-never-listed",
 ] as const;
 
 export const unreferencedNotice = "Candidates only: no indexed caller is not proof of no caller. Dynamic calls, reflection, string references and external consumers are not indexed.";
@@ -169,11 +171,15 @@ export function unreferenced(index: OsnovaIndex, options: UnreferencedOptions = 
   const entryPoints: Record<EntryPointRule, number> = { main: 0, "default-export": 0, "index-file": 0, "package-bin": 0, "test-file": 0, constructor: 0 };
   let examined = 0;
   let exportedNotListed = 0;
+  let shadowedNotListed = 0;
   const found: OsnovaSymbol[] = [];
   for (const symbol of index.symbols.values()) {
     if (!inScope(symbol.file, scope) || !kinds.has(symbol.kind)) continue;
     examined++;
     if (referenced.has(symbol.qualifiedName)) continue;
+    // A name the file declares in more than one scope can receive no edge at all, so its absence from
+    // the graph says nothing about its use.
+    if (symbol.shadowed === true) { shadowedNotListed++; continue; }
     const rule = entryPointRule(symbol, binFiles);
     if (rule !== null) { entryPoints[rule]++; continue; }
     const exported = isExported(index, symbol);
@@ -196,7 +202,7 @@ export function unreferenced(index: OsnovaIndex, options: UnreferencedOptions = 
   });
   const withoutLeads = candidates.filter((candidate) => candidate.unresolvedSameNameSites === 0 && candidate.testSites === 0 && candidate.mentions === 0).length;
   return {
-    receipt, scope, kinds: kindList, examined, candidates, omitted: found.length - kept.length, withoutLeads, exportedNotListed, entryPoints,
+    receipt, scope, kinds: kindList, examined, candidates, omitted: found.length - kept.length, withoutLeads, exportedNotListed, shadowedNotListed, entryPoints,
     mentionsScanned: mentions !== null, limitations: [...unreferencedLimitations],
   };
 }
