@@ -22,7 +22,7 @@ describe("format 9", () => {
     const names = (await fs.readdir(ws)).sort();
     for (const f of ["index.json", "index.sha", "edges.json", "text.bin"]) expect(names).toContain(f);
     const core = JSON.parse((await fs.readFile(path.join(ws, "index.json"))).toString("utf8")) as { formatVersion: number; paths: string[]; names: string[]; edgesHash: string; edgesBytes: number; files: Array<{ p: number; symbols: Array<{ n: number }> }> };
-    expect(core.formatVersion).toBe(11);
+    expect(core.formatVersion).toBe(12);
     expect(core.paths).toEqual([...core.paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
     expect(core.files.every((f) => Number.isInteger(f.p) && f.p < core.paths.length)).toBe(true);
     expect(core.files.every((f) => f.symbols.every((s) => Number.isInteger(s.n) && s.n < core.names.length))).toBe(true);

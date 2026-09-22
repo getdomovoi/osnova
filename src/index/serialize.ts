@@ -15,6 +15,7 @@ import type {
   ReExport,
   MemberKind,
   Callee,
+  RouteSite,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { validOwner } from "./edgeStore.js";
@@ -88,6 +89,7 @@ interface SerializedFile {
   readonly symbols: readonly SerializedSymbol[];
   readonly diagnostics: readonly IndexDiagnostic[];
   readonly reExports: readonly ReExport[];
+  readonly routes?: readonly RouteSite[] | undefined;
 }
 
 interface SerializedArtifact {
@@ -159,6 +161,7 @@ export function serializeSections(
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
+      ...(card.routes === undefined || card.routes.length === 0 ? {} : { routes: card.routes }),
     };
   });
   const artifact: SerializedArtifact = {
@@ -302,6 +305,13 @@ function deserializeBody(
     if (binaryCard && (file.lineCount !== 0 || file.symbols.length !== 0)) throw new Error("osnova: corrupt binary card");
     if (!Array.isArray(file.reExports)) throw new Error("osnova: corrupt re-export metadata");
     const reExports = file.reExports.map(readReExport);
+    if (file.routes !== undefined && (!Array.isArray(file.routes) || file.routes.some((route: unknown) => {
+      const value = route as Partial<RouteSite> | null;
+      return typeof value !== "object" || value === null || typeof value.method !== "string" || !/^[A-Z]+$/.test(value.method) ||
+        (value.path !== undefined && (typeof value.path !== "string" || value.path.length > 2048)) || !positiveInteger(value.line) || (value.line as number) > file.lineCount ||
+        (value.handler !== undefined && typeof value.handler !== "string");
+    }))) throw new Error("osnova: corrupt route metadata");
+    const routes: RouteSite[] | undefined = file.routes === undefined ? undefined : file.routes.map((route: RouteSite) => ({ method: route.method, ...(route.path === undefined ? {} : { path: route.path }), line: route.line, ...(route.handler === undefined ? {} : { handler: route.handler }) }));
     if (!Array.isArray(file.diagnostics) || file.diagnostics.some((diagnostic: unknown) => {
       if (typeof diagnostic !== "object" || diagnostic === null) return true;
       const value = diagnostic as Partial<IndexDiagnostic>;
@@ -370,7 +380,7 @@ function deserializeBody(
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
       };
     });
-    const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports };
+    const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports, ...(routes === undefined ? {} : { routes }) };
     if (textBytes !== undefined) {
       const text = textBytes.subarray(file.to, file.to + file.tl).toString("utf8");
       if (!binaryCard && (sha256Hex(text) !== file.hash || (text.length === 0 ? 0 : text.split("\n").length) !== file.lineCount)) throw new Error("osnova: corrupt file content");

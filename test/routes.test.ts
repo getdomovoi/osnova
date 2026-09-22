@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyChanges, ask, buildIndex, resolutionCoverage } from "../src/index.js";
+import { applyChanges, ask, buildIndex, loadIndex, resolutionCoverage } from "../src/index.js";
+import { OsnovaIndexImpl } from "../src/index/indexImpl.js";
 import { serializeArtifact, serializeSections } from "../src/index/serialize.js";
 import { serializeEdges, deserializeEdges } from "../src/index/edgeStore.js";
 import { formatCallersDetailed } from "../src/query/format.js";
@@ -194,6 +195,16 @@ describe("route edges", () => {
     expect(composed[0]?.symbol?.qualifiedName).toBe("src/cats.controller.ts#CatsController.create");
     const listing = ask(index, "GET /cats").hits;
     expect(listing[0]?.symbol?.qualifiedName).toBe("src/cats.controller.ts#CatsController.findAll");
+  });
+
+  it("answers a route query from the core section without loading edges", async () => {
+    await write({ "src/app.ts": expressApp, "src/users.ts": "export function listUsers(): void {}\n" });
+    await buildIndex(workspace, { cacheDir });
+    const loaded = await loadIndex(workspace, { cacheDir });
+    expect(loaded).toBeDefined();
+    const hits = ask(loaded!, "GET /users").hits;
+    expect(hits[0]?.symbol?.qualifiedName).toBe("src/app.ts#handler");
+    expect((loaded as OsnovaIndexImpl).edgesLoaded()).toBe(false);
   });
 
   it("prints the route on warp rows", async () => {

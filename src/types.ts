@@ -1,4 +1,4 @@
-export const indexFormatVersion = 11 as const;
+export const indexFormatVersion = 12 as const;
 
 export type LanguageId =
   | "typescript"
@@ -79,6 +79,14 @@ export interface RouteInfo {
   readonly path?: string | undefined;
 }
 
+// A route registration as the file card records it: what the site wrote, plus the handler's local
+// qualified name when the handler is declared in the same file. Ground reads this from the core
+// section so a route query never has to load the edge section.
+export interface RouteSite extends RouteInfo {
+  readonly line: number;
+  readonly handler?: string | undefined;
+}
+
 export type EdgeResolution =
   | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition"; readonly via?: undefined }
   | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
@@ -143,6 +151,7 @@ export interface FileCard {
   readonly symbols: readonly OsnovaSymbol[];
   readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
   readonly reExports?: readonly ReExport[] | undefined;
+  readonly routes?: readonly RouteSite[] | undefined;
 }
 
 export interface OsnovaIndex {
