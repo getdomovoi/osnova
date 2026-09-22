@@ -4,6 +4,13 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+The extraction version moves to `structural-9.28`, so the first run after upgrading rebuilds the cache once.
+
+### Fixed
+
+- A declaration on the line where its own scope opens (`items.map((n) => { const twin = ...; return twin(); })`, or a one-line method in an object literal) was assigned the enclosing scope, so two such declarations of one name were never marked shadowed and every call to the name resolved to whichever record survived. Scope lookup now compares positions rather than lines: the scope of a declaration is the innermost function, class or file root that starts strictly before it. Found by a Kilo trial round in which `osnova_unreferenced` listed `wrapped` in a memoizer as unreferenced.
+- `unreferenced` no longer lists a shadowed declaration. The resolver records no reference edge to a name the file declares in more than one scope, so such a symbol always looked unreferenced with no leads; it is now counted in `shadowedNotListed`, the text header says `N shadowed not listed`, and the limitations gain `shadowed-declarations-never-listed`.
+
 ### Added
 
 - `integrations/claude-code/` is a Claude Code plugin: `.claude-plugin/plugin.json`, `.mcp.json` and `hooks/hooks.json` beside the existing skill, listed by `.claude-plugin/marketplace.json` at the repository root, so `/plugin marketplace add getdomovoi/osnova` and `/plugin install osnova@osnova` install the MCP entry, the session, prompt and stop hooks and the skill together, each run as `npx -y @getdomovoi/osnova` with no global install. `test/distribution-manifests.test.ts` holds the plugin hooks to what `osnova setup` writes and pins every manifest version to the package version.

@@ -56,6 +56,27 @@ describe("shadowed same-file locals", () => {
     expect(index.files.get("a.ts")?.symbols.filter((symbol) => symbol.name === "helper").every((symbol) => symbol.shadowed === true)).toBe(true);
   });
 
+  it("marks a declaration that shares its line with the scope it sits in", async () => {
+    const index = await build({
+      "a.ts": [
+        "export const host = {",
+        "  guard(inst: { run: unknown }) { const wrapped = (): number => 1; inst.run = wrapped; wrapped(); },",
+        "  attach(inst: { run: unknown }) { const wrapped = (): number => 2; inst.run = wrapped; wrapped(); },",
+        "};",
+        "[1].map((n) => { const twin = (): number => n; return twin(); });",
+        "[2].map((n) => { const twin = (): number => n; return twin(); });",
+        "",
+      ].join("\n"),
+    });
+    for (const name of ["wrapped", "twin"]) {
+      const symbols = index.files.get("a.ts")?.symbols.filter((symbol) => symbol.name === name) ?? [];
+      expect(symbols.map((symbol) => symbol.shadowed)).toEqual([true, true]);
+      const calls = callsTo(index.edges, name);
+      expect(calls).toHaveLength(2);
+      for (const edge of calls) expect(edge.evidence).toEqual({ source: "syntax", resolution: { status: "unresolved", reason: "shadowed-declaration" } });
+    }
+  });
+
   it("keeps a value and a type of the same name in one scope resolved", async () => {
     const index = await build({
       "a.ts": [
