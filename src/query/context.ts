@@ -1,4 +1,4 @@
-import type { CardLanguage, FileCard, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { CardLanguage, FileCard, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 
 const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "of", "in", "to", "for", "and", "or", "how",
@@ -72,6 +72,7 @@ export interface SearchDocument {
   readonly path: ReadonlySet<string>;
   readonly documentationRange: { start: number; end: number } | null;
   readonly ranges: Array<{ start: number; end: number }>;
+  readonly route?: { readonly method: string; readonly path: string | undefined; readonly line: number } | undefined;
   readonly body: Map<string, number>;
   length: number;
 }
@@ -119,9 +120,9 @@ interface FileDocuments {
 const fileCache = new Map<string, FileDocuments>();
 const contextCache = new WeakMap<OsnovaIndex, QueryContext>();
 
-const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}`;
+const cacheKey = (card: FileCard, routes: number): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}\0${routes}`;
 
-function buildFileDocuments(file: string, card: FileCard): FileDocuments {
+function buildFileDocuments(file: string, card: FileCard, routes: readonly OsnovaEdge[]): FileDocuments {
   const lines = card.text.length > 0 ? card.text.split("\n") : [];
   const pathTokens = new Set(tokenize(file));
   const create = (symbol: OsnovaSymbol | null): SearchDocument => {
@@ -155,7 +156,24 @@ function buildFileDocuments(file: string, card: FileCard): FileDocuments {
     owner.length += tokens.length;
     for (const token of tokens) owner.body.set(token, (owner.body.get(token) ?? 0) + 1);
   }
-  const documents = [module, ...definitions];
+  // One document per route registration, so "GET /users" ranks the site and its handler. The verb and
+  // path are literal in this file, so the entry stays valid under the card's own cache key; the handler
+  // symbol is attached only when it lives in this file.
+  const routeDocuments = routes.map((edge) => {
+    const label = `${edge.route?.method ?? ""} ${edge.route?.path ?? ""}`;
+    const symbol = edge.toFile === file && edge.toSymbol !== undefined ? card.symbols.find((candidate) => candidate.qualifiedName === edge.toSymbol) ?? null : null;
+    const tokens = tokenize(lines[edge.line - 1] ?? "");
+    return {
+      file, symbol, path: pathTokens,
+      name: new Set(tokenize(label)),
+      signature: new Set(tokenize(`${label} ${edge.toName} route`)),
+      documentation: new Set<string>(), documentationRange: null,
+      ranges: [{ start: edge.line, end: edge.line }],
+      body: new Map(tokens.map((token) => [token, tokens.filter((other) => other === token).length])), length: tokens.length,
+      route: { method: edge.route?.method ?? "", path: edge.route?.path, line: edge.line },
+    } satisfies SearchDocument;
+  });
+  const documents = [module, ...definitions, ...routeDocuments];
   const documentTerms: Set<string>[] = [];
   let length = 0;
   for (const document of documents) {
@@ -174,11 +192,12 @@ export function queryContext(index: OsnovaIndex): QueryContext {
   let totalLength = 0;
   const live = new Set<string>();
   for (const [file, card] of index.files) {
-    const key = cacheKey(card);
+    const routes = index.edgesForFile(file).filter((edge) => edge.kind === "routes" && edge.fromFile === file);
+    const key = cacheKey(card, routes.length);
     live.add(key);
     let entry = fileCache.get(key);
     if (entry === undefined) {
-      entry = buildFileDocuments(file, card);
+      entry = buildFileDocuments(file, card, routes);
       fileCache.set(key, entry);
     }
     documents.push(...entry.documents);
@@ -198,7 +217,7 @@ export function queryContext(index: OsnovaIndex): QueryContext {
 
 export function fileDocumentsCached(index: OsnovaIndex, file: string): boolean {
   const card = index.files.get(file);
-  return card !== undefined && fileCache.has(cacheKey(card));
+  return card !== undefined && fileCache.has(cacheKey(card, index.edgesForFile(file).filter((edge) => edge.kind === "routes" && edge.fromFile === file).length));
 }
 
 export function idf(ctx: QueryContext, term: string): number {

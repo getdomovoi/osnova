@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyChanges, buildIndex, resolutionCoverage } from "../src/index.js";
+import { applyChanges, ask, buildIndex, resolutionCoverage } from "../src/index.js";
 import { serializeArtifact, serializeSections } from "../src/index/serialize.js";
 import { serializeEdges, deserializeEdges } from "../src/index/edgeStore.js";
 import { formatCallersDetailed } from "../src/query/format.js";
@@ -175,6 +175,21 @@ describe("route edges", () => {
     await write({ "src/map.ts": 'const m = new Map<string, () => void>();\nfunction h(): void {}\nm.get("/x");\nm.set("/y", h);\nconst app = { get(p: string, f: () => void): void { f(); } };\napp.get("/z", h);\n' });
     const index = await buildIndex(workspace, { cacheDir });
     expect(index.edges.filter((edge) => edge.kind === "routes")).toEqual([]);
+  });
+
+  it("ranks a route by verb and path in ground", async () => {
+    await write({ "src/app.ts": expressApp, "src/users.ts": "export function listUsers(): void {}\n", "src/cats.controller.ts": nestController });
+    const index = await buildIndex(workspace, { cacheDir });
+    const users = ask(index, "GET /users").hits;
+    expect(users[0]?.symbol?.qualifiedName).toBe("src/app.ts#handler");
+    expect(users[0]?.line).toBe(12);
+    const inline = ask(index, "POST /users").hits;
+    expect(inline.map((hit) => `${hit.file}:${hit.line}:${hit.symbol?.qualifiedName ?? "-"}`).slice(0, 2)).toContain("src/app.ts:14:-");
+    const imported = ask(index, "GET /imported").hits;
+    expect(imported[0]?.file).toBe("src/app.ts");
+    expect(imported[0]?.line).toBe(13);
+    const cats = ask(index, "POST :id").hits;
+    expect(cats[0]?.symbol?.qualifiedName).toBe("src/cats.controller.ts#CatsController.create");
   });
 
   it("prints the route on warp rows", async () => {
