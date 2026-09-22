@@ -66,17 +66,17 @@ Each confirmed line names the caller, its lines and the evidence that tied the c
 
 ## How much of the graph is exact
 
-A call site counts as resolved when the index ties it to one definition through evidence it can name; everything else stays unresolved with a reason. These are the shares on the pinned checkouts under `benchmarks/corpora/`, recorded in [`benchmarks/results/resolution-coverage-2026-09-21.json`](benchmarks/results/resolution-coverage-2026-09-21.json); the last column leaves out calls through packages outside the repository and calls to builtins, which can never resolve locally, and the [reference](docs/reference.md#resolution-coverage-and-claim-checking) defines every column.
+A call site counts as resolved when the index ties it to one definition through evidence it can name; everything else stays unresolved with a reason. These are the shares on the pinned checkouts under `benchmarks/corpora/`, recorded in [`benchmarks/results/resolution-coverage-2026-09-21b.json`](benchmarks/results/resolution-coverage-2026-09-21b.json); the last column leaves out calls through packages outside the repository and calls to builtins, which can never resolve locally, and the [reference](docs/reference.md#resolution-coverage-and-claim-checking) defines every column.
 
 | Corpus | Languages | Call sites | Resolved | Share | Excluding externals |
 |---|---|---:|---:|---:|---:|
-| click | all | 5488 | 2118 | 38.6% | 59.7% |
+| click | all | 6593 | 2903 | 44.0% | 62.4% |
 | cobra | all | 4374 | 1980 | 45.3% | 88.9% |
 | gson | all | 23382 | 8473 | 36.2% | 56.7% |
-| humanizer | all | 30517 | 7804 | 25.6% | 51.3% |
-| pyright | all | 58462 | 30057 | 51.4% | 74.5% |
+| humanizer | all | 30517 | 7798 | 25.6% | 51.3% |
+| pyright | all | 58578 | 30070 | 51.3% | 74.5% |
 | ripgrep | all | 13387 | 6121 | 45.7% | 71.6% |
-| zod | all | 53417 | 21679 | 40.6% | 73.4% |
+| zod | all | 53417 | 21630 | 40.5% | 73.2% |
 
 Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 

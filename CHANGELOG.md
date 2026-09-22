@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- A call to a name the file declares in more than one scope no longer resolves. Osnova keeps one symbol record per qualified name, so when a file declares `const helper` inside two callbacks, or a class of the same name inside several test blocks, no edge can name the declaration a given call site sees; the index used to emit an edge to whichever record survived and was wrong at every site but one. Extraction now records the scope of each declaration and marks a name the file declares in more than one of them, and the resolver refuses those calls with the new `shadowed-declaration` reason instead of guessing. A scope is the nearest enclosing function, class or file root, not any block, so declarations that share one scope are still one declaration and still resolve: overload signatures with their implementation, a value and a type of the same name (`const Shape` beside `interface Shape`), the branches of a conditional definition (`if WIN: def f() ... else: def f() ...`), and Python `@overload` stubs. Scored against the TypeScript 5.9.3 checker on the pinned 702-file TypeScript monorepo, false call edges fall from 39 of 21,325 decided to 4 of 21,276, a false-edge rate of 0.183% to 0.019%, and all 35 removed edges are this one cause; covered call sites fall from 21,213 to 21,199, the 14 sites where the surviving record happened to be the one in scope. Scored against pyright on the pinned 160-file Python package the result is byte for byte identical: 2,883 true positives, no false positives and no refusals, because every duplicate name there is an `@overload` group or a conditional definition. Refusals by corpus: 49 of 53,417 call sites on the TypeScript monorepo, 22 of 58,578 on pyright, 6 of 30,517 on humanizer, none on click, cobra, gson or ripgrep. `OsnovaSymbol` gains an optional `shadowed` flag, the artifact format version is 11 and the extraction version is `structural-9.26`, so the first run after this release rebuilds the cache once.
+
 ## 0.7.0 (2026-09-21)
 
 ### Added

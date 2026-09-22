@@ -1,4 +1,4 @@
-export const indexFormatVersion = 10 as const;
+export const indexFormatVersion = 11 as const;
 
 export type LanguageId =
   | "typescript"
@@ -52,6 +52,7 @@ export interface OsnovaSymbol {
   readonly span: SourceSpan;
   readonly signature: string;
   readonly lineCount: number;
+  readonly shadowed?: true | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -78,7 +79,7 @@ export type EdgeResolution =
   | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
   | { readonly status: "resolved"; readonly method: "receiver-hint"; readonly receiver: { readonly classSymbol: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }; readonly via?: readonly ExportHop[] | undefined }
   | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
-  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "import-target-ambiguous" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" | "unbound-global"; readonly external?: string | undefined };
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "import-target-ambiguous" | "binding-blocked" | "bound-symbol-missing" | "shadowed-declaration" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" | "unbound-global"; readonly external?: string | undefined };
 
 export type ReExport =
   | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }

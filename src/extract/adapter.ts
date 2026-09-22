@@ -7,6 +7,7 @@ export interface RawDefinition {
   readonly span: SourceSpan;
   readonly signature: string;
   readonly parent: string;
+  readonly shadowed?: true | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;

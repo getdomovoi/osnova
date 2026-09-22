@@ -573,6 +573,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           candidates = [...declaredAs(fromFile, qualifiedNameOf(fromFile, reference.name))];
           // A same-file function named like a builtin (`export function string()`) is not the type a receiver carries.
           if (binding.kind === "member" && BUILTIN_TYPES.has(reference.name) && !candidates.some(isHolder)) candidates = [];
+          // The file declares this name in more than one scope, and the index keeps one record per
+          // qualified name, so no edge can name the declaration this site sees. Refuse instead.
+          if (candidates.some((symbol) => symbol.shadowed === true)) {
+            // A value reference is recorded only when it names an indexed callable or class.
+            if (raw.kind === "references") continue;
+            edges.push({
+              kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
+              evidence: { source: "syntax", resolution: { status: "unresolved", reason: "shadowed-declaration" } },
+            });
+            continue;
+          }
           resolution = { status: "resolved", method: "lexical-definition" };
           if (candidates.length === 0 && binding.kind === "member") {
             const family = languageFamily(card.language);

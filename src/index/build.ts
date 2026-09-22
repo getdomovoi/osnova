@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { discardParser, getParser } from "../grammar/loader.js";
 import { languageForPath } from "../grammar/languages.js";
 import { adapterFor } from "../extract/adapters.js";
+import { markShadowed } from "../extract/scope.js";
 import { forgetTree, localJoin } from "../extract/util.js";
 import type { RawDefinition, RawEdge } from "../extract/adapter.js";
 import type {
@@ -79,7 +80,7 @@ export async function extractCard(
           diagnostics.push({ phase: "parse", path: relPath, code: "syntax-errors" });
         }
         const output = adapterFor(language).extract(tree, text);
-        definitions = [...output.definitions];
+        definitions = markShadowed(tree, output.definitions);
         reExports = output.reExports ?? [];
         rawEdges = output.edges.map((edge: RawEdge) => ({
           kind: edge.kind,
@@ -114,6 +115,7 @@ export async function extractCard(
       span: def.span,
       signature: def.signature,
       lineCount: Math.max(1, def.span.endLine - def.span.startLine + 1),
+      ...(def.shadowed === undefined ? {} : { shadowed: def.shadowed }),
       ...(def.exportedNames === undefined ? {} : { exportedNames: def.exportedNames }),
       ...(def.memberKind === undefined ? {} : { memberKind: def.memberKind }),
       ...(def.heritage === undefined ? {} : { heritage: def.heritage }),
