@@ -38,7 +38,7 @@ const maximumMcpSkeletonCodeUnits = 4_096;
 // harness with an MCP client gets the tool contract without a hook.
 export const mcpInstructions = [
   "Osnova is a deterministic call graph of this repository with exact file:line, no type inference, no LLM. Use its tools before grep and file reads.",
-  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search. osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
+  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search, including HTTP routes by verb and path (GET /users). osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
 const maximumMcpCallersCodeUnits = 2_048;
@@ -56,7 +56,7 @@ const toolDefinitions = [
   {
     name: "osnova_ground",
     description:
-      "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Use lean=true when you only need where things are: it keeps file:line, kind, definition span and signature and drops the source lines. Start here when you do not know where code lives.",
+      "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Use lean=true when you only need where things are: it keeps file:line, kind, definition span and signature and drops the source lines. Start here when you do not know where code lives. A verb and path (GET /users) finds the route registration and its handler for Express, NestJS, Flask and FastAPI.",
     inputSchema: {
       type: "object" as const,
       properties: {

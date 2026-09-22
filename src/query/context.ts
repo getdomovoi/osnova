@@ -1,4 +1,4 @@
-import type { CardLanguage, FileCard, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { CardLanguage, FileCard, OsnovaIndex, OsnovaSymbol, RouteSite } from "../types.js";
 
 const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "of", "in", "to", "for", "and", "or", "how",
@@ -72,6 +72,7 @@ export interface SearchDocument {
   readonly path: ReadonlySet<string>;
   readonly documentationRange: { start: number; end: number } | null;
   readonly ranges: Array<{ start: number; end: number }>;
+  readonly route?: { readonly method: string; readonly path: string | undefined; readonly line: number } | undefined;
   readonly body: Map<string, number>;
   length: number;
 }
@@ -119,7 +120,7 @@ interface FileDocuments {
 const fileCache = new Map<string, FileDocuments>();
 const contextCache = new WeakMap<OsnovaIndex, QueryContext>();
 
-const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}`;
+const cacheKey = (card: FileCard): string => `${card.path}\0${card.hash}\0${card.language}\0${card.symbols.length}\0${card.routes?.length ?? 0}`;
 
 function buildFileDocuments(file: string, card: FileCard): FileDocuments {
   const lines = card.text.length > 0 ? card.text.split("\n") : [];
@@ -155,7 +156,34 @@ function buildFileDocuments(file: string, card: FileCard): FileDocuments {
     owner.length += tokens.length;
     for (const token of tokens) owner.body.set(token, (owner.body.get(token) ?? 0) + 1);
   }
-  const documents = [module, ...definitions];
+  // One document per route registration, so "GET /users" ranks the site and its handler. The verb and
+  // path are literal in this file, so the entry stays valid under the card's own cache key; the handler
+  // symbol is attached only when it lives in this file.
+  // A controller prefix and a method path declared in the same file compose into one label at query
+  // time only (`cats` + `:id` is searchable as `/cats/:id`); the artifact keeps the two sites apart.
+  const routes = card.routes ?? [];
+  const prefixOf = (site: RouteSite): string | undefined => {
+    if (site.handler === undefined || !site.handler.includes(".")) return undefined;
+    const owner = site.handler.slice(0, site.handler.lastIndexOf("."));
+    return routes.find((mount) => mount.method === "ANY" && mount.handler === owner && mount.path !== undefined)?.path;
+  };
+  const routeDocuments = routes.map((site) => {
+    const prefix = site.path === undefined ? undefined : prefixOf(site);
+    const composed = prefix === undefined ? undefined : `/${prefix}/${site.path ?? ""}`.replace(/\/+/g, "/");
+    const label = `${site.method} ${site.path ?? ""} ${composed ?? ""}`;
+    const symbol = site.handler === undefined ? null : card.symbols.find((candidate) => candidate.qualifiedName === `${file}#${site.handler}`) ?? null;
+    const tokens = tokenize(lines[site.line - 1] ?? "");
+    return {
+      file, symbol, path: pathTokens,
+      name: new Set(tokenize(label)),
+      signature: new Set(tokenize(`${label} ${site.handler ?? ""} route`)),
+      documentation: new Set<string>(), documentationRange: null,
+      ranges: [{ start: site.line, end: site.line }],
+      body: new Map(tokens.map((token) => [token, tokens.filter((other) => other === token).length])), length: tokens.length,
+      route: { method: site.method, path: site.path, line: site.line },
+    } satisfies SearchDocument;
+  });
+  const documents = [module, ...definitions, ...routeDocuments];
   const documentTerms: Set<string>[] = [];
   let length = 0;
   for (const document of documents) {

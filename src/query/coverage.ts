@@ -16,6 +16,8 @@ export interface LanguageCoverage {
   readonly referencesResolved: number;
   readonly extends: number;
   readonly extendsResolved: number;
+  readonly routes: number;
+  readonly routesResolved: number;
   readonly byMethod: Readonly<Record<string, number>>;
   readonly byReason: Readonly<Record<string, number>>;
   readonly resolvedShare: number;
@@ -36,11 +38,11 @@ export interface CoverageReport {
 
 interface Tally {
   files: number; symbols: number; calls: number; resolved: number; ambiguous: number; unresolved: number; imports: number; importsResolved: number;
-  references: number; referencesResolved: number; extends: number; extendsResolved: number;
+  references: number; referencesResolved: number; extends: number; extendsResolved: number; routes: number; routesResolved: number;
   byMethod: Map<string, number>; byReason: Map<string, number>; byExternal: Map<string, number>;
 }
 
-const tally = (): Tally => ({ files: 0, symbols: 0, calls: 0, resolved: 0, ambiguous: 0, unresolved: 0, imports: 0, importsResolved: 0, references: 0, referencesResolved: 0, extends: 0, extendsResolved: 0, byMethod: new Map(), byReason: new Map(), byExternal: new Map() });
+const tally = (): Tally => ({ files: 0, symbols: 0, calls: 0, resolved: 0, ambiguous: 0, unresolved: 0, imports: 0, importsResolved: 0, references: 0, referencesResolved: 0, extends: 0, extendsResolved: 0, routes: 0, routesResolved: 0, byMethod: new Map(), byReason: new Map(), byExternal: new Map() });
 const bump = (map: Map<string, number>, key: string): void => { map.set(key, (map.get(key) ?? 0) + 1); };
 const sortedRecord = (map: Map<string, number>): Record<string, number> =>
   Object.fromEntries([...map].sort(([a], [b]) => compareText(a, b)));
@@ -50,7 +52,7 @@ const finish = (language: string, t: Tally): LanguageCoverage => {
   const unboundGlobalCalls = t.byReason.get("unbound-global") ?? 0;
   return {
     language, files: t.files, symbols: t.symbols, calls: t.calls, resolved: t.resolved, ambiguous: t.ambiguous, unresolved: t.unresolved,
-    imports: t.imports, importsResolved: t.importsResolved, references: t.references, referencesResolved: t.referencesResolved, extends: t.extends, extendsResolved: t.extendsResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
+    imports: t.imports, importsResolved: t.importsResolved, references: t.references, referencesResolved: t.referencesResolved, extends: t.extends, extendsResolved: t.extendsResolved, routes: t.routes, routesResolved: t.routesResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
     unresolvedImportCalls, unboundGlobalCalls, resolvedShareExcludingUnresolvedImports: share(t.resolved, t.calls - unresolvedImportCalls),
     resolvedShareExcludingExternal: share(t.resolved, t.calls - unresolvedImportCalls - unboundGlobalCalls),
     externalImportCalls: [...t.byExternal.values()].reduce((sum, count) => sum + count, 0), byExternal: sortedRecord(t.byExternal),
@@ -80,6 +82,10 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
     }
     if (edge.kind === "extends") {
       for (const row of rows) { row.extends++; if (resolution?.status === "resolved") row.extendsResolved++; }
+      continue;
+    }
+    if (edge.kind === "routes") {
+      for (const row of rows) { row.routes++; if (resolution?.status === "resolved") row.routesResolved++; }
       continue;
     }
     if (edge.kind !== "calls") continue;

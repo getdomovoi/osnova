@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "id": "receiver-boundary-census-2026-09-21",
+  "question": "Of the call sites osnova does not resolve, how many have a receiver type written in the source that the extractor already parses?",
+  "outcome": "closed",
+  "summary": "The unresolved-call boundary is a source-information limit, not a resolver gap. Across two pinned corpora, 5.5% of missed sites on zod and 3.3% on click have a type written at the receiver's declaration, and a single library idiom accounts for 248 of the 349 on zod. Recovering every one of them is worth about one recall point on zod and a third of a point on click, so the annotation fallback was not built.",
+  "method": "For each corpus, a type checker enumerated every call site and recorded the declarations it resolved. Sites the checker placed inside the corpus form the truth set. Sites osnova resolved to a span containing one of those declarations are covered; the rest are missed. Each missed site was then classified by the syntactic shape of its receiver, using the language's own parser with no type checking: what the source writes at the call, and what the receiver's declaration writes as its type.",
+  "corpora": [
+    {
+      "id": "zod-v1",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "oracle": "typescript",
+      "oracleVersion": "5.9.3"
+    },
+    {
+      "id": "click-v1",
+      "oracle": "pyright",
+      "oracleVersion": "1.1.414"
+    }
+  ],
+  "results": {
+    "zod-v1": {
+      "oracleInRepoSites": 27558,
+      "coveredSites": 21199,
+      "missedSites": 6359,
+      "recall": 0.7693,
+      "recallCeilingIfAnnotationsResolved": 0.7819,
+      "missedByReceiverShape": {
+        "identifier-no-annotation": 2945,
+        "call-result": 867,
+        "site-not-found": 728,
+        "property-access": 611,
+        "bare-identifier-call": 579,
+        "written-annotation": 349,
+        "identifier-param-no-annotation": 180,
+        "identifier-decl-not-found": 56,
+        "element-access": 29,
+        "annotation-useless": 11,
+        "this": 4
+      },
+      "writtenAnnotationConcentration": {
+        "total": 349,
+        "largestSingleIdiom": 248,
+        "idiom": "a module-level constant annotated with a generic interface whose body declares the called member",
+        "remainderAfterIdiom": 101
+      }
+    },
+    "click-v1": {
+      "oracleInRepoSites": 3190,
+      "coveredSites": 2883,
+      "missedSites": 307,
+      "recall": 0.9038,
+      "recallCeilingIfAnnotationsResolved": 0.9069,
+      "missedByReceiverShape": {
+        "identifier-no-annotation": 164,
+        "bare-identifier-call": 71,
+        "property-access": 40,
+        "self": 17,
+        "written-annotation": 10,
+        "call-result": 5
+      }
+    }
+  },
+  "rejectedLever": {
+    "name": "annotation owner fallback",
+    "shape": "When a member call resolves its receiver to a class-reference owner that declares no such member, fall back to the type name written at the receiver's declaration.",
+    "reasonRejected": "The gain is bounded at 1.3 recall points on zod and 0.3 on click, 71% of the zod gain comes from one library idiom, and the change reorders a binding path that currently produces correct edges against a measured false-edge rate of 0.019%.",
+    "reopenIf": "A corpus in a language with mandatory annotations is scored against an oracle and shows a materially larger written-annotation slice."
+  },
+  "openQuestions": [
+    "728 missed sites on zod, 11% of the total, were not located by the census matcher and are unclassified. This is a limit of the census tool, not of the index."
+  ],
+  "plainNameCalls": {
+    "question": "579 missed sites on zod and 71 on click are calls to a plain name rather than a member call. What does the checker say the name is?",
+    "zod": {
+      "total": 579,
+      "byTarget": {
+        "constant holding a non-callable value (`const parse = _parse(Err)`, `const noMorph = type({...})`)": 256,
+        "function declaration, where the called name is a parameter of that function (`getter()` inside `defineLazy(object, key, getter)`)": 98,
+        "arrow or function-typed parameter of the enclosing callable": 27,
+        "const holding an arrow, mostly one that wraps a call result or a parameter": 60,
+        "class": 2,
+        "other (destructured, loop variable, catch binding)": 136
+      }
+    },
+    "answer": "These are calls through a value the syntax cannot name: a parameter (125 of 579) or a constant whose value is the result of another call (256 of 579). Neither is a resolver gap. The one representable option is an edge from the call to the constant's own symbol, which says only that the call goes through that binding, the same claim a mount edge makes for a router constant.",
+    "decision": "Not built. A call edge to a constant would change what a caller list of a constant means and would cover about 4% of zod misses. Reopen if warp on a constant is a query people ask for."
+  }
+}

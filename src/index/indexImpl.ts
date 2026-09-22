@@ -1,4 +1,4 @@
-import type { EdgeBinding, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { EdgeBinding, RouteInfo, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { canonical, deserializeEdges } from "./edgeStore.js";
 import { IndexingError } from "./diagnostics.js";
 
@@ -12,6 +12,7 @@ export interface RawEdgeItem {
   readonly line: number;
   readonly enclosing: string;
   readonly binding?: EdgeBinding | undefined;
+  readonly route?: RouteInfo | undefined;
 }
 
 export function qualifiedNameOf(file: string, local: string): string {

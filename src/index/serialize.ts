@@ -15,6 +15,7 @@ import type {
   ReExport,
   MemberKind,
   Callee,
+  RouteSite,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { validOwner } from "./edgeStore.js";
@@ -37,7 +38,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.25.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.27.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 class ExtractionVersionError extends Error {}
@@ -61,6 +62,7 @@ interface SerializedSymbol {
   readonly kind: SymbolKind;
   readonly span: SerializedSpan;
   readonly signature: string;
+  readonly shadowed?: true | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -87,6 +89,7 @@ interface SerializedFile {
   readonly symbols: readonly SerializedSymbol[];
   readonly diagnostics: readonly IndexDiagnostic[];
   readonly reExports: readonly ReExport[];
+  readonly routes?: readonly RouteSite[] | undefined;
 }
 
 interface SerializedArtifact {
@@ -141,6 +144,7 @@ export function serializeSections(
           ec: symbol.span.endCol,
         },
         signature: symbol.signature,
+        ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
@@ -157,6 +161,7 @@ export function serializeSections(
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
+      ...(card.routes === undefined || card.routes.length === 0 ? {} : { routes: card.routes }),
     };
   });
   const artifact: SerializedArtifact = {
@@ -300,6 +305,13 @@ function deserializeBody(
     if (binaryCard && (file.lineCount !== 0 || file.symbols.length !== 0)) throw new Error("osnova: corrupt binary card");
     if (!Array.isArray(file.reExports)) throw new Error("osnova: corrupt re-export metadata");
     const reExports = file.reExports.map(readReExport);
+    if (file.routes !== undefined && (!Array.isArray(file.routes) || file.routes.some((route: unknown) => {
+      const value = route as Partial<RouteSite> | null;
+      return typeof value !== "object" || value === null || typeof value.method !== "string" || !/^[A-Z]+$/.test(value.method) ||
+        (value.path !== undefined && (typeof value.path !== "string" || value.path.length > 2048)) || !positiveInteger(value.line) || (value.line as number) > file.lineCount ||
+        (value.handler !== undefined && typeof value.handler !== "string");
+    }))) throw new Error("osnova: corrupt route metadata");
+    const routes: RouteSite[] | undefined = file.routes === undefined ? undefined : file.routes.map((route: RouteSite) => ({ method: route.method, ...(route.path === undefined ? {} : { path: route.path }), line: route.line, ...(route.handler === undefined ? {} : { handler: route.handler }) }));
     if (!Array.isArray(file.diagnostics) || file.diagnostics.some((diagnostic: unknown) => {
       if (typeof diagnostic !== "object" || diagnostic === null) return true;
       const value = diagnostic as Partial<IndexDiagnostic>;
@@ -319,6 +331,7 @@ function deserializeBody(
       if (symbol.exportedNames !== undefined && (!Array.isArray(symbol.exportedNames) || !symbol.exportedNames.every((name: unknown) => typeof name === "string"))) {
         throw new Error("osnova: corrupt exported-name metadata");
       }
+      if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
       if (symbol.memberKind !== undefined && !["instance", "static", "class", "property", "unknown"].includes(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
       if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
         (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||
@@ -351,6 +364,7 @@ function deserializeBody(
         span,
         signature: symbol.signature,
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
+        ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
@@ -366,7 +380,7 @@ function deserializeBody(
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
       };
     });
-    const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports };
+    const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports, ...(routes === undefined ? {} : { routes }) };
     if (textBytes !== undefined) {
       const text = textBytes.subarray(file.to, file.to + file.tl).toString("utf8");
       if (!binaryCard && (sha256Hex(text) !== file.hash || (text.length === 0 ? 0 : text.split("\n").length) !== file.lineCount)) throw new Error("osnova: corrupt file content");

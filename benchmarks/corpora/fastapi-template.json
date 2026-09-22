@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "fastapi-template-v1",
+  "source": { "kind": "checkout", "revision": "cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7", "repository": "https://github.com/fastapi/full-stack-fastapi-template" },
+  "purpose": "route edges scored against the runtime route table (scripts/route-oracle-fastapi.py app.api.main:api_router from backend/); no retrieval cases"
+}

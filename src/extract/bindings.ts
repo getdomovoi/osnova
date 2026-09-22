@@ -314,6 +314,7 @@ export interface HeritageRef {
 export function collectBindings(root: Node, python: boolean): {
   at: (expression: Node | null, site: Node) => EdgeBinding | undefined;
   boundValue: (name: string, site: Node) => SymbolBinding | undefined;
+  declaredName: (name: string, site: Node) => string | undefined;
   aliasCallee: (node: Node) => Callee | undefined;
   heritage: (node: Node) => SymbolBinding[];
   heritageRefs: (node: Node) => HeritageRef[];
@@ -1324,6 +1325,15 @@ export function collectBindings(root: Node, python: boolean): {
     boundValue,
     aliasCallee,
     returns,
+    // The local qualified name of the nearest declaration of `name`, whatever value it holds: a
+    // module-level `const router = Router()` is `router`, one inside `build` is `build.router`.
+    declaredName: (name, site) => {
+      for (let scope: Scope | null = scopes.get(site.id) ?? module; scope !== null; scope = scope.parent) {
+        if (scope.names.has("*")) return undefined;
+        if (scope.names.has(name)) return join(scope.owner, name);
+      }
+      return undefined;
+    },
     heritage: (node) => {
       const out: SymbolBinding[] = [];
       for (const item of heritageItems(node)) {

@@ -1,4 +1,4 @@
-export const indexFormatVersion = 10 as const;
+export const indexFormatVersion = 12 as const;
 
 export type LanguageId =
   | "typescript"
@@ -52,6 +52,7 @@ export interface OsnovaSymbol {
   readonly span: SourceSpan;
   readonly signature: string;
   readonly lineCount: number;
+  readonly shadowed?: true | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -71,14 +72,27 @@ export type MemberKind = "instance" | "static" | "class" | "property" | "unknown
 export type ReceiverMode = "instance" | "class";
 export type ReceiverBasis = "constructor" | "lexical" | "class-reference" | "annotation" | "return";
 
-export type EdgeKind = "calls" | "references" | "imports" | "extends";
+export type EdgeKind = "calls" | "references" | "imports" | "extends" | "routes";
+
+export interface RouteInfo {
+  readonly method: string;
+  readonly path?: string | undefined;
+}
+
+// A route registration as the file card records it: what the site wrote, plus the handler's local
+// qualified name when the handler is declared in the same file. Ground reads this from the core
+// section so a route query never has to load the edge section.
+export interface RouteSite extends RouteInfo {
+  readonly line: number;
+  readonly handler?: string | undefined;
+}
 
 export type EdgeResolution =
   | { readonly status: "resolved"; readonly method: "import-path" | "same-file-name" | "imported-file-name" | "unique-name" | "import-binding" | "lexical-definition"; readonly via?: undefined }
   | { readonly status: "resolved"; readonly method: "re-export-binding"; readonly via: readonly ExportHop[] }
   | { readonly status: "resolved"; readonly method: "receiver-hint"; readonly receiver: { readonly classSymbol: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }; readonly via?: readonly ExportHop[] | undefined }
   | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
-  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "import-target-ambiguous" | "binding-blocked" | "bound-symbol-missing" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" | "unbound-global"; readonly external?: string | undefined };
+  | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "import-target-unresolved" | "import-target-ambiguous" | "binding-blocked" | "bound-symbol-missing" | "shadowed-declaration" | "route-handler-inline" | "route-handler-wrapped" | "re-export-incomplete" | "re-export-cycle" | "receiver-unresolved" | "unbound-global"; readonly external?: string | undefined };
 
 export type ReExport =
   | { readonly kind: "named"; readonly exportedName: string; readonly source: string; readonly importedName: string; readonly line: number }
@@ -108,7 +122,7 @@ export type ReturnBinding = SymbolBinding | { readonly kind: "this" };
 export type EdgeBinding = SymbolBinding
   | { readonly kind: "instance"; readonly owner: ReceiverOwner; readonly basis: "constructor" | "lexical" | "annotation" | "return" }
   | { readonly kind: "member"; readonly owner: ReceiverOwner; readonly member: string; readonly mode: ReceiverMode; readonly basis: ReceiverBasis }
-  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" | "unbound" };
+  | { readonly kind: "blocked"; readonly reason: "local-value" | "unsupported" | "ambiguous" | "unknown-receiver" | "unbound" | "inline-handler" | "wrapped-handler" };
 
 export type EdgeEvidence =
   | { readonly source: "syntax"; readonly resolution: EdgeResolution }
@@ -124,6 +138,7 @@ export interface OsnovaEdge {
   readonly toFile?: string | undefined;
   readonly evidence?: EdgeEvidence | undefined;
   readonly binding?: EdgeBinding | undefined;
+  readonly route?: RouteInfo | undefined;
 }
 
 export interface FileCard {
@@ -136,6 +151,7 @@ export interface FileCard {
   readonly symbols: readonly OsnovaSymbol[];
   readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
   readonly reExports?: readonly ReExport[] | undefined;
+  readonly routes?: readonly RouteSite[] | undefined;
 }
 
 export interface OsnovaIndex {
