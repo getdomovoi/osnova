@@ -1,0 +1,398 @@
+{
+  "schemaVersion": 1,
+  "measured": "full build split by phase on pinned checkouts, single thread, steady state after one untimed pass, median of repeats; wall clock with the default extraction pool and with the pool off",
+  "osnova": {
+    "commit": "69ca761d474ba22781d671f57a8ed03e4cfdcac1",
+    "version": "0.7.0"
+  },
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.9.0",
+    "cpus": 15
+  },
+  "phases": {
+    "scan": "directory walk and ignore rules",
+    "grammarLoad": "first load of every WASM grammar the corpus needs, once per process",
+    "read": "file read, SHA-256 and UTF-8 decode",
+    "parse": "tree-sitter parse of the source text into a syntax tree (WASM grammar)",
+    "walk": "adapter walk of the tree into definitions and raw edges, plus shadowed-declaration marking",
+    "extractOther": "the rest of extractCard: symbol assembly, sorting and card construction",
+    "resolve": "edge resolution across files: imports, re-exports, bindings, receivers",
+    "serialize": "artifact assembly and JSON encoding in memory",
+    "save": "gzip and write of the core, edges and text sections"
+  },
+  "reading": "parse is the WASM grammar; walk, resolve, serialize and save are TypeScript. Native grammar bindings could only shorten the parse row.",
+  "outcome": {
+    "question": "Does tree-sitter parsing dominate a full build, so that native grammar bindings would be worth their platform binaries and the web-tree-sitter pin?",
+    "answer": "No. On six of seven corpora the adapter walk takes 1.9 to 2.7 times the parse; only the C# corpus has parse and walk within 10 percent of each other. Across all seven, parse is 17 to 39 percent of attributed build time and on those six the TypeScript phases (walk, symbol assembly, resolve, serialize, save) are 63 to 78 percent. Halving parse everywhere would cut single-thread build time by 8 to 19 percent; the same effort on the walk buys more on every corpus but one.",
+    "decision": "Native tree-sitter bindings are not priced. The next build-time lever is the adapter walk, concentrated in the TypeScript and Python binding collector: on the two largest corpora it is 918 ms of 1904 ms and 1284 ms of 4046 ms.",
+    "reopenIf": "A corpus whose grammar is measured at more than half of attributed build time, or a walk optimization that leaves parse as the largest remaining phase."
+  },
+  "corpora": [
+    {
+      "corpus": "click-v1",
+      "repository": "https://github.com/pallets/click",
+      "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+      "files": {
+        "python": 90
+      },
+      "bytes": {
+        "python": 958658
+      },
+      "repeats": 3,
+      "phaseMs": {
+        "scan": 1.8,
+        "grammarLoad": 0.1,
+        "read": 13.9,
+        "parse": 77.4,
+        "walk": 197.8,
+        "extractOther": 2.1,
+        "resolve": 19.2,
+        "serialize": 17.8,
+        "save": 19.5
+      },
+      "phaseShare": {
+        "scan": 0.005,
+        "grammarLoad": 0,
+        "read": 0.04,
+        "parse": 0.221,
+        "walk": 0.566,
+        "extractOther": 0.006,
+        "resolve": 0.055,
+        "serialize": 0.051,
+        "save": 0.056
+      },
+      "attributedMs": 349.6,
+      "extractionFailures": [],
+      "parseMsByLanguage": {
+        "python": 77.4
+      },
+      "walkMsByLanguage": {
+        "python": 197.8
+      },
+      "wallClockMs": {
+        "defaultPool": 273.9,
+        "singleThread": 374.6
+      }
+    },
+    {
+      "corpus": "cobra-v1",
+      "repository": "https://github.com/spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "files": {
+        "go": 36
+      },
+      "bytes": {
+        "go": 512600
+      },
+      "repeats": 3,
+      "phaseMs": {
+        "scan": 0.9,
+        "grammarLoad": 0,
+        "read": 4.6,
+        "parse": 36.5,
+        "walk": 67.6,
+        "extractOther": 1.7,
+        "resolve": 11.6,
+        "serialize": 8.7,
+        "save": 10.5
+      },
+      "phaseShare": {
+        "scan": 0.006,
+        "grammarLoad": 0,
+        "read": 0.032,
+        "parse": 0.257,
+        "walk": 0.476,
+        "extractOther": 0.012,
+        "resolve": 0.082,
+        "serialize": 0.061,
+        "save": 0.074
+      },
+      "attributedMs": 142.1,
+      "extractionFailures": [],
+      "parseMsByLanguage": {
+        "go": 36.5
+      },
+      "walkMsByLanguage": {
+        "go": 67.6
+      },
+      "wallClockMs": {
+        "defaultPool": 183.8,
+        "singleThread": 152.1
+      }
+    },
+    {
+      "corpus": "gson-v1",
+      "repository": "https://github.com/google/gson",
+      "revision": "854c8255b625cf1e13c701a83ea9ccb4caaa576a",
+      "files": {
+        "java": 264
+      },
+      "bytes": {
+        "java": 2021450
+      },
+      "repeats": 3,
+      "phaseMs": {
+        "scan": 3.8,
+        "grammarLoad": 0.1,
+        "read": 35.4,
+        "parse": 123.2,
+        "walk": 232.7,
+        "extractOther": 2.7,
+        "resolve": 98.8,
+        "serialize": 51.9,
+        "save": 62.9
+      },
+      "phaseShare": {
+        "scan": 0.006,
+        "grammarLoad": 0,
+        "read": 0.058,
+        "parse": 0.201,
+        "walk": 0.381,
+        "extractOther": 0.004,
+        "resolve": 0.162,
+        "serialize": 0.085,
+        "save": 0.103
+      },
+      "attributedMs": 611.5,
+      "extractionFailures": [],
+      "parseMsByLanguage": {
+        "java": 123.2
+      },
+      "walkMsByLanguage": {
+        "java": 232.7
+      },
+      "wallClockMs": {
+        "defaultPool": 426.5,
+        "singleThread": 622.2
+      }
+    },
+    {
+      "corpus": "humanizer-v1",
+      "repository": "https://github.com/Humanizr/Humanizer",
+      "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b",
+      "files": {
+        "c_sharp": 733,
+        "javascript": 16,
+        "typescript": 6,
+        "tsx": 8
+      },
+      "bytes": {
+        "c_sharp": 7087588,
+        "javascript": 80550,
+        "typescript": 41546,
+        "tsx": 21272
+      },
+      "repeats": 3,
+      "phaseMs": {
+        "scan": 30.1,
+        "grammarLoad": 0.4,
+        "read": 218.7,
+        "parse": 725,
+        "walk": 659.4,
+        "extractOther": 5,
+        "resolve": 66.1,
+        "serialize": 68.7,
+        "save": 103.3
+      },
+      "phaseShare": {
+        "scan": 0.016,
+        "grammarLoad": 0,
+        "read": 0.117,
+        "parse": 0.386,
+        "walk": 0.351,
+        "extractOther": 0.003,
+        "resolve": 0.035,
+        "serialize": 0.037,
+        "save": 0.055
+      },
+      "attributedMs": 1876.7,
+      "extractionFailures": [],
+      "parseMsByLanguage": {
+        "c_sharp": 711.9,
+        "javascript": 7.1,
+        "tsx": 1.9,
+        "typescript": 4.1
+      },
+      "walkMsByLanguage": {
+        "c_sharp": 623.8,
+        "javascript": 18.1,
+        "tsx": 4.3,
+        "typescript": 11.1
+      },
+      "wallClockMs": {
+        "defaultPool": 889.6,
+        "singleThread": 2071.3
+      }
+    },
+    {
+      "corpus": "pyright-v1",
+      "repository": "https://github.com/microsoft/pyright",
+      "revision": "a07bbdeae085f59396acee8739c7d862dd3a1ff1",
+      "files": {
+        "javascript": 9,
+        "typescript": 603,
+        "python": 1357
+      },
+      "bytes": {
+        "javascript": 13320,
+        "typescript": 7058881,
+        "python": 1671755
+      },
+      "repeats": 3,
+      "phaseMs": {
+        "scan": 71.9,
+        "grammarLoad": 1,
+        "read": 740.1,
+        "parse": 676.7,
+        "walk": 1777,
+        "extractOther": 133,
+        "resolve": 200.1,
+        "serialize": 201.6,
+        "save": 245.1
+      },
+      "phaseShare": {
+        "scan": 0.018,
+        "grammarLoad": 0,
+        "read": 0.183,
+        "parse": 0.167,
+        "walk": 0.439,
+        "extractOther": 0.033,
+        "resolve": 0.049,
+        "serialize": 0.05,
+        "save": 0.061
+      },
+      "attributedMs": 4046.5,
+      "extractionFailures": [],
+      "parseMsByLanguage": {
+        "javascript": 1.1,
+        "python": 173.6,
+        "typescript": 504.4
+      },
+      "walkMsByLanguage": {
+        "javascript": 1.6,
+        "python": 474.9,
+        "typescript": 1284.3
+      },
+      "wallClockMs": {
+        "defaultPool": 2277.5,
+        "singleThread": 4572.9
+      }
+    },
+    {
+      "corpus": "ripgrep-v1",
+      "repository": "https://github.com/BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "files": {
+        "rust": 110,
+        "bash": 2,
+        "ruby": 1
+      },
+      "bytes": {
+        "rust": 1902104,
+        "bash": 3415,
+        "ruby": 804
+      },
+      "repeats": 3,
+      "phaseMs": {
+        "scan": 2.5,
+        "grammarLoad": 0,
+        "read": 19.9,
+        "parse": 119.5,
+        "walk": 322.2,
+        "extractOther": 8.4,
+        "resolve": 74.7,
+        "serialize": 41.1,
+        "save": 45.1
+      },
+      "phaseShare": {
+        "scan": 0.004,
+        "grammarLoad": 0,
+        "read": 0.031,
+        "parse": 0.189,
+        "walk": 0.509,
+        "extractOther": 0.013,
+        "resolve": 0.118,
+        "serialize": 0.065,
+        "save": 0.071
+      },
+      "attributedMs": 633.4,
+      "extractionFailures": [
+        "ci/utils.sh: parse: TypeError: resolved is not a function"
+      ],
+      "parseMsByLanguage": {
+        "bash": 0.2,
+        "ruby": 0.1,
+        "rust": 119.2
+      },
+      "walkMsByLanguage": {
+        "bash": 0.1,
+        "ruby": 0.1,
+        "rust": 322
+      },
+      "wallClockMs": {
+        "defaultPool": 393.1,
+        "singleThread": 643
+      }
+    },
+    {
+      "corpus": "zod-v1",
+      "repository": "https://github.com/colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "files": {
+        "javascript": 5,
+        "typescript": 481,
+        "tsx": 34,
+        "bash": 1
+      },
+      "bytes": {
+        "javascript": 9732,
+        "typescript": 3467860,
+        "tsx": 80712,
+        "bash": 239
+      },
+      "repeats": 3,
+      "phaseMs": {
+        "scan": 8.3,
+        "grammarLoad": 0.1,
+        "read": 71.5,
+        "parse": 339.6,
+        "walk": 929.7,
+        "extractOther": 31.2,
+        "resolve": 214.5,
+        "serialize": 149.2,
+        "save": 160.3
+      },
+      "phaseShare": {
+        "scan": 0.004,
+        "grammarLoad": 0,
+        "read": 0.038,
+        "parse": 0.178,
+        "walk": 0.488,
+        "extractOther": 0.016,
+        "resolve": 0.113,
+        "serialize": 0.078,
+        "save": 0.084
+      },
+      "attributedMs": 1904.4,
+      "extractionFailures": [
+        "packages/docs/should-build-site.sh: parse: TypeError: resolved is not a function"
+      ],
+      "parseMsByLanguage": {
+        "javascript": 0.8,
+        "tsx": 6,
+        "typescript": 332.9
+      },
+      "walkMsByLanguage": {
+        "javascript": 1,
+        "tsx": 10.9,
+        "typescript": 917.9
+      },
+      "wallClockMs": {
+        "defaultPool": 859,
+        "singleThread": 1844.3
+      }
+    }
+  ]
+}
