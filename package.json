@@ -1,6 +1,7 @@
 {
   "name": "@getdomovoi/osnova",
-  "version": "0.8.0",
+  "mcpName": "io.github.getdomovoi/osnova",
+  "version": "0.8.1",
   "description": "Deterministic code map for AI coding agents: a tree-sitter symbol and call graph served over MCP and a CLI, with no embeddings, network or telemetry.",
   "type": "module",
   "license": "Apache-2.0",
@@ -24,7 +25,13 @@
     "static-analysis",
     "claude-code",
     "codex",
-    "opencode"
+    "opencode",
+    "code-graph",
+    "repo-map",
+    "code-intelligence",
+    "cursor",
+    "kilo",
+    "pi"
   ],
   "homepage": "https://github.com/getdomovoi/osnova#readme",
   "engines": {
@@ -90,6 +97,8 @@
     "@types/emscripten": "^1.41.6",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.2.7",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "eslint": "^9.39.5",
     "js-tiktoken": "1.0.21",
     "tsup": "^8.5.0",

@@ -34,6 +34,12 @@ beforeAll(async () => {
   write("src/other.ts", 'export function run(): number { return leadOnly(); }\nexport const label = "mentionedInString";\n');
   write("src/index.ts", "export function fromIndex(): number { return 6; }\n");
   write("src/cli.ts", "export function cliMain(): number { return 7; }\n");
+  write("src/shadow.ts", [
+    "export const host = {",
+    "  guard(inst: { run: unknown }) { const wrapped = (x: number): number => x + 1; inst.run = wrapped; },",
+    "  attach(inst: { run: unknown }) { const wrapped = (x: number): number => x + 2; inst.run = wrapped; },",
+    "};",
+  ].join("\n"));
   write("src/defaulted.ts", "export default function defaulted(): number { return 8; }\n");
   write("test/lib.test.ts", 'import { unusedExported } from "../src/lib.js";\nexport function fromTest(): number { return unusedExported(); }\n');
   index = await buildIndex(workspace, { cacheDir });
@@ -69,10 +75,19 @@ describe("unreferenced", () => {
     ]);
     expect(withExported.kinds).toEqual(["class", "function", "method"]);
     const constants = unreferenced(index, { kinds: ["constant"], includeExported: true });
-    expect(constants.candidates.map((c) => c.symbol.qualifiedName)).toEqual(["src/other.ts#label"]);
+    expect(constants.candidates.map((c) => c.symbol.qualifiedName)).toEqual(["src/other.ts#label", "src/shadow.ts#host"]);
     expect(withExported.exportedNotListed).toBe(0);
     expect(JSON.stringify(withExported)).not.toContain("Widget.size");
     expect(JSON.stringify(withExported)).not.toContain("fromTest");
+  });
+
+  it("never lists a shadowed declaration, since no reference to it can be recorded", () => {
+    const result = unreferenced(index);
+    expect(index.symbols.get("src/shadow.ts#wrapped")?.shadowed).toBe(true);
+    expect(result.candidates.map((c) => c.symbol.qualifiedName)).not.toContain("src/shadow.ts#wrapped");
+    expect(result.shadowedNotListed).toBe(1);
+    expect(unreferenced(index, { scope: "src/lib.ts" }).shadowedNotListed).toBe(0);
+    expect(formatUnreferenced(result)).toContain("1 shadowed not listed");
   });
 
   it("filters by scope and kinds, clips with an exact count and is deterministic", () => {

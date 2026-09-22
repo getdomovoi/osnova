@@ -797,7 +797,7 @@ export function formatSymbolsUnderTest(result: SymbolsUnderTestResult): string {
 
 export function formatUnreferenced(result: UnreferencedResult): string {
   const listed = result.candidates.length;
-  const lines = [`osnova unreferenced: scope ${result.scope === "" ? "." : result.scope}, kinds ${result.kinds.join(",")}, ${listed} candidates listed of ${listed + result.omitted}, ${result.exportedNotListed} exported not listed, ${result.examined} symbols examined`];
+  const lines = [`osnova unreferenced: scope ${result.scope === "" ? "." : result.scope}, kinds ${result.kinds.join(",")}, ${listed} candidates listed of ${listed + result.omitted}, ${result.exportedNotListed} exported not listed, ${result.shadowedNotListed} shadowed not listed, ${result.examined} symbols examined`];
   for (const candidate of result.candidates) {
     const symbol = candidate.symbol;
     const mentions = candidate.mentions === null ? "text mentions skipped (corpus over cap)" : `${candidate.mentions} text mentions in non-test files`;
@@ -810,6 +810,7 @@ export function formatUnreferenced(result: UnreferencedResult): string {
     `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}`,
     entryPointRuleText,
     result.exportedNotListed > 0 ? "exported symbols are entry points for external consumers and are listed only with includeExported." : "",
+    result.shadowedNotListed > 0 ? "shadowed symbols (a name the file declares in more than one scope) are never listed: the index records no edge to them, so their absence from the graph is not evidence." : "",
     unreferencedNotice,
     `limitations: ${result.limitations.join(", ")}`,
   );

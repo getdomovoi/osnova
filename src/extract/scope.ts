@@ -19,31 +19,36 @@ function isScope(node: Node): boolean {
   return SCOPE_PARTS.some((part) => type.includes(part));
 }
 
-function scopeIds(tree: Tree, lines: ReadonlySet<number>): Map<number, number> {
-  const found = new Map<number, number>();
-  const sorted = [...lines].sort((a, b) => a - b);
-  // A subtree that spans no contested line has nothing to classify; skipping it keeps the walk
-  // proportional to the contested declarations rather than to the file.
-  const holdsTarget = (node: Node): boolean => {
-    const first = node.startPosition.row + 1, last = node.endPosition.row + 1;
-    let low = 0, high = sorted.length - 1;
-    while (low <= high) {
-      const mid = (low + high) >> 1;
-      const line = sorted[mid]!;
-      if (line < first) low = mid + 1; else if (line > last) high = mid - 1; else return true;
-    }
-    return false;
-  };
-  const descend = (node: Node, scope: number): void => {
-    for (const child of childrenOf(node)) {
-      if (!holdsTarget(child)) continue;
-      const startLine = child.startPosition.row + 1;
-      const inner = isScope(child) ? child.startIndex : scope;
-      if (lines.has(startLine) && !found.has(startLine)) found.set(startLine, scope);
-      descend(child, inner);
-    }
-  };
-  descend(tree.rootNode, tree.rootNode.startIndex);
+interface Target { readonly key: string; readonly row: number; readonly column: number }
+
+const targetKey = (definition: RawDefinition): string => `${definition.span.startLine}:${definition.span.startCol}`;
+
+function startsBefore(node: Node, target: Target): boolean {
+  const { row, column } = node.startPosition;
+  return row < target.row || (row === target.row && column < target.column);
+}
+
+function holds(node: Node, target: Target): boolean {
+  const start = node.startPosition, end = node.endPosition;
+  if (start.row > target.row || (start.row === target.row && start.column > target.column)) return false;
+  return end.row > target.row || (end.row === target.row && end.column >= target.column);
+}
+
+// The scope of a declaration is the innermost scope node that starts strictly before it. A
+// declaration that is itself a scope (`function twin() {}`) therefore belongs to its parent, and a
+// declaration on the line where its method or callback opens still belongs to that method or
+// callback, since the comparison is by position, not by line.
+function scopeOf(node: Node, target: Target, scope: number): number {
+  for (const child of childrenOf(node)) {
+    if (!holds(child, target)) continue;
+    return scopeOf(child, target, isScope(child) && startsBefore(child, target) ? child.startIndex : scope);
+  }
+  return scope;
+}
+
+function scopeIds(tree: Tree, targets: readonly Target[]): Map<string, number> {
+  const found = new Map<string, number>();
+  for (const target of targets) found.set(target.key, scopeOf(tree.rootNode, target, tree.rootNode.startIndex));
   return found;
 }
 
@@ -60,12 +65,15 @@ export function markShadowed(tree: Tree, definitions: readonly RawDefinition[]):
   }
   const contested = [...byName.values()].filter((list) => list.length > 1);
   if (contested.length === 0) return [...definitions];
-  const lines = new Set(contested.flatMap((list) => list.map((definition) => definition.span.startLine)));
-  const scopes = scopeIds(tree, lines);
+  const targets = new Map<string, Target>();
+  for (const definition of contested.flat()) {
+    targets.set(targetKey(definition), { key: targetKey(definition), row: definition.span.startLine - 1, column: definition.span.startCol });
+  }
+  const scopes = scopeIds(tree, [...targets.values()]);
   const shadowed = new Set<string>();
   for (const [key, list] of byName) {
     if (list.length < 2) continue;
-    const distinct = new Set(list.map((definition) => scopes.get(definition.span.startLine) ?? -1));
+    const distinct = new Set(list.map((definition) => scopes.get(targetKey(definition)) ?? -1));
     if (distinct.size > 1) shadowed.add(key);
   }
   if (shadowed.size === 0) return [...definitions];
