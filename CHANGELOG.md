@@ -2,7 +2,9 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
-## Unreleased
+## 0.8.0 (2026-09-21)
+
+The edge section format moves to 11 and the extraction version to `structural-9.27`, so the first run after upgrading rebuilds the cache once.
 
 ### Added
 
