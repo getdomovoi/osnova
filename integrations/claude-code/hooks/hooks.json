@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npx -y @getdomovoi/osnova hook session", "timeout": 15 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npx -y @getdomovoi/osnova hook prompt", "timeout": 15 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "npx -y @getdomovoi/osnova hook stop", "timeout": 30 }] }]
+  }
+}

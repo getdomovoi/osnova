@@ -1,0 +1,34 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.getdomovoi/osnova",
+  "description": "Deterministic code map for AI coding agents: a tree-sitter call graph with exact file:line over MCP.",
+  "repository": {
+    "url": "https://github.com/getdomovoi/osnova",
+    "source": "github"
+  },
+  "version": "0.8.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@getdomovoi/osnova",
+      "version": "0.8.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "OSNOVA_CACHE_DIR",
+          "description": "Cache directory; the only place osnova writes.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

@@ -46,6 +46,8 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 
 ## What you get back
 
+<img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/demo/warp.gif" width="1600" alt="A terminal recording: osnova warp lists the five resolved callers of click Context.invoke, each with its receiver hint; grep finds twelve .invoke( lines; osnova plumb checks those twelve and reports five confirmed, six name-only matches on other invoke methods and one line inside a docstring.">
+
 `osnova warp refreshWorkspace` on this repository, cut to twelve lines:
 
 ```text
@@ -126,6 +128,7 @@ One global install serves every repository and every client: one entry in each c
 | Client | How to wire | What it adds |
 | --- | --- | --- |
 | Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
+| Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace |
 | Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently |
 | Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message |
 | OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin: full contract in the system prompt, starting points on each message |
