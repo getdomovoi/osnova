@@ -9,6 +9,8 @@ import { TsConfigs, probeNodeFile } from "./tsconfig.js";
 const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
 const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
 const VALUE_REFERENCE_KINDS: ReadonlySet<string> = new Set(["function", "method", "class"]);
+// A route handler is a callable or a class; a mount target may also be a router held in a constant.
+const ROUTE_TARGET_KINDS: ReadonlySet<string> = new Set(["function", "method", "class", "constant"]);
 // A declared base is a type, never a value: a same-named function or constant is not the base.
 const HERITAGE_KINDS: ReadonlySet<string> = new Set(["class", "interface", "struct", "trait"]);
 // Languages whose receiver hints name a type without an import binding; a type not declared in the
@@ -551,7 +553,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const binding = raw.binding;
         const reference = binding.kind === "member" ? binding.owner : binding;
         let candidates: readonly OsnovaSymbol[] = [];
-        let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved"
+        let resolution: EdgeResolution = { status: "unresolved", reason: binding.kind === "blocked" && binding.reason === "inline-handler" ? "route-handler-inline" : binding.kind === "blocked" && binding.reason === "wrapped-handler" ? "route-handler-wrapped"
+          : binding.kind === "instance" || (binding.kind === "blocked" && binding.reason === "unknown-receiver") ? "receiver-unresolved"
           : binding.kind === "blocked" && binding.reason === "unbound" && !(languageFamily(card.language) === languageFamily("typescript") && ambientGlobals.has(raw.toName)) ? "unbound-global" : "binding-blocked" };
         let exportResult: ExportResult | undefined;
         if (reference.kind === "import") {
@@ -581,6 +584,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             edges.push({
               kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
               evidence: { source: "syntax", resolution: { status: "unresolved", reason: "shadowed-declaration" } },
+              ...(raw.route === undefined ? {} : { route: raw.route }),
             });
             continue;
           }
@@ -877,6 +881,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         if (raw.kind === "references") candidates = candidates.filter((symbol) => VALUE_REFERENCE_KINDS.has(symbol.kind));
         if (raw.kind === "extends") candidates = candidates.filter((symbol) => HERITAGE_KINDS.has(symbol.kind));
+        if (raw.kind === "routes") candidates = candidates.filter((symbol) => ROUTE_TARGET_KINDS.has(symbol.kind));
         const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
         const resolved = names.length === 1 ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
@@ -891,6 +896,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
           evidence: { source: "syntax", resolution },
           ...(resolved === undefined ? {} : { toSymbol: resolved.qualifiedName, toFile: resolved.file }),
+          ...(raw.route === undefined ? {} : { route: raw.route }),
         });
         continue;
       }

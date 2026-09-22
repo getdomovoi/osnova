@@ -88,6 +88,7 @@ export async function extractCard(
           line: edge.line,
           enclosing: edge.enclosing,
           ...(edge.binding === undefined ? {} : { binding: edge.binding }),
+          ...(edge.route === undefined ? {} : { route: edge.route }),
         }));
       } finally {
         tree.delete();

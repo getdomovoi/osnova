@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "flask-v1",
+  "source": { "kind": "checkout", "revision": "d73fa1cdcbd8b1465c151db8924ba58b1dd14e35", "repository": "https://github.com/pallets/flask" },
+  "purpose": "route edges (Flask decorators, blueprints, add_url_rule) and resolution coverage; no retrieval cases"
+}

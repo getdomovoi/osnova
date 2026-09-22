@@ -2,6 +2,8 @@ import type { Node } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import { collectBindings } from "./bindings.js";
+import { frameworkOfReceiver, isMount, routeInfo, routeMethod } from "./routes.js";
+import type { EdgeBinding } from "../types.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -19,6 +21,32 @@ function callTarget(node: Node): string | null {
     return attr !== null ? attr.text : null;
   }
   return null;
+}
+
+// A plain string is a route path; an f-string or a concatenation is computed and records none.
+function literalPath(node: Node | undefined): string | undefined {
+  if (node === undefined || node.type !== "string") return undefined;
+  const parts = childrenOf(node);
+  if (parts.some((part) => part.type === "interpolation") || /[fF]/.test(parts.find((part) => part.type === "string_start")?.text ?? "")) return undefined;
+  return parts.filter((part) => part.type === "string_content").map((part) => part.text).join("");
+}
+
+function keywordArgument(args: Node | null, name: string): Node | undefined {
+  if (args === null) return undefined;
+  for (const arg of childrenOf(args)) {
+    if (arg.type === "keyword_argument" && arg.childForFieldName("name")?.text === name) return arg.childForFieldName("value") ?? undefined;
+  }
+  return undefined;
+}
+
+function routeHandler(node: Node, site: Node, bindings: ReturnType<typeof collectBindings>): { name: string; binding: EdgeBinding } {
+  if (node.type === "identifier") {
+    const declared = bindings.declaredName(node.text, site);
+    return { name: node.text, binding: bindings.boundValue(node.text, site) ?? (declared === undefined ? { kind: "blocked", reason: "unbound" } : { kind: "local", name: declared }) };
+  }
+  if (node.type === "attribute") return { name: node.childForFieldName("attribute")?.text ?? node.text, binding: bindings.at(node, site) ?? { kind: "blocked", reason: "unknown-receiver" } };
+  if (node.type === "lambda") return { name: "(inline)", binding: { kind: "blocked", reason: "inline-handler" } };
+  return { name: "(wrapped)", binding: { kind: "blocked", reason: "wrapped-handler" } };
 }
 
 function valuePosition(node: Node): boolean {
@@ -63,7 +91,15 @@ export const pythonAdapter: LanguageAdapter = {
               if (inner === undefined) continue;
               if (inner.type === "call") {
                 const target = callTarget(inner);
-                if (target !== null) out.addEdge("calls", target, inner, bindings.at(inner.childForFieldName("function"), inner));
+                const callee = bindings.at(inner.childForFieldName("function"), inner);
+                if (target !== null) out.addEdge("calls", target, inner, callee);
+                const framework = frameworkOfReceiver(callee);
+                const method = framework === undefined || target === null || isMount(framework, target) ? undefined : routeMethod(framework, target);
+                const defName = nameField(defNode);
+                if (method !== undefined && defName !== null && IDENTIFIER_RE.test(defName)) {
+                  const args = childrenOf(inner.childForFieldName("arguments") ?? inner);
+                  out.addEdge("routes", defName, deco, { kind: "local", name: out.enclosing === "" ? defName : `${out.enclosing}.${defName}` }, routeInfo(method, literalPath(args[0])));
+                }
                 for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
                 continue;
               }
@@ -117,7 +153,21 @@ export const pythonAdapter: LanguageAdapter = {
         }
         case "call": {
           const target = callTarget(node);
-          if (target !== null) out.addEdge("calls", target, node, bindings.at(node.childForFieldName("function"), node));
+          const callee = bindings.at(node.childForFieldName("function"), node);
+          if (target !== null) out.addEdge("calls", target, node, callee);
+          const framework = frameworkOfReceiver(callee);
+          if (framework !== undefined && target !== null && isMount(framework, target)) {
+            const argList = node.childForFieldName("arguments");
+            const positional = childrenOf(argList ?? node).filter((arg) => arg.type !== "keyword_argument");
+            if (target === "add_url_rule") {
+              // add_url_rule(rule, endpoint=None, view_func=None): the view is the keyword or the third positional argument.
+              const view = keywordArgument(argList, "view_func") ?? positional[2];
+              if (view !== undefined) { const handler = routeHandler(view, node, bindings); out.addEdge("routes", handler.name, node, handler.binding, routeInfo("ANY", literalPath(positional[0]))); }
+            } else if (positional[0] !== undefined) {
+              const handler = routeHandler(positional[0], node, bindings);
+              out.addEdge("routes", handler.name, node, handler.binding, routeInfo("ANY", literalPath(keywordArgument(argList, target === "include_router" ? "prefix" : "url_prefix"))));
+            }
+          }
           for (const child of childrenOf(node)) visit(child);
           return;
         }

@@ -2,6 +2,8 @@ import type { Node, Tree } from "web-tree-sitter";
 import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import { FIELD_NODES, FUNCTION_VALUE_NODES, collectBindings, memberKindOf } from "./bindings.js";
+import { decoratorMethod, frameworkOfImport, frameworkOfReceiver, isMount, routeInfo, routeMethod } from "./routes.js";
+import type { EdgeBinding } from "../types.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const VALUE_WRAPPERS = new Set(["parenthesized_expression", "as_expression", "satisfies_expression", "non_null_expression"]);
@@ -23,6 +25,34 @@ class TsExtractor {
     if (!IDENTIFIER_RE.test(name)) return;
     this.out.addDef(name, kind, node, sigNode, undefined, undefined, undefined, kind === "function" ? this.bindings.returns(sigNode ?? node) : undefined, undefined, undefined, kind === "function" ? this.bindings.unwrapped(sigNode ?? node) : undefined, kind === "function" ? this.bindings.elements(sigNode ?? node) : undefined, undefined, kind === "function" ? this.bindings.values(sigNode ?? node) : undefined, undefined, kind === "constant" ? this.bindings.aliasCallee(node) : undefined);
   }
+}
+
+// A plain string argument is a route path; a template or any expression is a computed path and records none.
+function literalPath(node: Node | undefined): string | undefined {
+  if (node === undefined || node.type !== "string") return undefined;
+  return stringFragmentOf(node) ?? "";
+}
+
+function unwrapValue(node: Node): Node {
+  let inner = node;
+  while (VALUE_WRAPPERS.has(inner.type)) inner = childrenOf(inner)[0] ?? inner;
+  return inner;
+}
+
+// The handler of a registration call is its last positional argument: a bound name, a member the
+// receiver hints can identify, or a closure or call result the index cannot name.
+function routeHandler(node: Node, site: Node, bindings: ReturnType<typeof collectBindings>): { name: string; binding: EdgeBinding } {
+  const value = unwrapValue(node);
+  if (value.type === "identifier") {
+    const declared = bindings.declaredName(value.text, site);
+    return { name: value.text, binding: bindings.boundValue(value.text, site) ?? (declared === undefined ? { kind: "blocked", reason: "unbound" } : { kind: "local", name: declared }) };
+  }
+  if (value.type === "member_expression") {
+    const property = value.childForFieldName("property")?.text ?? lastIdentifier(value) ?? value.text;
+    return { name: property, binding: bindings.at(value, site) ?? { kind: "blocked", reason: "unknown-receiver" } };
+  }
+  if (FUNCTION_VALUE_NODES.has(value.type)) return { name: "(inline)", binding: { kind: "blocked", reason: "inline-handler" } };
+  return { name: lastIdentifier(value) ?? "(wrapped)", binding: { kind: "blocked", reason: "wrapped-handler" } };
 }
 
 function declarationName(node: Node): string | null {
@@ -104,6 +134,7 @@ function handleClass(node: Node, name: string, ex: TsExtractor, visit: (n: Node)
     if (child.type === "class_body" || child.type === "declaration_list") {
       for (const member of childrenOf(child)) {
         const fieldValue = FIELD_NODES.has(member.type) ? member.childForFieldName("value") : null;
+        if (member.type === "decorator") { visit(member); continue; }
         if (member.type === "method_definition" || (fieldValue !== null && FUNCTION_VALUE_NODES.has(fieldValue.type))) {
           const methodName = declarationName(member);
           if (methodName !== null && IDENTIFIER_RE.test(methodName)) {
@@ -229,7 +260,24 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
           if (inner !== undefined) {
             const name = inner.type === "identifier" ? inner.text : lastIdentifier(inner);
             if (name !== null) ex.out.addEdge("references", name, node);
-            if (inner.type === "call_expression") for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
+            if (inner.type === "call_expression") {
+              // A decorator is a sibling of what it decorates: the next non-decorator node in a class body,
+              // or the declaration of the export statement it precedes.
+              let decorated = node.nextNamedSibling;
+              while (decorated !== null && decorated.type === "decorator") decorated = decorated.nextNamedSibling;
+              const factory = inner.childForFieldName("function");
+              const framework = factory?.type === "identifier" ? frameworkOfImport(bindings.at(factory, node)) : undefined;
+              const method = framework === undefined || factory === null ? undefined : decoratorMethod(framework, factory.text);
+              const owner = decorated?.type === "class_declaration" ? decorated : node.parent?.type === "class_body" && node.parent.parent?.type === "class_declaration" ? node.parent.parent : null;
+              const ownerName = owner === null ? null : declarationName(owner);
+              const handlerName = decorated?.type === "class_declaration" ? ownerName : decorated?.type === "method_definition" && owner !== null ? declarationName(decorated) : null;
+              if (method !== undefined && handlerName !== null && ownerName !== null) {
+                const local = decorated?.type === "class_declaration" ? ownerName : `${ownerName}.${handlerName}`;
+                const args = childrenOf(inner.childForFieldName("arguments") ?? inner);
+                ex.out.addEdge("routes", handlerName, node, { kind: "local", name: local }, routeInfo(method, args.length === 0 ? "" : literalPath(args[0])));
+              }
+              for (const arg of childrenOf(inner.childForFieldName("arguments") ?? inner)) visit(arg);
+            }
           }
           return;
         }
@@ -266,7 +314,21 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
             return;
           }
           const target = callTarget(node);
-          if (target !== null) ex.out.addEdge("calls", target, node, bindings.at(fn, node));
+          const callee = bindings.at(fn, node);
+          if (target !== null) ex.out.addEdge("calls", target, node, callee);
+          const framework = frameworkOfReceiver(callee);
+          if (framework !== undefined && fn !== null && fn.type === "member_expression") {
+            const member = fn.childForFieldName("property")?.text ?? "";
+            const method = routeMethod(framework, member);
+            const args = childrenOf(node.childForFieldName("arguments") ?? node);
+            const path = literalPath(args[0]);
+            // `app.get("view engine")` reads a setting, and `use` without a literal first argument
+            // (`app.use(fn)`, `app.use(cors(), auth)`) mounts middleware: neither names a path and a handler.
+            if (method !== undefined && args.length >= 2 && (path !== undefined || !isMount(framework, member))) {
+              const handler = routeHandler(args[args.length - 1]!, node, bindings);
+              ex.out.addEdge("routes", handler.name, node, handler.binding, routeInfo(method, path));
+            }
+          }
           for (const child of childrenOf(node)) visit(child);
           return;
         }

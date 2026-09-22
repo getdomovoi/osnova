@@ -308,9 +308,13 @@ function edgeBasis(hit: CallerEvidenceHit): string {
     ? evidence.resolution.method : evidence.resolution.status : "unknown provenance";
 }
 
+function routeDetail(edge: OsnovaEdge): string[] {
+  return edge.route === undefined ? [] : [`route: ${edge.route.method} ${edge.route.path ?? "(computed path)"}`];
+}
+
 function edgeDetail(hit: CallerEvidenceHit): string[] {
   const evidence = hit.edge.evidence;
-  const lines: string[] = [];
+  const lines: string[] = routeDetail(hit.edge);
   if (evidence?.source === "syntax" && evidence.resolution.status === "resolved") {
     if (evidence.resolution.method === "receiver-hint") {
       const receiver = evidence.resolution.receiver;
@@ -436,9 +440,9 @@ function unresolvedGroups(items: readonly UnresolvedCallerEdge[]): UnresolvedGro
   const groups = new Map<string, UnresolvedGroup>();
   for (const { edge, depth, nameMatches } of items) {
     const basis = unresolvedBasis(edge);
-    const detail = edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous"
+    const detail = [...routeDetail(edge), ...(edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "ambiguous"
       ? [`ambiguous candidates: ${edge.evidence.resolution.candidates.join(", ")}`]
-      : [];
+      : [])];
     const candidates = candidateLine(edge.toName, nameMatches);
     const key = [depth, edge.kind, edge.toName, basis, detail.join("\n"), candidates ?? ""].join("\0");
     const group = groups.get(key) ?? { depth, kind: edge.kind, name: edge.toName, basis, detail, candidates, sites: [], edges: 0 };
