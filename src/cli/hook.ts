@@ -1,6 +1,7 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
+import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { loadIndex, refreshWorkspace } from "../api.js";
@@ -8,6 +9,7 @@ import { resolveCacheDir } from "../cache/cache.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { boundText } from "../query/budget.js";
+import { denyReason, gateSubject, indexedFilesUnder, isInside, isOsnovaToolName } from "./gate.js";
 import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
@@ -24,7 +26,8 @@ import type { CliIo } from "./cli.js";
 // outnumber OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1); otherwise it warns the user without continuing.
 // Its once-per-diff and once-per-nudge state lives under the cache directory, the one place the
 // hooks may write.
-export type HookEvent = "prompt" | "session" | "stop" | "tool" | "install-preview";
+export type HookEvent = "prompt" | "session" | "stop" | "tool" | "gate" | "mark" | "install-preview";
+export const hookEvents: readonly HookEvent[] = ["prompt", "session", "stop", "tool", "gate", "mark", "install-preview"];
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
@@ -89,22 +92,46 @@ export function workspaceRootFor(dir: string): string {
   } catch { return path.resolve(dir); }
 }
 
-export function hookSettingsSnippet(command: readonly string[], client: HookClient = "claude-code", nudge = false): string {
-  return JSON.stringify(hookSettingsObject(command, client, nudge), null, 2);
+export interface HookInstallShape {
+  readonly nudge?: boolean | undefined;
+  /** Install the blocking search gate. On by default for a client that can deny a tool call. */
+  readonly gate?: boolean | undefined;
+}
+
+export function hookSettingsSnippet(command: readonly string[], client: HookClient = "claude-code", shape: HookInstallShape = {}): string {
+  return JSON.stringify(hookSettingsObject(command, client, shape), null, 2);
+}
+
+/** Clients whose pre-tool hook can return a deny decision. Only these get the gate. */
+export const gateClients: readonly HookClient[] = ["claude-code"];
+export function clientCanGate(client: HookClient): boolean {
+  return gateClients.includes(client);
 }
 
 // The hook groups a client's file needs. Claude Code and Codex share one shape; Cursor's beforeSubmitPrompt cannot add context,
 // so Cursor gets the stop hook only, as a follow-up message.
+// The gate is the only hook that changes what the agent may do: PreToolUse on the search tools, denied until
+// osnova has run this turn, with a PostToolUse `mark` on the osnova tools to record that it did. It is on by
+// default because a text instruction is not enforcement: the model can skip text, and it did.
 // The PostToolUse grep nudge is opt-in (`nudge`): measured, it did not change what the agent did after a grep.
-export function hookSettingsObject(command: readonly string[], client: HookClient, nudge = false): Record<string, unknown> {
+export function hookSettingsObject(command: readonly string[], client: HookClient, shape: HookInstallShape = {}): Record<string, unknown> {
   const quoted = command.map((part) => (/[\s"]/.test(part) ? JSON.stringify(part) : part)).join(" ");
   const suffix = client === "claude-code" ? "" : ` --client ${client}`;
   if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
   const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
   const hooks: Record<string, unknown[]> = { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] };
-  if (client === "claude-code" && nudge) hooks.PostToolUse = [{ matcher: "Grep|Bash", ...entry("tool", 10) }];
+  const post: unknown[] = [];
+  if (clientCanGate(client) && shape.gate !== false) {
+    hooks.PreToolUse = [{ matcher: gateToolMatcher, ...entry("gate", 10) }];
+    post.push({ matcher: osnovaToolMatcher, ...entry("mark", 5) });
+  }
+  if (client === "claude-code" && shape.nudge === true) post.push({ matcher: "Grep|Bash", ...entry("tool", 10) });
+  if (post.length > 0) hooks.PostToolUse = post;
   return { hooks };
 }
+
+export const gateToolMatcher = "Grep|Glob|Bash";
+export const osnovaToolMatcher = "mcp__.*osnova.*";
 
 export type HookClient = "claude-code" | "codex" | "cursor";
 export const hookClients: readonly HookClient[] = ["claude-code", "codex", "cursor"];
@@ -117,6 +144,8 @@ export interface HookOptions {
   readonly command?: readonly string[] | undefined;
   /** Include the opt-in PostToolUse grep nudge in the install preview. */
   readonly nudge?: boolean | undefined;
+  /** Install the blocking search gate; default true for a client that can deny a tool call. */
+  readonly gate?: boolean | undefined;
   /** Session: restate the whole tool contract instead of one pointer to the tools. */
   readonly fullContract?: boolean | undefined;
   /** How long the session hook waits for a background build of a cold repository before answering without starting points (default 3,000 ms). */
@@ -160,16 +189,29 @@ function settleContinueThreshold(): number {
 export async function runHook(event: HookEvent, raw: string, io: CliIo, options: HookOptions): Promise<void> {
   const client = options.client ?? "claude-code";
   if (event === "install-preview") {
+    const gate = clientCanGate(client) && options.gate !== false;
     io.stdout([
       `osnova hook preview for ${client}: add these hooks to ${hookFileDescription(client)}, or run osnova setup --apply --hooks --client ${client}.`,
       `The stop hook continues the turn at most once per diff per session${client === "cursor" ? "" : ", and only when more than OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1) indexed dependents lie outside the change; otherwise it warns through systemMessage"}; its state lives under the osnova cache directory.`,
-      hookSettingsSnippet(options.command ?? ["osnova"], client, options.nudge === true),
+      gate
+        ? "The gate denies Grep, Glob and shell search inside an indexed workspace until an osnova tool has run in the turn; it allows a search whose target holds no indexed file, and allows every search once osnova has been tried. Turn it off for one run with OSNOVA_GATE=off, or install without it with --gate off."
+        : `${client} has no pre-tool hook that can deny a tool call, so the gate is not installed for it; its hooks only add text.`,
+      hookSettingsSnippet(options.command ?? ["osnova"], client, { nudge: options.nudge === true, gate: options.gate }),
     ].join("\n"));
     return;
   }
   const input = parseHookInput(raw);
   const workspace = options.workspace ?? workspaceRootFor(input.cwd ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
   const fail = (error: unknown): void => io.stderr(`osnova hook: ${error instanceof Error ? error.message : String(error)}`);
+  if (event === "mark") {
+    if (!isOsnovaToolName(input.toolName)) return;
+    try { await stampHookState(options.cacheDir, input.sessionId, "osnova"); } catch (error) { fail(error); }
+    return;
+  }
+  if (event === "gate") {
+    try { await runGate(input, io, workspace, options); } catch (error) { fail(error); }
+    return;
+  }
   if (event === "session") {
     try {
       let cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
@@ -212,6 +254,10 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     return;
   }
   if (event === "tool") {
+    if (isOsnovaToolName(input.toolName)) {
+      try { await stampHookState(options.cacheDir, input.sessionId, "osnova"); } catch (error) { fail(error); }
+      return;
+    }
     const name = grepName(input.toolName, input.toolInput);
     if (name === null || input.sessionId === undefined) return;
     try {
@@ -228,6 +274,8 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     } catch (error) { fail(error); }
     return;
   }
+  // A new prompt starts a new turn: the gate denies search again until osnova has been tried in it.
+  try { await stampHookState(options.cacheDir, input.sessionId, "turn"); } catch (error) { fail(error); }
   const prompt = (input.prompt ?? "").trim();
   if (prompt.length < minimumPromptLength || prompt.startsWith("/")) return;
   try {
@@ -246,6 +294,28 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     if (!text.startsWith("- ")) return;
     emitContext(io, client, "prompt", `${header}\n${boundText(text, available)}`);
   } catch (error) { fail(error); }
+}
+
+// The gate, in order of cost: the cheap refusals first, the index load last, and every unknown allows.
+// A hook that cannot decide must never block work, so any throw is caught by the caller and the call proceeds.
+async function runGate(input: HookInput, io: CliIo, workspace: string, options: HookOptions): Promise<void> {
+  if (process.env.OSNOVA_GATE === "off") return;
+  if (workspace === os.homedir() || workspace === path.parse(workspace).root) return;
+  const subject = gateSubject({ toolName: input.toolName, toolInput: input.toolInput, cwd: input.cwd ?? workspace });
+  if (subject === null) return;
+  if (subject.usedOsnova) await stampHookState(options.cacheDir, input.sessionId, "osnova");
+  const inside = subject.targets.filter((target) => isInside(target, workspace));
+  if (inside.length === 0) return;
+  const state = await readHookState(hookStateFile(options.cacheDir, input.sessionId ?? "none"));
+  if (state.osnovaTurn >= state.turn) return;
+  const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
+  if (cached === undefined) return;
+  let indexed = 0;
+  for (const target of inside) indexed += indexedFilesUnder(cached, workspace, target);
+  if (indexed === 0) return;
+  io.stdout(JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(subject.label, indexed, workspace) },
+  }));
 }
 
 // One line per named definition, then the count of what the graph holds beyond them. Relationships are not
@@ -380,11 +450,16 @@ export function formatGrepNudge(index: OsnovaIndex, name: string): string | null
 
 // Per-session hook state, one file per session under the cache directory: the grep names already nudged
 // and the diff digests the stop hook already continued on. A missing or unreadable file is an empty state.
+// `turn` counts the prompts in this session and `osnovaTurn` is the turn osnova last ran in. A counter,
+// not a timestamp: two hooks can fire inside one millisecond, and a clock comparison would then read as
+// "osnova already ran in this turn" for a turn that had only just started.
 interface HookState {
   readonly nudges: readonly string[];
   readonly settled: readonly string[];
+  readonly turn: number;
+  readonly osnovaTurn: number;
 }
-const emptyHookState: HookState = { nudges: [], settled: [] };
+const emptyHookState: HookState = { nudges: [], settled: [], turn: 0, osnovaTurn: -1 };
 
 function hookStateFile(cacheDir: string | undefined, sessionId: string): string {
   return path.join(resolveCacheDir(cacheDir), "hook-state", `${sessionId.replace(/[^\w.-]/g, "_")}.json`);
@@ -393,10 +468,18 @@ async function readHookState(file: string): Promise<HookState> {
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<Record<keyof HookState, unknown>>;
     const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
-    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled) };
+    const count = (value: unknown, fallback: number): number => (typeof value === "number" && Number.isInteger(value) ? value : fallback);
+    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled), turn: count(parsed.turn, 0), osnovaTurn: count(parsed.osnovaTurn, -1) };
   } catch { return emptyHookState; }
 }
 async function writeHookState(file: string, state: HookState): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify({ nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)] }));
+  await fs.writeFile(file, JSON.stringify({ nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)], turn: state.turn, osnovaTurn: state.osnovaTurn }));
+}
+
+/** A prompt opens the next turn; osnova running records the turn it ran in. Both only move forward. */
+async function stampHookState(cacheDir: string | undefined, sessionId: string | undefined, event: "turn" | "osnova"): Promise<void> {
+  const file = hookStateFile(cacheDir, sessionId ?? "none");
+  const state = await readHookState(file);
+  await writeHookState(file, event === "turn" ? { ...state, turn: state.turn + 1 } : { ...state, osnovaTurn: state.turn });
 }

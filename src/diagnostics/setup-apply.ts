@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
-import { hookSettingsObject } from "../cli/hook.js";
+import { clientCanGate, hookSettingsObject } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
 
 // Applying a setup: every file change is planned first (path, action, diff), then written with a
@@ -35,7 +35,7 @@ export async function planMcp(client: SetupClientId, options: { home?: string | 
 // Hook files: Claude Code (~/.claude/settings.json) and Codex (~/.codex/hooks.json) share the event-group shape;
 // Cursor (~/.cursor/hooks.json) lists commands per event under a version key. A group or entry is added only when
 // none already runs that `osnova hook <event>`; every other key survives and the file keeps its indent.
-export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined }): Promise<PlannedChange> {
+export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined; gate?: boolean | undefined }): Promise<PlannedChange> {
   const client = options.client ?? "claude-code";
   const home = path.resolve(options.home ?? os.homedir());
   const defaultPath = client === "codex" ? path.join(home, ".codex", "hooks.json") : client === "cursor" ? path.join(home, ".cursor", "hooks.json") : path.join(home, ".claude", "settings.json");
@@ -48,8 +48,6 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`osnova setup: ${target} is not a JSON object`);
     root = parsed as Record<string, unknown>;
   }
-  const wanted = hookSettingsObject(options.command ?? ["osnova"], client, options.nudge === true);
-  const wantedHooks = wanted.hooks as Record<string, unknown[]>;
   const hooks = (root.hooks !== null && typeof root.hooks === "object" && !Array.isArray(root.hooks) ? { ...(root.hooks as Record<string, unknown>) } : {});
   const commandOf = (item: unknown): string[] => {
     if (item === null || typeof item !== "object") return [];
@@ -57,6 +55,12 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (typeof record.command === "string") return [record.command];
     return Array.isArray(record.hooks) ? record.hooks.flatMap(commandOf) : [];
   };
+  // A hand-written gate already in this file does the same job. Two gates would deny the same call twice
+  // and their turn state would disagree, so osnova installs its own only when none is there.
+  const foreignGate = Object.values(hooks).flatMap((group) => (Array.isArray(group) ? group.flatMap(commandOf) : [])).find((command) => /osnova-first/.test(command));
+  const gate = clientCanGate(client) && options.gate !== false && foreignGate === undefined;
+  const wanted = hookSettingsObject(options.command ?? ["osnova"], client, { nudge: options.nudge === true, gate });
+  const wantedHooks = wanted.hooks as Record<string, unknown[]>;
   let added = 0;
   for (const [event, entries] of Object.entries(wantedHooks)) {
     const current = Array.isArray(hooks[event]) ? [...(hooks[event] as unknown[])] : [];
@@ -69,11 +73,16 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     }
     hooks[event] = current;
   }
-  if (added === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client}.` };
+  const gateNotice = foreignGate !== undefined
+    ? ` ${target} already runs a hand-written gate (${foreignGate}); osnova installed no gate of its own. Remove that hook, then run this again with --gate on.`
+    : gate
+      ? " The gate denies Grep, Glob and shell search inside an indexed workspace until an osnova tool has run in the turn. Turn it off for one run with OSNOVA_GATE=off, or install without it with --gate off."
+      : clientCanGate(client) ? "" : ` ${client} has no pre-tool hook that can deny a tool call, so no gate was installed; its hooks only add text.`;
+  if (added === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client}.${gateNotice}` };
   const indent = existing === null ? "  " : (/^( +|\t+)"/m.exec(existing)?.[1] ?? "  ");
   const merged = `${JSON.stringify({ ...(client === "cursor" && root.version === undefined ? { version: 1 } : {}), ...root, hooks }, null, indent)}\n`;
   const action = existing === null ? "create" : "append";
-  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${added} osnova hook entr${added === 1 ? "y" : "ies"} for ${client} in ${target}; other keys are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}` };
+  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${added} osnova hook entr${added === 1 ? "y" : "ies"} for ${client} in ${target}; other keys are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}${gateNotice}` };
 }
 
 // The shipped integration file for a client that runs plugins instead of hooks, copied into its plugin directory.
