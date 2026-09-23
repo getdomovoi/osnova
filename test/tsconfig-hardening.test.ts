@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchPaths } from "../src/index/tsconfig.js";
+import { matchPaths, parseJsonc, tsConfigDiagnostics } from "../src/index/tsconfig.js";
 
 function referenceMatchPaths(paths: ReadonlyMap<string, readonly string[]>, spec: string): readonly string[] | "ambiguous" | undefined {
   const exact = paths.get(spec);
@@ -55,5 +55,21 @@ describe("matchPaths", () => {
         expect(matchPaths(paths, spec), `${JSON.stringify([...paths.keys()])} ${JSON.stringify(spec)}`).toEqual(referenceMatchPaths(paths, spec));
       }
     }
+  });
+});
+
+describe("tsconfig parse diagnostics", () => {
+  it("reads a config that starts with a byte order mark", () => {
+    expect(parseJsonc('\uFEFF{ "compilerOptions": { "baseUrl": "." } }')).toEqual({ compilerOptions: { baseUrl: "." } });
+  });
+
+  it("names a config whose text cannot be read as a JSON object", () => {
+    expect(tsConfigDiagnostics("tsconfig.json", '{ "compilerOptions": {} "extra": 1 }')).toEqual([{ phase: "parse", path: "tsconfig.json", code: "config-unparsed" }]);
+    expect(tsConfigDiagnostics("packages/a/jsconfig.base.json", "[1, 2]")).toEqual([{ phase: "parse", path: "packages/a/jsconfig.base.json", code: "config-unparsed" }]);
+  });
+
+  it("stays silent for a readable config and for files that are not configs", () => {
+    expect(tsConfigDiagnostics("tsconfig.json", '{\n  // paths\n  "compilerOptions": { "paths": { "@/*": ["src/*"], }, },\n}\n')).toEqual([]);
+    expect(tsConfigDiagnostics("src/data.json", "{ not json")).toEqual([]);
   });
 });

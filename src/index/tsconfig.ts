@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { FileCard } from "../types.js";
+import type { FileCard, IndexDiagnostic } from "../types.js";
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 const CONFIG_NAME = /^(?:ts|js)config[^/]*\.json$/;
@@ -23,6 +23,7 @@ export function probeNodeFile(base: string, knownFiles: ReadonlySet<string>): st
 
 // tsconfig.json allows comments and trailing commas; strip both outside strings before parsing.
 export function parseJsonc(text: string): unknown {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   let out = "";
   let i = 0;
   while (i < text.length) {
@@ -45,6 +46,12 @@ export function parseJsonc(text: string): unknown {
     } else { out += ch; i++; }
   }
   try { return JSON.parse(out); } catch { return undefined; }
+}
+
+export function tsConfigDiagnostics(file: string, text: string): IndexDiagnostic[] {
+  if (!isTsConfigPath(file)) return [];
+  const json = parseJsonc(text);
+  return typeof json === "object" && json !== null && !Array.isArray(json) ? [] : [{ phase: "parse", path: file, code: "config-unparsed" }];
 }
 
 interface RawConfig {
