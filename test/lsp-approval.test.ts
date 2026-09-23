@@ -23,7 +23,7 @@ async function setup() {
   await fs.writeFile(path.join(root, "a.txt"), text);
   const hash = createHash("sha256").update(text).digest("hex");
   const card: FileCard = { path: "a.txt", language: "typescript", hash, size: text.length, lineCount: 1, text, symbols: [] };
-  const index: OsnovaIndex = { root, files: new Map([["a.txt", card]]), symbols: new Map(), edges: [], incoming: () => [], outgoing: () => [], edgesForFile: () => [] };
+  const index: OsnovaIndex = { root, files: new Map([["a.txt", card]]), symbols: new Map(), edges: [], incoming: () => [], outgoing: () => [], edgesForFile: () => [], degree: () => ({ incoming: 0, outgoing: 0 }) };
   const queries: LspQuery[] = [{ file: "a.txt", sourceHash: hash, method: "references", position: { line: 0, character: 0 } }];
   const policyFor = (log: string): LspPolicy => ({ version: 1, servers: [{ id: "ts", workspace: root, languages: ["typescript"], executable: process.execPath, args: [worker, "normal", path.join(dir, log), "typescript"] }] });
   return { dir, root, cacheDir, index, queries, policyFor };
