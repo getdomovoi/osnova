@@ -16,6 +16,8 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 - The GitHub Action runs the osnova version of the action ref you use, so `getdomovoi/osnova@v0.8.1` runs osnova 0.8.1 on every run instead of whatever npm published last. `version: latest` floats on purpose. `scripts/settle-ci.sh` resolves the version and prints it under `OSNOVA_PRINT_COMMAND=1`.
 - A `NOTICE` file ships in the package. It records that the tree-sitter grammar binaries npm installs from `tree-sitter-wasms` are compiled from MIT-licensed grammar projects under a package that declares Unlicense, and that osnova does not redistribute them.
+- The README's type-checker oracle figures now say the version they were measured at, 0.8.0, as `docs/reference.md` already did.
+
 
 
 ## 0.8.1 (2026-09-22)
