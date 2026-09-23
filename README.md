@@ -52,17 +52,17 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 
 ```text
 function src/api.ts#refreshWorkspace: 83 indexed edges
-reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 9; tests 17
+reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 9; tests 18
 d1 calls src/cli/cli.ts#ensureIndex:78 [import-binding]
 d1 calls src/cli/hook.ts#runHook:189,201,223,238 [import-binding]
 d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:257 [import-binding]
 d1 calls test/verification-fastpath.test.ts#<module>:37,47,48,51,53,57,58,64,68,74,78,85,110,114,132,145,154,166,171,197 [re-export-binding]
-  via src/index.ts:64 refreshWorkspace -> src/api.ts (export refreshWorkspace)
+  via src/index.ts:65 refreshWorkspace -> src/api.ts (export refreshWorkspace)
 This does not prove absence of callers or that deletion is safe.
 unresolved evidence (9); not confirmed relationships
 candidates for refreshWorkspace (2, unverified): src/api.ts#refreshWorkspace, test/mcp-watch.test.ts#refreshWorkspace
-d1 calls refreshWorkspace test/artifact-format9.test.ts:76,83,102,118,138 [binding-blocked]
-d1 calls refreshWorkspace scripts/perf.mjs:475,476,481 [import-target-unresolved]
+d1 calls refreshWorkspace test/artifact-format9.test.ts:78,85,104,120,140 [binding-blocked]
+d1 calls refreshWorkspace scripts/perf.mjs:482,483,488 [import-target-unresolved]
 ```
 
 Each confirmed line names the caller, its lines and the evidence that tied the call to this definition: an import binding, a same-file definition, a re-export chain with its hop, or an identified receiver. Calls the index could not tie to a definition are listed apart as unresolved evidence, with the same-name candidates it found and the reason it stopped, so a name match is never mistaken for a caller. The `reach` line gives exact counts, not scores, and when the list outgrows its budget a `capped:` line and an `omitted:` footer count what was left out.
