@@ -105,7 +105,7 @@ const toolDefinitions = [
       properties: {
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers (default), out = callees" },
-        depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
+        depth: { type: "number", description: "Hops to walk from the symbol (default 1); 2 also lists callers of callers, or callees of callees with direction=out" },
         full: { type: "boolean", description: "Print every call site with no per-symbol cap or summary (default false); output is still clipped at 16,384 code units" },
       },
       required: ["symbol"],

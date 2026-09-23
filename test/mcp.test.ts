@@ -73,6 +73,29 @@ describe("mcp stdio server", () => {
     }
   });
 
+  it("repeats an argument description across tools only where the argument means the same thing", async () => {
+    // An argument description is the only documentation an MCP client ever sees. warp's depth once
+    // shipped plumb's wording, telling agents a walk depth was the depth a claimed list was made at.
+    const sameMeaning = new Set(["in", "symbol"]);
+    const client = await connect();
+    try {
+      const { tools } = await client.listTools();
+      const owners = new Map<string, string[]>();
+      for (const tool of tools) {
+        const properties = (tool.inputSchema.properties ?? {}) as Record<string, { description?: string }>;
+        for (const [argument, schema] of Object.entries(properties)) {
+          if (schema.description === undefined || sameMeaning.has(argument)) continue;
+          const key = schema.description;
+          owners.set(key, [...(owners.get(key) ?? []), `${tool.name}.${argument}`]);
+        }
+      }
+      const repeated = [...owners.values()].filter((sites) => sites.length > 1);
+      expect(repeated).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("builds on first use and answers every tool round-trip", async () => {
     write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
     write("src/loud.ts", "export function shout(text: string): string { return text.toUpperCase(); }\n");
