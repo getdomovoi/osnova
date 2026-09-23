@@ -72,7 +72,7 @@ export type MemberKind = "instance" | "static" | "class" | "property" | "unknown
 export type ReceiverMode = "instance" | "class";
 export type ReceiverBasis = "constructor" | "lexical" | "class-reference" | "annotation" | "return";
 
-export type EdgeKind = "calls" | "references" | "imports" | "extends" | "routes";
+export type EdgeKind = "calls" | "references" | "imports" | "extends" | "routes" | "implements";
 
 export interface RouteInfo {
   readonly method: string;
