@@ -57,8 +57,8 @@ interface CallerWalk {
 function checkCallerOptions(options: CallersOptions | undefined): CallerWalk {
   const depth = options?.depth ?? 1;
   const direction = options?.direction ?? "in";
-  if (!Number.isSafeInteger(depth) || depth < 1) {
-    throw new RangeError("osnova: caller depth must be a positive safe integer");
+  if (depth !== Infinity && (!Number.isSafeInteger(depth) || depth < 1)) {
+    throw new RangeError("osnova: caller depth must be a positive safe integer or Infinity");
   }
   if (direction !== "in" && direction !== "out") {
     throw new RangeError("osnova: caller direction must be in or out");
