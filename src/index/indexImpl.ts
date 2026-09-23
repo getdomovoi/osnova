@@ -1,4 +1,4 @@
-import type { EdgeBinding, RouteInfo, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { EdgeBinding, RouteInfo, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol, SymbolDegree } from "../types.js";
 import { canonical, deserializeEdges } from "./edgeStore.js";
 import { IndexingError } from "./diagnostics.js";
 
@@ -49,7 +49,7 @@ interface LoadedEdges {
 
 export interface DeferredBody {
   readonly path: string;
-  readonly load: () => { files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource };
+  readonly load: () => { files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource; degrees?: ReadonlyMap<string, SymbolDegree> | undefined };
 }
 
 interface IndexBody {
@@ -57,20 +57,23 @@ interface IndexBody {
   readonly symbols: Map<string, OsnovaSymbol>;
   readonly diagnostics: readonly IndexDiagnostic[];
   readonly source: EdgeSource | undefined;
+  readonly degrees: ReadonlyMap<string, SymbolDegree> | undefined;
   loaded: LoadedEdges | undefined;
 }
+
+const NO_DEGREE: SymbolDegree = Object.freeze({ incoming: 0, outgoing: 0 });
 
 export class OsnovaIndexImpl implements OsnovaIndex {
   readonly root: string;
   private body: IndexBody | undefined;
   private readonly deferred: DeferredBody | undefined;
 
-  constructor(root: string, files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource);
+  constructor(root: string, files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource, degrees?: ReadonlyMap<string, SymbolDegree> | undefined);
   constructor(root: string, deferred: DeferredBody);
-  constructor(root: string, files: Map<string, FileCard> | DeferredBody, edges?: readonly OsnovaEdge[] | EdgeSource) {
+  constructor(root: string, files: Map<string, FileCard> | DeferredBody, edges?: readonly OsnovaEdge[] | EdgeSource, degrees?: ReadonlyMap<string, SymbolDegree> | undefined) {
     this.root = root;
     if (files instanceof Map) {
-      this.body = OsnovaIndexImpl.bodyOf(files, edges!);
+      this.body = OsnovaIndexImpl.bodyOf(files, edges!, degrees);
       this.deferred = undefined;
     } else {
       this.body = undefined;
@@ -78,12 +81,12 @@ export class OsnovaIndexImpl implements OsnovaIndex {
     }
   }
 
-  private static bodyOf(files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource): IndexBody {
+  private static bodyOf(files: Map<string, FileCard>, edges: readonly OsnovaEdge[] | EdgeSource, degrees: ReadonlyMap<string, SymbolDegree> | undefined): IndexBody {
     const diagnostics = [...files.values()].flatMap((file) => file.diagnostics ?? []).sort((a, b) =>
       compareStr(a.path, b.path) || compareStr(a.phase, b.phase) || compareStr(a.code, b.code));
     return Array.isArray(edges)
-      ? { files, symbols: buildSymbolTable(files), diagnostics, source: undefined, loaded: OsnovaIndexImpl.build(edges) }
-      : { files, symbols: buildSymbolTable(files), diagnostics, source: edges as EdgeSource, loaded: undefined };
+      ? { files, symbols: buildSymbolTable(files), diagnostics, source: undefined, degrees, loaded: OsnovaIndexImpl.build(edges) }
+      : { files, symbols: buildSymbolTable(files), diagnostics, source: edges as EdgeSource, degrees, loaded: undefined };
   }
 
   private static build(edges: readonly OsnovaEdge[]): LoadedEdges {
@@ -103,8 +106,8 @@ export class OsnovaIndexImpl implements OsnovaIndex {
     if (this.body !== undefined) return this.body;
     const deferred = this.deferred!;
     try {
-      const { files, edges } = deferred.load();
-      this.body = OsnovaIndexImpl.bodyOf(files, edges);
+      const { files, edges, degrees } = deferred.load();
+      this.body = OsnovaIndexImpl.bodyOf(files, edges, degrees);
     } catch (error) {
       throw new IndexingError({ phase: "cache", path: deferred.path, code: "cache-read-failed" }, error);
     }
@@ -149,6 +152,13 @@ export class OsnovaIndexImpl implements OsnovaIndex {
 
   edgesForFile(path: string): readonly OsnovaEdge[] {
     return this.ensure().byFile.get(path) ?? [];
+  }
+
+  degree(qualifiedName: string): SymbolDegree {
+    const body = this.ensureBody();
+    if (body.degrees !== undefined) return body.degrees.get(qualifiedName) ?? NO_DEGREE;
+    const loaded = this.ensure();
+    return { incoming: loaded.incoming.get(qualifiedName)?.length ?? 0, outgoing: loaded.outgoing.get(qualifiedName)?.length ?? 0 };
   }
 
   edgesLoaded(): boolean {

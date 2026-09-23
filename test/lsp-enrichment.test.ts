@@ -31,7 +31,7 @@ async function setup(mode = "normal") {
     await fs.writeFile(path.join(root, file), text);
     files.set(file, { path: file, language, hash: hash(text), size: text.length, lineCount: 1, text, symbols: [] });
   }
-  const index: OsnovaIndex = { root, files, symbols: new Map(), edges: [], incoming: () => [], outgoing: () => [], edgesForFile: () => [] };
+  const index: OsnovaIndex = { root, files, symbols: new Map(), edges: [], incoming: () => [], outgoing: () => [], edgesForFile: () => [], degree: () => ({ incoming: 0, outgoing: 0 }) };
   const queries: LspQuery[] = [...files.values()].map((f) => ({ file: f.path, sourceHash: f.hash, method: "references", position: { line: 0, character: 0 } }));
   const policy: LspPolicy = { version: 1, servers: languages.map((language) => ({ id: language, workspace: root, languages: [language], executable: process.execPath, args: [worker, mode, path.join(cacheDir, `${language}.log`), language === "tsx" ? "typescriptreact" : language === "c_sharp" ? "csharp" : language] })) };
   return { root, cacheDir, index, files, queries, policy };

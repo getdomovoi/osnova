@@ -4,6 +4,12 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+The artifact format moves to 13, so the first run after upgrading rebuilds the cache once.
+
+### Performance
+
+- `osnova_thread` and the bounded `osnova_outline` no longer decode the edge section to rank by degree. The core now records each symbol's incoming and outgoing edge counts, so a cold text search or outline answers from the core alone; `scripts/perf.mjs` fails if either loads the edge section. The bounded outline also fits its budget in one pass instead of re-sorting and re-rendering the selection for every candidate.
+
 ### Added
 
 - An `implements` edge kind. A written `implements` clause on a TypeScript, TSX or JavaScript class was recorded and reported as `extends`, which misstated the relation on the one product property that every edge carries its own basis. It is now its own kind, resolved by the same rule as `extends` (same-file, then imports, filtered to class, interface, struct and trait candidates), stored at wire position 5 so no existing edge renumbers, and counted by coverage as `implements` and `implementsResolved`. The extraction version moves to `structural-9.30`, so the first run after upgrading rebuilds the cache once.

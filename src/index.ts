@@ -55,6 +55,7 @@ export type {
   SkeletonEntry,
   SkeletonResult,
   SourceSpan,
+  SymbolDegree,
   SymbolKind,
 } from "./types.js";
 export { buildIndex } from "./index/build.js";
@@ -68,6 +69,7 @@ export { scanFiles } from "./index/scan.js";
 export { ask, askDetailed } from "./query/ask.js";
 export { findText, findTextDetailed } from "./query/findText.js";
 export { skeleton } from "./query/skeleton.js";
+export { formatSkeletonBounded } from "./query/format.js";
 export { callers, callersDetailed } from "./query/callers.js";
 export { map } from "./query/map.js";
 export { renderMapCard } from "./query/mapCard.js";

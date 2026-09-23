@@ -16,6 +16,8 @@ import type {
   MemberKind,
   Callee,
   RouteSite,
+  SymbolDegree,
+  OsnovaSymbol,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { membersOf, validOwner } from "./edgeStore.js";
@@ -96,6 +98,7 @@ interface SerializedFile {
   readonly diagnostics: readonly IndexDiagnostic[];
   readonly reExports: readonly ReExport[];
   readonly routes?: readonly RouteSite[] | undefined;
+  readonly d: readonly number[];
 }
 
 interface SerializedArtifact {
@@ -128,6 +131,12 @@ export function serializeSections(
   const nameIndex = new Map(names.map((n, i) => [n, i]));
   const text = serializeText(index, previousText);
   const edges = serializeEdges(index.edges, paths);
+  const incomingCount = new Map<string, number>();
+  const outgoingCount = new Map<string, number>();
+  for (const edge of index.edges) {
+    if (edge.toSymbol !== undefined) incomingCount.set(edge.toSymbol, (incomingCount.get(edge.toSymbol) ?? 0) + 1);
+    if (edge.fromSymbol.length > 0) outgoingCount.set(edge.fromSymbol, (outgoingCount.get(edge.fromSymbol) ?? 0) + 1);
+  }
   const files: SerializedFile[] = paths.map((p, i) => {
     const card = index.files.get(p)!;
     const [to, tl] = text.offsets.get(p)!;
@@ -168,6 +177,7 @@ export function serializeSections(
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
       ...(card.routes === undefined || card.routes.length === 0 ? {} : { routes: card.routes }),
+      d: card.symbols.flatMap((symbol) => [incomingCount.get(symbol.qualifiedName) ?? 0, outgoingCount.get(symbol.qualifiedName) ?? 0]),
     };
   });
   const artifact: SerializedArtifact = {
@@ -261,7 +271,7 @@ function deserializeParsedArtifact(
   rootOverride?: string,
 ): OsnovaIndexImpl {
   const body = deserializeBody(parsed, textPath, edgeSource, textBytes, edgeBytes);
-  const index = new OsnovaIndexImpl(rootOverride ?? body.root, body.files, body.edges);
+  const index = new OsnovaIndexImpl(rootOverride ?? body.root, body.files, body.edges, body.degrees);
   if (rootOverride === undefined) rememberIndexGeneration(index, data);
   return index;
 }
@@ -272,8 +282,9 @@ function deserializeBody(
   edgeSource: { path: string; raw: Buffer } | undefined,
   textBytes?: Buffer,
   edgeBytes?: Buffer,
-): { root: string; files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource } {
+): { root: string; files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource; degrees: ReadonlyMap<string, SymbolDegree> } {
   const envelope = readEnvelope(parsed);
+  const degrees = new Map<string, SymbolDegree>();
   const artifact = parsed as SerializedArtifact;
   if (!Array.isArray(artifact.files) || !Array.isArray(artifact.paths) || !Array.isArray(artifact.names)) {
     throw new Error("osnova: corrupt index envelope");
@@ -306,6 +317,7 @@ function deserializeBody(
       !nonnegativeInteger(file.size) || !nonnegativeInteger(file.lineCount) ||
       !nonnegativeInteger(file.to) || !nonnegativeInteger(file.tl) || file.to + file.tl > artifact.textBytes ||
       !Array.isArray(file.symbols)) throw new Error("osnova: corrupt file metadata");
+    if (!Array.isArray(file.d) || file.d.length !== 2 * file.symbols.length || !file.d.every(nonnegativeInteger)) throw new Error("osnova: corrupt degree table");
     const binaryCard = file.language === "fallback" && file.tl === 0 && file.size > 0;
     if (!binaryCard && file.tl !== file.size) throw new Error("osnova: corrupt file content");
     if (binaryCard && (file.lineCount !== 0 || file.symbols.length !== 0)) throw new Error("osnova: corrupt binary card");
@@ -386,6 +398,7 @@ function deserializeBody(
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
       };
     });
+    symbols.forEach((symbol: OsnovaSymbol, i: number) => { degrees.set(symbol.qualifiedName, { incoming: file.d[2 * i]!, outgoing: file.d[2 * i + 1]! }); });
     const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports, ...(routes === undefined ? {} : { routes }) };
     if (textBytes !== undefined) {
       const text = textBytes.subarray(file.to, file.to + file.tl).toString("utf8");
@@ -406,7 +419,7 @@ function deserializeBody(
   } else {
     throw new Error("osnova: edge source required");
   }
-  return { root: envelope.root, files, edges };
+  return { root: envelope.root, files, edges, degrees };
 }
 
 export function serializedTextIdentity(data: string): { hash: string; bytes: number } {
