@@ -270,7 +270,8 @@ describe("map", () => {
     expect(result.fileCount).toBe(28);
     expect(result.clusters[0]?.dir).toBe("src/");
     expect(result.hotspots.length).toBeGreaterThan(0);
-    expect(result.droppedHotspots).toBeGreaterThanOrEqual(0);
+    // Pinned to the fixture: the previous >= 0 could not fail.
+    expect(result.droppedHotspots).toBe(65);
     const top = result.hotspots[0];
     expect(top !== undefined && top.inEdges + top.outEdges > 0).toBe(true);
   });
