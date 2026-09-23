@@ -73,3 +73,30 @@ it("keeps polling when the lock directory cannot be created or its owner read fo
   expect(readFailures).toBe(1);
   await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+it("clears a lock directory it emptied itself, without waiting out the grace period", async () => {
+  const lockPath = await deadLock();
+  const rmdir = fs.rmdir.bind(fs);
+  const rename = fs.rename.bind(fs);
+  let rmdirFailures = 1;
+  vi.spyOn(fs, "rmdir").mockImplementation(async (target, options) => {
+    if (rmdirFailures > 0 && String(target) === lockPath) { rmdirFailures -= 1; throw errno("EBUSY"); }
+    return rmdir(target, options);
+  });
+  // Windows refuses to rename a directory onto an existing one even when that one is empty, so an
+  // empty lock directory cannot simply be taken over there the way it can on Linux and macOS.
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(to) === lockPath) {
+      let exists = true;
+      try { await fs.stat(lockPath); } catch { exists = false; }
+      if (exists) throw errno("EPERM");
+    }
+    return rename(from, to);
+  });
+  const started = performance.now();
+  await withCacheLock(lockPath, async () => {}, { lockTimeoutMs: 30_000, lockPollMs: 5 });
+  // What the reclaimer emptied a moment ago names nobody and cannot be held by anyone. Waiting
+  // abandonedLockGraceMs for it is the bug.
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(rmdirFailures).toBe(0);
+});

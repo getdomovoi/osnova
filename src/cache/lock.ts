@@ -28,6 +28,10 @@ const held = new AsyncLocalStorage<HeldLocks>();
 // this long, so a process that is mid-way through creating or reclaiming it is never overtaken.
 export const abandonedLockGraceMs = 5_000;
 
+// How long a reclaim keeps retrying the removal of the directory it has just emptied. Short: the
+// alternative is not failure but another poll, and every retry here holds no lock of its own.
+const reclaimRmdirRetryMs = 250;
+
 const ownedLocks = new Map<string, LockOwner>();
 const stagedLocks = new Set<string>();
 
@@ -189,7 +193,21 @@ async function reclaimAbandonedLock(lockPath: string): Promise<void> {
       if (!(await removeObservedOwner(lockPath, entry))) return;
     }
     if (observed.names.includes(LEGACY_MARKER)) await ignoreMissing(fs.rmdir(path.join(lockPath, LEGACY_MARKER)));
-    await fs.rmdir(lockPath);
+    // The directory is empty now, and an empty lock directory names nobody: leaving it for the next
+    // poll costs the whole grace period, because a snapshot with no owner has only its quiet time to
+    // go on. Windows also refuses to rename a new lock onto it, so nothing else clears it either.
+    // Retrying here is safe: rmdir removes only an empty directory, and a lock taken in the meantime
+    // holds its owner file, so this fails with ENOTEMPTY and leaves that owner alone.
+    const until = performance.now() + reclaimRmdirRetryMs;
+    for (;;) {
+      try {
+        await fs.rmdir(lockPath);
+        break;
+      } catch (error) {
+        if (!TRANSIENT_CODES.has(errorCode(error)) || performance.now() >= until) throw error;
+        await delay(5);
+      }
+    }
   } catch (error) {
     const code = errorCode(error);
     if (code === "EEXIST" || TRANSIENT_CODES.has(code)) return;
