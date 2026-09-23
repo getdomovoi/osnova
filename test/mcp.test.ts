@@ -433,3 +433,21 @@ describe("mcp stdio server", () => {
   }, 60_000);
 
 });
+
+describe("the frozen contract document", () => {
+  it("names exactly the tools the server registers", async () => {
+    // AGENTS.md is the one line that says what may not break without a major version. It froze seven
+    // tools while ten shipped, so three load-bearing tools carried no stated protection.
+    const agents = fs.readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
+    const line = agents.split("\n").find((text) => text.includes("The MCP tool names and argument shapes"));
+    expect(line).toBeDefined();
+    const frozen = [...(line ?? "").matchAll(/`(osnova_[a-z]+)`/g)].map((match) => match[1]).sort();
+    const client = await connect();
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name).sort()).toEqual(frozen);
+    } finally {
+      await client.close();
+    }
+  });
+});

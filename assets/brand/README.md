@@ -94,9 +94,9 @@ Every name comes from the one image: ground you stand on, thread you follow, war
 | `groundwork` | Repository map | the groundwork under everything |
 | `footing` | Task context | the footing you build on |
 | `settle` | Change impact | how the ground settles after a change |
-| `plumb` | Path between two symbols | the plumb line dropped straight through |
+| `plumb` | Check a claimed list of call sites | the plumb line dropped straight through |
 | `tests` | Tests that reach a symbol | the cloth pulled to see what holds |
-| `unreferenced` | Symbols nothing calls | threads left loose at the edge |
+| `unreferenced` | Candidates with no indexed caller | threads left loose at the edge |
 
 ## Voice check
 
