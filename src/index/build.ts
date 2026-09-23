@@ -26,6 +26,7 @@ import { knownIndexGeneration } from "./generation.js";
 import { resolveEdges } from "./resolve.js";
 import type { EdgeReuse } from "./resolve.js";
 import { scanFiles, sha256File, sha256Hex, sourceText } from "./scan.js";
+import { tsConfigDiagnostics } from "./tsconfig.js";
 import { maximumIndexedFileSizeBytes } from "../types.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
@@ -67,7 +68,7 @@ export async function extractCard(
       lineCount,
       text,
       symbols: [],
-      diagnostics: [],
+      diagnostics: binary ? [] : tsConfigDiagnostics(relPath, text),
       reExports: [],
     };
     return { card, rawEdges: [] };

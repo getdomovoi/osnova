@@ -84,3 +84,12 @@ it("records a file that grows past the cap after the scan, instead of dropping i
   expect(index.diagnostics).toEqual([tooLarge("grows.ts")]);
   expect(await freshness(index, root)).toEqual({ added: [], changed: [], deleted: [] });
 });
+
+it("names a tsconfig that cannot be read in the index diagnostics", async () => {
+  const { root, cacheDir } = await fixture();
+  await fs.writeFile(path.join(root, "tsconfig.json"), '{ "compilerOptions": { "baseUrl": "." } "extra": 1 }\n');
+  await fs.writeFile(path.join(root, "a.ts"), "export function a() {}\n");
+  const index = await buildIndex(root, { cacheDir });
+  expect(index.diagnostics).toEqual([{ phase: "parse", path: "tsconfig.json", code: "config-unparsed" }]);
+  expect(resolutionCoverage(index).diagnostics).toEqual({ "parse/config-unparsed": 1 });
+});
