@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- An `implements` edge kind. A written `implements` clause on a TypeScript, TSX or JavaScript class was recorded and reported as `extends`, which misstated the relation on the one product property that every edge carries its own basis. It is now its own kind, resolved by the same rule as `extends` (same-file, then imports, filtered to class, interface, struct and trait candidates), stored at wire position 5 so no existing edge renumbers, and counted by coverage as `implements` and `implementsResolved`. The extraction version moves to `structural-9.30`, so the first run after upgrading rebuilds the cache once.
+
 ## 0.8.1 (2026-09-22)
 
 The extraction version moves to `structural-9.28`, so the first run after upgrading rebuilds the cache once.

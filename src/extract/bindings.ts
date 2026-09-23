@@ -314,6 +314,7 @@ export interface HeritageRef {
   readonly name: string;
   readonly node: Node;
   readonly binding: EdgeBinding;
+  readonly relation: "extends" | "implements";
 }
 
 export function collectBindings(root: Node, python: boolean): {
@@ -1368,7 +1369,7 @@ export function collectBindings(root: Node, python: boolean): {
       const bound = lookup(head, node) ?? typeLookup(head, node);
       const binding: EdgeBinding = bound === undefined ? { kind: "blocked", reason: "unbound" }
         : ownerFor(item.name, node) ?? { kind: "blocked", reason: "unsupported" };
-      return { name: item.name, node: item.node, binding };
+      return { name: item.name, node: item.node, binding, relation: item.relation };
     }),
     unwrapped,
     elements: (node) => returnedContents(node).element,

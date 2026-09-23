@@ -4,7 +4,7 @@ import { sha256Hex } from "./scan.js";
 // The position in this list is the stored encoding of an edge's kind, so the order is written down
 // rather than left to the order of a literal. A new kind takes the next number; renumbering one
 // reinterprets every stored edge and needs a format version bump.
-const edgeKindWireOrder = { calls: 0, references: 1, imports: 2, extends: 3, routes: 4 } satisfies Record<EdgeKind, number>;
+const edgeKindWireOrder = { calls: 0, references: 1, imports: 2, extends: 3, routes: 4, implements: 5 } satisfies Record<EdgeKind, number>;
 export const edgeKinds: readonly EdgeKind[] = (Object.keys(edgeKindWireOrder) as EdgeKind[])
   .sort((a, b) => edgeKindWireOrder[a] - edgeKindWireOrder[b]);
 
