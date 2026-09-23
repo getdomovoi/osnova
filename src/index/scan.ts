@@ -37,13 +37,22 @@ export function sourceText(buffer: Buffer): string | null {
   return buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0) || !isUtf8(buffer) ? null : buffer.toString("utf8");
 }
 
-async function loadIgnoreFile(absPath: string, relDir: string, name: string): Promise<string[]> {
+export const maximumIgnoreFileBytes = 1_000_000;
+export const maximumIgnorePatterns = 10_000;
+
+async function loadIgnoreFile(absPath: string, relPath: string): Promise<string[]> {
+  const tooLarge = () => new IndexingError({ phase: "scan", path: relPath, code: "ignore-file-too-large" });
   try {
-    if ((await fs.lstat(absPath)).isSymbolicLink()) throw new Error("ignore file must not be a symlink");
-    return (await fs.readFile(absPath, "utf8")).split("\n");
+    const stat = await fs.lstat(absPath);
+    if (stat.isSymbolicLink()) throw new Error("ignore file must not be a symlink");
+    if (stat.size > maximumIgnoreFileBytes) throw tooLarge();
+    const buffer = await fs.readFile(absPath);
+    if (buffer.length > maximumIgnoreFileBytes) throw tooLarge();
+    return buffer.toString("utf8").split("\n");
   } catch (error) {
+    if (error instanceof IndexingError) throw error;
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw new IndexingError({ phase: "scan", path: relDir ? `${relDir}/${name}` : name, code: "ignore-unreadable" }, error);
+    throw new IndexingError({ phase: "scan", path: relPath, code: "ignore-unreadable" }, error);
   }
 }
 
@@ -74,6 +83,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
   const results: Array<{ rel: string; metadata: FileMetadata }> = [];
   const symlinkedDirectories: string[] = [];
   let truncated = 0;
+  let ignorePatterns = 0;
 
   const limited = (limit: number) => {
     let active = 0;
@@ -101,8 +111,12 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
         const names = new Set(dirEntries.map((entry) => entry.name));
         for (const name of [".gitignore", ".osnovaignore"]) {
           if (!names.has(name)) continue;
-          const lines = await loadIgnoreFile(path.join(dir, name), relDir, name);
-          if (lines.some((line) => { const text = line.trim(); return text.length > 0 && !text.startsWith("#"); })) patterned = true;
+          const relPath = relDir ? `${relDir}/${name}` : name;
+          const lines = await loadIgnoreFile(path.join(dir, name), relPath);
+          const patterns = lines.filter((line) => { const text = line.trim(); return text.length > 0 && !text.startsWith("#"); }).length;
+          ignorePatterns += patterns;
+          if (ignorePatterns > maximumIgnorePatterns) throw new IndexingError({ phase: "scan", path: relPath, code: "ignore-pattern-limit" });
+          if (patterns > 0) patterned = true;
           rules.add(lines);
         }
         return dirEntries;
