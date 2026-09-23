@@ -70,6 +70,7 @@ async function parkedBuild(nodeArgs: readonly string[] = [], waitForLock = true)
 it.skipIf(process.platform === "win32").each([
   ["SIGINT", 130],
   ["SIGTERM", 143],
+  ["SIGHUP", 129],
 ] as const)("releases the cache locks it holds when it receives %s", async (signal, expected) => {
   const parked = await parkedBuild();
   parked.run.child.kill(signal);

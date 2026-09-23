@@ -25,18 +25,18 @@ const errno = (code: string): NodeJS.ErrnoException => Object.assign(new Error(c
 
 afterEach(() => vi.restoreAllMocks());
 
-it("recovers a dead owner even when the first rename and the first marker removal fail transiently", async () => {
+it("recovers a dead owner even when the first rename and the first directory removal of the reclaim fail transiently", async () => {
   const lockPath = await deadLock();
   const rename = fs.rename.bind(fs);
   const rmdir = fs.rmdir.bind(fs);
   let renameFailures = 1;
   let rmdirFailures = 1;
   vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-    if (renameFailures > 0 && String(from) === lockPath) { renameFailures -= 1; throw errno("EPERM"); }
+    if (renameFailures > 0 && String(from) === path.join(lockPath, "owner.json")) { renameFailures -= 1; throw errno("EPERM"); }
     return rename(from, to);
   });
   vi.spyOn(fs, "rmdir").mockImplementation(async (target, options) => {
-    if (rmdirFailures > 0 && String(target) === path.join(lockPath, "recovery")) { rmdirFailures -= 1; throw errno("EBUSY"); }
+    if (rmdirFailures > 0 && String(target) === lockPath) { rmdirFailures -= 1; throw errno("EBUSY"); }
     return rmdir(target, options);
   });
   let entered = 0;

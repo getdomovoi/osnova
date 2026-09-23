@@ -52,10 +52,57 @@ it.each([
   expect(await fs.readdir(path.dirname(lockPath))).toEqual([]);
 });
 
-it("does not reclaim an ownerless lock that changed within the grace period", async () => {
+it("does not reclaim an ownerless lock that changed within the grace period, and does once it has been quiet", async () => {
   const lockPath = await wedgedLock(async (target) => { await fs.mkdir(path.join(target, "recovery")); }, 0);
   await expect(withCacheLock(lockPath, async () => "entered", { lockTimeoutMs: 100, lockPollMs: 5 })).rejects.toThrow(/cache-lock-timeout/);
   expect(await fs.readdir(lockPath)).toEqual(["recovery"]);
+  const then = new Date(Date.now() - 60_000);
+  await fs.utimes(path.join(lockPath, "recovery"), then, then);
+  await fs.utimes(lockPath, then, then);
+  await expect(withCacheLock(lockPath, async () => "entered", { lockTimeoutMs: 3_000, lockPollMs: 5 })).resolves.toBe("entered");
+});
+
+it("treats an ownerless lock whose mtime is in the future as held, not as abandoned", async () => {
+  const lockPath = await wedgedLock(async (target) => { await fs.mkdir(path.join(target, "recovery")); }, -60_000);
+  await expect(withCacheLock(lockPath, async () => "entered", { lockTimeoutMs: 100, lockPollMs: 5 })).rejects.toThrow(/cache-lock-timeout/);
+  expect(await fs.readdir(lockPath)).toEqual(["recovery"]);
+});
+
+it("never moves a lock that another process took between the reclaim decision and the reclaim", async () => {
+  const lockPath = await wedgedLock(async (target) => {
+    await fs.writeFile(path.join(target, "owner.json"), JSON.stringify({ pid: await exitedPid(), host: os.hostname(), token: randomUUID() }));
+  });
+  const rename = fs.rename.bind(fs);
+  let active = 0;
+  let overlapped = false;
+  let openGate!: () => void;
+  const gate = new Promise<void>((resolve) => { openGate = resolve; });
+  let second: Promise<unknown> | undefined;
+  let paused = false;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    const destructive = String(from).startsWith(lockPath) && /\.(abandoned|reclaim)-/.test(String(to));
+    if (!destructive || paused) return rename(from, to);
+    paused = true;
+    // The reclaimer has decided and is about to act. Let the decision go stale: time passes beyond
+    // the grace period and a second process reclaims the lock and takes it.
+    const then = new Date(Date.now() - 60_000);
+    for (const name of await fs.readdir(lockPath)) await fs.utimes(path.join(lockPath, name), then, then);
+    await fs.utimes(lockPath, then, then);
+    let entered!: () => void;
+    const inside = new Promise<void>((resolve) => { entered = resolve; });
+    second = withCacheLock(lockPath, async () => { active += 1; entered(); await gate; active -= 1; }, { lockTimeoutMs: 5_000, lockPollMs: 5 })
+      .then(() => "released", (error: unknown) => (error as Error).message);
+    await inside;
+    const result = await rename(from, to).then(() => undefined, (error: unknown) => error);
+    setTimeout(openGate, 100);
+    if (result !== undefined) throw result;
+  });
+  const first = await withCacheLock(lockPath, async () => { if (active > 0) overlapped = true; return "entered"; }, { lockTimeoutMs: 5_000, lockPollMs: 5 });
+  openGate();
+  expect(first).toBe("entered");
+  expect(paused).toBe(true);
+  expect(overlapped).toBe(false);
+  expect(await second).toBe("released");
 });
 
 it("never leaves the lock path in place without its owner file while acquiring or releasing", async () => {

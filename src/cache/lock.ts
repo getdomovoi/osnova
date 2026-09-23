@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { promises as fs, readFileSync, renameSync, rmSync } from "node:fs";
+import { promises as fs, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -25,7 +25,7 @@ interface HeldLocks {
 const held = new AsyncLocalStorage<HeldLocks>();
 
 // A lock directory that names no live owner is reclaimed only once nothing inside it has changed for
-// this long, so a process that is mid-way through creating or recovering it is never overtaken.
+// this long, so a process that is mid-way through creating or reclaiming it is never overtaken.
 export const abandonedLockGraceMs = 5_000;
 
 const ownedLocks = new Map<string, LockOwner>();
@@ -75,144 +75,185 @@ export function lockOwnerExited(owner: LockOwner): boolean {
 
 const TRANSIENT_CODES = new Set(["ENOENT", "EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
 
-type OwnerState =
-  | { readonly kind: "owner"; readonly owner: LockOwner }
-  | { readonly kind: "missing" }
-  | { readonly kind: "invalid" }
-  | { readonly kind: "unsettled" };
+const OWNER_FILE = "owner.json";
+const SET_ASIDE_RE = /^owner\.json\.reclaim-[0-9a-f-]{36}$/;
+const LEGACY_MARKER = "recovery";
+const isOwnerFile = (name: string): boolean => name === OWNER_FILE || SET_ASIDE_RE.test(name);
+const isKnownEntry = (name: string): boolean => isOwnerFile(name) || name === LEGACY_MARKER;
 
-// An owner file that cannot be read right now (another process is renaming or removing the lock,
-// which Windows reports as EPERM or EBUSY) is not evidence of anything.
-async function inspectOwner(lockPath: string): Promise<OwnerState> {
-  let text: string;
+// Quiet time is measured against the wall clock. A modification time in the future cannot be told
+// apart from a lock taken a moment ago after the clock stepped back, so it never counts as quiet:
+// a skewed clock may delay recovery, but it must never hand a live lock to a second process.
+function quietSince(mtimeMs: number): boolean {
+  return Date.now() - mtimeMs >= abandonedLockGraceMs;
+}
+
+async function ignoreMissing(step: Promise<unknown>): Promise<void> {
   try {
-    text = await fs.readFile(path.join(lockPath, "owner.json"), "utf8");
+    await step;
   } catch (error) {
-    const code = errorCode(error);
-    if (code === "ENOENT") return { kind: "missing" };
-    if (TRANSIENT_CODES.has(code)) return { kind: "unsettled" };
-    throw error;
+    if (errorCode(error) !== "ENOENT") throw error;
   }
-  const owner = parseOwner(text);
-  return owner === undefined ? { kind: "invalid" } : { kind: "owner", owner };
+}
+
+interface OwnerEntry {
+  readonly name: string;
+  readonly text: string;
+  readonly owner: LockOwner | undefined;
 }
 
 interface LockSnapshot {
-  readonly dev: bigint;
-  readonly ino: bigint;
   readonly mtimeMs: number;
   readonly names: readonly string[];
-  readonly owner: OwnerState;
+  readonly owners: readonly OwnerEntry[];
+  // False when an owner file could not be read right now (another process is renaming or removing
+  // it, which Windows reports as EPERM or EBUSY). Such a snapshot is not evidence of anything.
+  readonly settled: boolean;
 }
 
-async function snapshot(lockPath: string): Promise<LockSnapshot | undefined> {
+async function snapshot(dir: string): Promise<LockSnapshot | undefined> {
   try {
-    const stat = await fs.lstat(lockPath, { bigint: true });
+    const stat = await fs.lstat(dir);
     if (!stat.isDirectory()) return undefined;
-    const names = (await fs.readdir(lockPath)).sort();
-    return { dev: stat.dev, ino: stat.ino, mtimeMs: Number(stat.mtimeMs), names, owner: await inspectOwner(lockPath) };
+    const names = (await fs.readdir(dir)).sort();
+    const owners: OwnerEntry[] = [];
+    let settled = true;
+    for (const name of names.filter(isOwnerFile)) {
+      try {
+        const text = await fs.readFile(path.join(dir, name), "utf8");
+        owners.push({ name, text, owner: parseOwner(text) });
+      } catch (error) {
+        if (!TRANSIENT_CODES.has(errorCode(error))) throw error;
+        settled = false;
+      }
+    }
+    return { mtimeMs: stat.mtimeMs, names, owners, settled };
   } catch (error) {
     if (TRANSIENT_CODES.has(errorCode(error))) return undefined;
     throw error;
   }
 }
 
-const isRecoveryMarker = (name: string): boolean => name === "recovery" || /^recovery-\d+$/.test(name);
-
-// A lock is abandoned when it names an owner that has exited, or when it names no usable owner at
-// all. The second state is what a process killed between creating the directory and writing its
-// owner (or between removing the owner and the directory) leaves behind under the previous
-// protocol, and what a recoverer killed mid-recovery leaves behind under either protocol. Only the
-// exact exited-owner state is taken at once; every other state must also have been quiet for the
-// grace period. Unknown entries are never reclaimed: they are not ours to delete.
+// A lock is abandoned when every owner it names has exited, or when it names no usable owner at
+// all: the residue of a process killed while creating or removing a lock under the previous
+// protocol, or of a reclaimer killed part-way. Only the plain exited-owner state is taken at once;
+// every other state must also have been quiet for the grace period. Unknown entries are never
+// reclaimed: they are not ours to delete.
 function isAbandoned(lock: LockSnapshot): boolean {
-  if (lock.owner.kind === "unsettled") return false;
-  if (lock.names.some((name) => name !== "owner.json" && !isRecoveryMarker(name))) return false;
-  if (lock.owner.kind === "owner") {
-    if (!lockOwnerExited(lock.owner.owner)) return false;
-    if (!lock.names.some(isRecoveryMarker)) return true;
+  if (!lock.settled || lock.names.some((name) => !isKnownEntry(name))) return false;
+  if (lock.owners.some((entry) => entry.owner !== undefined && !lockOwnerExited(entry.owner))) return false;
+  const [only] = lock.owners;
+  if (lock.names.length === 1 && only?.name === OWNER_FILE && only.owner !== undefined) return true;
+  return quietSince(lock.mtimeMs);
+}
+
+// owner.json is the one name every owner shares, so it is first moved to a name only this process
+// uses and compared with what was observed. Another owner's file is moved straight back; while it
+// is set aside it stays inside the lock directory, so the directory is not empty and that owner
+// still holds the lock, and its release recognises the set-aside file as its own.
+async function removeObservedOwner(lockPath: string, entry: OwnerEntry): Promise<boolean> {
+  const file = path.join(lockPath, entry.name);
+  if (entry.name !== OWNER_FILE) {
+    await ignoreMissing(fs.unlink(file));
+    return true;
   }
-  return Math.abs(Date.now() - lock.mtimeMs) >= abandonedLockGraceMs;
-}
-
-function sameLock(before: LockSnapshot, after: LockSnapshot, marker: string): boolean {
-  if (after.dev !== before.dev || after.ino !== before.ino) return false;
-  const expected = [...before.names, marker].sort();
-  if (after.names.length !== expected.length || after.names.some((name, i) => name !== expected[i])) return false;
-  if (after.owner.kind !== before.owner.kind) return false;
-  return after.owner.kind !== "owner" || before.owner.kind !== "owner" || after.owner.owner.token === before.owner.owner.token;
-}
-
-async function removeMarker(marker: string): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await fs.rmdir(marker);
-      return;
-    } catch (error) {
-      const code = errorCode(error);
-      if (code === "ENOENT") return;
-      if (!TRANSIENT_CODES.has(code) || attempt >= 40) throw error;
-      await delay(25);
-    }
+  const aside = path.join(lockPath, `${OWNER_FILE}.reclaim-${randomUUID()}`);
+  try {
+    await fs.rename(file, aside);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return true;
+    throw error;
   }
+  let text: string | undefined;
+  try {
+    text = await fs.readFile(aside, "utf8");
+  } finally {
+    if (text !== entry.text) await ignoreMissing(fs.rename(aside, file));
+  }
+  if (text !== entry.text) return false;
+  await ignoreMissing(fs.unlink(aside));
+  return true;
 }
 
-// Recoverers exclude each other with a marker directory whose name counts the markers already
-// present, so every process that observed the same abandoned state competes for the same name and
-// a process that observed an older state cannot win. The first marker keeps the name `recovery`,
-// which older osnova processes also compete for.
-async function recoverAbandonedLock(lockPath: string): Promise<void> {
+// Reclaiming never renames or removes the lock directory as a whole: a rename cannot check what it
+// moves, so a reclaimer acting on a stale observation could move a lock another process had just
+// taken. It removes only the entries it observed, each by a step that cannot remove anything a
+// newer owner put there, and then removes the directory only if it is empty. A held lock always
+// contains its owner file, so a stale reclaim fails at that last step and the holder keeps the lock.
+// Concurrent reclaimers need no marker: every step is idempotent.
+async function reclaimAbandonedLock(lockPath: string): Promise<void> {
   const observed = await snapshot(lockPath);
   if (observed === undefined || !isAbandoned(observed)) return;
-  const markers = observed.names.filter(isRecoveryMarker).length;
-  const markerName = markers === 0 ? "recovery" : `recovery-${markers}`;
-  const marker = path.join(lockPath, markerName);
   try {
-    await fs.mkdir(marker);
+    for (const entry of observed.owners) {
+      if (!(await removeObservedOwner(lockPath, entry))) return;
+    }
+    if (observed.names.includes(LEGACY_MARKER)) await ignoreMissing(fs.rmdir(path.join(lockPath, LEGACY_MARKER)));
+    await fs.rmdir(lockPath);
   } catch (error) {
     const code = errorCode(error);
     if (code === "EEXIST" || TRANSIENT_CODES.has(code)) return;
     throw error;
   }
-  const abandoned = `${lockPath}.abandoned-${randomUUID()}`;
-  let moved = false;
-  try {
-    const current = await snapshot(lockPath);
-    if (current === undefined || !sameLock(observed, current, markerName)) return;
-    await fs.rename(lockPath, abandoned);
-    moved = true;
-  } catch (error) {
-    if (!TRANSIENT_CODES.has(errorCode(error))) throw error;
-    return;
-  } finally {
-    if (!moved) await removeMarker(marker);
-  }
-  await fs.rm(abandoned, { recursive: true, force: true }).catch(() => {});
 }
 
 async function describeHolder(lockPath: string): Promise<string> {
   const remedy = `if no osnova process is using this cache, delete ${lockPath}`;
   const lock = await snapshot(lockPath).catch(() => undefined);
   if (lock === undefined) return remedy;
-  if (lock.names.some((name) => name !== "owner.json" && !isRecoveryMarker(name))) {
-    return `the lock directory holds unexpected entries (${lock.names.join(", ")}); ${remedy}`;
-  }
-  if (lock.owner.kind === "owner") return `held by pid ${lock.owner.owner.pid} on ${lock.owner.owner.host}; ${remedy}`;
+  const unexpected = lock.names.filter((name) => !isKnownEntry(name));
+  if (unexpected.length > 0) return `the lock directory holds unexpected entries (${unexpected.join(", ")}); ${remedy}`;
+  const holder = lock.owners.find((entry) => entry.owner !== undefined)?.owner;
+  if (holder !== undefined) return `held by pid ${holder.pid} on ${holder.host}; ${remedy}`;
   return `the lock directory names no owner; ${remedy}`;
+}
+
+type Ownership = "held" | "lost" | "unsettled";
+
+async function ownership(lockPath: string, owner: LockOwner): Promise<Ownership> {
+  let names: string[];
+  try {
+    names = await fs.readdir(lockPath);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") return "lost";
+    if (TRANSIENT_CODES.has(code)) return "unsettled";
+    throw error;
+  }
+  let unsettled = false;
+  for (const name of names.filter(isOwnerFile)) {
+    try {
+      if (parseOwner(await fs.readFile(path.join(lockPath, name), "utf8"))?.token === owner.token) return "held";
+    } catch (error) {
+      if (!TRANSIENT_CODES.has(errorCode(error))) throw error;
+      unsettled = true;
+    }
+  }
+  return unsettled ? "unsettled" : "lost";
+}
+
+function ownsSync(lockPath: string, owner: LockOwner): boolean {
+  for (const name of readdirSync(lockPath).filter(isOwnerFile)) {
+    try {
+      if (parseOwner(readFileSync(path.join(lockPath, name), "utf8"))?.token === owner.token) return true;
+    } catch { /* a file set aside or removed this instant: look at the next one */ }
+  }
+  return false;
 }
 
 async function releaseOwnedLock(lockPath: string, owner: LockOwner): Promise<void> {
   ownedLocks.delete(lockPath);
   const ownershipLost = (): IndexingError => new IndexingError({ phase: "cache", path: lockPath, code: "cache-lock-ownership-lost" });
   const deadline = performance.now() + 1000;
-  let current = await inspectOwner(lockPath);
-  while (current.kind === "unsettled" && performance.now() < deadline) {
+  let state = await ownership(lockPath, owner);
+  while (state === "unsettled" && performance.now() < deadline) {
     await delay(5);
-    current = await inspectOwner(lockPath);
+    state = await ownership(lockPath, owner);
   }
-  if (current.kind !== "owner" || current.owner.token !== owner.token) throw ownershipLost();
-  // Moving the whole directory aside is the release. Removing owner.json first would leave, for as
-  // long as it takes to remove the directory, a lock that names no owner.
+  if (state !== "held") throw ownershipLost();
+  // Moving the whole directory aside is the release, and only its owner may do it. Removing the
+  // owner file first would leave, for as long as it takes to remove the directory, a lock that
+  // names no owner.
   const released = `${lockPath}.released-${owner.token}`;
   for (;;) {
     try {
@@ -229,7 +270,8 @@ async function releaseOwnedLock(lockPath: string, owner: LockOwner): Promise<voi
 }
 
 // For a process that is about to exit on a signal: release every lock it holds and remove every
-// lock it was still waiting for, synchronously, so no cache operation can interleave.
+// lock it was still waiting for, synchronously, so no cache operation of this process can
+// interleave with the release.
 export function releaseHeldCacheLocksSync(): void {
   for (const staged of stagedLocks) {
     try { rmSync(staged, { recursive: true, force: true }); } catch { /* exiting: best effort */ }
@@ -237,7 +279,7 @@ export function releaseHeldCacheLocksSync(): void {
   stagedLocks.clear();
   for (const [lockPath, owner] of ownedLocks) {
     try {
-      if (parseOwner(readFileSync(path.join(lockPath, "owner.json"), "utf8"))?.token !== owner.token) continue;
+      if (!ownsSync(lockPath, owner)) continue;
       const released = `${lockPath}.released-${owner.token}`;
       renameSync(lockPath, released);
       rmSync(released, { recursive: true, force: true });
@@ -248,17 +290,9 @@ export function releaseHeldCacheLocksSync(): void {
 
 const DEBRIS_RE = /\.(?:acquire|released|abandoned)-[0-9a-f-]{36}$/;
 
-async function quietFor(target: string, ms: number): Promise<boolean> {
-  try {
-    return Math.abs(Date.now() - (await fs.lstat(target)).mtimeMs) >= ms;
-  } catch {
-    return false;
-  }
-}
-
 // A process killed while a lock directory sits under a private staged, released or abandoned name
-// leaves that directory behind. It blocks nothing, and it is removed here once the process named
-// in it has exited.
+// leaves that directory behind. It blocks nothing, and it is removed here once every owner named in
+// it has exited, or, when it names none, once it has been quiet for the grace period.
 export async function sweepLockDebris(dir: string): Promise<void> {
   let names: string[];
   try {
@@ -269,9 +303,10 @@ export async function sweepLockDebris(dir: string): Promise<void> {
   }
   for (const name of names.filter((entry) => DEBRIS_RE.test(entry))) {
     const debris = path.join(dir, name);
-    const state = await inspectOwner(debris).catch((): OwnerState => ({ kind: "unsettled" }));
-    if (state.kind === "unsettled") continue;
-    const gone = state.kind === "owner" ? lockOwnerExited(state.owner) : await quietFor(debris, abandonedLockGraceMs);
+    const state = await snapshot(debris).catch(() => undefined);
+    if (state === undefined || !state.settled) continue;
+    const owners = state.owners.flatMap((entry) => entry.owner === undefined ? [] : [entry.owner]);
+    const gone = owners.length > 0 ? owners.every(lockOwnerExited) : quietSince(state.mtimeMs);
     if (gone) await fs.rm(debris, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -308,7 +343,7 @@ export async function withCacheLock<T>(
   try {
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
     await fs.mkdir(staged);
-    await fs.writeFile(path.join(staged, "owner.json"), JSON.stringify(owner), { flag: "wx" });
+    await fs.writeFile(path.join(staged, OWNER_FILE), JSON.stringify(owner), { flag: "wx" });
     for (;;) {
       try {
         await fs.rename(staged, lockPath);
@@ -321,7 +356,7 @@ export async function withCacheLock<T>(
         // or EBUSY for the moment it takes); poll again rather than fail the whole cache operation.
         const code = errorCode(error);
         if (code !== "EEXIST" && !TRANSIENT_CODES.has(code)) throw error;
-        await recoverAbandonedLock(lockPath);
+        await reclaimAbandonedLock(lockPath);
         if (performance.now() >= deadline) throw new CacheLockTimeoutError(lockPath, await describeHolder(lockPath));
         await delay(Math.min(poll, Math.max(1, deadline - performance.now())));
       }
