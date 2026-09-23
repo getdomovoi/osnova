@@ -85,6 +85,7 @@ function view(index: OsnovaIndex): OsnovaIndex {
     incoming: (name) => index.incoming(name),
     outgoing: (name) => index.outgoing(name),
     edgesForFile: (file) => index.edgesForFile(file),
+    degree: (name) => index.degree(name),
   };
 }
 
