@@ -25,7 +25,9 @@ import { saveVerification } from "./verification.js";
 import { knownIndexGeneration } from "./generation.js";
 import { resolveEdges } from "./resolve.js";
 import type { EdgeReuse } from "./resolve.js";
-import { scanFiles, sha256Hex, sourceText } from "./scan.js";
+import { scanFiles, sha256File, sha256Hex, sourceText } from "./scan.js";
+import { tsConfigDiagnostics } from "./tsconfig.js";
+import { maximumIndexedFileSizeBytes } from "../types.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, workspaceFilePath } from "./workspace.js";
 import type { WorkspaceOptions } from "./workspace.js";
@@ -41,10 +43,16 @@ export async function extractCard(
   relPath: string,
 ): Promise<{ card: FileCard; rawEdges: RawEdgeItem[] }> {
   const abs = await workspaceFilePath(absRoot, relPath);
-  const buffer = await fs.readFile(abs).catch((error: unknown) => {
+  const unreadable = (error: unknown): never => {
     throw new IndexingError({ phase: "read", path: relPath, code: "file-unreadable" }, error);
-  });
+  };
+  if ((await fs.stat(abs).catch(unreadable)).size > maximumIndexedFileSizeBytes) {
+    const streamed = await sha256File(abs).catch(unreadable);
+    if (streamed.size > maximumIndexedFileSizeBytes) return { card: oversizedCard(relPath, streamed.hash, streamed.size), rawEdges: [] };
+  }
+  const buffer = await fs.readFile(abs).catch(unreadable);
   const hash = sha256Hex(buffer);
+  if (buffer.length > maximumIndexedFileSizeBytes) return { card: oversizedCard(relPath, hash, buffer.length), rawEdges: [] };
   const language = languageOf(relPath);
   const decoded = sourceText(buffer);
   const binary = decoded === null;
@@ -60,7 +68,7 @@ export async function extractCard(
       lineCount,
       text,
       symbols: [],
-      diagnostics: [],
+      diagnostics: binary ? [] : tsConfigDiagnostics(relPath, text),
       reExports: [],
     };
     return { card, rawEdges: [] };
@@ -151,6 +159,20 @@ export async function extractCard(
     ...(routes.length === 0 ? {} : { routes }),
   };
   return { card, rawEdges };
+}
+
+function oversizedCard(relPath: string, hash: string, size: number): FileCard {
+  return {
+    path: relPath,
+    language: "fallback",
+    hash,
+    size,
+    lineCount: 0,
+    text: "",
+    symbols: [],
+    diagnostics: [{ phase: "scan", path: relPath, code: "file-too-large" }],
+    reExports: [],
+  };
 }
 
 export function finalizeIndex(

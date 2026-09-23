@@ -1,9 +1,7 @@
 import { constants } from "node:fs";
-import { access, readFile, stat } from "node:fs/promises";
-import { execFile } from "node:child_process";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { OSNOVA_VERSION } from "../version.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { familySiblings, workspaceFamily } from "../cache/family.js";
@@ -42,10 +40,56 @@ export interface DoctorOptions {
   readonly home?: string | undefined;
 }
 
-const execFileAsync = promisify(execFile);
+const packageName = "@getdomovoi/osnova";
+
+async function readManifest(file: string): Promise<{ name?: unknown; version?: unknown } | undefined> {
+  try {
+    const value: unknown = JSON.parse(await readFile(file, "utf8"));
+    return typeof value === "object" && value !== null ? value as { name?: unknown; version?: unknown } : undefined;
+  } catch { return undefined; }
+}
+
+async function osnovaManifest(dir: string): Promise<{ root: string; version: string } | undefined> {
+  const manifest = await readManifest(path.join(dir, "package.json"));
+  return manifest?.name === packageName && typeof manifest.version === "string" ? { root: dir, version: manifest.version } : undefined;
+}
+
+async function onPath(name: string): Promise<string | undefined> {
+  if (name.includes("/") || name.includes("\\")) return path.resolve(name);
+  const extensions = process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(dir, name + extension);
+      if ((await stat(candidate).catch(() => undefined))?.isFile()) return candidate;
+    }
+  }
+  return undefined;
+}
+
+// The osnova install a configured command would start, found by reading files only: the nearest package.json
+// above the resolved script, or the package beside a node_modules/.bin or npm prefix shim.
+async function installBehind(executable: string, args: readonly string[]): Promise<{ root: string; version: string } | undefined> {
+  const script = /^node(\.exe)?$/i.test(path.basename(executable)) ? args.find((arg) => !arg.startsWith("-")) : executable;
+  if (script === undefined) return undefined;
+  const located = await onPath(script);
+  const real = located === undefined ? undefined : await realpath(located).catch(() => undefined);
+  if (real === undefined) return undefined;
+  const dir = path.dirname(real);
+  for (let current = dir; ; current = path.dirname(current)) {
+    if (await stat(path.join(current, "package.json")).then(() => true, () => false)) {
+      const found = await osnovaManifest(current);
+      if (found !== undefined) return found;
+      break;
+    }
+    if (path.dirname(current) === current) break;
+  }
+  return osnovaManifest(path.basename(dir) === ".bin" ? path.join(dir, "..", "@getdomovoi", "osnova") : path.join(dir, "node_modules", "@getdomovoi", "osnova"));
+}
 
 // Every osnova command a Claude Code config runs (hooks in ~/.claude/settings.json, the MCP server in ~/.claude.json)
-// must report this version; a hook or server from another install would read caches this one writes.
+// must come from this version; a hook or server from another install would read caches this one writes.
+// The check reads the install's package.json and never runs the configured command: the command comes from a
+// user-writable JSON file, and doctor reports itself read-only.
 export async function clientVersionChecks(home: string): Promise<DiagnosticCheck[]> {
   const commands = new Map<string, string[]>();
   const note = (command: string, role: string): void => { const roles = commands.get(command) ?? []; if (!roles.includes(role)) roles.push(role); commands.set(command, roles); };
@@ -72,15 +116,17 @@ export async function clientVersionChecks(home: string): Promise<DiagnosticCheck
     const parts = command.match(/"[^"]*"|\S+/g)?.map((part) => part.replace(/^"|"$/g, "")) ?? [];
     const [executable, ...args] = parts;
     if (executable === undefined) continue;
-    try {
-      const { stdout } = await execFileAsync(executable, [...args, "--version"], { encoding: "utf8", timeout: 5_000 });
-      const version = stdout.trim().split("\n").at(-1) ?? "";
-      checks.push(version === OSNOVA_VERSION
-        ? { id: `client:${role}`, status: "ok", message: `${command} reports ${version}, the same as this osnova.` }
-        : { id: `client:${role}`, status: "warning", message: `${command} reports ${version || "no version"}; this osnova is ${OSNOVA_VERSION}. Hooks, server and caches should come from one install.` });
-    } catch (error) {
-      checks.push({ id: `client:${role}`, status: "warning", message: `${command} did not answer --version: ${error instanceof Error ? error.message : String(error)}` });
+    const spec = args.map((arg) => new RegExp(`^${packageName}@(\\d+\\.\\d+\\.\\d+(?:-[\\w.]+)?)$`).exec(arg)?.[1]).find((version) => version !== undefined);
+    const install = spec === undefined ? await installBehind(executable, args) : undefined;
+    const version = spec ?? install?.version;
+    if (version === undefined) {
+      checks.push({ id: `client:${role}`, status: "warning", message: `${command} does not resolve to an osnova install this check can read; its version is unknown. Doctor does not run configured commands.` });
+      continue;
     }
+    const source = install === undefined ? "names" : `resolves to ${install.root}, which is`;
+    checks.push(version === OSNOVA_VERSION
+      ? { id: `client:${role}`, status: "ok", message: `${command} ${source} osnova ${version}, the same as this osnova.` }
+      : { id: `client:${role}`, status: "warning", message: `${command} ${source} osnova ${version}; this osnova is ${OSNOVA_VERSION}. Hooks, server and caches should come from one install.` });
   }
   return checks;
 }

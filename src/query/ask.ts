@@ -1,5 +1,5 @@
 import type { AskDetailedResult, AskHit, AskOptions, AskResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
-import { idf, matchInPath, queryContext, tokenize } from "./context.js";
+import { idf, matchInPath, queryContext, scopedQueryContext, tokenize } from "./context.js";
 import type { QueryContext, SearchDocument } from "./context.js";
 
 const DEFAULT_LIMIT = 8;
@@ -70,7 +70,7 @@ export function askDetailed(index: OsnovaIndex, question: string, options?: AskO
   if ((queryTokens.length === 0 && identifiers.size === 0) || index.files.size === 0) {
     return { scope: "indexed-definitions-and-text", hits: [], filesSearched, totalCandidates: 0, omittedHits: 0, truncated: false };
   }
-  const ctx = queryContext(index);
+  const ctx = filter.length > 0 ? scopedQueryContext(index, filter, queryTokens) : queryContext(index);
   const full = options?.full ?? false;
   const scored: Array<{ document: SearchDocument; score: number; exact: boolean }> = [];
   for (const document of ctx.documents) {
