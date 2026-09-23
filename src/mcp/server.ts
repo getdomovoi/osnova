@@ -352,7 +352,7 @@ export function createOsnovaMcpServer(
         }
         case "osnova_groundwork": {
           const card = await renderMapCard(index, {
-            maxDirs: optionalNumber(args, "maxDirs") ?? 8,
+            maxDirs: optionalNumber(args, "maxDirs"),
             staleCount: 0,
             maxCodeUnits: Math.min(maximumOsnovaMapCardCodeUnits, maximumMcpMapCodeUnits) - generation.length - 1,
           });
