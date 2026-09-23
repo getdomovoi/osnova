@@ -69,7 +69,8 @@
     "dist",
     "integrations",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsup",

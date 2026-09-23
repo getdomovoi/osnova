@@ -1,0 +1,14 @@
+@getdomovoi/osnova
+Copyright 2026 getdomovoi
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product loads prebuilt tree-sitter grammar binaries that npm installs at install time
+from the tree-sitter-wasms package (https://github.com/Gregoor/tree-sitter-wasms). Those
+binaries are compiled from the individual tree-sitter grammar projects, which are MIT licensed
+by their respective authors; the tree-sitter-wasms package itself declares Unlicense, which does
+not restate the terms of the grammars it compiles. osnova does not redistribute these binaries:
+they arrive on the user's machine as a declared npm dependency, and the terms of each grammar
+project travel with that project's own repository.
+
+The web-tree-sitter runtime (https://github.com/tree-sitter/tree-sitter) is MIT licensed.
