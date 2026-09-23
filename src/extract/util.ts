@@ -121,28 +121,3 @@ export function lastIdentifier(node: Node): string | null {
   }
   return null;
 }
-
-export interface CallNameRule {
-  callNodes: readonly string[];
-  callTarget: (node: Node) => string | null;
-  newNodes?: readonly string[];
-  newTarget?: (node: Node) => string | null;
-}
-
-export function collectCalls(
-  node: Node,
-  extractor: Extractor,
-  rules: CallNameRule,
-  skip?: (node: Node) => boolean,
-): void {
-  if (rules.callNodes.includes(node.type)) {
-    if (skip?.(node) !== true) {
-      const name = rules.callTarget(node);
-      if (name !== null) extractor.addEdge("calls", name, node);
-    }
-  }
-  if (rules.newNodes !== undefined && rules.newTarget !== undefined && rules.newNodes.includes(node.type)) {
-    const name = rules.newTarget(node);
-    if (name !== null) extractor.addEdge("calls", name, node);
-  }
-}
