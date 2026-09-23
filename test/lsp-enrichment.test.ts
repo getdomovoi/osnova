@@ -49,16 +49,11 @@ describe("opt-in LSP sidecar", () => {
     expect(result.results).toHaveLength(1);
   });
 
-  it("removes the writer lock even when handle cleanup reports an error", async () => {
+  it("removes the writer lock even when the locked write reports an error", async () => {
     const f = await setup();
-    const open = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
-      const handle = await open(...args);
-      const close = handle.close.bind(handle);
-      vi.spyOn(handle, "close").mockImplementationOnce(async () => { await close(); throw new Error("close failed"); });
-      return handle;
-    });
-    await expect(configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir })).rejects.toThrow(/cache-unavailable/);
+    vi.spyOn(fs, "rename").mockImplementationOnce(async () => { throw Object.assign(new Error("rename failed"), { code: "EIO" }); });
+    await expect(configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir })).rejects.toThrow(/rename failed/);
+    vi.restoreAllMocks();
     await expect(fs.access(path.join(workspaceDirFor(f.cacheDir, f.root), "lsp", "writer.lock"))).rejects.toThrow();
   });
   it("does not mistake an unchanged binary fallback card for stale source", async () => {
@@ -227,7 +222,8 @@ describe("opt-in LSP sidecar", () => {
     const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const lock = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp/writer.lock");
     const exited = spawnSync(process.execPath, ["-e", ""]);
-    await fs.writeFile(lock, JSON.stringify({ pid: exited.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000000" }));
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, "owner.json"), JSON.stringify({ pid: exited.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000000" }));
     const result = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
     expect(result.status, JSON.stringify(result.diagnostics)).toBe("complete");
     await expect(fs.access(lock)).rejects.toThrow();
@@ -238,10 +234,11 @@ describe("opt-in LSP sidecar", () => {
     const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const lock = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp/writer.lock");
     const owner = JSON.stringify({ pid: process.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000001" });
-    await fs.writeFile(lock, owner);
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, "owner.json"), owner);
     const result = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
     expect(result.diagnostics.some((d) => d.code === "cache-busy")).toBe(true);
-    expect(await fs.readFile(lock, "utf8")).toBe(owner);
+    expect(await fs.readFile(path.join(lock, "owner.json"), "utf8")).toBe(owner);
   });
 
   it("bounds requests per server without starving later languages and retries failures", async () => {
