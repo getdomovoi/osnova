@@ -746,6 +746,16 @@ export function formatCoverage(report: CoverageReport): string {
     `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve, ${report.total.unboundGlobalCalls} call a name with no binding in the file`,
     ...report.languages.map(row),
   ];
+  // Stated on stdout, beside the percentages it qualifies: the same notice on stderr is lost the moment
+  // the report is redirected to a file.
+  const skipped = report.oversizedFiles;
+  if (skipped.length > 0) {
+    lines.push(
+      `not indexed: ${skipped.length} ${skipped.length === 1 ? "file" : "files"} above the ${sizeCapText} size cap; ${skipped.length === 1 ? "its" : "their"} call sites are not counted above`,
+      ...skipped.slice(0, 10).map((file) => `- ${file.path}: ${file.size} bytes`),
+      ...(skipped.length > 10 ? [`- ${skipped.length - 10} more; coverage --json lists every one`] : []),
+    );
+  }
   const external = report.total.externalImportCalls;
   const detail = (reason: string, count: number): string => reason === "import-target-unresolved" && external > 0 ? ` (external ${external}, in-repo ${count - external})` : "";
   if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}${detail(reason, count)}`));
