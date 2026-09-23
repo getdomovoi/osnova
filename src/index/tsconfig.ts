@@ -181,17 +181,53 @@ export class TsConfigs {
 export function matchPaths(paths: ReadonlyMap<string, readonly string[]>, spec: string): readonly string[] | "ambiguous" | undefined {
   const exact = paths.get(spec);
   if (exact !== undefined) return exact;
-  let best: { prefix: number; targets: readonly string[]; filler: string; tie: boolean } | undefined;
+  const index = wildcardIndexOf(paths);
+  for (const prefixLength of index.prefixLengths) {
+    if (prefixLength > spec.length) continue;
+    const group = index.byPrefix.get(spec.slice(0, prefixLength));
+    if (group === undefined) continue;
+    let found: { targets: readonly string[]; suffixLength: number } | undefined;
+    for (const suffixLength of group.suffixLengths) {
+      if (prefixLength + suffixLength > spec.length) continue;
+      const targets = group.bySuffix.get(spec.slice(spec.length - suffixLength));
+      if (targets === undefined) continue;
+      if (found !== undefined) return "ambiguous";
+      found = { targets, suffixLength };
+    }
+    if (found === undefined) continue;
+    const filler = spec.slice(prefixLength, spec.length - found.suffixLength);
+    return found.targets.map((target) => target.split("*").join(filler));
+  }
+  return undefined;
+}
+
+interface WildcardGroup {
+  readonly bySuffix: Map<string, readonly string[]>;
+  readonly suffixLengths: number[];
+}
+
+interface WildcardIndex {
+  readonly byPrefix: ReadonlyMap<string, WildcardGroup>;
+  readonly prefixLengths: readonly number[];
+}
+
+const wildcardIndexes = new WeakMap<ReadonlyMap<string, readonly string[]>, WildcardIndex>();
+
+function wildcardIndexOf(paths: ReadonlyMap<string, readonly string[]>): WildcardIndex {
+  const cached = wildcardIndexes.get(paths);
+  if (cached !== undefined) return cached;
+  const byPrefix = new Map<string, WildcardGroup>();
   for (const [key, targets] of paths) {
     const star = key.indexOf("*");
     if (star < 0 || key.indexOf("*", star + 1) >= 0) continue;
     const prefix = key.slice(0, star), suffix = key.slice(star + 1);
-    if (!spec.startsWith(prefix) || !spec.endsWith(suffix) || spec.length < prefix.length + suffix.length) continue;
-    const filler = spec.slice(prefix.length, spec.length - suffix.length);
-    if (best === undefined || prefix.length > best.prefix) best = { prefix: prefix.length, targets, filler, tie: false };
-    else if (prefix.length === best.prefix) best.tie = true;
+    let group = byPrefix.get(prefix);
+    if (group === undefined) { group = { bySuffix: new Map(), suffixLengths: [] }; byPrefix.set(prefix, group); }
+    if (!group.suffixLengths.includes(suffix.length)) group.suffixLengths.push(suffix.length);
+    group.bySuffix.set(suffix, targets);
   }
-  if (best === undefined) return undefined;
-  if (best.tie) return "ambiguous";
-  return best.targets.map((target) => target.split("*").join(best.filler));
+  const prefixLengths = [...new Set([...byPrefix.keys()].map((prefix) => prefix.length))].sort((a, b) => b - a);
+  const index = { byPrefix, prefixLengths };
+  wildcardIndexes.set(paths, index);
+  return index;
 }
