@@ -30,7 +30,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
-      - run: node scripts/check-package.mjs
+      - run: node scripts/check-package.mjs --supply-chain
       - run: node scripts/package-smoke.mjs
       - run: node scripts/clean-install-smoke.mjs
       - run: pnpm perf

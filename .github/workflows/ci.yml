@@ -26,7 +26,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: node scripts/check-package.mjs
+      - run: node scripts/check-package.mjs --supply-chain
       - run: node scripts/package-smoke.mjs
       - run: node scripts/clean-install-smoke.mjs
       - run: node scripts/perf.mjs
@@ -45,7 +45,7 @@ jobs:
       - run: node --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: node scripts/check-package.mjs
+      - run: node scripts/check-package.mjs --supply-chain
       - run: node scripts/package-smoke.mjs
       - run: node scripts/clean-install-smoke.mjs
       - run: node dist/bin.js build . --cache-dir "$RUNNER_TEMP/osnova-floor-cache"
