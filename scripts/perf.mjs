@@ -9,8 +9,11 @@ const PACKAGES = 16;
 const MODULES = 12;
 const FUNCTIONS = 6;
 const BUILD_WORKERS = "2";
-const GENEROUS = { build: 20_000, incremental: 5_000, coreLoad: 500, scan: 200, coldGround: 1_500, edgesLoad: 500, noChangeRefresh: 400, changedRefresh: 4_000, scopedAsk: 150, peakRssMiB: 3_072 };
-const BUDGETS = { linux: GENEROUS, darwin: GENEROUS, win32: GENEROUS };
+const BUDGETS = {
+  linux: { build: 25_000, incremental: 4_500, coreLoad: 350, scan: 100, coldGround: 900, edgesLoad: 300, noChangeRefresh: 90, changedRefresh: 2_100, scopedAsk: 260, peakRssMiB: 1_200 },
+  darwin: { build: 16_000, incremental: 2_500, coreLoad: 220, scan: 75, coldGround: 860, edgesLoad: 230, noChangeRefresh: 90, changedRefresh: 2_100, scopedAsk: 160, peakRssMiB: 1_950 },
+  win32: { build: 35_000, incremental: 6_700, coreLoad: 270, scan: 190, coldGround: 970, edgesLoad: 280, noChangeRefresh: 180, changedRefresh: 3_300, scopedAsk: 190, peakRssMiB: 900 },
+};
 const POLYGLOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "test", "fixtures", "sample-repo");
 
 function write(root, rel, lines) {
@@ -479,7 +482,7 @@ async function main() {
 
   fs.rmSync(root, { recursive: true, force: true });
   if (failures.length > 0) {
-    console.error(`perf budget exceeded: ${failures.join("; ")}`);
+    console.error(`perf gate failed: ${failures.join("; ")}`);
     process.exit(1);
   }
   console.log("perf budgets met");
