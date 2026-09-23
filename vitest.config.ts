@@ -16,5 +16,9 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: 60_000,
     pool: "forks",
+    // Test files build indexes on worker pools sized to the machine, so parallel forks only pay off with
+    // cores to spare: on the 3-4 vCPU CI runners they slowed the suite (ubuntu 138s to 197s, windows 265s
+    // to 408s with a property-test timeout), while on a 15-core laptop they cut 55s to 27s.
+    poolOptions: { forks: { singleFork: os.availableParallelism() < 8 } },
   },
 });
