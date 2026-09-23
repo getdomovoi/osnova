@@ -15,6 +15,7 @@ import type {
   EdgeKind,
   UnresolvedCallerEdge,
 } from "../types.js";
+import { maximumIndexedFileSizeBytes } from "../types.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { PlumbResult } from "./plumb.js";
@@ -35,6 +36,9 @@ export function formatIndexDiagnostics(index: OsnovaIndex): string {
   return lines.join("\n");
 }
 
+const notIndexedCategory = "scan/file-too-large";
+const sizeCapText = `${maximumIndexedFileSizeBytes / 1_000_000} MB`;
+
 export function formatIndexHealthSummary(index: OsnovaIndex): string {
   if (index.diagnostics === undefined) return "osnova foundation: unverified";
   if (index.diagnostics.length === 0) return "";
@@ -44,10 +48,30 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
     const category = `${diagnostic.phase}/${code}`;
     counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  // A file above the size cap is absent from the index, so every count that could have included it
+  // is short. That is the one category a reader must never find folded into "+N categories".
+  const rank = (category: string): number => category === notIndexedCategory ? 0 : 1;
+  const categories = [...counts].sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
   const shown = categories.slice(0, 4).map(([category, count]) => `${category}=${count}`);
   if (categories.length > 4) shown.push(`+${categories.length - 4} categories`);
-  return `osnova foundation: partial (${shown.join(", ")}); some files did not parse fully`;
+  const tooLarge = counts.get(notIndexedCategory) ?? 0;
+  const reasons: string[] = [];
+  if (tooLarge > 0) {
+    reasons.push(`${tooLarge} ${tooLarge === 1 ? "file" : "files"} above the ${sizeCapText} size cap ${tooLarge === 1 ? "is" : "are"} not indexed`);
+  }
+  if (index.diagnostics.some((diagnostic) => diagnostic.phase === "parse")) reasons.push("some files did not parse fully");
+  if (reasons.length === 0) reasons.push("results may be incomplete");
+  return `osnova foundation: partial (${shown.join(", ")}); ${reasons.join("; ")}`;
+}
+
+// The summary above never names files, because it heads every MCP answer. A query about one file is
+// the exception: the agent already named that file, and cannot otherwise join the aggregate to it.
+export function formatFileDiagnostics(index: OsnovaIndex, file: string): string {
+  const entries = index.files.get(file)?.diagnostics ?? [];
+  return entries.map((diagnostic) => {
+    const effect = diagnostic.code === "file-too-large" ? "this file is not indexed" : "results for this file are incomplete";
+    return `osnova: ${file} ${diagnostic.phase}/${diagnostic.code}; ${effect}`;
+  }).join("\n");
 }
 
 function foldNestedHits(hits: readonly AskHit[]): Map<AskHit, string[]> {
