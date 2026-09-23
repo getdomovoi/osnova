@@ -99,6 +99,28 @@ describe("cli", () => {
     expect(await runCli(["check", workspace, ...cacheArgs], freshAgain.io)).toBe(0);
   }, 60_000);
 
+  it("publishes the same artifact bytes after a refresh as a full rebuild", async () => {
+    expect(await runCli(["build", workspace, ...cacheArgs], capture().io)).toBe(0);
+    write("src/three.ts", 'import { two } from "./two.js";\nexport function three(): number { return two() + 1; }\n');
+    write("src/two.ts", 'import { one } from "./one.js";\nexport function two(): number { return one() + 2; }\nexport function twin(): number { return one(); }\n');
+    expect(await runCli(["ground", "three", "--workspace", workspace, ...cacheArgs], capture().io)).toBe(0);
+    const rebuiltCache = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-rebuilt-"));
+    try {
+      expect(await runCli(["build", workspace, "--cache-dir", rebuiltCache], capture().io)).toBe(0);
+      const published = (dir: string): string => {
+        const keys = fs.readdirSync(dir).filter((name) => /^[0-9a-f]{16}$/.test(name));
+        expect(keys).toHaveLength(1);
+        return path.join(dir, keys[0]!);
+      };
+      for (const artifact of ["index.json", "edges.json", "text.bin", "index.sha"]) {
+        const refreshed = fs.readFileSync(path.join(published(cacheDir), artifact));
+        expect(refreshed.equals(fs.readFileSync(path.join(published(rebuiltCache), artifact))), artifact).toBe(true);
+      }
+    } finally {
+      fs.rmSync(rebuiltCache, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("outline, thread, warp, groundwork round-trip", async () => {
     const skeletonOut = capture();
     expect(await runCli(["outline", "src/two.ts", "--workspace", workspace, ...cacheArgs], skeletonOut.io)).toBe(0);
