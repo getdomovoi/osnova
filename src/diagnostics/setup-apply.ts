@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
-import { hookSettingsObject } from "../cli/hook.js";
+import { clientCanGate, gateCaveat, hookSettingsObject } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
 
 // Applying a setup: every file change is planned first (path, action, diff), then written with a
@@ -35,7 +35,7 @@ export async function planMcp(client: SetupClientId, options: { home?: string | 
 // Hook files: Claude Code (~/.claude/settings.json) and Codex (~/.codex/hooks.json) share the event-group shape;
 // Cursor (~/.cursor/hooks.json) lists commands per event under a version key. A group or entry is added only when
 // none already runs that `osnova hook <event>`; every other key survives and the file keeps its indent.
-export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined }): Promise<PlannedChange> {
+export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined; gate?: boolean | undefined }): Promise<PlannedChange> {
   const client = options.client ?? "claude-code";
   const home = path.resolve(options.home ?? os.homedir());
   const defaultPath = client === "codex" ? path.join(home, ".codex", "hooks.json") : client === "cursor" ? path.join(home, ".cursor", "hooks.json") : path.join(home, ".claude", "settings.json");
@@ -48,8 +48,6 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`osnova setup: ${target} is not a JSON object`);
     root = parsed as Record<string, unknown>;
   }
-  const wanted = hookSettingsObject(options.command ?? ["osnova"], client, options.nudge === true);
-  const wantedHooks = wanted.hooks as Record<string, unknown[]>;
   const hooks = (root.hooks !== null && typeof root.hooks === "object" && !Array.isArray(root.hooks) ? { ...(root.hooks as Record<string, unknown>) } : {});
   const commandOf = (item: unknown): string[] => {
     if (item === null || typeof item !== "object") return [];
@@ -57,6 +55,12 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (typeof record.command === "string") return [record.command];
     return Array.isArray(record.hooks) ? record.hooks.flatMap(commandOf) : [];
   };
+  // A hand-written gate already in this file does the same job. Two gates would deny the same call twice
+  // and their turn state would disagree, so osnova installs its own only when none is there.
+  const foreignGate = Object.values(hooks).flatMap((group) => (Array.isArray(group) ? group.flatMap(commandOf) : [])).find((command) => /osnova-first/.test(command));
+  const gate = clientCanGate(client) && options.gate !== false && foreignGate === undefined;
+  const wanted = hookSettingsObject(options.command ?? ["osnova"], client, { nudge: options.nudge === true, gate });
+  const wantedHooks = wanted.hooks as Record<string, unknown[]>;
   let added = 0;
   for (const [event, entries] of Object.entries(wantedHooks)) {
     const current = Array.isArray(hooks[event]) ? [...(hooks[event] as unknown[])] : [];
@@ -69,11 +73,30 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     }
     hooks[event] = current;
   }
-  if (added === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client}.` };
+  // `--gate off` means no gate, on a fresh file and on one that already has it. Only osnova's own gate
+  // and mark entries are dropped; anything else sharing those event arrays stays.
+  let removed = 0;
+  if (options.gate === false) {
+    const isGateEntry = (item: unknown): boolean => commandOf(item).some((command) => /osnova/.test(command) && /\bhook (?:gate|mark)\b/.test(command));
+    for (const [event, group] of Object.entries(hooks)) {
+      if (!Array.isArray(group)) continue;
+      const kept = group.filter((item) => !isGateEntry(item));
+      removed += group.length - kept.length;
+      if (kept.length === group.length) continue;
+      if (kept.length === 0) delete hooks[event]; else hooks[event] = kept;
+    }
+  }
+  const gateNotice = foreignGate !== undefined
+    ? ` ${target} already runs a hand-written gate (${foreignGate}); osnova installed no gate of its own. Remove that hook, then run this again with --gate on.`
+    : gate
+      ? ` The gate denies Grep, Glob and shell search inside an indexed workspace until an osnova tool has run in the turn. Turn it off for one run with OSNOVA_GATE=off, or install without it with --gate off.${gateCaveat(client)}`
+      : removed > 0 ? ` ${removed} gate entr${removed === 1 ? "y was" : "ies were"} removed from ${target}; osnova now only suggests its tools, it does not enforce them.`
+      : clientCanGate(client) ? "" : ` ${client} has no pre-tool hook that can deny a tool call, so no gate was installed; its hooks only add text.`;
+  if (added === 0 && removed === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client}.${gateNotice}` };
   const indent = existing === null ? "  " : (/^( +|\t+)"/m.exec(existing)?.[1] ?? "  ");
   const merged = `${JSON.stringify({ ...(client === "cursor" && root.version === undefined ? { version: 1 } : {}), ...root, hooks }, null, indent)}\n`;
   const action = existing === null ? "create" : "append";
-  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${added} osnova hook entr${added === 1 ? "y" : "ies"} for ${client} in ${target}; other keys are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}` };
+  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${added} osnova hook entr${added === 1 ? "y" : "ies"} for ${client} in ${target}; other keys are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}${gateNotice}` };
 }
 
 // The shipped integration file for a client that runs plugins instead of hooks, copied into its plugin directory.
@@ -97,7 +120,15 @@ export async function planPlugin(client: PluginClient, options: { home?: string 
   const existing = await readOptional(target);
   if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova ${client === "pi" ? "extension" : "plugin"}.` };
   if (existing !== null) return { kind: "plugin", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a plugin file. Remove it or compare by hand.` };
-  return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN).` };
+  return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN). ${pluginGateNotice(client)}` };
+}
+
+// Pi's tool_call handler returns {block, reason} and can refuse a call. OpenCode and Kilo run
+// tool.execute.before, which returns void: there is no deny channel, so their plugin only adds text.
+export function pluginGateNotice(client: PluginClient): string {
+  return client === "pi"
+    ? "It also installs the search gate: grep and find are denied inside an indexed workspace until an osnova tool has run in the turn. Turn it off for one run with OSNOVA_GATE=off."
+    : `${client} runs plugin hooks that return void and cannot deny a tool call, so no gate is installed; this plugin only adds text.`;
 }
 
 // The shipped Claude Code skill, copied once into ~/.claude/skills/osnova/; a differing file is a conflict.

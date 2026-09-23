@@ -2,6 +2,21 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova hook gate`, a pre-tool hook that denies plain search until osnova has run in the turn. Inside a workspace osnova has indexed, it refuses `Grep`, `Glob` and shell search (`grep`, `egrep`, `fgrep`, `rg`, `ag`, `ack`, `fd`, `find`, `git grep`) and names the indexed file count under the searched path along with the five tools that answer the question. After one osnova call in the turn, search is allowed again as a fallback for the files osnova does not index. Until now the hooks only added text, and an agent could skip text.
+- `osnova hook mark`, the post-tool half of the gate: it runs on `mcp__.*osnova.*` and records the turn osnova ran in. The gate compares that turn against the counter `osnova hook prompt` advances. The counter is a count rather than a clock, because two hooks can fire inside one millisecond and a timestamp comparison would then read as though osnova had already run in a turn that had only just started. Both live in `hook-state/<session id>.json` under the cache directory.
+- The gate is installed by default by `osnova setup --apply --hooks` for every client that can refuse a tool call: Claude Code, Codex (which runs no hook until it is trusted under `/hooks`) and Cursor (which is fail-open on a hook that crashes or times out). The Pi extension gained the same gate through its `tool_call` handler. OpenCode and Kilo are left out because `tool.execute.before` returns void and has no deny channel, and `setup --preview` now says so instead of installing something that cannot work.
+- `osnova setup --apply --hooks --gate off` installs without the gate and removes one already installed, leaving every other hook in those event arrays. `OSNOVA_GATE=off` turns the gate off for a single run.
+- `osnova doctor` reports, per client, whether the gate is installed, whether the mark that lifts it is installed with it (a gate without its mark would block every search for the whole session), and whether a hand-written `osnova-first` gate is running instead.
+
+### Fixed
+
+- The gate allows a search whose target holds no indexed file, so it never stands in front of a search osnova cannot answer, such as one inside a hidden or ignored directory.
+- Shell commands are split on separators outside quotes. Splitting on a bare pipe cut `grep -nE "FAIL|error" notes.txt` in half and lost its path, so a search of one file read as a search of the whole workspace.
+
 ## 0.8.1 (2026-09-22)
 
 The extraction version moves to `structural-9.28`, so the first run after upgrading rebuilds the cache once.
