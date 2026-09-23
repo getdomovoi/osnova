@@ -33,6 +33,7 @@ export interface CoverageReport {
   readonly generation: string;
   readonly languages: readonly LanguageCoverage[];
   readonly total: LanguageCoverage;
+  readonly diagnostics: Readonly<Record<string, number>>;
   readonly limitations: readonly string[];
 }
 
@@ -98,8 +99,10 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
     }
   }
   const languages = [...perLanguage].sort(([a], [b]) => compareText(a, b)).map(([language, row]) => finish(language, row));
+  const diagnostics = new Map<string, number>();
+  for (const diagnostic of index.diagnostics ?? [{ phase: "cache", code: "health-unverified" }]) bump(diagnostics, `${diagnostic.phase}/${diagnostic.code}`);
   return {
-    generation: indexGeneration(index), languages, total: finish("all", total),
+    generation: indexGeneration(index), languages, total: finish("all", total), diagnostics: sortedRecord(diagnostics),
     limitations: ["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges", "unbound-global-calls-are-names-with-no-binding-in-the-file"],
   };
 }
