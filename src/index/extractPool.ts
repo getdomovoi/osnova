@@ -27,6 +27,7 @@ export const EXTRACT_POOL_MIN_FILES = 32;
 export const EXTRACT_POOL_REFRESH_MIN_FILES = 64;
 const EXTRACT_POOL_MAX_WORKERS = 8;
 const EXTRACT_POOL_HARD_MAX_WORKERS = EXTRACT_POOL_MAX_WORKERS * 4;
+const EXTRACT_FILE_TIMEOUT_MS = 60_000;
 
 export function extractWorkerCount(fileCount: number, env: NodeJS.ProcessEnv = process.env, minFiles: number = EXTRACT_POOL_MIN_FILES): number {
   const raw = env.OSNOVA_EXTRACT_WORKERS;
@@ -68,16 +69,18 @@ async function extractSequential(
   return results;
 }
 
-async function extractWithPool(
+export async function extractWithPool(
   absRoot: string,
   paths: readonly string[],
   script: { url: URL; execArgv?: string[] },
   workerCount: number,
   onDone?: (done: number) => void,
+  fileTimeoutMs: number = EXTRACT_FILE_TIMEOUT_MS,
 ): Promise<ExtractedFile[]> {
   const results: (ExtractedFile | undefined)[] = new Array<ExtractedFile | undefined>(paths.length);
   const failures = new Map<number, Error>();
   const current = new Map<Worker, number>();
+  const deadlines = new Map<Worker, NodeJS.Timeout>();
   const workers: Worker[] = [];
   let next = 0;
   let completed = 0;
@@ -93,14 +96,23 @@ async function extractWithPool(
       const id = next;
       next += 1;
       current.set(worker, id);
+      const deadline = setTimeout(() => failWorker(worker, new Error(`osnova: extract worker stalled on ${relPath} for ${fileTimeoutMs} ms`)), fileTimeoutMs);
+      deadline.unref();
+      deadlines.set(worker, deadline);
       worker.postMessage({ id, absRoot, relPath } satisfies ExtractRequest);
       return;
     }
     if (current.size === 0) settle?.();
   };
 
+  const clearDeadline = (worker: Worker): void => {
+    clearTimeout(deadlines.get(worker));
+    deadlines.delete(worker);
+  };
+
   const failWorker = (worker: Worker, error: Error): void => {
     if (closing) return;
+    clearDeadline(worker);
     const id = current.get(worker);
     if (id === undefined) return;
     current.delete(worker);
@@ -114,6 +126,7 @@ async function extractWithPool(
       workers.push(worker);
       worker.on("message", (response: ExtractResponse) => {
         if (closing || current.get(worker) !== response.id) return;
+        clearDeadline(worker);
         current.delete(worker);
         completed += 1;
         if (response.ok) results[response.id] = { card: response.card, rawEdges: response.rawEdges };
@@ -128,6 +141,7 @@ async function extractWithPool(
     await finished;
   } finally {
     closing = true;
+    for (const deadline of deadlines.values()) clearTimeout(deadline);
     await Promise.all(workers.map((worker) => worker.terminate()));
   }
 
