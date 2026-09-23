@@ -13,9 +13,17 @@ const children = new Set<ChildProcess>();
 const temporary: string[] = [];
 
 afterEach(async () => {
-  for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  // Killing is not exiting. Windows keeps the handles of a dying child open for a moment, so the
+  // removal below answers EBUSY unless the exit is awaited first and the removal itself retries.
+  await Promise.all([...children].map(async (child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    child.kill("SIGKILL");
+    await exited;
+  }));
   children.clear();
-  await Promise.all(temporary.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(temporary.splice(0).map((dir) =>
+    fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })));
 });
 
 async function fixture(): Promise<{ root: string; cacheDir: string }> {
