@@ -325,12 +325,12 @@ The same check runs on every pull request without an agent. The action runs `osn
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: getdomovoi/osnova@main
+- uses: getdomovoi/osnova@v0.8.1
   with:
     depth: "2"
 ```
 
-Inputs: `base-ref` (default: the pull request base), `depth`, `workspace`, `version` (the npm version run through `npx`), `command` (run a local build instead), `comment` (post a PR comment; needs `GH_TOKEN` with pull-requests write). The report is indexed structural evidence only: a missing dependent is not proof that nothing depends on the change. `scripts/settle-ci.sh` is the whole action and runs by hand with `BASE_REF=<commit> bash scripts/settle-ci.sh`.
+Inputs: `base-ref` (default: the pull request base), `depth`, `workspace`, `version` (the npm version run through `npx`; by default the version of the action ref, so `@v0.8.1` runs osnova 0.8.1, and `latest` floats on purpose), `command` (run a local build instead), `comment` (post a PR comment; needs `GH_TOKEN` with pull-requests write). The report is indexed structural evidence only: a missing dependent is not proof that nothing depends on the change. `scripts/settle-ci.sh` is the whole action and runs by hand with `BASE_REF=<commit> bash scripts/settle-ci.sh`.
 
 ## Development
 
