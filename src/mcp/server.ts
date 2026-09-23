@@ -225,14 +225,15 @@ export function createOsnovaMcpServer(
   let latest: OsnovaIndex | undefined;
   let inFlight: Promise<OsnovaIndex> | undefined;
   let dirty = true;
+  let changes = 0;
   let verifiedAt = 0;
   let refreshes = 0;
   // One refresh at a time; a change that arrives during a refresh marks the result stale again.
   function refresh(): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
-    dirty = false;
+    const seen = changes;
     inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true }).then((index) => {
-      latest = index; verifiedAt = Date.now(); refreshes += 1; return index;
+      latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false; return index;
     }).finally(() => { inFlight = undefined; });
     return inFlight;
   }
@@ -256,6 +257,7 @@ export function createOsnovaMcpServer(
       watcher = fsWatch(absRoot, { recursive: true, persistent: false }, (_event, file) => {
         if (ignoredChange(file)) return;
         dirty = true;
+        changes += 1;
         if (timer !== undefined) clearTimeout(timer);
         timer = setTimeout(() => { timer = undefined; refresh().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
         timer.unref();
