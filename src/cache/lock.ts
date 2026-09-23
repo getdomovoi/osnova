@@ -57,7 +57,7 @@ export function holdsCacheLock(lockPath: string): boolean {
 
 const errorCode = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? "";
 
-function parseOwner(text: string): LockOwner | undefined {
+export function parseOwner(text: string): LockOwner | undefined {
   let value: unknown;
   try { value = JSON.parse(text); } catch { return undefined; }
   if (typeof value !== "object" || value === null) return undefined;
