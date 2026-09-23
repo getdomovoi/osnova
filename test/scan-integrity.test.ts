@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { maximumIgnoreFileBytes, maximumIgnorePatterns, scanFiles } from "../src/index/scan.js";
+import { maximumIndexedFileSizeBytes } from "../src/types.js";
 
 const temporary: string[] = [];
 async function workspace(): Promise<string> {
@@ -13,6 +14,23 @@ async function workspace(): Promise<string> {
   return root;
 }
 afterEach(async () => { await Promise.all(temporary.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
+
+it("names every file skipped for exceeding the indexed size cap, with its size", async () => {
+  const root = await workspace();
+  await fs.writeFile(path.join(root, "small.ts"), "export const a = 1;\n");
+  await fs.writeFile(path.join(root, "nested/big.ts"), "x".repeat(maximumIndexedFileSizeBytes + 1));
+  await fs.writeFile(path.join(root, "big.js"), "y".repeat(maximumIndexedFileSizeBytes + 7));
+  await fs.writeFile(path.join(root, "edge.ts"), "z".repeat(maximumIndexedFileSizeBytes));
+  await fs.writeFile(path.join(root, "ignored.ts"), "w".repeat(maximumIndexedFileSizeBytes + 1));
+  await fs.writeFile(path.join(root, ".gitignore"), "ignored.ts\n");
+  const scan = await scanFiles(root);
+  expect(scan.paths).toEqual(["edge.ts", "small.ts"]);
+  expect(scan.oversized).toEqual([
+    { path: "big.js", size: maximumIndexedFileSizeBytes + 7 },
+    { path: "nested/big.ts", size: maximumIndexedFileSizeBytes + 1 },
+  ]);
+  expect(scan.truncated).toBe(2);
+});
 
 it("refuses an ignore file above the byte cap instead of compiling it", async () => {
   const root = await workspace();

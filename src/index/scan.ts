@@ -56,9 +56,15 @@ async function loadIgnoreFile(absPath: string, relPath: string): Promise<string[
   }
 }
 
+export interface OversizedFile {
+  readonly path: string;
+  readonly size: number;
+}
+
 export interface ScanResult {
   readonly paths: string[];
   readonly truncated: number;
+  readonly oversized: readonly OversizedFile[];
   readonly metadata: ReadonlyMap<string, FileMetadata>;
   readonly symlinkedDirectories: readonly string[];
 }
@@ -82,7 +88,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
   const errors: IndexingError[] = [];
   const results: Array<{ rel: string; metadata: FileMetadata }> = [];
   const symlinkedDirectories: string[] = [];
-  let truncated = 0;
+  const oversized: OversizedFile[] = [];
   let ignorePatterns = 0;
 
   const limited = (limit: number) => {
@@ -176,7 +182,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
       pending.push(fileGate(async () => {
         let stat;
         try { stat = await fs.stat(abs, { bigint: true }); } catch (error) { fail({ phase: "scan", path: rel, code: "stat-failed" }, error); return; }
-        if (stat.size > BigInt(maximumIndexedFileSizeBytes)) { truncated += 1; return; }
+        if (stat.size > BigInt(maximumIndexedFileSizeBytes)) { oversized.push({ path: rel, size: Number(stat.size) }); return; }
         results.push({ rel, metadata: { size: Number(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs), ino: String(stat.ino), dev: String(stat.dev) } });
       }));
     }
@@ -192,5 +198,6 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
   const paths = results.map((item) => item.rel);
   const metadata = new Map(results.map((item) => [item.rel, item.metadata]));
   symlinkedDirectories.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return { paths, truncated, metadata, symlinkedDirectories };
+  oversized.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { paths, truncated: oversized.length, oversized, metadata, symlinkedDirectories };
 }
