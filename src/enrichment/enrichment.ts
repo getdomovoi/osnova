@@ -186,10 +186,14 @@ async function withWriteLock<T>(root: string, options: LspCacheOptions, operatio
   return result as T;
 }
 
-export async function configureLspEnrichment(root: string, policy: LspPolicy, options: LspCacheOptions = {}): Promise<void> {
+function approval(policy: LspPolicy): string { return digest(canonical(policy)); }
+
+/** Stores the policy and returns its approval, which a later refresh must present to launch it from the cache. */
+export async function configureLspEnrichment(root: string, policy: LspPolicy, options: LspCacheOptions = {}): Promise<string> {
   root = workspaceIdentity(root);
   const validated = validatePolicy(root, policy);
   await serialized(directory(root, options), () => withWriteLock(root, options, () => store(root, "policy.json", validated, options)));
+  return approval(validated);
 }
 
 async function verifySources(index: OsnovaIndex): Promise<LspDiagnostic[]> {
@@ -297,6 +301,7 @@ async function refresh(index: OsnovaIndex, options: LspRefreshOptions): Promise<
     const policy = previous.policy;
     const diagnostics = previous.diagnostics.filter((d) => ["cache-unreadable", "invalid-policy", "invalid-sidecar"].includes(d.code));
     if (!policy) return { ...previous, status: "unavailable", diagnostics: [...diagnostics, { code: "no-policy" }] };
+    if (options.policy === undefined && options.approve !== approval(policy)) return { ...previous, status: "unavailable", diagnostics: [...diagnostics, { code: "policy-not-approved" }] };
     const sourceDiagnostics = await verifySources(index);
     if (sourceDiagnostics.length) return { ...previous, results: [], status: "unavailable", diagnostics: [...diagnostics, ...sourceDiagnostics] };
     const allQueries = new Map(previous.queries.filter((q) => {
