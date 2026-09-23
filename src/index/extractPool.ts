@@ -26,6 +26,7 @@ export type ExtractOne = (absRoot: string, relPath: string) => Promise<Extracted
 export const EXTRACT_POOL_MIN_FILES = 32;
 export const EXTRACT_POOL_REFRESH_MIN_FILES = 64;
 const EXTRACT_POOL_MAX_WORKERS = 8;
+const EXTRACT_POOL_HARD_MAX_WORKERS = EXTRACT_POOL_MAX_WORKERS * 4;
 
 export function extractWorkerCount(fileCount: number, env: NodeJS.ProcessEnv = process.env, minFiles: number = EXTRACT_POOL_MIN_FILES): number {
   const raw = env.OSNOVA_EXTRACT_WORKERS;
@@ -37,7 +38,7 @@ export function extractWorkerCount(fileCount: number, env: NodeJS.ProcessEnv = p
   } else {
     requested = Math.min(os.availableParallelism() - 1, EXTRACT_POOL_MAX_WORKERS);
   }
-  return Math.max(0, Math.min(requested, fileCount));
+  return Math.max(0, Math.min(requested, fileCount, EXTRACT_POOL_HARD_MAX_WORKERS));
 }
 
 function workerScript(): { url: URL; execArgv?: string[] } | undefined {
