@@ -6,7 +6,7 @@ Only the latest published version of `@getdomovoi/osnova` receives fixes.
 
 ## What Osnova does
 
-Osnova reads the files in a workspace, writes an index to one cache directory, and answers queries over stdio or the command line. It performs no network access and sends no telemetry. It never writes inside the workspace. Optional language-server enrichment launches only executables the user names explicitly.
+Osnova reads the files in a workspace, writes an index to one cache directory, and answers queries over stdio or the command line. It sends no telemetry, and the only command that opens a network connection is `osnova update-check`, which asks the npm registry for the latest version number and runs only when you type it. It never writes inside the workspace; the one write outside the cache directory is `osnova setup --apply`, which edits the client configuration files you name under your home directory and backs each one up first. Optional language-server enrichment launches only executables the user names explicitly. [PRIVACY.md](PRIVACY.md) states the same two exceptions from the user's side.
 
 ## Reporting a vulnerability
 
