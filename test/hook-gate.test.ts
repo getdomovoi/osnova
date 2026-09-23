@@ -50,6 +50,7 @@ describe("osnova hook gate", () => {
     await fs.writeFile(path.join(root, "sub", "helper.ts"), "export function helper(): number { return 2; }\n");
     await fs.writeFile(path.join(root, ".hidden", "notes.txt"), "not indexed\n");
     await fs.writeFile(path.join(outside, "notes.txt"), "elsewhere\n");
+    await fs.writeFile(path.join(outside, "my notes.txt"), "elsewhere\n");
     const { buildIndex } = await import("../src/index.js");
     await buildIndex(root, { cacheDir });
     await newTurn();
@@ -103,7 +104,7 @@ describe("osnova hook gate", () => {
   it("still reads a backslash that escapes a space or a quote", async () => {
     const [stage] = shellStages(String.raw`grep -n x /tmp/my\ notes.txt`);
     expect(stage?.words).toEqual(["grep", "-n", "x", "/tmp/my notes.txt"]);
-    expect((await gate(bash(String.raw`grep -n x ${outside}/my\ notes.txt`))).decision).toBeUndefined();
+    expect((await gate(bash(String.raw`grep -n x ${outside}/my\ notes.txt`))).decision, "escaped space, real file").toBeUndefined();
   });
 
   it("allows a command that is not a search", async () => {
