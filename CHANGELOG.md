@@ -24,6 +24,11 @@ The artifact format moves to 13, so the first run after upgrading rebuilds the c
 - A `NOTICE` file ships in the package. It records that the tree-sitter grammar binaries npm installs from `tree-sitter-wasms` are compiled from MIT-licensed grammar projects under a package that declares Unlicense, and that osnova does not redistribute them.
 - The README's type-checker oracle figures now say the version they were measured at, 0.8.0, as `docs/reference.md` already did.
 
+### Fixed
+
+- One process's LRU eviction could delete the `text.bin` and `edges.json` another process was still reading. A loaded artifact reads both sidecars lazily after the workspace lock is released, and eviction only checked locks, so a server that had loaded a workspace answered `cache-read-failed: cache text sidecar missing` until its next refresh. A loader now leaves a lease under `readers/` in the workspace directory; eviction spares a workspace whose lease names a live process and removes the leases of processes that have exited.
+- `loadIndex` reported a lock timeout met while recording access as `cache-read-failed`; it now reports `cache-lock-timeout` with the holder.
+
 ### Added
 
 - An `implements` edge kind. A written `implements` clause on a TypeScript, TSX or JavaScript class was recorded and reported as `extends`, which misstated the relation on the one product property that every edge carries its own basis. It is now its own kind, resolved by the same rule as `extends` (same-file, then imports, filtered to class, interface, struct and trait candidates), stored at wire position 5 so no existing edge renumbers, and counted by coverage as `implements` and `implementsResolved`. The extraction version moves to `structural-9.30`, so the first run after upgrading rebuilds the cache once.
