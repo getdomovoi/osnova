@@ -18,7 +18,7 @@ import type {
   RouteSite,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
-import { validOwner } from "./edgeStore.js";
+import { membersOf, validOwner } from "./edgeStore.js";
 import { OsnovaIndexImpl } from "./indexImpl.js";
 import type { EdgeSource } from "./indexImpl.js";
 import { serializeEdges, deserializeEdges } from "./edgeStore.js";
@@ -40,6 +40,12 @@ import { queriesFingerprint } from "../grammar/queries/index.js";
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
 export const extractionVersion = `structural-9.29.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
+
+const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
+const symbolKinds = membersOf<SymbolKind>({
+  function: true, method: true, class: true, struct: true, interface: true, trait: true, enum: true, type: true, constant: true, module: true,
+});
+const memberKinds = membersOf<MemberKind>({ instance: true, static: true, class: true, property: true, unknown: true });
 
 class ExtractionVersionError extends Error {}
 
@@ -316,14 +322,14 @@ function deserializeBody(
       if (typeof diagnostic !== "object" || diagnostic === null) return true;
       const value = diagnostic as Partial<IndexDiagnostic>;
       return typeof value.path !== "string" || typeof value.code !== "string" ||
-        !["scan", "read", "parse", "cache"].includes(value.phase ?? "");
+        !diagnosticPhases.has(value.phase ?? "");
     })) {
       throw new Error("osnova: corrupt index diagnostic metadata");
     }
     const symbols = file.symbols.map((symbol: SerializedSymbol) => {
       if (typeof symbol !== "object" || symbol === null || !integerIn(symbol.n, 0, names.length - 1) ||
         typeof symbol.q !== "string" || typeof symbol.signature !== "string" ||
-        !["function", "method", "class", "struct", "interface", "trait", "enum", "type", "constant", "module"].includes(symbol.kind) ||
+        !symbolKinds.has(symbol.kind) ||
         typeof symbol.span !== "object" || symbol.span === null || !positiveInteger(symbol.span.s) ||
         !positiveInteger(symbol.span.e) || symbol.span.e < symbol.span.s || symbol.span.e > file.lineCount ||
         !nonnegativeInteger(symbol.span.sc) || !nonnegativeInteger(symbol.span.ec) ||
@@ -332,7 +338,7 @@ function deserializeBody(
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
-      if (symbol.memberKind !== undefined && !["instance", "static", "class", "property", "unknown"].includes(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
+      if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
       if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
         (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||
           ((item as { kind?: unknown }).kind === "import" && typeof (item as { source?: unknown }).source === "string" && typeof (item as { importedName?: unknown }).importedName === "string"))))) {
