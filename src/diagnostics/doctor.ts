@@ -239,9 +239,7 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     "Name-based resolution can be ambiguous or incomplete.",
     "No binding-aware receiver identity or runtime dispatch proof.",
   ];
-  const extraLimitations: Partial<Record<LanguageId, readonly string[]>> = {
-    dart: ["Call edges are not extracted for Dart; the tags query only records definitions."],
-  };
+  const extraLimitations: Partial<Record<LanguageId, readonly string[]>> = {};
   const capabilities: LanguageCapability[] = [];
   for (const language of Object.keys(grammarFile).sort() as LanguageId[]) {
     let status: "ok" | "error" = "ok";
