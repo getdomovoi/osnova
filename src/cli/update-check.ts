@@ -17,6 +17,35 @@ export const updateCheckRegistryUrl = "https://registry.npmjs.org/@getdomovoi/os
 
 const packageName = "@getdomovoi/osnova";
 const defaultTimeoutMs = 5000;
+const maxAnswerBytes = 1_048_576;
+
+// The timeout covers the body as well as the headers, and the answer is capped, so a registry, proxy or
+// captive portal that stalls or streams without end cannot hang the command or grow its memory.
+async function readBounded(response: Response, signal: AbortSignal): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return "";
+  let onAbort = (): void => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error("timed out while reading the answer"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxAnswerBytes) throw new Error(`the answer is larger than ${maxAnswerBytes} bytes`);
+      chunks.push(value);
+    }
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 function releaseParts(version: string): readonly number[] {
   const release = version.split("-", 1)[0] ?? "";
@@ -52,17 +81,28 @@ export async function updateCheck(options: UpdateCheckOptions = {}): Promise<Upd
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let response: Response;
+  let body: unknown;
   try {
-    response = await request(updateCheckRegistryUrl, { signal: controller.signal, headers: { accept: "application/json" } });
-  } catch (cause) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
-    throw new Error(`osnova update-check could not reach the npm registry: ${reason}`);
+    let response: Response;
+    try {
+      response = await request(updateCheckRegistryUrl, { signal: controller.signal, headers: { accept: "application/json" } });
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(`osnova update-check could not reach the npm registry: ${reason}`);
+    }
+    if (!response.ok) {
+      response.body?.cancel().catch(() => {});
+      throw new Error(`osnova update-check: the npm registry answered ${response.status}`);
+    }
+    try {
+      body = JSON.parse(await readBounded(response, controller.signal));
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(`osnova update-check could not read the npm registry answer: ${reason}`);
+    }
   } finally {
     clearTimeout(timer);
   }
-  if (!response.ok) throw new Error(`osnova update-check: the npm registry answered ${response.status}`);
-  const body: unknown = await response.json();
   const latest = typeof body === "object" && body !== null ? (body as { version?: unknown }).version : undefined;
   if (typeof latest !== "string" || latest.length === 0) throw new Error("osnova update-check: the npm registry answer has no version field");
   return { name: packageName, current, latest, outdated: isNewerVersion(latest, current) };

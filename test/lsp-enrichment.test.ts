@@ -41,24 +41,19 @@ describe("opt-in LSP sidecar", () => {
   it("uses the same canonical workspace identity as the structural engine", async () => {
     const f = await setup();
     await fs.writeFile(path.join(f.root, "source.ts"), "export const target = 1;\n");
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const index = await buildIndex(f.root, { cacheDir: f.cacheDir });
     const card = index.files.get("source.ts")!;
-    const result = await refreshLspEnrichment(index, { enabled: true, queries: [{ file: card.path, sourceHash: card.hash, method: "references", position: { line: 0, character: 0 } }], cacheDir: f.cacheDir });
+    const result = await refreshLspEnrichment(index, { enabled: true, approve, queries: [{ file: card.path, sourceHash: card.hash, method: "references", position: { line: 0, character: 0 } }], cacheDir: f.cacheDir });
     expect(result.status, JSON.stringify(result.diagnostics)).toBe("complete");
     expect(result.results).toHaveLength(1);
   });
 
-  it("removes the writer lock even when handle cleanup reports an error", async () => {
+  it("removes the writer lock even when the locked write reports an error", async () => {
     const f = await setup();
-    const open = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
-      const handle = await open(...args);
-      const close = handle.close.bind(handle);
-      vi.spyOn(handle, "close").mockImplementationOnce(async () => { await close(); throw new Error("close failed"); });
-      return handle;
-    });
-    await expect(configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir })).rejects.toThrow(/cache-unavailable/);
+    vi.spyOn(fs, "rename").mockImplementationOnce(async () => { throw Object.assign(new Error("rename failed"), { code: "EIO" }); });
+    await expect(configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir })).rejects.toThrow(/rename failed/);
+    vi.restoreAllMocks();
     await expect(fs.access(path.join(workspaceDirFor(f.cacheDir, f.root), "lsp", "writer.lock"))).rejects.toThrow();
   });
   it("does not mistake an unchanged binary fallback card for stale source", async () => {
@@ -93,12 +88,12 @@ describe("opt-in LSP sidecar", () => {
 
   it("retains valid evidence with subset refresh and recomputes after dependency changes", async () => {
     const f = await setup();
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
-    const a = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
-    const b = await refreshLspEnrichment(f.index, { enabled: true, queries: [], cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const a = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
+    const b = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: [], cacheDir: f.cacheDir });
     expect(b.results).toEqual(a.results);
     expect(b.reused).toBe(8);
-    const staleInput = await refreshLspEnrichment(f.index, { enabled: true, queries: [{ ...f.queries[0]!, sourceHash: hash("obsolete") }], cacheDir: f.cacheDir });
+    const staleInput = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: [{ ...f.queries[0]!, sourceHash: hash("obsolete") }], cacheDir: f.cacheDir });
     expect(staleInput.results).toEqual(a.results);
     expect(staleInput.diagnostics.some((d) => d.code === "stale-query")).toBe(true);
     const old = f.files.get("python.txt")!;
@@ -109,7 +104,7 @@ describe("opt-in LSP sidecar", () => {
     expect(loaded.results).toHaveLength(0);
     expect(loaded.diagnostics.some((d) => d.code === "stale-generation")).toBe(true);
     const updated = f.queries.map((q) => q.file === old.path ? { ...q, sourceHash: hash(text) } : q);
-    const c = await refreshLspEnrichment(f.index, { enabled: true, queries: updated, cacheDir: f.cacheDir });
+    const c = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: updated, cacheDir: f.cacheDir });
     expect(c.status).toBe("complete");
     expect(c.results).toHaveLength(8);
     expect(c.reused).toBe(0);
@@ -142,12 +137,12 @@ describe("opt-in LSP sidecar", () => {
 
   it("preserves partial evidence on failed retries and discloses stored failures on load", async () => {
     const f = await setup("partial");
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
-    const first = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const first = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
     expect(first.status).toBe("partial");
     expect(first.results).toHaveLength(8);
     for (const language of languages) await fs.writeFile(path.join(f.cacheDir, `${language}.log.fail`), "fail");
-    const retry = await refreshLspEnrichment(f.index, { enabled: true, cacheDir: f.cacheDir });
+    const retry = await refreshLspEnrichment(f.index, { enabled: true, approve, cacheDir: f.cacheDir });
     expect(retry.results).toEqual(first.results);
     expect(retry.diagnostics.some((d) => d.code === "rpc-error")).toBe(true);
     const loaded = await loadLspEnrichment(f.index, { cacheDir: f.cacheDir });
@@ -158,8 +153,8 @@ describe("opt-in LSP sidecar", () => {
   it("keeps missing-language failure visible after load", async () => {
     const f = await setup();
     const policy = { ...f.policy, servers: f.policy.servers.slice(0, 1) };
-    await configureLspEnrichment(f.root, policy, { cacheDir: f.cacheDir });
-    expect((await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir })).status).toBe("partial");
+    const approve = await configureLspEnrichment(f.root, policy, { cacheDir: f.cacheDir });
+    expect((await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir })).status).toBe("partial");
     const loaded = await loadLspEnrichment(f.index, { cacheDir: f.cacheDir });
     expect(loaded.status).toBe("partial");
     expect(loaded.diagnostics.filter((d) => d.code === "no-server")).toHaveLength(7);
@@ -176,16 +171,16 @@ describe("opt-in LSP sidecar", () => {
 
   it("accepts definition links and invalidates deleted targets and renamed sources", async () => {
     const f = await setup("link");
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const queries = f.queries.map((q) => ({ ...q, method: "definition" as const }));
-    const first = await refreshLspEnrichment(f.index, { enabled: true, queries, cacheDir: f.cacheDir });
+    const first = await refreshLspEnrichment(f.index, { enabled: true, approve, queries, cacheDir: f.cacheDir });
     expect(first.results).toHaveLength(8);
     expect(first.results.every((r) => r.locations.length === 1)).toBe(true);
     const old = f.files.get("python.txt")!;
     await fs.rename(path.join(f.root, old.path), path.join(f.root, "renamed.txt"));
     f.files.delete(old.path);
     f.files.set("renamed.txt", { ...old, path: "renamed.txt" });
-    const next = await refreshLspEnrichment(f.index, { enabled: true, queries: [{ ...queries.find((q) => q.file === old.path)!, file: "renamed.txt" }], cacheDir: f.cacheDir });
+    const next = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: [{ ...queries.find((q) => q.file === old.path)!, file: "renamed.txt" }], cacheDir: f.cacheDir });
     expect(next.results).toHaveLength(8);
     expect(next.results.some((r) => r.query.file === old.path)).toBe(false);
     expect(next.results.some((r) => r.query.file === "renamed.txt")).toBe(true);
@@ -195,13 +190,13 @@ describe("opt-in LSP sidecar", () => {
   it("contains corrupt caches, rejects relative launches, and never writes outside cache", async () => {
     const f = await setup();
     await expect(configureLspEnrichment(f.root, { version: 1, servers: [{ ...f.policy.servers[0]!, executable: "node" }] }, { cacheDir: f.cacheDir })).rejects.toThrow("invalid-policy");
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const dir = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp");
     await fs.writeFile(path.join(dir, "results.json"), "{");
     const loaded = await loadLspEnrichment(f.index, { cacheDir: f.cacheDir });
     expect(loaded.status).toBe("unavailable");
     expect(loaded.diagnostics.some((d) => d.code === "cache-unreadable")).toBe(true);
-    const recovered = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
+    const recovered = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
     expect(recovered.results).toHaveLength(8);
     expect((await fs.readdir(f.root)).sort()).toEqual([...f.files.keys()].sort());
     const blocked = path.join(f.cacheDir, "not-a-directory");
@@ -213,10 +208,10 @@ describe("opt-in LSP sidecar", () => {
 
   it("rejects competing writers without deleting their lock or launching servers", async () => {
     const f = await setup();
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const lock = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp/writer.lock");
     await fs.writeFile(lock, "owned elsewhere");
-    const result = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
+    const result = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
     expect(result.diagnostics.some((d) => d.code === "cache-busy")).toBe(true);
     expect(await fs.readFile(lock, "utf8")).toBe("owned elsewhere");
     await expect(fs.access(path.join(f.cacheDir, "typescript.log"))).rejects.toThrow();
@@ -224,35 +219,37 @@ describe("opt-in LSP sidecar", () => {
 
   it("reclaims a writer lock whose owning process has exited", async () => {
     const f = await setup();
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const lock = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp/writer.lock");
     const exited = spawnSync(process.execPath, ["-e", ""]);
-    await fs.writeFile(lock, JSON.stringify({ pid: exited.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000000" }));
-    const result = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, "owner.json"), JSON.stringify({ pid: exited.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000000" }));
+    const result = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
     expect(result.status, JSON.stringify(result.diagnostics)).toBe("complete");
     await expect(fs.access(lock)).rejects.toThrow();
   });
 
   it("keeps a writer lock whose owning process is still alive", async () => {
     const f = await setup();
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const lock = path.join(workspaceDirFor(f.cacheDir, f.root), "lsp/writer.lock");
     const owner = JSON.stringify({ pid: process.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000001" });
-    await fs.writeFile(lock, owner);
-    const result = await refreshLspEnrichment(f.index, { enabled: true, queries: f.queries, cacheDir: f.cacheDir });
+    await fs.mkdir(lock);
+    await fs.writeFile(path.join(lock, "owner.json"), owner);
+    const result = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: f.queries, cacheDir: f.cacheDir });
     expect(result.diagnostics.some((d) => d.code === "cache-busy")).toBe(true);
-    expect(await fs.readFile(lock, "utf8")).toBe(owner);
+    expect(await fs.readFile(path.join(lock, "owner.json"), "utf8")).toBe(owner);
   });
 
   it("bounds requests per server without starving later languages and retries failures", async () => {
     const f = await setup();
     const policy = { ...f.policy, limits: { maxRequests: 2 } };
-    await configureLspEnrichment(f.root, policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, policy, { cacheDir: f.cacheDir });
     const queries = [...f.queries, { ...f.queries[0]!, position: { line: 0, character: 1 } }];
-    const result = await refreshLspEnrichment(f.index, { enabled: true, queries, cacheDir: f.cacheDir });
+    const result = await refreshLspEnrichment(f.index, { enabled: true, approve, queries, cacheDir: f.cacheDir });
     expect(result.results).toHaveLength(8);
     expect(result.diagnostics.some((d) => d.code === "request-limit")).toBe(true);
-    const retry = await refreshLspEnrichment(f.index, { enabled: true, cacheDir: f.cacheDir });
+    const retry = await refreshLspEnrichment(f.index, { enabled: true, approve, cacheDir: f.cacheDir });
     expect(retry.status).toBe("complete");
     expect(retry.results).toHaveLength(9);
     expect(retry.reused).toBe(8);
@@ -267,28 +264,28 @@ describe("opt-in LSP sidecar", () => {
     f.files.delete(old.path);
     f.files.set(`pkg/${old.path}`, { ...old, path: `pkg/${old.path}` });
     const policy = { ...f.policy, servers: [...f.policy.servers, { ...f.policy.servers[0]!, id: "nested", workspace: nested, args: [worker] }] };
-    await configureLspEnrichment(f.root, policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, policy, { cacheDir: f.cacheDir });
     const queries = f.queries.map((q) => q.file === old.path ? { ...q, file: `pkg/${old.path}` } : q);
-    const first = await refreshLspEnrichment(f.index, { enabled: true, queries, cacheDir: f.cacheDir, baseGeneration: "generation-a" });
+    const first = await refreshLspEnrichment(f.index, { enabled: true, approve, queries, cacheDir: f.cacheDir, baseGeneration: "generation-a" });
     expect(first.results).toHaveLength(9);
     const loaded = await loadLspEnrichment(f.index, { cacheDir: f.cacheDir, baseGeneration: "generation-b" });
     expect(loaded.results).toHaveLength(0);
-    const next = await refreshLspEnrichment(f.index, { enabled: true, cacheDir: f.cacheDir, baseGeneration: "generation-b" });
+    const next = await refreshLspEnrichment(f.index, { enabled: true, approve, cacheDir: f.cacheDir, baseGeneration: "generation-b" });
     expect(next.results).toHaveLength(9);
     expect(next.reused).toBe(0);
   });
 
   it("releases obsolete query slots after source edits without reusing old offsets", async () => {
     const f = await setup();
-    await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
+    const approve = await configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir });
     const q = f.queries[0]!;
-    await refreshLspEnrichment(f.index, { enabled: true, queries: [q], cacheDir: f.cacheDir });
+    await refreshLspEnrichment(f.index, { enabled: true, approve, queries: [q], cacheDir: f.cacheDir });
     const card = f.files.get(q.file)!;
     const text = "target changed offsets";
     await fs.writeFile(path.join(f.root, q.file), text);
     f.files.set(q.file, { ...card, text, hash: hash(text), size: text.length });
     const moved = { ...q, sourceHash: hash(text), position: { line: 0, character: 1 } };
-    const result = await refreshLspEnrichment(f.index, { enabled: true, queries: [moved], cacheDir: f.cacheDir });
+    const result = await refreshLspEnrichment(f.index, { enabled: true, approve, queries: [moved], cacheDir: f.cacheDir });
     expect(result.results).toHaveLength(1);
     expect(result.queries).toEqual([moved]);
     expect(result.diagnostics.some((d) => d.code === "stale-query")).toBe(true);
