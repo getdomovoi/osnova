@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchPaths, parseJsonc, tsConfigDiagnostics } from "../src/index/tsconfig.js";
+import { matchPaths, parseJsonc, tsConfigDiagnostics, wildcardIndex } from "../src/index/tsconfig.js";
 
 function referenceMatchPaths(paths: ReadonlyMap<string, readonly string[]>, spec: string): readonly string[] | "ambiguous" | undefined {
   const exact = paths.get(spec);
@@ -32,9 +32,19 @@ describe("matchPaths", () => {
   it("walks the paths map once per config, not once per specifier", () => {
     const paths = new CountingMap<string, readonly string[]>();
     for (let i = 0; i < 2000; i += 1) paths.set(`@m${i}/*`, [`lib/m${i}/*`]);
-    for (let i = 0; i < 2000; i += 1) expect(matchPaths(paths, `@m${i}/x`)).toEqual([`lib/m${i}/x`]);
-    expect(matchPaths(paths, "@none/x")).toBeUndefined();
+    const wildcards = wildcardIndex(paths);
+    for (let i = 0; i < 2000; i += 1) expect(matchPaths(paths, `@m${i}/x`, wildcards)).toEqual([`lib/m${i}/x`]);
+    expect(matchPaths(paths, "@none/x", wildcards)).toBeUndefined();
     expect(paths.walks).toBeLessThanOrEqual(1);
+  });
+
+  it("never answers from a stale view of a map that changed between lookups", () => {
+    const paths = new Map<string, readonly string[]>([["@a/*", ["a/*"]]]);
+    expect(matchPaths(paths, "@a/x")).toEqual(["a/x"]);
+    paths.delete("@a/*");
+    paths.set("@b/*", ["b/*"]);
+    expect(matchPaths(paths, "@a/x")).toBeUndefined();
+    expect(matchPaths(paths, "@b/x")).toEqual(["b/x"]);
   });
 
   it("agrees with the linear scan on exact keys, longest prefix, suffixes, overlap and ties", () => {
