@@ -49,21 +49,12 @@ function resolveTargets(index: OsnovaIndex, symbol: string): OsnovaSymbol[] {
   return candidates;
 }
 
-export function callers(
-  index: OsnovaIndex,
-  symbol: string,
-  options?: { direction?: EdgeDirection; depth?: number },
-): CallersResult {
-  const target = resolveTargets(index, symbol)[0] as OsnovaSymbol;
-  const { hits } = walkCallers(index, target, options);
-  return { target, hits: hits.map(({ edge: _edge, ...hit }) => hit) };
+interface CallerWalk {
+  readonly direction: EdgeDirection;
+  readonly depth: number;
 }
 
-export function callersDetailed(
-  index: OsnovaIndex,
-  symbol: string,
-  options?: CallersOptions,
-): CallersDetailedResult {
+function checkCallerOptions(options: CallersOptions | undefined): CallerWalk {
   const depth = options?.depth ?? 1;
   const direction = options?.direction ?? "in";
   if (!Number.isSafeInteger(depth) || depth < 1) {
@@ -72,6 +63,26 @@ export function callersDetailed(
   if (direction !== "in" && direction !== "out") {
     throw new RangeError("osnova: caller direction must be in or out");
   }
+  return { direction, depth };
+}
+
+export function callers(
+  index: OsnovaIndex,
+  symbol: string,
+  options?: CallersOptions,
+): CallersResult {
+  const walk = checkCallerOptions(options);
+  const target = resolveTargets(index, symbol)[0] as OsnovaSymbol;
+  const { hits } = walkCallers(index, target, walk);
+  return { target, hits: hits.map(({ edge: _edge, ...hit }) => hit) };
+}
+
+export function callersDetailed(
+  index: OsnovaIndex,
+  symbol: string,
+  options?: CallersOptions,
+): CallersDetailedResult {
+  const { direction, depth } = checkCallerOptions(options);
   const candidates = resolveTargets(index, symbol);
   if (candidates.length > 1) return { status: "ambiguous", candidates };
   const target = candidates[0] as OsnovaSymbol;
@@ -100,11 +111,8 @@ export function unresolvedCallsByName(index: OsnovaIndex): Map<string, OsnovaEdg
 function walkCallers(
   index: OsnovaIndex,
   target: OsnovaSymbol,
-  options?: CallersOptions,
+  { direction, depth }: CallerWalk,
 ): { hits: CallerEvidenceHit[]; unresolved: UnresolvedCallerEdge[] } {
-  const direction = options?.direction ?? "in";
-  const depth = Math.max(1, options?.depth ?? 1);
-
   const hits: CallerEvidenceHit[] = [];
   const unresolved: UnresolvedCallerEdge[] = [];
   const seenUnresolved = new Set<OsnovaEdge>();

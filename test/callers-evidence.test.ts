@@ -71,6 +71,15 @@ describe("caller evidence", () => {
     expect(() => callersDetailed(index, "work", { depth })).toThrow(RangeError);
   });
 
+  it.each([0, -1, 1.5, NaN, Infinity])("rejects invalid depth %s from callers instead of answering", (depth) => {
+    expect(() => callers(index, "a.ts#work", { depth })).toThrow(RangeError);
+  });
+
+  it("rejects an unknown direction from both entry points instead of walking callees", () => {
+    expect(() => callers(index, "caller.ts#entry", { direction: "sideways" as never })).toThrow(RangeError);
+    expect(() => callersDetailed(index, "caller.ts#entry", { direction: "sideways" as never })).toThrow(RangeError);
+  });
+
   it("retains an error for missing symbols", () => {
     expect(() => callersDetailed(index, "missing")).toThrow(/no indexed symbol/);
   });
