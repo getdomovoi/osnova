@@ -25,7 +25,7 @@ import { serializeEdges, deserializeEdges } from "./edgeStore.js";
 import type { EdgeLayout } from "./edgeStore.js";
 import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits, recordReader } from "../cache/cache.js";
 import type { CachePolicy } from "../cache/cache.js";
-import { withCacheLock } from "../cache/lock.js";
+import { cacheLockTimeoutIn, withCacheLock } from "../cache/lock.js";
 import type { LockOptions } from "../cache/lock.js";
 import { IndexingError, SectionError } from "./diagnostics.js";
 import { bindIndexGeneration, rememberIndexGeneration } from "./generation.js";
@@ -575,6 +575,8 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
       });
       return bindIndexCache(index, cacheDir);
     } catch (error) {
+      const timeout = cacheLockTimeoutIn(error);
+      if (timeout !== undefined) throw timeout;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       if (error instanceof ArtifactVersionError && typeof error.version === "number" &&
         Number.isInteger(error.version) && error.version > 0 && error.version < indexFormatVersion) return undefined;

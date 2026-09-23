@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildIndex, loadIndex } from "../src/index.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
+import { withCacheLock } from "../src/cache/lock.js";
 import type { OsnovaIndexImpl } from "../src/index/indexImpl.js";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -71,6 +72,16 @@ describe("reader leases", () => {
     publishElsewhere(cacheDir, b);
     await expect(fs.stat(path.join(dirA, "text.bin"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(path.join(dirA, "readers", `${dead}.json`))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports a busy eviction lock met while loading as cache-lock-timeout, not cache-read-failed", async () => {
+    const { cacheDir, a } = await scratch();
+    await buildIndex(a, { cacheDir });
+    const busy = path.join(cacheDir, ".eviction.lock");
+    await fs.mkdir(busy);
+    await fs.writeFile(path.join(busy, "owner.json"), JSON.stringify({ pid: process.pid, host: os.hostname(), token: "00000000-0000-4000-8000-000000000001" }));
+    const load = withCacheLock(path.join(cacheDir, "unrelated.lock"), () => loadIndex(a, { cacheDir }), { lockTimeoutMs: 50, lockPollMs: 5 });
+    await expect(load).rejects.toMatchObject({ diagnostic: { code: "cache-lock-timeout", path: busy } });
   });
 
   it("still evicts an unread workspace, so the cap holds when nothing is in use", async () => {

@@ -7,6 +7,8 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 ### Fixed
 
 - One process's LRU eviction could delete the `text.bin` and `edges.json` another process was still reading. A loaded artifact reads both sidecars lazily after the workspace lock is released, and eviction only checked locks, so a server that had loaded a workspace answered `cache-read-failed: cache text sidecar missing` until its next refresh. A loader now leaves a lease under `readers/` in the workspace directory; eviction spares a workspace whose lease names a live process and removes the leases of processes that have exited.
+- `loadIndex` reported a lock timeout met while recording access as `cache-read-failed`; it now reports `cache-lock-timeout` with the holder.
+
 
 
 ## 0.8.1 (2026-09-22)
