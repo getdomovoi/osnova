@@ -1,3 +1,4 @@
+import { maximumIndexedFileSizeBytes } from "../types.js";
 import type { OsnovaIndex } from "../types.js";
 import { indexGeneration } from "../api.js";
 import { compareText } from "./impact.js";
@@ -29,11 +30,18 @@ export interface LanguageCoverage {
   readonly byExternal: Readonly<Record<string, number>>;
 }
 
+export interface OversizedFileCoverage {
+  readonly path: string;
+  readonly size: number;
+  readonly limitBytes: number;
+}
+
 export interface CoverageReport {
   readonly generation: string;
   readonly languages: readonly LanguageCoverage[];
   readonly total: LanguageCoverage;
   readonly diagnostics: Readonly<Record<string, number>>;
+  readonly oversizedFiles: readonly OversizedFileCoverage[];
   readonly limitations: readonly string[];
 }
 
@@ -101,8 +109,12 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
   const languages = [...perLanguage].sort(([a], [b]) => compareText(a, b)).map(([language, row]) => finish(language, row));
   const diagnostics = new Map<string, number>();
   for (const diagnostic of index.diagnostics ?? [{ phase: "cache", code: "health-unverified" }]) bump(diagnostics, `${diagnostic.phase}/${diagnostic.code}`);
+  const oversizedFiles = [...index.files.values()]
+    .filter((card) => card.diagnostics?.some((diagnostic) => diagnostic.phase === "scan" && diagnostic.code === "file-too-large"))
+    .map((card) => ({ path: card.path, size: card.size, limitBytes: maximumIndexedFileSizeBytes }))
+    .sort((a, b) => compareText(a.path, b.path));
   return {
-    generation: indexGeneration(index), languages, total: finish("all", total), diagnostics: sortedRecord(diagnostics),
+    generation: indexGeneration(index), languages, total: finish("all", total), diagnostics: sortedRecord(diagnostics), oversizedFiles,
     limitations: ["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges", "unbound-global-calls-are-names-with-no-binding-in-the-file"],
   };
 }

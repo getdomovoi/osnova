@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { isUtf8 } from "node:buffer";
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
 import ignore from "ignore";
 import type { Ignore } from "ignore";
@@ -31,6 +31,13 @@ export const DEFAULT_SKIP_DIRS = new Set([
 
 export function sha256Hex(data: Buffer | string): string {
   return createHash("sha256").update(data).digest("hex");
+}
+
+export async function sha256File(absPath: string): Promise<{ hash: string; size: number }> {
+  const hash = createHash("sha256");
+  let size = 0;
+  for await (const chunk of createReadStream(absPath)) { hash.update(chunk as Buffer); size += (chunk as Buffer).length; }
+  return { hash: hash.digest("hex"), size };
 }
 
 export function sourceText(buffer: Buffer): string | null {
@@ -182,7 +189,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
       pending.push(fileGate(async () => {
         let stat;
         try { stat = await fs.stat(abs, { bigint: true }); } catch (error) { fail({ phase: "scan", path: rel, code: "stat-failed" }, error); return; }
-        if (stat.size > BigInt(maximumIndexedFileSizeBytes)) { oversized.push({ path: rel, size: Number(stat.size) }); return; }
+        if (stat.size > BigInt(maximumIndexedFileSizeBytes)) oversized.push({ path: rel, size: Number(stat.size) });
         results.push({ rel, metadata: { size: Number(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs), ino: String(stat.ino), dev: String(stat.dev) } });
       }));
     }

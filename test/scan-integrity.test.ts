@@ -15,7 +15,7 @@ async function workspace(): Promise<string> {
 }
 afterEach(async () => { await Promise.all(temporary.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
 
-it("names every file skipped for exceeding the indexed size cap, with its size", async () => {
+it("names every file above the indexed size cap, with its size, and keeps it in the scan", async () => {
   const root = await workspace();
   await fs.writeFile(path.join(root, "small.ts"), "export const a = 1;\n");
   await fs.writeFile(path.join(root, "nested/big.ts"), "x".repeat(maximumIndexedFileSizeBytes + 1));
@@ -24,7 +24,7 @@ it("names every file skipped for exceeding the indexed size cap, with its size",
   await fs.writeFile(path.join(root, "ignored.ts"), "w".repeat(maximumIndexedFileSizeBytes + 1));
   await fs.writeFile(path.join(root, ".gitignore"), "ignored.ts\n");
   const scan = await scanFiles(root);
-  expect(scan.paths).toEqual(["edge.ts", "small.ts"]);
+  expect(scan.paths).toEqual(["big.js", "edge.ts", "nested/big.ts", "small.ts"]);
   expect(scan.oversized).toEqual([
     { path: "big.js", size: maximumIndexedFileSizeBytes + 7 },
     { path: "nested/big.ts", size: maximumIndexedFileSizeBytes + 1 },
