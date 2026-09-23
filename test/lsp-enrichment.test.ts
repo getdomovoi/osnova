@@ -51,7 +51,20 @@ describe("opt-in LSP sidecar", () => {
 
   it("removes the writer lock even when the locked write reports an error", async () => {
     const f = await setup();
-    vi.spyOn(fs, "rename").mockImplementationOnce(async () => { throw Object.assign(new Error("rename failed"), { code: "EIO" }); });
+    const rename = fs.rename.bind(fs);
+    // Taking the cache lock is itself a rename of the staged lock directory into place, so failing
+    // whichever rename comes first would fail the acquisition rather than the write this test is
+    // about. Matched by suffix: on macOS the temporary root reaches the call as /private/var while
+    // the path built here says /var, and path.resolve does not reconcile the two.
+    const lockSuffix = path.join("lsp", "writer.lock");
+    let failures = 1;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (failures > 0 && !String(to).endsWith(lockSuffix)) {
+        failures -= 1;
+        throw Object.assign(new Error("rename failed"), { code: "EIO" });
+      }
+      return rename(from, to);
+    });
     await expect(configureLspEnrichment(f.root, f.policy, { cacheDir: f.cacheDir })).rejects.toThrow(/rename failed/);
     vi.restoreAllMocks();
     await expect(fs.access(path.join(workspaceDirFor(f.cacheDir, f.root), "lsp", "writer.lock"))).rejects.toThrow();
