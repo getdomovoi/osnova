@@ -364,7 +364,8 @@ function termDocumentCounts(file: string, card: FileCard, terms: readonly string
 
 // The context for a question scoped to a path: documents for files inside the scope only, with the
 // document frequency of each query term, the document count and the average length still taken over
-// the whole repository, so every score equals the one the unscoped context gives.
+// the whole repository, so every score equals the one the unscoped context gives. When the whole
+// context is already built it is returned as is, so callers still filter documents by the scope.
 export function scopedQueryContext(index: OsnovaIndex, scope: string, terms: readonly string[]): QueryContext {
   const cached = contextCache.get(index);
   if (cached !== undefined || scope.length === 0) return cached ?? queryContext(index);
