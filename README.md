@@ -6,7 +6,7 @@
 
 # Osnova
 
-[![npm version](https://img.shields.io/npm/v/%40getdomovoi%2Fosnova)](https://www.npmjs.com/package/@getdomovoi/osnova) [![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![ci](https://img.shields.io/github/actions/workflow/status/getdomovoi/osnova/ci.yml?branch=main&label=ci)](https://github.com/getdomovoi/osnova/actions/workflows/ci.yml) [![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen)](package.json)
+[![npm version](https://img.shields.io/npm/v/%40getdomovoi%2Fosnova)](https://www.npmjs.com/package/@getdomovoi/osnova) [![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![ci](https://img.shields.io/github/actions/workflow/status/getdomovoi/osnova/ci.yml?branch=main&label=ci)](https://github.com/getdomovoi/osnova/actions/workflows/ci.yml) [![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen)](package.json) [![M8ven Verified](https://m8ven.ai/badge/mcp/getdomovoi-osnova-2032ih?variant=verified)](https://m8ven.ai/mcp/getdomovoi-osnova-2032ih)
 
 **A deterministic code map for AI coding agents.** Osnova indexes a repository into a symbol and call graph with tree-sitter, then serves it to any MCP client or from the command line. Same input, same output, byte for byte. No embeddings, no telemetry, and no network connection unless you type `osnova update-check`. Twenty languages, seven of them (TypeScript, JavaScript, Python, Go, Rust, Java, C#) with deep adapters.
 

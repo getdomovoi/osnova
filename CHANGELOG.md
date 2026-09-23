@@ -32,6 +32,7 @@ The extraction version moves to `structural-9.30` and the artifact format to 13,
 
 ### Changed
 
+- The declared range of `@modelcontextprotocol/sdk` is `^1.30.0`. Installs already resolved 1.30.0; the old floor of 1.12.0 was what dependency scanners read, and it carries advisories that never shipped.
 - `pnpm test` and `pnpm perf` build first, so no test can pass against a stale `dist/`; the 28 CLI and MCP tests each get their own workspace and cache and can run alone; `scripts/perf.mjs` generates 642 files across TypeScript, Python and Go plus the 20-language fixture (16,657 symbols, 40,162 edges), gates peak resident memory instead of `heapUsed`, fails if a cold `ground` query or a no-change refresh loads the edge section, and takes the best of five samples for the scan metric, since a single sample on a shared runner swung 6.2x on identical code while a real one-millisecond slowdown per path still fails the gate at 936 percent of budget. CI adds a job on the declared Node floor, 22.13.0.
 - The release workflow is two jobs. `verify` runs every gate with read-only permissions and packs the tarball; `publish` holds the write and provenance permissions, installs nothing, and publishes that tarball. `npm install -g npm@latest` before a trusted publish is gone, every action in every workflow is pinned to a commit SHA, and the checkout no longer persists its token. A step in the pull request `settle` workflow fails a change that touches `src/extract/`, `src/grammar/` or `src/index/scan.ts` without moving `extractionVersion`, because a missed bump served stale caches whose hashes all still verified; `scripts/extraction-version-guard.mjs <base-ref>` runs it by hand.
 - The eleven runtime validator lists that hand-copied TypeScript unions are derived from them, so a new union member is a compile error at the validator rather than an artifact the reader rejects as corrupt right after the writer produced it. The stored order of edge kinds is written down as explicit ordinals and pinned by a test, since that order is the on-disk encoding.
@@ -39,6 +40,9 @@ The extraction version moves to `structural-9.30` and the artifact format to 13,
 - The GitHub Action runs the osnova version of the action ref you use, so `getdomovoi/osnova@v0.8.1` runs osnova 0.8.1 on every run instead of whatever npm published last. `version: latest` floats on purpose. `scripts/settle-ci.sh` resolves the version and prints it under `OSNOVA_PRINT_COMMAND=1`.
 - A `NOTICE` file ships in the package. It records that the tree-sitter grammar binaries npm installs from `tree-sitter-wasms` are compiled from MIT-licensed grammar projects under a package that declares Unlicense, and that osnova does not redistribute them.
 - The README's type-checker oracle figures now say the version they were measured at, 0.8.0, as `docs/reference.md` already did.
+- Every MCP tool declares its annotation hints: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`. All ten read the index and write nothing, and clients and directories read these hints to decide what a tool may do. A test lists the tools over an in-memory transport and holds every one to those four values.
+
+
 
 ### Added
 

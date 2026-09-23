@@ -55,6 +55,7 @@ const mcpGenerationDigits = 16;
 const toolDefinitions = [
   {
     name: "osnova_ground",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Use lean=true when you only need where things are: it keeps file:line, kind, definition span and signature and drops the source lines. Start here when you do not know where code lives. A verb and path (GET /users) finds the route registration and its handler for Express, NestJS, Flask and FastAPI.",
     inputSchema: {
@@ -71,6 +72,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_thread",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Text search: regex or literal matches over indexed text, grouped by the enclosing definition and ranked by how much else depends on it. Shows up to 10 matches per group and 50 groups by default (limit raises the group cap); totals and omission counts are exact, so you know what was left out.",
     inputSchema: {
@@ -87,6 +89,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_outline",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: "Outline: the definitions of one file with signature and line span, selected by connectivity to fit 4096 code units, with an exact count of any omitted. Use instead of reading a whole file to learn its shape; read only the span you need afterwards.",
     inputSchema: {
       type: "object" as const,
@@ -98,6 +101,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_warp",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Call graph: who calls a symbol (direction=in, default) or what it calls (direction=out), with exact call-site file:line. Accepts file#Class.method, Class.method or a bare name. Use before changing a signature or deleting code. An empty list means no indexed caller, not proof that none exists.",
     inputSchema: {
@@ -113,6 +117,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_groundwork",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Repository map: directory clusters, hubs and hotspots in under 2048 code units. Use once when the repository is unfamiliar; do not follow it with an outline of every directory.",
     inputSchema: {
@@ -124,6 +129,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_footing",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Task context: for one task, the seed definitions (inlined when 40 lines or shorter), the callers and callees that connect them, and the test files that touch them, under 4096 code units with exact omission counts. Use once at the start of a change or review that spans more than one file; for a single known symbol use ground or warp instead.",
     inputSchema: {
@@ -141,6 +147,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_settle",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Without baseRef it compares against the current index only, so deleted symbols are not visible; with baseRef (a git commit or ref) it indexes that commit's tree under the cache and compares it with the current index, computing the diff with git when none is given.",
     inputSchema: {
@@ -154,6 +161,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_plumb",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Check claims: given a symbol and a list of path:line call sites an agent believes depend on it, says which are confirmed by the index, which are name matches only, which have no call, and which indexed dependents were left out. Use before declaring a caller list complete. Confirmed means an indexed resolved edge, not runtime proof.",
     inputSchema: {
@@ -169,6 +177,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_tests",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Tests: given symbols, the indexed test files for each one in two separate tiers with separate counts: files with a resolved call or reference edge to the symbol (exact file:line and resolution basis), then files that only import the symbol's file and contain no indexed call or reference to it. An empty resolved tier is stated on its own line; import-only files are leads, not tests of the symbol. Given one test file, the non-test symbols it calls and the files it imports. Exactly one of symbols or file. Use before editing to find the tests to run. No indexed test is not proof of no test, and a listed test is not coverage.",
     inputSchema: {
@@ -183,6 +192,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_unreferenced",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
     inputSchema: {
