@@ -14,8 +14,8 @@ inputs:
     description: Repository root to index.
     default: "."
   version:
-    description: Osnova version to run through npx. Ignored when command is set.
-    default: latest
+    description: Osnova version to run through npx. Defaults to the version of the action ref you use, so getdomovoi/osnova@v0.8.1 runs osnova 0.8.1; set "latest" to float on purpose. Ignored when command is set.
+    default: ""
   command:
     description: Command that runs osnova. Overrides version, for example "node dist/bin.js" when testing this repository.
     default: ""
@@ -32,7 +32,8 @@ runs:
     - id: settle
       shell: bash
       env:
-        OSNOVA: ${{ inputs.command != '' && inputs.command || format('npx -y @getdomovoi/osnova@{0}', inputs.version) }}
+        OSNOVA: ${{ inputs.command }}
+        OSNOVA_VERSION: ${{ inputs.version }}
         BASE_REF: ${{ inputs.base-ref }}
         DEPTH: ${{ inputs.depth }}
         WORKSPACE: ${{ inputs.workspace }}

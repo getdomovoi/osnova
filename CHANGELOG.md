@@ -12,6 +12,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 - The unused changesets machinery: the `changeset` script, the `@changesets/cli` development dependency and `.changeset/config.json`. Releases are the hand-written changelog plus the tag workflow, and nothing read a changeset.
 
+### Changed
+
+- The GitHub Action runs the osnova version of the action ref you use, so `getdomovoi/osnova@v0.8.1` runs osnova 0.8.1 on every run instead of whatever npm published last. `version: latest` floats on purpose. `scripts/settle-ci.sh` resolves the version and prints it under `OSNOVA_PRINT_COMMAND=1`.
+
 ## 0.8.1 (2026-09-22)
 
 The extraction version moves to `structural-9.28`, so the first run after upgrading rebuilds the cache once.
