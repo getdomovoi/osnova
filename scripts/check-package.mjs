@@ -78,7 +78,10 @@ async function installedPackage(from, name) {
 export async function runtimePackages(root) {
   const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const found = new Map();
-  const pending = Object.keys(manifest.dependencies ?? {}).map((name) => ({ from: root, name, optional: false }));
+  const pending = [
+    ...Object.keys(manifest.dependencies ?? {}).map((name) => ({ from: root, name, optional: false })),
+    ...Object.keys(manifest.optionalDependencies ?? {}).map((name) => ({ from: root, name, optional: true })),
+  ];
   while (pending.length > 0) {
     const { from, name, optional } = pending.pop();
     const dir = await installedPackage(from, name);
