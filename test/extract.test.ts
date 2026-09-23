@@ -677,15 +677,15 @@ describe("inheritance edges", () => {
     "",
   ].join("\n");
 
-  const heritage = (built: OsnovaIndex, file: string): string[] =>
-    built.edges.filter((e) => e.fromFile === file && e.kind === "extends")
+  const heritage = (built: OsnovaIndex, file: string, kind: "extends" | "implements" = "extends"): string[] =>
+    built.edges.filter((e) => e.fromFile === file && e.kind === kind)
       .map((e) => {
         const resolution = e.evidence?.source === "syntax" ? e.evidence.resolution : undefined;
         const basis = resolution?.status === "resolved" ? resolution.method : resolution?.status === "unresolved" ? `unresolved:${resolution.reason}` : resolution?.status ?? "?";
         return `${e.line}:${e.fromSymbol}->${e.toName}=${e.toSymbol ?? "unresolved"}[${basis}]`;
       });
 
-  it("records typescript extends and implements clauses as extends edges", async () => {
+  it("records typescript extends clauses as extends edges and implements clauses as implements edges", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-extends-ts-"));
     try {
       fs.writeFileSync(path.join(dir, "lib.ts"), tsLib);
@@ -694,14 +694,18 @@ describe("inheritance edges", () => {
       expect(built.diagnostics ?? []).toEqual([]);
       expect(heritage(built, "main.ts")).toEqual([
         "3:main.ts#Leaf->Base=lib.ts#Base[import-binding]",
-        "3:main.ts#Leaf->Closer=lib.ts#Closer[import-binding]",
-        "3:main.ts#Leaf->Reader=lib.ts#Reader[import-binding]",
         "8:main.ts#Both->Closer=lib.ts#Closer[import-binding]",
         "8:main.ts#Both->Reader=lib.ts#Reader[import-binding]",
         "11:main.ts#Near->Local=main.ts#Local[lexical-definition]",
         "12:main.ts#Ambient->Error=unresolved[unresolved:unbound-global]",
       ]);
+      expect(heritage(built, "main.ts", "implements")).toEqual([
+        "3:main.ts#Leaf->Closer=lib.ts#Closer[import-binding]",
+        "3:main.ts#Leaf->Reader=lib.ts#Reader[import-binding]",
+      ]);
       expect(built.incoming("lib.ts#Base").map((e) => e.kind)).toContain("extends");
+      expect(built.incoming("lib.ts#Reader").map((e) => e.kind).sort()).toEqual(["extends", "implements"]);
+      expect(built.edges.some((e) => e.kind === "implements" && e.fromFile === "lib.ts")).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

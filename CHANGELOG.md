@@ -4,7 +4,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
-The extraction version moves to `structural-9.29`, so the first run after upgrading rebuilds the cache once. This release lands the remediation of the 2026-09-22 repository audit, 97 findings across ten categories worked in three waves; the audit itself is a private record, and each entry below states what changed and what was measured.
+The extraction version moves to `structural-9.30` and the artifact format to 13, so the first run after upgrading rebuilds the cache once. This release lands the remediation of the 2026-09-22 repository audit, 97 findings across ten categories worked in three waves; the audit itself is a private record, and each entry below states what changed and what was measured.
 
 ### Breaking
 
@@ -27,6 +27,8 @@ The extraction version moves to `structural-9.29`, so the first run after upgrad
 - Enrichment refresh launched the executable named in the stored `policy.json` sidecar. `configureLspEnrichment` returns an approval (a SHA-256 of the canonical policy) that a refresh from stored policy must present as `approve`, else it launches nothing and reports `policy-not-approved`; a policy passed in the call is approved by the call. The sidecar's own lock implementation is replaced by the cache lock, so contention reports `cache-busy` after 250 ms.
 - `osnova_warp`'s `depth` argument had carried `osnova_plumb`'s description since 0.7.0, telling agents a walk depth was the depth a claimed list was made at. It describes its own walk, and a test fails if any argument description repeats across tools except `in` and `symbol`, which mean the same thing everywhere.
 - The documents tell the truth about the code. `SECURITY.md` and `AGENTS.md` promised no network access and no writes outside the cache while `osnova update-check` and `osnova setup --apply` shipped; both now state those two exceptions, `PRIVACY.md` scopes its "no key, no service" statement to the installed tool, and both policy files ship in the package. The reference's coverage table printed the record before the one it cited, ten rows wrong and four rows missing; it is generated from the cited record and `test/docs-coverage-table.test.ts` holds them equal. `AGENTS.md` froze seven tools while ten shipped and `CONTRIBUTING.md` said five; the frozen list names all ten and `test/mcp.test.ts` holds the server to it. The README named an `exports` edge kind that never existed, quoted the type-checker oracle without its version, promised a generation receipt on CLI output that carries none, and showed a `warp` example whose bare name is now ambiguous and whose counts had drifted; each is corrected, and `test/docs-readme-warp.test.ts` rebuilds the index and holds the example's first two lines. The reference CLI block lacked `tests`, `unreferenced`, `hook` and `update-check` and the `tool` hook event (`test/docs-cli-inventory.test.ts` diffs it against the binary's usage), said the cache keeps 8 workspaces (32), documented six internal hook helpers as if they were exports, and gave `osnova footing` no flags where `-n`, `--depth` and `--max-code-units` exist. Nine uncited benchmark records, one a same-date twin of the record the README stakes its numbers on, moved to `benchmarks/results/superseded/` under an index that `test/docs-benchmark-citations.test.ts` holds current. The brand table called `plumb` a path-finder and `unreferenced` proof.
+- One process's LRU eviction could delete the `text.bin` and `edges.json` another process was still reading. A loaded artifact reads both sidecars lazily after the workspace lock is released, and eviction only checked locks, so a server that had loaded a workspace answered `cache-read-failed: cache text sidecar missing` until its next refresh. A loader now leaves a lease under `readers/` in the workspace directory; eviction spares a workspace whose lease names a live process and removes the leases of processes that have exited.
+- `loadIndex` reported a lock timeout met while recording access as `cache-read-failed`; it now reports `cache-lock-timeout` with the holder.
 
 ### Changed
 
@@ -34,17 +36,30 @@ The extraction version moves to `structural-9.29`, so the first run after upgrad
 - The release workflow is two jobs. `verify` runs every gate with read-only permissions and packs the tarball; `publish` holds the write and provenance permissions, installs nothing, and publishes that tarball. `npm install -g npm@latest` before a trusted publish is gone, every action in every workflow is pinned to a commit SHA, and the checkout no longer persists its token. A step in the pull request `settle` workflow fails a change that touches `src/extract/`, `src/grammar/` or `src/index/scan.ts` without moving `extractionVersion`, because a missed bump served stale caches whose hashes all still verified; `scripts/extraction-version-guard.mjs <base-ref>` runs it by hand.
 - The eleven runtime validator lists that hand-copied TypeScript unions are derived from them, so a new union member is a compile error at the validator rather than an artifact the reader rejects as corrupt right after the writer produced it. The stored order of edge kinds is written down as explicit ordinals and pinned by a test, since that order is the on-disk encoding.
 - Dropped `@types/emscripten` and `@vitest/coverage-v8`; `node scripts/check-package.mjs --supply-chain` checks a recorded SHA-256 for each packaged grammar file rather than trusting the lockfile hash alone.
+- The GitHub Action runs the osnova version of the action ref you use, so `getdomovoi/osnova@v0.8.1` runs osnova 0.8.1 on every run instead of whatever npm published last. `version: latest` floats on purpose. `scripts/settle-ci.sh` resolves the version and prints it under `OSNOVA_PRINT_COMMAND=1`.
+- A `NOTICE` file ships in the package. It records that the tree-sitter grammar binaries npm installs from `tree-sitter-wasms` are compiled from MIT-licensed grammar projects under a package that declares Unlicense, and that osnova does not redistribute them.
+- The README's type-checker oracle figures now say the version they were measured at, 0.8.0, as `docs/reference.md` already did.
 
 ### Added
 
 - `PRIVACY.md` states what Osnova reads, writes and sends, with the two carve-outs, and is linked from the README and `SECURITY.md`.
 - `osnova doctor --json`.
+- An `implements` edge kind. A written `implements` clause on a TypeScript, TSX or JavaScript class was recorded and reported as `extends`, which misstated the relation on the one product property that every edge carries its own basis. It is now its own kind, resolved by the same rule as `extends` (same-file, then imports, filtered to class, interface, struct and trait candidates), stored at wire position 5 so no existing edge renumbers, and counted by coverage as `implements` and `implementsResolved`.
 
 ### Performance
 
 - The extraction visitors read `node.type`, a getter that crosses into WASM, up to twelve times per node; each now reads it once. Reads fell from 13,952,666 to 3,488,867 on zod and from 26,060,792 to 7,699,521 on pyright, with byte-identical artifacts on all seven pinned corpora. Sequential build time fell from 1,785 ms to 1,520 ms on zod (minimum of 9 interleaved runs) and from 4,536 ms to 3,976 ms on pyright (minimum of 6), on a machine under load, so indicative rather than exact.
 - `ground --in` builds search documents only for the files inside the scope while keeping the repository-wide statistics every score depends on exact, so a one-file query no longer costs a whole-repository scan; scores are unchanged.
 - The tokenizer resumes instead of restarting at the first non-ASCII character, and the innermost symbol of a matching line is found once per line rather than once per match.
+- `osnova_thread` and the bounded `osnova_outline` no longer decode the edge section to rank by degree. The core now records each symbol's incoming and outgoing edge counts, so a cold text search or outline answers from the core alone; `scripts/perf.mjs` fails if either loads the edge section. The bounded outline also fits its budget in one pass instead of re-sorting and re-rendering the selection for every candidate.
+
+### Security
+
+- The lockfile resolved two esbuild majors: vitest's vite used 0.28.2 and tsup's bundle-require used 0.27.7, which matches GHSA-g7r4-m6w7-qqqr (arbitrary file read through esbuild's dev server on Windows). A single override in `pnpm-workspace.yaml` collapses the split onto the patched line and removes the duplicated `@esbuild/*` platform packages with it. Development dependency only; nothing shipped changes.
+
+### Removed
+
+- The unused changesets machinery: the `changeset` script, the `@changesets/cli` development dependency and `.changeset/config.json`. Releases are the hand-written changelog plus the tag workflow, and nothing read a changeset.
 
 ## 0.8.1 (2026-09-22)
 

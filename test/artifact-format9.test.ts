@@ -21,8 +21,10 @@ describe("format 9", () => {
     const ws = workspaceDirFor(cacheDir, index.root);
     const names = (await fs.readdir(ws)).sort();
     for (const f of ["index.json", "index.sha", "edges.json", "text.bin"]) expect(names).toContain(f);
-    const core = JSON.parse((await fs.readFile(path.join(ws, "index.json"))).toString("utf8")) as { formatVersion: number; paths: string[]; names: string[]; edgesHash: string; edgesBytes: number; files: Array<{ p: number; symbols: Array<{ n: number }> }> };
-    expect(core.formatVersion).toBe(12);
+    const core = JSON.parse((await fs.readFile(path.join(ws, "index.json"))).toString("utf8")) as { formatVersion: number; paths: string[]; names: string[]; edgesHash: string; edgesBytes: number; files: Array<{ p: number; symbols: Array<{ n: number }>; d: number[] }> };
+    expect(core.formatVersion).toBe(13);
+    expect(core.files.every((f) => Array.isArray(f.d) && f.d.length === 2 * f.symbols.length && f.d.every((n) => Number.isInteger(n) && n >= 0))).toBe(true);
+    expect(core.files.flatMap((f) => f.d).some((n) => n > 0)).toBe(true);
     expect(core.paths).toEqual([...core.paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
     expect(core.files.every((f) => Number.isInteger(f.p) && f.p < core.paths.length)).toBe(true);
     expect(core.files.every((f) => f.symbols.every((s) => Number.isInteger(s.n) && s.n < core.names.length))).toBe(true);
@@ -129,8 +131,8 @@ describe("format 9", () => {
     const ws = workspaceDirFor(cacheDir, index.root);
     const corePath = path.join(ws, "index.json");
     const original = (await fs.readFile(corePath)).toString("utf8");
-    expect(original).toContain('"structural-9.29.scan-4');
-    const stale = Buffer.from(original.replace('"structural-9.29.scan-4', '"structural-9.scan-4'), "utf8");
+    expect(original).toContain('"structural-9.30.scan-4');
+    const stale = Buffer.from(original.replace('"structural-9.30.scan-4', '"structural-9.scan-4'), "utf8");
     expect(stale.toString("utf8")).not.toBe(original);
     await fs.writeFile(corePath, stale);
     await fs.writeFile(path.join(ws, "index.sha"), sha256Hex(stale));

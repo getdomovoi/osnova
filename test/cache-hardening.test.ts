@@ -98,8 +98,11 @@ it("evicts by reads rather than publication age and enforces artifact bytes", as
   expect(await loadArtifact(root, cacheDir)).toBeDefined();
   expect(await loadArtifact(roots[1]!, cacheDir)).toBeUndefined();
   await evictLru(cacheDir, { maxWorkspaces: 8, maxBytes: 1 });
-  expect(await loadArtifact(root, cacheDir)).toBeUndefined();
+  expect(await loadArtifact(root, cacheDir), "this process holds a reader lease on root").toBeDefined();
   expect(await loadArtifact(roots[2]!, cacheDir)).toBeUndefined();
+  await fs.rm(path.join(workspaceDirFor(cacheDir, root), "readers"), { recursive: true, force: true });
+  await evictLru(cacheDir, { maxWorkspaces: 8, maxBytes: 1 });
+  expect(await loadArtifact(root, cacheDir)).toBeUndefined();
 });
 
 it.each(["files", "edgesIdentity", "symbols", "span", "hash", "duplicate", "edgeTarget"])("rejects malformed %s without returning empty data", async (field) => {
@@ -154,7 +157,7 @@ it("publishes compressed and plain generations through one atomic artifact path"
   for (let i = 0; i < 6; i += 1) await fs.unlink(path.join(root, `${i}.ts`));
   const small = await refreshWorkspace(root, { cacheDir });
   expect((await fs.readFile(target)).toString()).toBe(serializeArtifact(small).toString());
-  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "edges.json", "family.json", "index.json", "index.sha", "text.bin", "verification.json"]);
+  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "edges.json", "family.json", "index.json", "index.sha", "readers", "text.bin", "verification.json"]);
 });
 
 it("reports an unwritable cache target explicitly", async () => {

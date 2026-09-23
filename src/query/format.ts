@@ -238,29 +238,32 @@ export function formatSkeletonBounded(index: OsnovaIndex, result: SkeletonResult
   const complete = formatSkeleton(result);
   if (complete.length <= maxCodeUnits) return complete;
   const metadata = ` (${result.language}, ${result.lineCount} lines, ${result.entries.length} symbols)`;
-  const emptyFooter = `omitted: ${result.entries.length} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
-  const availablePath = Math.max(8, maxCodeUnits - metadata.length - emptyFooter.length - 2);
+  const total = result.entries.length;
+  const footerFor = (omitted: number): string =>
+    `omitted: ${omitted} of ${total} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
+  const availablePath = Math.max(8, maxCodeUnits - metadata.length - footerFor(total).length - 2);
   const header = `${compactField(result.file, availablePath)}${metadata}`;
-  const line = (entry: SkeletonResult["entries"][number]): string =>
+  type Entry = SkeletonResult["entries"][number];
+  const line = (entry: Entry): string =>
     `${entry.symbol.kind} ${entry.symbol.name} (L${entry.symbol.span.startLine}-L${entry.symbol.span.endLine}): ${entry.signature}`;
-  const ranked = [...result.entries].sort((a, b) => {
-    const aDegree = index.incoming(a.symbol.qualifiedName).length + index.outgoing(a.symbol.qualifiedName).length;
-    const bDegree = index.incoming(b.symbol.qualifiedName).length + index.outgoing(b.symbol.qualifiedName).length;
-    return bDegree - aDegree || a.symbol.span.startLine - b.symbol.span.startLine ||
-      a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1);
-  });
-  const selected: SkeletonResult["entries"][number][] = [];
+  const bySource = (a: Entry, b: Entry): number => a.symbol.span.startLine - b.symbol.span.startLine ||
+    a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1);
+  const degreeOf = new Map(result.entries.map((entry) => {
+    const degree = index.degree(entry.symbol.qualifiedName);
+    return [entry, degree.incoming + degree.outgoing] as const;
+  }));
+  const ranked = [...result.entries].sort((a, b) => degreeOf.get(b)! - degreeOf.get(a)! || bySource(a, b));
+  const selected: Entry[] = [];
+  let used = header.length;
   for (const entry of ranked) {
-    const candidate = [...selected, entry].sort((a, b) => a.symbol.span.startLine - b.symbol.span.startLine ||
-      a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1));
-    const omitted = result.entries.length - candidate.length;
-    const footer = `omitted: ${omitted} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
-    if ([header, ...candidate.map(line), footer].join("\n").length <= maxCodeUnits) selected.push(entry);
+    const next = used + 1 + line(entry).length;
+    if (next + 1 + footerFor(total - selected.length - 1).length <= maxCodeUnits) {
+      selected.push(entry);
+      used = next;
+    }
   }
-  selected.sort((a, b) => a.symbol.span.startLine - b.symbol.span.startLine ||
-    a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1));
-  const omitted = result.entries.length - selected.length;
-  return [header, ...selected.map(line), `omitted: ${omitted} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`].join("\n");
+  selected.sort(bySource);
+  return [header, ...selected.map(line), footerFor(total - selected.length)].join("\n");
 }
 
 function compactField(value: string, maxCodeUnits: number): string {
@@ -740,7 +743,7 @@ const percent = (share: number): string => `${(share * 100).toFixed(1)}%`;
 
 export function formatCoverage(report: CoverageReport): string {
   const row = (item: LanguageCoverage): string =>
-    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingExternal)} of the ${item.calls - item.unresolvedImportCalls - item.unboundGlobalCalls} not going through an unresolved import or an unbound global), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}, references ${item.references} (${item.referencesResolved} resolved), extends ${item.extends} (${item.extendsResolved} resolved), routes ${item.routes} (${item.routesResolved} resolved)`;
+    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingExternal)} of the ${item.calls - item.unresolvedImportCalls - item.unboundGlobalCalls} not going through an unresolved import or an unbound global), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}, references ${item.references} (${item.referencesResolved} resolved), extends ${item.extends} (${item.extendsResolved} resolved), implements ${item.implements} (${item.implementsResolved} resolved), routes ${item.routes} (${item.routesResolved} resolved)`;
   const reasons = Object.entries(report.total.byReason).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1));
   const lines = [
     `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve, ${report.total.unboundGlobalCalls} call a name with no binding in the file`,

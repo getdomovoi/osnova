@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyChanges, ask, buildIndex, freshness, loadIndex, refreshWorkspace, scanFiles, scopedAsk, serializeArtifact } from "../dist/index.js";
+import { applyChanges, ask, buildIndex, findTextDetailed, formatSkeletonBounded, freshness, loadIndex, refreshWorkspace, scanFiles, scopedAsk, serializeArtifact, skeleton } from "../dist/index.js";
 
 const PACKAGES = 16;
 const MODULES = 12;
@@ -447,6 +447,13 @@ async function main() {
   if (loaded === undefined) throw new Error("perf: core load returned no files");
   const [, coldGroundMs] = await timed(() => ask(loaded, "chain service registry", { limit: 8 }));
   if (edgesLoaded(loaded)) failures.push("a cold ground query loaded the edge section");
+  const thread = findTextDetailed(loaded, "service", { limit: 8, matchesPerGroup: 4 });
+  if (thread.groups.length === 0) failures.push("a cold thread query found no groups to rank");
+  if (edgesLoaded(loaded)) failures.push("a cold thread query loaded the edge section");
+  const richest = [...loaded.files.values()].reduce((a, b) => (b.symbols.length > a.symbols.length ? b : a));
+  const outline = formatSkeletonBounded(loaded, skeleton(loaded, richest.path), 256);
+  if (!outline.includes("omitted:")) failures.push("a cold bounded outline did not reach the ranked path");
+  if (edgesLoaded(loaded)) failures.push("a cold bounded outline loaded the edge section");
   const [edgeCount, edgesLoadMs] = await timed(() => loaded.edges.length);
   if (edgeCount !== built.edges.length) failures.push(`edge section holds ${edgeCount} edges, the build ${built.edges.length}`);
   scopedAsk(loaded, "chain service", { limit: 8 });

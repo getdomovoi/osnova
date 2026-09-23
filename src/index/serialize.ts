@@ -16,6 +16,8 @@ import type {
   MemberKind,
   Callee,
   RouteSite,
+  SymbolDegree,
+  OsnovaSymbol,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { membersOf, validOwner } from "./edgeStore.js";
@@ -23,9 +25,9 @@ import { OsnovaIndexImpl } from "./indexImpl.js";
 import type { EdgeSource } from "./indexImpl.js";
 import { serializeEdges, deserializeEdges } from "./edgeStore.js";
 import type { EdgeLayout } from "./edgeStore.js";
-import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits } from "../cache/cache.js";
+import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits, recordReader } from "../cache/cache.js";
 import type { CachePolicy } from "../cache/cache.js";
-import { withCacheLock } from "../cache/lock.js";
+import { cacheLockTimeoutIn, withCacheLock } from "../cache/lock.js";
 import type { LockOptions } from "../cache/lock.js";
 import { IndexingError, SectionError } from "./diagnostics.js";
 import { bindIndexGeneration, rememberIndexGeneration } from "./generation.js";
@@ -38,7 +40,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.29.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.30.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -96,6 +98,7 @@ interface SerializedFile {
   readonly diagnostics: readonly IndexDiagnostic[];
   readonly reExports: readonly ReExport[];
   readonly routes?: readonly RouteSite[] | undefined;
+  readonly d: readonly number[];
 }
 
 interface SerializedArtifact {
@@ -128,6 +131,12 @@ export function serializeSections(
   const nameIndex = new Map(names.map((n, i) => [n, i]));
   const text = serializeText(index, previousText);
   const edges = serializeEdges(index.edges, paths);
+  const incomingCount = new Map<string, number>();
+  const outgoingCount = new Map<string, number>();
+  for (const edge of index.edges) {
+    if (edge.toSymbol !== undefined) incomingCount.set(edge.toSymbol, (incomingCount.get(edge.toSymbol) ?? 0) + 1);
+    if (edge.fromSymbol.length > 0) outgoingCount.set(edge.fromSymbol, (outgoingCount.get(edge.fromSymbol) ?? 0) + 1);
+  }
   const files: SerializedFile[] = paths.map((p, i) => {
     const card = index.files.get(p)!;
     const [to, tl] = text.offsets.get(p)!;
@@ -168,6 +177,7 @@ export function serializeSections(
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
       ...(card.routes === undefined || card.routes.length === 0 ? {} : { routes: card.routes }),
+      d: card.symbols.flatMap((symbol) => [incomingCount.get(symbol.qualifiedName) ?? 0, outgoingCount.get(symbol.qualifiedName) ?? 0]),
     };
   });
   const artifact: SerializedArtifact = {
@@ -261,7 +271,7 @@ function deserializeParsedArtifact(
   rootOverride?: string,
 ): OsnovaIndexImpl {
   const body = deserializeBody(parsed, textPath, edgeSource, textBytes, edgeBytes);
-  const index = new OsnovaIndexImpl(rootOverride ?? body.root, body.files, body.edges);
+  const index = new OsnovaIndexImpl(rootOverride ?? body.root, body.files, body.edges, body.degrees);
   if (rootOverride === undefined) rememberIndexGeneration(index, data);
   return index;
 }
@@ -272,8 +282,9 @@ function deserializeBody(
   edgeSource: { path: string; raw: Buffer } | undefined,
   textBytes?: Buffer,
   edgeBytes?: Buffer,
-): { root: string; files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource } {
+): { root: string; files: Map<string, FileCard>; edges: readonly OsnovaEdge[] | EdgeSource; degrees: ReadonlyMap<string, SymbolDegree> } {
   const envelope = readEnvelope(parsed);
+  const degrees = new Map<string, SymbolDegree>();
   const artifact = parsed as SerializedArtifact;
   if (!Array.isArray(artifact.files) || !Array.isArray(artifact.paths) || !Array.isArray(artifact.names)) {
     throw new Error("osnova: corrupt index envelope");
@@ -306,6 +317,7 @@ function deserializeBody(
       !nonnegativeInteger(file.size) || !nonnegativeInteger(file.lineCount) ||
       !nonnegativeInteger(file.to) || !nonnegativeInteger(file.tl) || file.to + file.tl > artifact.textBytes ||
       !Array.isArray(file.symbols)) throw new Error("osnova: corrupt file metadata");
+    if (!Array.isArray(file.d) || file.d.length !== 2 * file.symbols.length || !file.d.every(nonnegativeInteger)) throw new Error("osnova: corrupt degree table");
     const binaryCard = file.language === "fallback" && file.tl === 0 && file.size > 0;
     if (!binaryCard && file.tl !== file.size) throw new Error("osnova: corrupt file content");
     if (binaryCard && (file.lineCount !== 0 || file.symbols.length !== 0)) throw new Error("osnova: corrupt binary card");
@@ -386,6 +398,7 @@ function deserializeBody(
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
       };
     });
+    symbols.forEach((symbol: OsnovaSymbol, i: number) => { degrees.set(symbol.qualifiedName, { incoming: file.d[2 * i]!, outgoing: file.d[2 * i + 1]! }); });
     const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports, ...(routes === undefined ? {} : { routes }) };
     if (textBytes !== undefined) {
       const text = textBytes.subarray(file.to, file.to + file.tl).toString("utf8");
@@ -406,7 +419,7 @@ function deserializeBody(
   } else {
     throw new Error("osnova: edge source required");
   }
-  return { root: envelope.root, files, edges };
+  return { root: envelope.root, files, edges, degrees };
 }
 
 export function serializedTextIdentity(data: string): { hash: string; bytes: number } {
@@ -570,11 +583,13 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
         load: () => deserializeBody(parsed ?? JSON.parse(raw.toString("utf8")), textPath, { path: edgesPath, raw: edgesRaw }),
       });
       bindIndexGeneration(index, sha);
-      await touchWorkspace(dir).catch((error: unknown) => {
+      await recordReader(dir).then(() => touchWorkspace(dir)).catch((error: unknown) => {
         throw new IndexingError({ phase: "cache", path: dir, code: "cache-access-write-failed" }, error);
       });
       return bindIndexCache(index, cacheDir);
     } catch (error) {
+      const timeout = cacheLockTimeoutIn(error);
+      if (timeout !== undefined) throw timeout;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       if (error instanceof ArtifactVersionError && typeof error.version === "number" &&
         Number.isInteger(error.version) && error.version > 0 && error.version < indexFormatVersion) return undefined;

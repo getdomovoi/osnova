@@ -1,4 +1,4 @@
-export const indexFormatVersion = 12 as const;
+export const indexFormatVersion = 13 as const;
 
 export type LanguageId =
   | "typescript"
@@ -72,7 +72,7 @@ export type MemberKind = "instance" | "static" | "class" | "property" | "unknown
 export type ReceiverMode = "instance" | "class";
 export type ReceiverBasis = "constructor" | "lexical" | "class-reference" | "annotation" | "return";
 
-export type EdgeKind = "calls" | "references" | "imports" | "extends" | "routes";
+export type EdgeKind = "calls" | "references" | "imports" | "extends" | "routes" | "implements";
 
 export interface RouteInfo {
   readonly method: string;
@@ -163,6 +163,12 @@ export interface OsnovaIndex {
   incoming(qualifiedName: string): readonly OsnovaEdge[];
   outgoing(qualifiedName: string): readonly OsnovaEdge[];
   edgesForFile(path: string): readonly OsnovaEdge[];
+  degree(qualifiedName: string): SymbolDegree;
+}
+
+export interface SymbolDegree {
+  readonly incoming: number;
+  readonly outgoing: number;
 }
 
 export interface IndexDiagnostic {
