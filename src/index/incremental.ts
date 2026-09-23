@@ -6,7 +6,8 @@ import { extractCard, finalizeIndex } from "./build.js";
 import { EXTRACT_POOL_REFRESH_MIN_FILES, extractCards } from "./extractPool.js";
 import type { EdgeReuse } from "./resolve.js";
 import type { FileCard } from "../types.js";
-import { scanFiles, sameFileMetadata, sha256Hex } from "./scan.js";
+import { scanFiles, sameFileMetadata, sha256File, sha256Hex } from "./scan.js";
+import { maximumIndexedFileSizeBytes } from "../types.js";
 import type { FileMetadata, ScanResult } from "./scan.js";
 import { IndexingError } from "./diagnostics.js";
 import { bindIndexCache, canonicalWorkspaceRoot, indexCacheDirectory, workspaceFilePath, workspaceRelativePath } from "./workspace.js";
@@ -49,7 +50,13 @@ export async function inspectFreshness(
     if (sameFileMetadata(verified?.get(relPath), scan.metadata.get(relPath))) continue;
     try {
       hashedFiles += 1;
-      const buffer = await fs.readFile(await workspaceFilePath(absRoot, relPath));
+      const abs = await workspaceFilePath(absRoot, relPath);
+      if ((scan.metadata.get(relPath)?.size ?? 0) > maximumIndexedFileSizeBytes) {
+        const streamed = await sha256File(abs);
+        if (streamed.hash !== card.hash || card.size !== streamed.size) changed.push(relPath);
+        continue;
+      }
+      const buffer = await fs.readFile(abs);
       if (sha256Hex(buffer) !== card.hash || card.size !== buffer.length) changed.push(relPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {

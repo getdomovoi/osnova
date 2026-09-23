@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { FileCard } from "../types.js";
+import type { FileCard, IndexDiagnostic } from "../types.js";
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
 const CONFIG_NAME = /^(?:ts|js)config[^/]*\.json$/;
@@ -23,6 +23,7 @@ export function probeNodeFile(base: string, knownFiles: ReadonlySet<string>): st
 
 // tsconfig.json allows comments and trailing commas; strip both outside strings before parsing.
 export function parseJsonc(text: string): unknown {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   let out = "";
   let i = 0;
   while (i < text.length) {
@@ -47,17 +48,25 @@ export function parseJsonc(text: string): unknown {
   try { return JSON.parse(out); } catch { return undefined; }
 }
 
+export function tsConfigDiagnostics(file: string, text: string): IndexDiagnostic[] {
+  if (!isTsConfigPath(file)) return [];
+  const json = parseJsonc(text);
+  return typeof json === "object" && json !== null && !Array.isArray(json) ? [] : [{ phase: "parse", path: file, code: "config-unparsed" }];
+}
+
 interface RawConfig {
   readonly dir: string;
   readonly extends: readonly string[];
   readonly baseUrl: string | undefined;
   readonly paths: ReadonlyMap<string, readonly string[]> | undefined;
+  readonly wildcards: WildcardIndex | undefined;
 }
 
 export interface EffectiveTsConfig {
   /** Directory the `paths` targets are relative to: `baseUrl` when one is set, else the declaring config's directory. */
   readonly pathsRoot: string;
   readonly paths: ReadonlyMap<string, readonly string[]>;
+  readonly wildcards: WildcardIndex;
   readonly baseUrl: string | undefined;
 }
 
@@ -80,7 +89,7 @@ function rawConfig(file: string, card: FileCard): RawConfig | undefined {
       paths.set(key, targets);
     }
   }
-  return { dir: dirOf(file), extends: extendsField, baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined, paths };
+  return { dir: dirOf(file), extends: extendsField, baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined, paths, wildcards: paths === undefined ? undefined : wildcardIndex(paths) };
 }
 
 export class TsConfigs {
@@ -116,7 +125,7 @@ export class TsConfigs {
     visited.add(file);
     const raw = this.rawOf(file);
     if (raw === undefined) return undefined;
-    let paths: { root: string; entries: ReadonlyMap<string, readonly string[]> } | undefined;
+    let paths: { root: string; entries: ReadonlyMap<string, readonly string[]>; wildcards: WildcardIndex } | undefined;
     let baseUrl: string | undefined;
     for (const parent of raw.extends) {
       if (!parent.startsWith("./") && !parent.startsWith("../")) continue;
@@ -125,12 +134,12 @@ export class TsConfigs {
       const inherited = this.walk(target, visited);
       if (inherited === undefined) continue;
       if (inherited.baseUrl !== undefined) baseUrl = inherited.baseUrl;
-      if (inherited.paths.size > 0) paths = { root: inherited.pathsRoot, entries: inherited.paths };
+      if (inherited.paths.size > 0) paths = { root: inherited.pathsRoot, entries: inherited.paths, wildcards: inherited.wildcards };
     }
     if (raw.baseUrl !== undefined) baseUrl = joinDir(raw.dir, raw.baseUrl);
-    if (raw.paths !== undefined) paths = { root: raw.dir, entries: raw.paths };
+    if (raw.paths !== undefined && raw.wildcards !== undefined) paths = { root: raw.dir, entries: raw.paths, wildcards: raw.wildcards };
     const pathsRoot = baseUrl ?? paths?.root ?? raw.dir;
-    return { pathsRoot, paths: paths?.entries ?? new Map(), baseUrl };
+    return { pathsRoot, paths: paths?.entries ?? new Map(), wildcards: paths?.wildcards ?? emptyWildcardIndex, baseUrl };
   }
 
   private nearest(fromFile: string): string | undefined {
@@ -155,7 +164,7 @@ export class TsConfigs {
     const config = this.nearest(fromFile);
     const effective = config === undefined ? undefined : this.effectiveOf(config);
     if (effective === undefined) return { kind: "none" };
-    const matched = matchPaths(effective.paths, spec);
+    const matched = matchPaths(effective.paths, spec, effective.wildcards);
     if (matched === "ambiguous") return { kind: "ambiguous" };
     if (matched !== undefined) {
       for (const target of matched) {
@@ -178,20 +187,55 @@ export class TsConfigs {
 
 // An exact key wins outright. Among `*` patterns the longest literal prefix wins, as the compiler
 // resolves it; two patterns with the same prefix length are ambiguous rather than order-dependent.
-export function matchPaths(paths: ReadonlyMap<string, readonly string[]>, spec: string): readonly string[] | "ambiguous" | undefined {
+export function matchPaths(
+  paths: ReadonlyMap<string, readonly string[]>,
+  spec: string,
+  wildcards: WildcardIndex = wildcardIndex(paths),
+): readonly string[] | "ambiguous" | undefined {
   const exact = paths.get(spec);
   if (exact !== undefined) return exact;
-  let best: { prefix: number; targets: readonly string[]; filler: string; tie: boolean } | undefined;
+  for (const prefixLength of wildcards.prefixLengths) {
+    if (prefixLength > spec.length) continue;
+    const group = wildcards.byPrefix.get(spec.slice(0, prefixLength));
+    if (group === undefined) continue;
+    let found: { targets: readonly string[]; suffixLength: number } | undefined;
+    for (const suffixLength of group.suffixLengths) {
+      if (prefixLength + suffixLength > spec.length) continue;
+      const targets = group.bySuffix.get(spec.slice(spec.length - suffixLength));
+      if (targets === undefined) continue;
+      if (found !== undefined) return "ambiguous";
+      found = { targets, suffixLength };
+    }
+    if (found === undefined) continue;
+    const filler = spec.slice(prefixLength, spec.length - found.suffixLength);
+    return found.targets.map((target) => target.split("*").join(filler));
+  }
+  return undefined;
+}
+
+interface WildcardGroup {
+  readonly bySuffix: Map<string, readonly string[]>;
+  readonly suffixLengths: number[];
+}
+
+export interface WildcardIndex {
+  readonly byPrefix: ReadonlyMap<string, WildcardGroup>;
+  readonly prefixLengths: readonly number[];
+}
+
+const emptyWildcardIndex: WildcardIndex = { byPrefix: new Map(), prefixLengths: [] };
+
+export function wildcardIndex(paths: ReadonlyMap<string, readonly string[]>): WildcardIndex {
+  const byPrefix = new Map<string, WildcardGroup>();
   for (const [key, targets] of paths) {
     const star = key.indexOf("*");
     if (star < 0 || key.indexOf("*", star + 1) >= 0) continue;
     const prefix = key.slice(0, star), suffix = key.slice(star + 1);
-    if (!spec.startsWith(prefix) || !spec.endsWith(suffix) || spec.length < prefix.length + suffix.length) continue;
-    const filler = spec.slice(prefix.length, spec.length - suffix.length);
-    if (best === undefined || prefix.length > best.prefix) best = { prefix: prefix.length, targets, filler, tie: false };
-    else if (prefix.length === best.prefix) best.tie = true;
+    let group = byPrefix.get(prefix);
+    if (group === undefined) { group = { bySuffix: new Map(), suffixLengths: [] }; byPrefix.set(prefix, group); }
+    if (!group.suffixLengths.includes(suffix.length)) group.suffixLengths.push(suffix.length);
+    group.bySuffix.set(suffix, targets);
   }
-  if (best === undefined) return undefined;
-  if (best.tie) return "ambiguous";
-  return best.targets.map((target) => target.split("*").join(best.filler));
+  const prefixLengths = [...new Set([...byPrefix.keys()].map((prefix) => prefix.length))].sort((a, b) => b - a);
+  return { byPrefix, prefixLengths };
 }
