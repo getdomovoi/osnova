@@ -65,8 +65,9 @@ export function findTextDetailed(
     texts.push(text);
   }
   const work = patternWork(source);
+  const matchedLines: (string[] | undefined)[] = [];
   const found = work !== null && work <= INLINE_WORK_LIMIT
-    ? scanTexts(texts, source, flags, matchLimit)
+    ? scanTexts(texts, source, flags, matchLimit, matchedLines)
     : scanInWorker(texts, source, flags, matchLimit, budgetMs, pattern);
 
   interface Group {
@@ -87,7 +88,7 @@ export function findTextDetailed(
     at += 4;
     const path = paths[fileAt]!;
     if (linesOf !== fileAt) {
-      lines = texts[fileAt]!.split("\n");
+      lines = matchedLines[fileAt] ?? texts[fileAt]!.split("\n");
       linesOf = fileAt;
     }
     const line = lines[lineAt] ?? "";
@@ -144,7 +145,7 @@ export function findTextDetailed(
 
 // Also runs inside the scan worker through its source text, so it must not reach outside its own body.
 // Each line with a match yields [file, line, matches, kept, col, length, ...] with at most `keep` pairs.
-function scanTexts(texts: readonly string[], source: string, flags: string, keep: number): number[] {
+function scanTexts(texts: readonly string[], source: string, flags: string, keep: number, matchedLines?: (string[] | undefined)[]): number[] {
   const regex = new RegExp(source, flags);
   const out: number[] = [];
   for (let file = 0; file < texts.length; file += 1) {
@@ -154,6 +155,7 @@ function scanTexts(texts: readonly string[], source: string, flags: string, keep
       regex.lastIndex = 0;
       let match = regex.exec(line);
       if (match === null) continue;
+      if (matchedLines !== undefined) matchedLines[file] = lines;
       const head = out.length;
       out.push(file, i, 0, 0);
       let count = 0;
@@ -175,36 +177,49 @@ function scanTexts(texts: readonly string[], source: string, flags: string, keep
 }
 
 const WORKER_SOURCE = `"use strict";
-const { workerData } = require("node:worker_threads");
+const { parentPort } = require("node:worker_threads");
 const scanTexts = (${scanTexts.toString()});
-const { port, done, texts, source, flags, keep } = workerData;
-try {
-  const found = Int32Array.from(scanTexts(texts, source, flags, keep));
-  port.postMessage({ ok: true, found }, [found.buffer]);
-} catch (error) {
-  port.postMessage({ ok: false, message: String(error && error.message ? error.message : error) });
-}
-Atomics.store(done, 0, 1);
-Atomics.notify(done, 0);
+parentPort.on("message", ({ port, done, texts, source, flags, keep }) => {
+  try {
+    const found = Int32Array.from(scanTexts(texts, source, flags, keep));
+    port.postMessage({ ok: true, found }, [found.buffer]);
+  } catch (error) {
+    port.postMessage({ ok: false, message: String(error && error.message ? error.message : error) });
+  }
+  port.close();
+  Atomics.store(done, 0, 1);
+  Atomics.notify(done, 0);
+});
 `;
 
 type WorkerReply = { readonly ok: true; readonly found: Int32Array } | { readonly ok: false; readonly message: string };
 
+let idleWorker: Worker | undefined;
+
+function scanWorker(): Worker {
+  const idle = idleWorker;
+  idleWorker = undefined;
+  if (idle !== undefined) return idle;
+  const worker = new Worker(WORKER_SOURCE, { eval: true, execArgv: [] });
+  worker.unref();
+  worker.once("exit", () => {
+    if (idleWorker === worker) idleWorker = undefined;
+  });
+  return worker;
+}
+
 // One backtracking exec call never yields, so no check between lines can stop it. A pattern whose cost
-// is not proven small runs on a worker thread that is abandoned and terminated at the deadline.
+// is not proven small runs on a worker thread, which is terminated at the deadline and otherwise reused.
 function scanInWorker(texts: readonly string[], source: string, flags: string, keep: number, budgetMs: number, pattern: string): ArrayLike<number> {
   const done = new Int32Array(new SharedArrayBuffer(4));
   const { port1, port2 } = new MessageChannel();
-  const worker = new Worker(WORKER_SOURCE, {
-    eval: true,
-    execArgv: [],
-    workerData: { port: port2, done, texts, source, flags, keep },
-    transferList: [port2],
-  });
-  worker.unref();
+  const worker = scanWorker();
+  let finished = false;
   try {
+    worker.postMessage({ port: port2, done, texts, source, flags, keep }, [port2]);
     Atomics.wait(done, 0, 0, budgetMs);
     const received = receiveMessageOnPort(port1)?.message as WorkerReply | undefined;
+    finished = received !== undefined;
     if (received === undefined) {
       throw new Error(
         `osnova: pattern-budget-exceeded: ${JSON.stringify(pattern)} did not finish within ${budgetMs} ms over ` +
@@ -217,7 +232,8 @@ function scanInWorker(texts: readonly string[], source: string, flags: string, k
     return received.found;
   } finally {
     port1.close();
-    void worker.terminate();
+    if (finished) idleWorker = worker;
+    else void worker.terminate();
   }
 }
 
