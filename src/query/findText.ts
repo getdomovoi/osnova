@@ -42,6 +42,8 @@ export function findTextDetailed(
   if (!Number.isSafeInteger(budgetMs) || budgetMs <= 0) {
     throw new RangeError("osnova: the pattern budget must be a positive safe integer of milliseconds");
   }
+  // Starts before the pattern is compiled, so compilation is inside the budget rather than free.
+  const deadlineAt = performance.now() + budgetMs;
   const source = options?.fixed === true ? escapeRegExp(pattern) : pattern;
   const flags = options?.ignoreCase === true ? "gi" : "g";
   try {
@@ -66,9 +68,11 @@ export function findTextDetailed(
   }
   const work = patternWork(source);
   const matchedLines: (string[] | undefined)[] = [];
+  // A small per-position cost bounds one start position, not the whole scan: the indexed text can hold
+  // a million positions on one line. The inline scan therefore carries the same deadline as the worker.
   const found = work !== null && work <= INLINE_WORK_LIMIT
-    ? scanTexts(texts, source, flags, matchLimit, matchedLines)
-    : scanInWorker(texts, source, flags, matchLimit, budgetMs, pattern);
+    ? scanInline(texts, source, flags, matchLimit, matchedLines, deadlineAt, budgetMs, pattern)
+    : scanInWorker(texts, source, flags, matchLimit, budgetMs, pattern, deadlineAt);
 
   interface Group {
     file: string;
@@ -145,16 +149,26 @@ export function findTextDetailed(
 
 // Also runs inside the scan worker through its source text, so it must not reach outside its own body.
 // Each line with a match yields [file, line, matches, kept, col, length, ...] with at most `keep` pairs.
-function scanTexts(texts: readonly string[], source: string, flags: string, keep: number, matchedLines?: (string[] | undefined)[]): number[] {
+function scanTexts(texts: readonly string[], source: string, flags: string, keep: number, matchedLines?: (string[] | undefined)[], deadlineAt?: number): number[] {
   const regex = new RegExp(source, flags);
   const out: number[] = [];
+  // Sampled rather than checked every step: performance.now() costs more than one exec of a cheap pattern.
+  const CHECK_EVERY = 4096;
+  let since = 0;
   for (let file = 0; file < texts.length; file += 1) {
     const lines = (texts[file] ?? "").split("\n");
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i] ?? "";
       regex.lastIndex = 0;
       let match = regex.exec(line);
-      if (match === null) continue;
+      if (match === null) {
+        since += 1;
+        if (deadlineAt !== undefined && since >= CHECK_EVERY) {
+          since = 0;
+          if (performance.now() > deadlineAt) throw new Error("osnova-pattern-budget-exceeded");
+        }
+        continue;
+      }
       if (matchedLines !== undefined) matchedLines[file] = lines;
       const head = out.length;
       out.push(file, i, 0, 0);
@@ -165,6 +179,12 @@ function scanTexts(texts: readonly string[], source: string, flags: string, keep
         if (kept < keep) {
           out.push(match.index, match[0].length);
           kept += 1;
+        }
+        // A single line can hold a million matches, so the check has to live in this loop too.
+        since += 1;
+        if (deadlineAt !== undefined && since >= CHECK_EVERY) {
+          since = 0;
+          if (performance.now() > deadlineAt) throw new Error("osnova-pattern-budget-exceeded");
         }
         if (match[0].length === 0) regex.lastIndex += 1;
         match = regex.exec(line);
@@ -194,6 +214,37 @@ parentPort.on("message", ({ port, done, texts, source, flags, keep }) => {
 
 type WorkerReply = { readonly ok: true; readonly found: Int32Array } | { readonly ok: false; readonly message: string };
 
+function budgetExceeded(pattern: string, budgetMs: number, files: number): Error {
+  return new Error(
+    `osnova: pattern-budget-exceeded: ${JSON.stringify(pattern)} did not finish within ${budgetMs} ms over ` +
+    `${files} indexed files, so no result is returned. This is a refusal, not an absence of matches. ` +
+    "A nested quantifier such as (a+)+ can backtrack without end: rewrite the pattern without one, pass fixed " +
+    "for a literal, or narrow the search with in.",
+  );
+}
+
+// The inline scan is chosen when one start position is provably cheap. It still has to stop at the
+// deadline, because the number of start positions is bounded only by the size of the indexed text.
+function scanInline(
+  texts: readonly string[],
+  source: string,
+  flags: string,
+  keep: number,
+  matchedLines: (string[] | undefined)[],
+  deadlineAt: number,
+  budgetMs: number,
+  pattern: string,
+): ArrayLike<number> {
+  try {
+    return scanTexts(texts, source, flags, keep, matchedLines, deadlineAt);
+  } catch (error) {
+    if (error instanceof Error && error.message === "osnova-pattern-budget-exceeded") {
+      throw budgetExceeded(pattern, budgetMs, texts.length);
+    }
+    throw error;
+  }
+}
+
 let idleWorker: Worker | undefined;
 
 function scanWorker(): Worker {
@@ -205,29 +256,29 @@ function scanWorker(): Worker {
   worker.once("exit", () => {
     if (idleWorker === worker) idleWorker = undefined;
   });
+  // Without this listener an "error" event on the worker is unhandled, which ends the host process.
+  // The scanning body catches its own failures today, so this guards the paths outside that catch.
+  worker.on("error", () => {
+    if (idleWorker === worker) idleWorker = undefined;
+  });
   return worker;
 }
 
 // One backtracking exec call never yields, so no check between lines can stop it. A pattern whose cost
 // is not proven small runs on a worker thread, which is terminated at the deadline and otherwise reused.
-function scanInWorker(texts: readonly string[], source: string, flags: string, keep: number, budgetMs: number, pattern: string): ArrayLike<number> {
+function scanInWorker(texts: readonly string[], source: string, flags: string, keep: number, budgetMs: number, pattern: string, deadlineAt: number): ArrayLike<number> {
   const done = new Int32Array(new SharedArrayBuffer(4));
   const { port1, port2 } = new MessageChannel();
   const worker = scanWorker();
   let finished = false;
   try {
     worker.postMessage({ port: port2, done, texts, source, flags, keep }, [port2]);
-    Atomics.wait(done, 0, 0, budgetMs);
+    // Whatever the caller's setup already spent comes out of the budget, so the deadline is absolute.
+    const remaining = deadlineAt - performance.now();
+    if (remaining > 0) Atomics.wait(done, 0, 0, remaining);
     const received = receiveMessageOnPort(port1)?.message as WorkerReply | undefined;
     finished = received !== undefined;
-    if (received === undefined) {
-      throw new Error(
-        `osnova: pattern-budget-exceeded: ${JSON.stringify(pattern)} did not finish within ${budgetMs} ms over ` +
-        `${texts.length} indexed files, so no result is returned. This is a refusal, not an absence of matches. ` +
-        "A nested quantifier such as (a+)+ can backtrack without end: rewrite the pattern without one, pass fixed " +
-        "for a literal, or narrow the search with in.",
-      );
-    }
+    if (received === undefined) throw budgetExceeded(pattern, budgetMs, texts.length);
     if (!received.ok) throw new Error(`osnova: pattern scan failed for ${JSON.stringify(pattern)}: ${received.message}`);
     return received.found;
   } finally {
