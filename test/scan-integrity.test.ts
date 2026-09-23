@@ -53,6 +53,10 @@ it("does not count blank lines or comments against the pattern budget", async ()
   const root = await workspace();
   await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n");
   await fs.writeFile(path.join(root, "b.log"), "b\n");
-  await fs.writeFile(path.join(root, ".gitignore"), `${"# note\n\n".repeat(maximumIgnorePatterns)}*.log\n`);
+  const rules = Array.from({ length: maximumIgnorePatterns - 1 }, (_, i) => `r${i}/`).join("\n");
+  const text = `${"# note\n\n".repeat(maximumIgnorePatterns)}${rules}\n*.log\n`;
+  await fs.writeFile(path.join(root, ".gitignore"), text);
   expect((await scanFiles(root)).paths).toEqual(["a.ts"]);
+  await fs.writeFile(path.join(root, ".gitignore"), `${text}one-more/\n`);
+  await expect(scanFiles(root)).rejects.toMatchObject({ diagnostic: { phase: "scan", path: ".gitignore", code: "ignore-pattern-limit" } });
 });
