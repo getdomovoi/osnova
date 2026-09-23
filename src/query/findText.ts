@@ -116,10 +116,7 @@ export function findTextDetailed(
   }
 
   const ranked = groups.map((group) => {
-    const incoming =
-      group.symbolQ !== null
-        ? index.incoming(group.symbolQ).length
-        : 0;
+    const incoming = group.symbolQ !== null ? index.degree(group.symbolQ).incoming : 0;
     const symbol = group.symbolQ !== null ? (index.symbols.get(group.symbolQ) ?? null) : null;
     return { group, incoming, symbol };
   });

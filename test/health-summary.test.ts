@@ -44,6 +44,7 @@ it("keeps fresh output empty and unverified health explicit", () => {
   const custom: OsnovaIndex = {
     root: target.root, files: target.files, symbols: target.symbols, edges: target.edges, diagnostics: undefined,
     incoming: target.incoming.bind(target), outgoing: target.outgoing.bind(target), edgesForFile: target.edgesForFile.bind(target),
+    degree: target.degree.bind(target),
   };
   expect(formatIndexHealthSummary(custom)).toBe("osnova foundation: unverified");
 });
