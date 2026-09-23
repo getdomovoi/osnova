@@ -10,6 +10,20 @@ The artifact format moves to 13, so the first run after upgrading rebuilds the c
 
 - `osnova_thread` and the bounded `osnova_outline` no longer decode the edge section to rank by degree. The core now records each symbol's incoming and outgoing edge counts, so a cold text search or outline answers from the core alone; `scripts/perf.mjs` fails if either loads the edge section. The bounded outline also fits its budget in one pass instead of re-sorting and re-rendering the selection for every candidate.
 
+### Security
+
+- The lockfile resolved two esbuild majors: vitest's vite used 0.28.2 and tsup's bundle-require used 0.27.7, which matches GHSA-g7r4-m6w7-qqqr (arbitrary file read through esbuild's dev server on Windows). A single override in `pnpm-workspace.yaml` collapses the split onto the patched line and removes the duplicated `@esbuild/*` platform packages with it. Development dependency only; nothing shipped changes.
+
+### Removed
+
+- The unused changesets machinery: the `changeset` script, the `@changesets/cli` development dependency and `.changeset/config.json`. Releases are the hand-written changelog plus the tag workflow, and nothing read a changeset.
+
+### Changed
+
+- The GitHub Action runs the osnova version of the action ref you use, so `getdomovoi/osnova@v0.8.1` runs osnova 0.8.1 on every run instead of whatever npm published last. `version: latest` floats on purpose. `scripts/settle-ci.sh` resolves the version and prints it under `OSNOVA_PRINT_COMMAND=1`.
+- A `NOTICE` file ships in the package. It records that the tree-sitter grammar binaries npm installs from `tree-sitter-wasms` are compiled from MIT-licensed grammar projects under a package that declares Unlicense, and that osnova does not redistribute them.
+- The README's type-checker oracle figures now say the version they were measured at, 0.8.0, as `docs/reference.md` already did.
+
 ### Added
 
 - An `implements` edge kind. A written `implements` clause on a TypeScript, TSX or JavaScript class was recorded and reported as `extends`, which misstated the relation on the one product property that every edge carries its own basis. It is now its own kind, resolved by the same rule as `extends` (same-file, then imports, filtered to class, interface, struct and trait candidates), stored at wire position 5 so no existing edge renumbers, and counted by coverage as `implements` and `implementsResolved`. The extraction version moves to `structural-9.30`, so the first run after upgrading rebuilds the cache once.
