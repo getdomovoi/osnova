@@ -48,20 +48,21 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 
 <img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/demo/warp.gif" width="1600" alt="A terminal recording: osnova warp lists the five resolved callers of click Context.invoke, each with its receiver hint; grep finds twelve .invoke( lines; osnova plumb checks those twelve and reports five confirmed, six name-only matches on other invoke methods and one line inside a docstring.">
 
-`osnova warp refreshWorkspace` on this repository, cut to twelve lines:
+`osnova warp src/api.ts#refreshWorkspace` on this repository, cut to twelve lines (`test/docs-readme-warp.test.ts` fails when the first two no longer reproduce):
 
 ```text
-function src/api.ts#refreshWorkspace: 70 indexed edges
-reach: d1 callers 70 in 12 files (3 dirs); d2 +16 in 2 files; unresolved same-name 8; tests 15
+function src/api.ts#refreshWorkspace: 83 indexed edges
+reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 9; tests 18
 d1 calls src/cli/cli.ts#ensureIndex:78 [import-binding]
 d1 calls src/cli/hook.ts#runHook:189,201,223,238 [import-binding]
-d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:233 [import-binding]
+d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:257 [import-binding]
 d1 calls test/verification-fastpath.test.ts#<module>:37,47,48,51,53,57,58,64,68,74,78,85,110,114,132,145,154,166,171,197 [re-export-binding]
-  via src/index.ts:64 refreshWorkspace -> src/api.ts (export refreshWorkspace)
+  via src/index.ts:65 refreshWorkspace -> src/api.ts (export refreshWorkspace)
 This does not prove absence of callers or that deletion is safe.
-unresolved evidence (8); not confirmed relationships
-candidates for refreshWorkspace (1, unverified): src/api.ts#refreshWorkspace
-d1 calls refreshWorkspace scripts/perf.mjs:100,102,111; test/artifact-format9.test.ts:76,83,102,118,138 [binding-blocked]
+unresolved evidence (9); not confirmed relationships
+candidates for refreshWorkspace (2, unverified): src/api.ts#refreshWorkspace, test/mcp-watch.test.ts#refreshWorkspace
+d1 calls refreshWorkspace test/artifact-format9.test.ts:78,85,104,120,140 [binding-blocked]
+d1 calls refreshWorkspace scripts/perf.mjs:482,483,488 [import-target-unresolved]
 ```
 
 Each confirmed line names the caller, its lines and the evidence that tied the call to this definition: an import binding, a same-file definition, a re-export chain with its hop, or an identified receiver. Calls the index could not tie to a definition are listed apart as unresolved evidence, with the same-name candidates it found and the reason it stopped, so a name match is never mistaken for a caller. The `reach` line gives exact counts, not scores, and when the list outgrows its budget a `capped:` line and an `omitted:` footer count what was left out.
@@ -119,7 +120,7 @@ The names play on the foundation image. The CLI uses the same names without the 
 | `osnova_tests` | the cloth pulled to see what holds | Tests: the test files that reference a symbol, or the symbols one test file reaches |
 | `osnova_unreferenced` | threads left loose at the edge | Definitions with no indexed caller, each with its leads; candidates, never proof |
 
-Every response opens with its index generation, says when the index is partial, and counts what its budget left out; the budgets are in the [reference](docs/reference.md#presentation-budget).
+Every MCP response opens with its index generation, says when the index is partial, and counts what its budget left out; the budgets, and which CLI subcommands carry the generation, are in the [reference](docs/reference.md#presentation-budget).
 
 ## Hooks and clients
 
@@ -152,7 +153,7 @@ Inputs and the local form are in the [reference](docs/reference.md#settle-in-ci)
 
 ## What osnova does not do
 
-- No type inference and no dynamic dispatch. Edges come from syntax: direct calls, imports, exports, name references, declared heritage (a written superclass or interface name) and framework routes (a registration whose receiver binds to a listed framework import, with the verb and the literal path written at the site), with lexical binding and receiver hints for TypeScript, JavaScript and Python. Resolution is heuristic and says so.
+- No type inference and no dynamic dispatch. Edges come from syntax: direct calls, imports, name references, declared heritage (a written superclass or interface name) and framework routes (a registration whose receiver binds to a listed framework import, with the verb and the literal path written at the site), with lexical binding and receiver hints for TypeScript, JavaScript and Python. Resolution is heuristic and says so.
 - No route table. A `routes` edge is one registration site tied to one handler; prefixes from mounts, blueprints and controllers are recorded on their own edges and never composed into a full path, a computed path records no path, and an inline closure or a wrapped handler records the route with no target. Express, NestJS, Flask and FastAPI are read; gin, axum, Django, Spring, ASP.NET, Rails and file-based routers are not.
 - That boundary has a measured price. Scored against a type checker on two pinned corpora, the calls osnova does not resolve are mostly calls whose receiver type is never written down: 2945 of 6359 missed sites on zod and 164 of 307 on click are a plain name carrying no annotation, and another 1478 on zod are a call result or a property chain. Only 349 missed sites on zod and 10 on click have a type written at the receiver's declaration, and 248 of those 349 are a single library idiom. Resolving every one of them would move recall from 76.9% to 78.2% on zod and from 90.4% to 90.7% on click, so the boundary costs roughly one recall point rather than ten. The full census is in [`benchmarks/results/receiver-boundary-census-2026-09-21.json`](benchmarks/results/receiver-boundary-census-2026-09-21.json).
 - No semantic search. `osnova_ground` is fielded lexical ranking over definitions. It is fast, deterministic and explainable, and it will not match a paraphrase.
@@ -189,3 +190,5 @@ Determinism is the core invariant. A change that makes incremental refresh diffe
 ## License
 
 Apache-2.0
+
+Privacy: [PRIVACY.md](PRIVACY.md). Security policy and reporting: [SECURITY.md](SECURITY.md).

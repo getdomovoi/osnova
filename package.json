@@ -70,6 +70,8 @@
     "integrations",
     "README.md",
     "LICENSE",
+    "PRIVACY.md",
+    "SECURITY.md",
     "NOTICE"
   ],
   "scripts": {

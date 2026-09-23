@@ -48,7 +48,7 @@ usage:
   osnova outline <file> [--workspace <path>] [--cache-dir <path>]
   osnova warp <symbol> [--direction in|out] [--depth <n>] [--full] [--workspace <path>] [--cache-dir <path>]
   osnova groundwork [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
-  osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
+  osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [-n <n>] [--depth <n>] [--max-code-units <n>] [--workspace <path>] [--cache-dir <path>]
   osnova settle <--base-ref <ref> | --base-cache <path>> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]

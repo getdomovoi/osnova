@@ -55,10 +55,10 @@ pnpm test:install  # fresh registry-backed package install and consumer
 ## Invariants (read before touching src/)
 
 - **Determinism**: no timestamps, random values, or host-dependent ordering in index artifacts. All paths, symbols, and edges are sorted before serialization. `localeCompare` is banned in sort paths; use code-unit comparison.
-- **Frozen contract**: existing exported APIs, the `cacheDir` parameter, `OSNOVA_CACHE_DIR`, and the five MCP tool names/argument shapes are consumed downstream. Breaking them requires a coordinated major version. Additive APIs require direct and package round-trip tests.
+- **Frozen contract**: existing exported APIs, the `cacheDir` parameter, `OSNOVA_CACHE_DIR`, and every MCP tool name and argument shape registered in `src/mcp/server.ts` (the list in `AGENTS.md`) are consumed downstream. Breaking them requires a coordinated major version. Additive APIs require direct and package round-trip tests.
 - **Read-only**: no writes outside the cache directory, no network, no telemetry.
 - **web-tree-sitter is pinned exactly** (0.25.10). The prebuilt grammars in `tree-sitter-wasms@0.1.13` use the older dynamic-linking format that 0.27 cannot load. Do not bump without probing every grammar (`test/grammar.test.ts`).
-- **Edge semantics v1**: direct calls, imports, name references only. No type inference. Document precision limits in the README rather than working around them silently.
+- **Edge semantics v1**: direct calls, imports, name references, declared heritage (`extends`) and framework routes (`routes`) only, the `EdgeKind` union in `src/types.ts`. No type inference. Document precision limits in the README rather than working around them silently.
 
 ## Adding a language
 
