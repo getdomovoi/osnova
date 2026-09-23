@@ -4,8 +4,10 @@ import { readFileSync } from "node:fs";
 // The reference's CLI block is what the README calls "the full list". It had fourteen of the
 // eighteen subcommands, and the four it lacked included the one command the privacy policy is
 // built around disclosing.
-const usage = readFileSync(new URL("../src/cli/cli.ts", import.meta.url), "utf8");
-const reference = readFileSync(new URL("../docs/reference.md", import.meta.url), "utf8");
+// A Windows checkout may carry CRLF, and both the heading search and the `$` anchors below assume LF.
+const lf = (url: URL): string => readFileSync(url, "utf8").replace(/\r\n/g, "\n");
+const usage = lf(new URL("../src/cli/cli.ts", import.meta.url));
+const reference = lf(new URL("../docs/reference.md", import.meta.url));
 
 function usageSubcommands(): string[] {
   const start = usage.indexOf("usage:");
