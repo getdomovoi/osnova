@@ -129,14 +129,16 @@ it.each(["files", "edgesIdentity", "symbols", "span", "hash", "duplicate", "edge
   expect(() => deserializeArtifact(JSON.stringify(data), undefined, sections.text.bytes, edgeBytes)).toThrow(/corrupt/);
 });
 
-it("rejects corrupt compressed artifacts and preserves a valid cache when a smaller cap is requested", async () => {
+it("rejects corrupt compressed artifacts, rebuilds them on refresh and preserves a valid cache when a smaller cap is requested", async () => {
   const { root, cacheDir } = await fixture();
   const index = await refreshWorkspace(root, { cacheDir });
   await expect(refreshWorkspace(root, { cacheDir, maxBytes: 1 })).rejects.toThrow(/cache-limit-exceeded/);
   expect((await loadArtifact(root, cacheDir))?.files.size).toBe(1);
   const target = path.join(workspaceDirFor(cacheDir, root), "index.json");
   await fs.writeFile(target, gzipSync(serializeArtifact(index)).subarray(0, 20));
-  await expect(refreshWorkspace(root, { cacheDir })).rejects.toThrow(/cache-read-failed/);
+  await expect(loadArtifact(root, cacheDir)).rejects.toThrow(/cache-read-failed/);
+  expect((await refreshWorkspace(root, { cacheDir })).files.size).toBe(1);
+  expect((await loadArtifact(root, cacheDir))?.files.size).toBe(1);
 });
 
 it("publishes compressed and plain generations through one atomic artifact path", async () => {
