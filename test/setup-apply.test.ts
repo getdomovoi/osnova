@@ -60,10 +60,16 @@ describe("osnova setup --apply", () => {
 });
 
 describe("doctor client version check", () => {
-  it("warns when a configured hook or MCP command reports another version, ok when it matches", async () => {
+  it("warns when a configured hook or MCP command resolves to another version, ok when it matches", async () => {
     const { OSNOVA_VERSION } = await import("../src/version.js");
-    const same = path.join(home, "same.js"); await fs.writeFile(same, `console.log(${JSON.stringify(OSNOVA_VERSION)});\n`);
-    const other = path.join(home, "other.js"); await fs.writeFile(other, "console.log('0.0.1');\n");
+    const install = async (name: string, version: string): Promise<string> => {
+      await fs.mkdir(path.join(home, name), { recursive: true });
+      await fs.writeFile(path.join(home, name, "package.json"), JSON.stringify({ name: "@getdomovoi/osnova", version }));
+      const bin = path.join(home, name, "bin.js"); await fs.writeFile(bin, "process.exit(1);\n");
+      return bin;
+    };
+    const same = await install("same", OSNOVA_VERSION);
+    const other = await install("other", "0.0.1");
     await fs.mkdir(path.join(home, ".claude"), { recursive: true });
     const node = process.execPath;
     await fs.writeFile(path.join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: `${JSON.stringify(node)} ${JSON.stringify(other)} hook prompt` }] }] } }));
