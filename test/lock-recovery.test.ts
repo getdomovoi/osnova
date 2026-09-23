@@ -56,12 +56,12 @@ it("does not recover a lock whose owner is alive", async () => {
 
 it("keeps polling when the lock directory cannot be created or its owner read for a moment, as Windows reports mid-rename", async () => {
   const lockPath = await deadLock();
-  const mkdir = fs.mkdir.bind(fs);
+  const rename = fs.rename.bind(fs);
   const readFile = fs.readFile.bind(fs);
   let mkdirFailures = 0, readFailures = 0;
-  vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
-    if (String(target) === lockPath && mkdirFailures < 1) { mkdirFailures += 1; throw errno("EPERM"); }
-    return mkdir(target, options as never) as Promise<undefined>;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(to) === lockPath && mkdirFailures < 1) { mkdirFailures += 1; throw errno("EPERM"); }
+    return rename(from, to);
   });
   vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
     if (String(target) === path.join(lockPath, "owner.json") && readFailures < 1) { readFailures += 1; throw errno("EBUSY"); }
