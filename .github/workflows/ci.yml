@@ -22,12 +22,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm build
       - run: pnpm test
       - run: node scripts/check-package.mjs
       - run: node scripts/package-smoke.mjs
       - run: node scripts/clean-install-smoke.mjs
-      - run: pnpm perf
+      - run: node scripts/perf.mjs
 
   node-floor:
     name: package (ubuntu-latest, node 22.13.0)
