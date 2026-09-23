@@ -28,3 +28,22 @@ jobs:
       - run: node scripts/package-smoke.mjs
       - run: node scripts/clean-install-smoke.mjs
       - run: pnpm perf
+
+  node-floor:
+    name: package (ubuntu-latest, node 22.13.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+      - run: node --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node scripts/check-package.mjs
+      - run: node scripts/package-smoke.mjs
+      - run: node scripts/clean-install-smoke.mjs
+      - run: node dist/bin.js build . --cache-dir "$RUNNER_TEMP/osnova-floor-cache"
