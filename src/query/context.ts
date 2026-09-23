@@ -14,7 +14,7 @@ for (let code = 0; code < 128; code += 1) {
 
 // Splits a camel hump, lowercases, and keeps runs of letters and digits. A character outside ASCII can lowercase
 // into letters (`İ` becomes `i` and a combining dot), so text that holds one falls back to the regular expressions.
-function tokenizeUnicode(text: string): string[] {
+export function tokenizeUnicode(text: string): string[] {
   const camelSplit = text.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").replace(/([a-z0-9])([A-Z])/g, "$1 $2");
   const raw = camelSplit.toLowerCase().split(/[^a-z0-9]+/);
   const out: string[] = [];
@@ -30,6 +30,8 @@ export function tokenize(text: string): string[] {
   const out: string[] = [];
   const end = text.length;
   let start = -1;
+  let run = -1;
+  let runTokens = 0;
   let previous = OTHER;
   const take = (from: number, to: number): void => {
     const length = to - from;
@@ -40,14 +42,21 @@ export function tokenize(text: string): string[] {
   };
   for (let i = 0; i < end; i += 1) {
     const code = text.charCodeAt(i);
-    if (code >= 128) return tokenizeUnicode(text);
+    if (code >= 128) {
+      // Text before the current letter-and-digit run ends on a separator, so both tokenizers agree on it and
+      // only the rest needs the regular expressions.
+      if (run >= 0) out.length = runTokens;
+      for (const token of tokenizeUnicode(text.slice(run >= 0 ? run : i))) out.push(token);
+      return out;
+    }
     const current = ASCII_CLASS[code] ?? OTHER;
     if (current === OTHER) {
       if (start >= 0) { take(start, i); start = -1; }
+      run = -1;
       previous = OTHER;
       continue;
     }
-    if (start < 0) { start = i; previous = current; continue; }
+    if (start < 0) { start = i; run = i; runTokens = out.length; previous = current; continue; }
     let split = false;
     if (current === UPPER) {
       if (previous === LOWER || previous === DIGIT) split = true;
