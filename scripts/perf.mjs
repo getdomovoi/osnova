@@ -412,7 +412,6 @@ async function main() {
   const [built, buildMs] = await timed(() => buildIndex(repo, { cacheDir }));
   if (requestedWorkers === undefined) delete process.env.OSNOVA_EXTRACT_WORKERS;
   else process.env.OSNOVA_EXTRACT_WORKERS = requestedWorkers;
-  const peakRssMiB = process.resourceUsage().maxRSS / 1024;
   const artifactBytes = serializeArtifact(built).length;
   const symbolsByLanguage = new Map();
   for (const card of built.files.values()) symbolsByLanguage.set(card.language, (symbolsByLanguage.get(card.language) ?? 0) + card.symbols.length);
@@ -467,6 +466,7 @@ async function main() {
   const [changed, changedRefreshMs] = await timed(() => refreshWorkspace(repo, { cacheDir }));
   if (!changed.files.get(probe)?.text.includes("perfProbeMarker")) failures.push("changed refresh missed the edit");
 
+  const peakRssMiB = process.resourceUsage().maxRSS / 1024;
   const measured = { build: buildMs, incremental: incrementalMs, coreLoad: coreLoadMs, scan: scanMs, coldGround: coldGroundMs, edgesLoad: edgesLoadMs, noChangeRefresh: noChangeRefreshMs, changedRefresh: changedRefreshMs, scopedAsk: scopedAskMs };
   for (const [name, ms] of Object.entries(measured)) {
     if (ms > budgets[name]) failures.push(`${name} ${ms.toFixed(0)}ms > ${budgets[name]}ms`);
