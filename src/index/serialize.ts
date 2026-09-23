@@ -23,7 +23,7 @@ import { OsnovaIndexImpl } from "./indexImpl.js";
 import type { EdgeSource } from "./indexImpl.js";
 import { serializeEdges, deserializeEdges } from "./edgeStore.js";
 import type { EdgeLayout } from "./edgeStore.js";
-import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits } from "../cache/cache.js";
+import { workspaceDirFor, workspaceLockPath, evictLru, touchWorkspace, cacheLimits, recordReader } from "../cache/cache.js";
 import type { CachePolicy } from "../cache/cache.js";
 import { withCacheLock } from "../cache/lock.js";
 import type { LockOptions } from "../cache/lock.js";
@@ -570,7 +570,7 @@ export async function loadArtifact(root: string, cacheDir: string): Promise<Osno
         load: () => deserializeBody(parsed ?? JSON.parse(raw.toString("utf8")), textPath, { path: edgesPath, raw: edgesRaw }),
       });
       bindIndexGeneration(index, sha);
-      await touchWorkspace(dir).catch((error: unknown) => {
+      await recordReader(dir).then(() => touchWorkspace(dir)).catch((error: unknown) => {
         throw new IndexingError({ phase: "cache", path: dir, code: "cache-access-write-failed" }, error);
       });
       return bindIndexCache(index, cacheDir);

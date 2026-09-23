@@ -2,6 +2,13 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Fixed
+
+- One process's LRU eviction could delete the `text.bin` and `edges.json` another process was still reading. A loaded artifact reads both sidecars lazily after the workspace lock is released, and eviction only checked locks, so a server that had loaded a workspace answered `cache-read-failed: cache text sidecar missing` until its next refresh. A loader now leaves a lease under `readers/` in the workspace directory; eviction spares a workspace whose lease names a live process and removes the leases of processes that have exited.
+
+
 ## 0.8.1 (2026-09-22)
 
 The extraction version moves to `structural-9.28`, so the first run after upgrading rebuilds the cache once.
