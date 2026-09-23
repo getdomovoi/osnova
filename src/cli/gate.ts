@@ -45,6 +45,8 @@ interface Stage {
   readonly afterPipe: boolean;
 }
 
+const shellEscapable = /[\s'"\\|&;$`()<>*?[\]{}#!~]/;
+
 // Splitting on `|` with a regular expression cuts `grep -nE "FAIL|error" notes.txt` in half and loses the
 // path, which then reads as a search of the whole workspace. The separators only count outside quotes.
 export function shellStages(command: string): Stage[] {
@@ -63,7 +65,10 @@ export function shellStages(command: string): Stage[] {
       continue;
     }
     if (character === "'" || character === "\"") { quote = character; started = true; continue; }
-    if (character === "\\" && i + 1 < command.length) { word += command[i + 1]!; started = true; i += 1; continue; }
+    // A backslash escapes only a character the shell would otherwise act on. Treating it as a general
+    // escape ate the separators of `C:\Users\me\notes.txt` and left a word that named no path at all,
+    // so a search of one file outside the workspace read as a search of the whole workspace.
+    if (character === "\\" && i + 1 < command.length && shellEscapable.test(command[i + 1]!)) { word += command[i + 1]!; started = true; i += 1; continue; }
     if (character === "|") { const double = command[i + 1] === "|"; endStage(!double); if (double) i += 1; continue; }
     if (character === "&") { if (command[i + 1] === "&") i += 1; endStage(false); continue; }
     if (character === ";" || character === "\n") { endStage(false); continue; }

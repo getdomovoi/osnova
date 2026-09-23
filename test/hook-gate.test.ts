@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCli } from "../src/cli/cli.js";
+import { shellStages } from "../src/cli/gate.js";
 
 // The gate is a PreToolUse hook: it denies plain search inside an indexed workspace until osnova has
 // run in the current turn. Every case below mirrors one the hand-written reference gate answered.
@@ -92,6 +93,17 @@ describe("osnova hook gate", () => {
     expect((await gate(bash(`grep -nE "FAIL|error" ${outside}/notes.txt`))).decision).toBeUndefined();
     expect((await gate(bash(`grep -nE 'FAIL|error' ${outside}/notes.txt`))).decision).toBeUndefined();
     expect((await gate(bash('rg "FAIL|error"'))).decision?.permissionDecision).toBe("deny");
+  });
+
+  it("keeps a Windows path whole instead of reading its separators as escapes", () => {
+    const [stage] = shellStages(String.raw`grep -n x C:\Users\me\Temp\notes.txt`);
+    expect(stage?.words).toEqual(["grep", "-n", "x", String.raw`C:\Users\me\Temp\notes.txt`]);
+  });
+
+  it("still reads a backslash that escapes a space or a quote", async () => {
+    const [stage] = shellStages(String.raw`grep -n x /tmp/my\ notes.txt`);
+    expect(stage?.words).toEqual(["grep", "-n", "x", "/tmp/my notes.txt"]);
+    expect((await gate(bash(String.raw`grep -n x ${outside}/my\ notes.txt`))).decision).toBeUndefined();
   });
 
   it("allows a command that is not a search", async () => {
