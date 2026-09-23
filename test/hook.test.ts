@@ -65,16 +65,25 @@ describe("osnova hook", () => {
       c = capture();
       expect(await runCli(["hook", "install-preview", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
       expect(c.out.join("\n").split("\n")[1]).toContain("at most once per diff per session, and only when more than OSNOVA_HOOK_SETTLE_BLOCK_AT");
-      const snippet = JSON.parse(c.out.join("\n").split("\n").slice(2).join("\n"));
+      expect(c.out.join("\n").split("\n")[2]).toContain("The gate denies Grep, Glob and shell search");
+      const snippet = JSON.parse(c.out.join("\n").split("\n").slice(3).join("\n"));
       expect(snippet.hooks.UserPromptSubmit[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook prompt");
       expect(snippet.hooks.SessionStart[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook session");
       expect(snippet.hooks.Stop[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook stop");
-      expect(snippet.hooks.PostToolUse).toBeUndefined();
+      // The gate ships by default now, so the default preview carries the PreToolUse gate and its mark.
+      expect(snippet.hooks.PreToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook gate");
+      expect(snippet.hooks.PostToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook mark");
+      expect(snippet.hooks.PostToolUse).toHaveLength(1);
+      c = capture();
+      expect(await runCli(["hook", "install-preview", "--gate", "off", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
+      const withoutGate = JSON.parse(c.out.join("\n").split("\n").slice(3).join("\n"));
+      expect(withoutGate.hooks.PreToolUse).toBeUndefined();
+      expect(withoutGate.hooks.PostToolUse).toBeUndefined();
       c = capture();
       expect(await runCli(["hook", "install-preview", "--nudge", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
-      const withNudge = JSON.parse(c.out.join("\n").split("\n").slice(2).join("\n"));
-      expect(withNudge.hooks.PostToolUse[0].matcher).toBe("Grep|Bash");
-      expect(withNudge.hooks.PostToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook tool");
+      const withNudge = JSON.parse(c.out.join("\n").split("\n").slice(3).join("\n"));
+      expect(withNudge.hooks.PostToolUse[1].matcher).toBe("Grep|Bash");
+      expect(withNudge.hooks.PostToolUse[1].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook tool");
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 

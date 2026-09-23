@@ -35,17 +35,53 @@ export interface ShellScan {
   readonly usedOsnova: boolean;
 }
 
+interface Stage {
+  readonly words: readonly string[];
+  /** The stage reads another command's output, so it filters rather than searches. */
+  readonly afterPipe: boolean;
+}
+
+// Splitting on `|` with a regular expression cuts `grep -nE "FAIL|error" notes.txt` in half and loses the
+// path, which then reads as a search of the whole workspace. The separators only count outside quotes.
+export function shellStages(command: string): Stage[] {
+  const stages: Stage[] = [];
+  let words: string[] = [];
+  let word = "";
+  let started = false;
+  let afterPipe = false;
+  let quote: "'" | "\"" | null = null;
+  const endWord = (): void => { if (started) { words.push(word); word = ""; started = false; } };
+  const endStage = (nextAfterPipe: boolean): void => { endWord(); if (words.length > 0) stages.push({ words, afterPipe }); words = []; afterPipe = nextAfterPipe; };
+  for (let i = 0; i < command.length; i += 1) {
+    const character = command[i]!;
+    if (quote !== null) {
+      if (character === quote) quote = null; else { word += character; started = true; }
+      continue;
+    }
+    if (character === "'" || character === "\"") { quote = character; started = true; continue; }
+    if (character === "\\" && i + 1 < command.length) { word += command[i + 1]!; started = true; i += 1; continue; }
+    if (character === "|") { const double = command[i + 1] === "|"; endStage(!double); if (double) i += 1; continue; }
+    if (character === "&") { if (command[i + 1] === "&") i += 1; endStage(false); continue; }
+    if (character === ";" || character === "\n") { endStage(false); continue; }
+    if (/\s/.test(character)) { endWord(); continue; }
+    word += character; started = true;
+  }
+  endStage(false);
+  return stages;
+}
+
 // Only the command that opens a pipeline stage is a search. `git status | grep x` filters output that
 // is already in hand, so it is never gated.
 export function scanShellCommand(command: string, cwd: string): ShellScan {
   const searches: string[][] = [];
   let usedOsnova = false;
-  for (const chain of command.split(/&&|\|\||;|\n/)) {
-    const words = chain.split(/\|/)[0]!.trim().split(/\s+/).filter((word) => word.length > 0);
+  for (const stage of shellStages(command)) {
+    const words = [...stage.words];
     while (words.length > 0 && wrapperWords.test(words[0]!)) words.shift();
     if (words.length === 0) continue;
     const head = path.basename(words[0]!);
     if (head === "osnova") usedOsnova = true;
+    if (stage.afterPipe) continue;
     if (!searchCommands.has(head) && !(head === "git" && words[1] === "grep")) continue;
     searches.push(searchPaths(words.slice(1), cwd));
   }

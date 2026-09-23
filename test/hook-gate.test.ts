@@ -88,6 +88,12 @@ describe("osnova hook gate", () => {
     expect((await gate(grep("x", outside))).decision).toBeUndefined();
   });
 
+  it("does not mistake a pipe inside a quoted pattern for a pipeline", async () => {
+    expect((await gate(bash(`grep -nE "FAIL|error" ${outside}/notes.txt`))).decision).toBeUndefined();
+    expect((await gate(bash(`grep -nE 'FAIL|error' ${outside}/notes.txt`))).decision).toBeUndefined();
+    expect((await gate(bash('rg "FAIL|error"'))).decision?.permissionDecision).toBe("deny");
+  });
+
   it("allows a command that is not a search", async () => {
     expect((await gate(bash("ls -la"))).decision).toBeUndefined();
   });

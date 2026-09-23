@@ -11,6 +11,7 @@ import { getParser } from "../grammar/loader.js";
 import { extensionLanguage, grammarFile, languageTier } from "../grammar/languages.js";
 import type { LanguageId } from "../types.js";
 import { pluginClients, pluginSource, pluginTarget, skillSource, skillTarget } from "./setup-apply.js";
+import { clientCanGate, gateToolMatcher, hookClients, osnovaToolMatcher } from "../cli/hook.js";
 
 export interface DiagnosticCheck {
   readonly id: string;
@@ -83,6 +84,46 @@ export async function clientVersionChecks(home: string): Promise<DiagnosticCheck
     }
   }
   return checks;
+}
+
+// Is the search gate installed, and would it actually run? A gate the client never calls is the same as
+// no gate at all, so this reads the hook file rather than trusting that setup was run at some point.
+export async function gateChecks(home: string): Promise<DiagnosticCheck[]> {
+  const checks: DiagnosticCheck[] = [];
+  const off = process.env.OSNOVA_GATE === "off";
+  for (const client of hookClients) {
+    const file = client === "codex" ? path.join(home, ".codex", "hooks.json") : client === "cursor" ? path.join(home, ".cursor", "hooks.json") : path.join(home, ".claude", "settings.json");
+    const raw = await readFile(file, "utf8").catch(() => undefined);
+    if (raw === undefined) continue;
+    let parsed: { hooks?: Record<string, unknown> } | undefined;
+    try { parsed = JSON.parse(raw) as { hooks?: Record<string, unknown> }; } catch {
+      checks.push({ id: `gate:${client}`, status: "warning", message: `${file} is not valid JSON, so whether the gate is installed there could not be read.` });
+      continue;
+    }
+    const commands = Object.values(parsed?.hooks ?? {}).flatMap((group) => (Array.isArray(group) ? group.flatMap(hookCommands) : []));
+    const ours = commands.some((command) => /osnova/.test(command) && /\bhook gate\b/.test(command));
+    const marks = commands.some((command) => /osnova/.test(command) && /\bhook mark\b/.test(command));
+    const foreign = commands.find((command) => /osnova-first/.test(command));
+    if (!clientCanGate(client)) {
+      checks.push({ id: `gate:${client}`, status: "ok", message: `${client} has no pre-tool hook that can deny a tool call; its osnova hooks only add text.` });
+      continue;
+    }
+    if (foreign !== undefined) { checks.push({ id: `gate:${client}`, status: "warning", message: `${file} runs a hand-written gate (${foreign}), not the built-in one. Remove it, then run osnova setup --apply --hooks --client ${client}.` }); continue; }
+    if (!ours) { checks.push({ id: `gate:${client}`, status: "warning", message: `${file} has osnova hooks but no gate; search is suggested, never enforced. Install it with osnova setup --apply --hooks --client ${client}.` }); continue; }
+    if (!marks) { checks.push({ id: `gate:${client}`, status: "error", message: `${file} runs the gate without the PostToolUse mark on ${osnovaToolMatcher}, so an osnova call never lifts the denial and every search stays blocked. Re-run osnova setup --apply --hooks --client ${client}.` }); continue; }
+    checks.push({ id: `gate:${client}`, status: off ? "warning" : "ok", message: off
+      ? `${file} installs the gate, but OSNOVA_GATE=off is set in this environment, so it allows every search.`
+      : `${file} installs the gate on ${gateToolMatcher} with the mark on ${osnovaToolMatcher}; search is denied until an osnova tool runs in the turn.` });
+  }
+  if (checks.length === 0) checks.push({ id: "gate", status: "ok", message: "No client hook file under this home directory references osnova; nothing to gate." });
+  return checks;
+}
+
+function hookCommands(item: unknown): string[] {
+  if (item === null || typeof item !== "object") return [];
+  const record = item as { command?: unknown; hooks?: unknown };
+  if (typeof record.command === "string") return [record.command];
+  return Array.isArray(record.hooks) ? record.hooks.flatMap(hookCommands) : [];
 }
 
 // The plugin and skill files osnova setup copies: present and identical to what this osnova ships, or
@@ -227,7 +268,7 @@ export async function doctor(workspace: string, options: DoctorOptions = {}): Pr
     checks.push({ id: `grammar:${language}`, status, message: status === "ok" ? "Packaged WASM loaded and parsed a synthetic snippet without syntax errors." : "WASM load or synthetic parse failed; check installed parser and grammar assets. No download attempted." });
   }
   const home = path.resolve(options.home ?? os.homedir());
-  checks.push(...(await clientVersionChecks(home)), ...(await integrationFileChecks(home)));
+  checks.push(...(await clientVersionChecks(home)), ...(await gateChecks(home)), ...(await integrationFileChecks(home)));
   return {
     ok: checks.every((check) => check.status !== "error"), readOnly: true, checks, capabilities,
     fallback: "Other eligible text files receive file cards without structural extraction. Declaration files may be excluded; scan eligibility is separate from grammar availability.",
