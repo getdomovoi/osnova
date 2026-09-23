@@ -67,8 +67,32 @@ describe("caller evidence", () => {
     expect(text).toContain("heuristic");
   });
 
-  it.each([0, -1, 1.5, NaN, Infinity])("rejects invalid depth %s", (depth) => {
+  it.each([0, -1, 1.5, NaN, -Infinity])("rejects invalid depth %s", (depth) => {
     expect(() => callersDetailed(index, "work", { depth })).toThrow(RangeError);
+  });
+
+  it.each([0, -1, 1.5, NaN, -Infinity])("rejects invalid depth %s from callers instead of answering", (depth) => {
+    expect(() => callers(index, "a.ts#work", { depth })).toThrow(RangeError);
+  });
+
+  it("walks the whole transitive graph when depth is Infinity", () => {
+    const result = callers(index, "a.ts#work", { depth: Infinity });
+    expect(result.hits.map((hit) => [hit.qualifiedName, hit.depth])).toEqual([
+      ["caller.ts#entry", 1], ["top.ts#top", 2],
+    ]);
+  });
+
+  it("walks the whole transitive graph from callersDetailed when depth is Infinity", () => {
+    const result = callersDetailed(index, "a.ts#work", { depth: Infinity });
+    if (result.status !== "found") throw new Error("expected target");
+    expect(result.hits.map((hit) => [hit.qualifiedName, hit.depth])).toEqual([
+      ["caller.ts#entry", 1], ["top.ts#top", 2],
+    ]);
+  });
+
+  it("rejects an unknown direction from both entry points instead of walking callees", () => {
+    expect(() => callers(index, "caller.ts#entry", { direction: "sideways" as never })).toThrow(RangeError);
+    expect(() => callersDetailed(index, "caller.ts#entry", { direction: "sideways" as never })).toThrow(RangeError);
   });
 
   it("retains an error for missing symbols", () => {
