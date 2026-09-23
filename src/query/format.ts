@@ -18,6 +18,7 @@ import type {
 import { maximumIndexedFileSizeBytes } from "../types.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
+import type { DiagnosticCheck, DoctorReport, LanguageCapability } from "../diagnostics/doctor.js";
 import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 import { formatReach } from "./reach.js";
@@ -751,6 +752,39 @@ export function formatCoverage(report: CoverageReport): string {
   const packages = Object.entries(report.total.byExternal).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1)).slice(0, 10);
   if (packages.length > 0) lines.push("external packages (top 10):", ...packages.map(([name, count]) => `- ${name}: ${count}`));
   lines.push(`limitations: ${report.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+const doctorTiers: ReadonlyArray<{ readonly extraction: LanguageCapability["extraction"]; readonly resolution: LanguageCapability["resolution"]; readonly label: string }> = [
+  { extraction: "syntax", resolution: "binding-and-receiver-hints", label: "syntax, binding and receiver hints" },
+  { extraction: "syntax", resolution: "name-heuristics", label: "syntax, name heuristics" },
+  { extraction: "tags", resolution: "binding-and-receiver-hints", label: "tags query, binding and receiver hints" },
+  { extraction: "tags", resolution: "name-heuristics", label: "tags query, name heuristics" },
+];
+
+// doctor is what a new user runs when nothing works, so its default form is read by a person. The
+// JSON form keeps every field, including the per-language limitation text this summary leaves out.
+export function formatDoctor(report: DoctorReport): string {
+  const statusCount = (status: DiagnosticCheck["status"]): number => report.checks.filter((check) => check.status === status).length;
+  const counts = (["ok", "warning", "error"] as const).map((status) => [status, statusCount(status)] as const).filter(([, count]) => count > 0);
+  const lines = [
+    `osnova doctor: ${report.ok ? "ok" : "failed"}, read-only`,
+    `checks: ${counts.length === 0 ? "none" : counts.map(([status, count]) => `${count} ${status}`).join(", ")}`,
+    ...report.checks.filter((check) => check.status !== "ok").map((check) => `  ${check.status} ${check.id}: ${check.message}`),
+    `language support, ${report.capabilities.length} languages:`,
+  ];
+  for (const tier of doctorTiers) {
+    const members = report.capabilities.filter((item) => item.extraction === tier.extraction && item.resolution === tier.resolution);
+    if (members.length === 0) continue;
+    const names = members.map((item) => item.status === "ok" ? item.language : `${item.language} (grammar failed to load)`);
+    lines.push(`  ${tier.label} (${members.length}): ${names.join(", ")}`);
+  }
+  lines.push(
+    "  no language has type inference: relationships are structural, not a type checker's",
+    ...(report.fallback.length > 0 ? [`other files: ${report.fallback}`] : []),
+    "grammar checks parse a short synthetic snippet: they show each packaged grammar loads, not that every real file parses",
+    "per-language limitations: osnova doctor --json",
+  );
   return lines.join("\n");
 }
 
