@@ -39,6 +39,9 @@ The extraction version moves to `structural-9.30` and the artifact format to 13,
 - The GitHub Action runs the osnova version of the action ref you use, so `getdomovoi/osnova@v0.8.1` runs osnova 0.8.1 on every run instead of whatever npm published last. `version: latest` floats on purpose. `scripts/settle-ci.sh` resolves the version and prints it under `OSNOVA_PRINT_COMMAND=1`.
 - A `NOTICE` file ships in the package. It records that the tree-sitter grammar binaries npm installs from `tree-sitter-wasms` are compiled from MIT-licensed grammar projects under a package that declares Unlicense, and that osnova does not redistribute them.
 - The README's type-checker oracle figures now say the version they were measured at, 0.8.0, as `docs/reference.md` already did.
+- Every MCP tool declares its annotation hints: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`. All ten read the index and write nothing, and clients and directories read these hints to decide what a tool may do. A test lists the tools over an in-memory transport and holds every one to those four values.
+
+
 
 ### Added
 
