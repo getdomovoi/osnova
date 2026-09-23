@@ -29,14 +29,17 @@ const kindPreference: readonly SymbolKind[] = [
   "function",
 ];
 
+// A definition ends where its body ends. Most grammars nest the body inside the declaration node; Dart
+// writes it as the next sibling, which the query captures as `definition.body`.
 interface Pending {
   readonly name: string;
   readonly kind: SymbolKind;
   readonly node: Node;
+  readonly end: Node;
 }
 
-function contains(outer: Node, inner: Node): boolean {
-  return outer.startIndex <= inner.startIndex && outer.endIndex >= inner.endIndex && outer.id !== inner.id;
+function contains(outer: Pending, inner: Node): boolean {
+  return outer.node.startIndex <= inner.startIndex && outer.end.endIndex >= inner.endIndex && outer.node.id !== inner.id;
 }
 
 function dedupeSharedNodes(pending: readonly Pending[]): Pending[] {
@@ -50,9 +53,8 @@ function dedupeSharedNodes(pending: readonly Pending[]): Pending[] {
       order.push(key);
       continue;
     }
-    if (kindPreference.indexOf(item.kind) < kindPreference.indexOf(existing.kind)) {
-      bestBySpan.set(key, item);
-    }
+    const preferred = kindPreference.indexOf(item.kind) < kindPreference.indexOf(existing.kind) ? item : existing;
+    bestBySpan.set(key, { ...preferred, end: item.end.endIndex > existing.end.endIndex ? item.end : existing.end });
   }
   return order.map((key) => bestBySpan.get(key)!);
 }
@@ -76,9 +78,10 @@ export function makeGenericAdapter(
         if (nameCapture === undefined) continue;
         const name = nameCapture.node.text.trim();
         if (name.length === 0) continue;
+        const body = match.captures.find((capture) => capture.name === "definition.body")?.node;
         for (const capture of match.captures) {
           const kind = definitionKinds[capture.name];
-          if (kind !== undefined) rawPending.push({ name, kind, node: capture.node });
+          if (kind !== undefined) rawPending.push({ name, kind, node: capture.node, end: body ?? capture.node });
           else if (capture.name === "reference.call") {
             if (!ignoreCallNames.has(name)) rawCalls.push({ name, node: capture.node });
           } else if (capture.name === "definition.head") {
@@ -88,12 +91,12 @@ export function makeGenericAdapter(
       }
       const calls = rawCalls.filter((call) => !headSpans.has(`${call.node.startIndex}:${call.node.endIndex}`));
       const pending = dedupeSharedNodes(rawPending);
-      pending.sort((a, b) => a.node.startIndex - b.node.startIndex || b.node.endIndex - a.node.endIndex);
+      pending.sort((a, b) => a.node.startIndex - b.node.startIndex || b.end.endIndex - a.end.endIndex);
       const qualified: string[] = [];
       const definitions: RawDefinition[] = pending.map((item, i) => {
         let parent = "";
         for (let j = i - 1; j >= 0; j -= 1) {
-          if (contains(pending[j]!.node, item.node)) {
+          if (contains(pending[j]!, item.node)) {
             parent = qualified[j]!;
             break;
           }
@@ -103,7 +106,7 @@ export function makeGenericAdapter(
         return {
           name: item.name,
           kind: item.kind,
-          span: makeSpan(item.node.startPosition.row, item.node.endPosition.row, item.node.startPosition.column, item.node.endPosition.column),
+          span: makeSpan(item.node.startPosition.row, item.end.endPosition.row, item.node.startPosition.column, item.end.endPosition.column),
           signature: makeSignature(source.slice(item.node.startIndex, item.node.endIndex)),
           parent,
         };
@@ -111,7 +114,7 @@ export function makeGenericAdapter(
       const edges: RawEdge[] = calls.map((call) => {
         let enclosing = "";
         for (let j = pending.length - 1; j >= 0; j -= 1) {
-          if (contains(pending[j]!.node, call.node)) {
+          if (contains(pending[j]!, call.node)) {
             enclosing = qualified[j]!;
             break;
           }

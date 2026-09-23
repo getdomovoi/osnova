@@ -63,8 +63,9 @@ function declarationName(node: Node): string | null {
 function callTarget(node: Node): string | null {
   const fn = node.childForFieldName("function");
   if (fn === null) return null;
-  if (fn.type === "identifier") return fn.text;
-  if (fn.type === "member_expression") {
+  const type = fn.type;
+  if (type === "identifier") return fn.text;
+  if (type === "member_expression") {
     const prop = fn.childForFieldName("property");
     return prop !== null ? prop.text : null;
   }
@@ -74,8 +75,9 @@ function callTarget(node: Node): string | null {
 function newTarget(node: Node): string | null {
   const ctor = node.childForFieldName("constructor");
   if (ctor === null) return null;
-  if (ctor.type === "identifier") return ctor.text;
-  if (ctor.type === "member_expression") {
+  const type = ctor.type;
+  if (type === "identifier") return ctor.text;
+  if (type === "member_expression") {
     const prop = ctor.childForFieldName("property");
     return prop !== null ? prop.text : null;
   }
@@ -91,17 +93,18 @@ function stringFragmentOf(node: Node): string | null {
 function valuePosition(node: Node): boolean {
   let child = node;
   let parent = node.parent;
-  while (parent !== null && VALUE_WRAPPERS.has(parent.type)) { child = parent; parent = parent.parent; }
+  let parentType = parent === null ? "" : parent.type;
+  while (parent !== null && VALUE_WRAPPERS.has(parentType)) { child = parent; parent = parent.parent; parentType = parent === null ? "" : parent.type; }
   if (parent === null) return false;
   const inField = (field: string): boolean => parent.childForFieldName(field)?.id === child.id;
-  switch (parent.type) {
+  switch (parentType) {
     case "arguments": case "array": case "return_statement": case "template_substitution": case "object": return true;
     case "pair": case "variable_declarator": case "required_parameter": case "optional_parameter": return inField("value");
     case "assignment_expression": case "augmented_assignment_expression": case "assignment_pattern": case "object_assignment_pattern": return inField("right");
     case "arrow_function": return inField("body");
     case "binary_expression": return VALUE_OPERATORS.has(parent.childForFieldName("operator")?.text ?? "");
     case "ternary_expression": return inField("consequence") || inField("alternative");
-    default: return FIELD_NODES.has(parent.type) && inField("value");
+    default: return FIELD_NODES.has(parentType) && inField("value");
   }
 }
 
