@@ -121,6 +121,41 @@ describe("cli", () => {
     }
   }, 60_000);
 
+  it("coverage --json pins the resolution basis of every call site across languages", async () => {
+    const files: Record<string, string> = {
+      "c/main.c": '#include "util.h"\nstatic int local(void) { return 1; }\nint run(void) { return util_add(1) + local() + other(); }\n',
+      "c/util.h": "int util_add(int x);\n",
+      "c/util.c": '#include "util.h"\nint util_add(int x) { return x + 1; }\n',
+      "c/other.c": "int other(void) { return 3; }\n",
+      "go/pkg/a.go": "package pkg\n\nfunc Run() int {\n\treturn helper() + local()\n}\n\nfunc local() int { return 1 }\n",
+      "go/pkg/b.go": "package pkg\n\nfunc helper() int { return 2 }\n",
+      "java/src/a/b/Util.java": "package a.b;\n\npublic class Util {\n    public static int helper() { return 1; }\n}\n",
+      "java/src/a/b/App.java": "package a.b;\n\nimport static a.b.Util.helper;\nimport a.b.Util;\n\npublic class App {\n    int local() { return 1; }\n    int run() { return helper() + local() + Util.helper(); }\n}\n",
+      "py/util.py": "def helper():\n    return 1\n",
+      "py/app.py": "from .util import helper\n\nclass Box:\n    def size(self):\n        return 1\n\n    def total(self):\n        return self.size() + helper()\n\ndef local():\n    return 1\n\ndef run():\n    return helper() + local()\n",
+      "rb/a.rb": "def run\n  helper() + local()\nend\n\ndef local\n  1\nend\n",
+      "rb/b.rb": "def helper\n  2\nend\n",
+      "rs/src/main.rs": "mod util;\nuse crate::util::helper;\nuse util::*;\n\nfn local() -> i32 { 1 }\n\nfn main() {\n    let _ = helper() + local() + starred();\n}\n",
+      "rs/src/util.rs": "pub fn helper() -> i32 { 1 }\npub fn starred() -> i32 { 2 }\n",
+      "ts/lib.ts": "export function shared(): number { return 1; }\n",
+      "ts/app.ts": 'import { shared } from "./lib.js";\nfunction local(): number { return 1; }\nclass Counter {\n  step(): number { return 1; }\n  twice(): number { return this.step() + this.step(); }\n}\nexport function run(): number { return shared() + local() + new Counter().twice(); }\n',
+    };
+    fs.rmSync(path.join(workspace, "src"), { recursive: true, force: true });
+    for (const [rel, content] of Object.entries(files)) write(rel, content);
+    const out = capture();
+    expect(await runCli(["coverage", "--json", "--workspace", workspace, ...cacheArgs], out.io)).toBe(0);
+    const report = JSON.parse(out.lines.join("\n")) as { languages: { language: string; byMethod: Record<string, number> }[] };
+    expect(Object.fromEntries(report.languages.map((row) => [row.language, row.byMethod]))).toEqual({
+      c: { "same-file-name": 1, "unique-name": 2 },
+      go: { "same-file-name": 1, "unique-name": 1 },
+      java: { "imported-file-name": 1, "receiver-hint": 1, "same-file-name": 1 },
+      python: { "import-binding": 2, "lexical-definition": 1, "receiver-hint": 1 },
+      ruby: { "same-file-name": 1, "unique-name": 1 },
+      rust: { "imported-file-name": 2, "same-file-name": 1 },
+      typescript: { "import-binding": 1, "lexical-definition": 2, "receiver-hint": 2 },
+    });
+  }, 60_000);
+
   it("outline, thread, warp, groundwork round-trip", async () => {
     const skeletonOut = capture();
     expect(await runCli(["outline", "src/two.ts", "--workspace", workspace, ...cacheArgs], skeletonOut.io)).toBe(0);
