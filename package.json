@@ -73,11 +73,11 @@
   ],
   "scripts": {
     "build": "tsup",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "perf": "node scripts/perf.mjs",
+    "perf": "pnpm build && node scripts/perf.mjs",
     "benchmark": "tsx scripts/bench/cli.ts",
     "check:package": "node scripts/check-package.mjs",
     "test:package": "pnpm build && node scripts/package-smoke.mjs",

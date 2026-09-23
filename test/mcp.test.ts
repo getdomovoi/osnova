@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,10 +7,15 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-ws-"));
-const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-cache-"));
+let workspace: string;
+let cacheDir: string;
 
-afterAll(() => {
+beforeEach(() => {
+  workspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-ws-"));
+  cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-cache-"));
+});
+
+afterEach(() => {
   fs.rmSync(workspace, { recursive: true, force: true });
   fs.rmSync(cacheDir, { recursive: true, force: true });
 });
@@ -273,7 +278,6 @@ describe("mcp stdio server", () => {
       }
     } finally {
       await client.close();
-      fs.rmSync(path.join(workspace, "test"), { recursive: true, force: true });
     }
   }, 60_000);
 
@@ -298,8 +302,6 @@ describe("mcp stdio server", () => {
       }
     } finally {
       await client.close();
-      fs.rmSync(path.join(workspace, "src/lonely.ts"), { force: true });
-      fs.rmSync(path.join(workspace, "src/caller.ts"), { force: true });
     }
   }, 60_000);
 
@@ -362,6 +364,12 @@ describe("mcp stdio server", () => {
   }, 60_000);
 
   it("bounds map output while preserving dropped-detail counts", async () => {
+    for (let dir = 0; dir < 12; dir += 1) {
+      for (let file = 0; file < 6; file += 1) {
+        const next = (file + 1) % 6;
+        write(`pkg${dir}/mod${file}.ts`, `import { run${dir}_${next} } from "./mod${next}.js";\nexport function run${dir}_${file}(): number { return run${dir}_${next}(); }\n`);
+      }
+    }
     const client = await connect();
     try {
       const text = await callTool(client, "osnova_groundwork", {});

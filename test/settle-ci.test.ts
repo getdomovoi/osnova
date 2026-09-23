@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..");
+const osnovaFromSource = `node --import ${pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href} ${path.join(root, "src", "cli", "bin.ts")}`;
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" } }).trim();
 
 describe.skipIf(process.platform === "win32")("settle-ci.sh", () => {
@@ -22,7 +25,7 @@ describe.skipIf(process.platform === "win32")("settle-ci.sh", () => {
     const report = path.join(temporary, "report.txt");
     const output = execFileSync("bash", [path.join(root, "scripts", "settle-ci.sh")], {
       cwd: repo, encoding: "utf8",
-      env: { ...process.env, OSNOVA: `node ${path.join(root, "dist", "bin.js")}`, BASE_REF: base, DEPTH: "1", RUNNER_TEMP: temporary, GITHUB_STEP_SUMMARY: summary, REPORT: report },
+      env: { ...process.env, OSNOVA: osnovaFromSource, BASE_REF: base, DEPTH: "1", RUNNER_TEMP: temporary, GITHUB_STEP_SUMMARY: summary, REPORT: report },
     });
     expect(output).toMatch(/1 symbol changes; [1-9]\d* dependents/);
     expect(output).toContain("entry.ts#start");
