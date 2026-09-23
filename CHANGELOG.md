@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Security
+
+- The lockfile resolved two esbuild majors: vitest's vite used 0.28.2 and tsup's bundle-require used 0.27.7, which matches GHSA-g7r4-m6w7-qqqr (arbitrary file read through esbuild's dev server on Windows). A single override in `pnpm-workspace.yaml` collapses the split onto the patched line and removes the duplicated `@esbuild/*` platform packages with it. Development dependency only; nothing shipped changes.
+
 ## 0.8.1 (2026-09-22)
 
 The extraction version moves to `structural-9.28`, so the first run after upgrading rebuilds the cache once.
