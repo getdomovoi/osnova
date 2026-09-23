@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
-import { clientCanGate, hookSettingsObject } from "../cli/hook.js";
+import { clientCanGate, gateCaveat, hookSettingsObject } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
 
 // Applying a setup: every file change is planned first (path, action, diff), then written with a
@@ -73,12 +73,26 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     }
     hooks[event] = current;
   }
+  // `--gate off` means no gate, on a fresh file and on one that already has it. Only osnova's own gate
+  // and mark entries are dropped; anything else sharing those event arrays stays.
+  let removed = 0;
+  if (options.gate === false) {
+    const isGateEntry = (item: unknown): boolean => commandOf(item).some((command) => /osnova/.test(command) && /\bhook (?:gate|mark)\b/.test(command));
+    for (const [event, group] of Object.entries(hooks)) {
+      if (!Array.isArray(group)) continue;
+      const kept = group.filter((item) => !isGateEntry(item));
+      removed += group.length - kept.length;
+      if (kept.length === group.length) continue;
+      if (kept.length === 0) delete hooks[event]; else hooks[event] = kept;
+    }
+  }
   const gateNotice = foreignGate !== undefined
     ? ` ${target} already runs a hand-written gate (${foreignGate}); osnova installed no gate of its own. Remove that hook, then run this again with --gate on.`
     : gate
-      ? " The gate denies Grep, Glob and shell search inside an indexed workspace until an osnova tool has run in the turn. Turn it off for one run with OSNOVA_GATE=off, or install without it with --gate off."
+      ? ` The gate denies Grep, Glob and shell search inside an indexed workspace until an osnova tool has run in the turn. Turn it off for one run with OSNOVA_GATE=off, or install without it with --gate off.${gateCaveat(client)}`
+      : removed > 0 ? ` ${removed} gate entr${removed === 1 ? "y was" : "ies were"} removed from ${target}; osnova now only suggests its tools, it does not enforce them.`
       : clientCanGate(client) ? "" : ` ${client} has no pre-tool hook that can deny a tool call, so no gate was installed; its hooks only add text.`;
-  if (added === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client}.${gateNotice}` };
+  if (added === 0 && removed === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client}.${gateNotice}` };
   const indent = existing === null ? "  " : (/^( +|\t+)"/m.exec(existing)?.[1] ?? "  ");
   const merged = `${JSON.stringify({ ...(client === "cursor" && root.version === undefined ? { version: 1 } : {}), ...root, hooks }, null, indent)}\n`;
   const action = existing === null ? "create" : "append";
@@ -106,7 +120,15 @@ export async function planPlugin(client: PluginClient, options: { home?: string 
   const existing = await readOptional(target);
   if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova ${client === "pi" ? "extension" : "plugin"}.` };
   if (existing !== null) return { kind: "plugin", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a plugin file. Remove it or compare by hand.` };
-  return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN).` };
+  return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN). ${pluginGateNotice(client)}` };
+}
+
+// Pi's tool_call handler returns {block, reason} and can refuse a call. OpenCode and Kilo run
+// tool.execute.before, which returns void: there is no deny channel, so their plugin only adds text.
+export function pluginGateNotice(client: PluginClient): string {
+  return client === "pi"
+    ? "It also installs the search gate: grep and find are denied inside an indexed workspace until an osnova tool has run in the turn. Turn it off for one run with OSNOVA_GATE=off."
+    : `${client} runs plugin hooks that return void and cannot deny a tool call, so no gate is installed; this plugin only adds text.`;
 }
 
 // The shipped Claude Code skill, copied once into ~/.claude/skills/osnova/; a differing file is a conflict.

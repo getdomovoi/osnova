@@ -9,7 +9,8 @@ import { resolveCacheDir } from "../cache/cache.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
 import { boundText } from "../query/budget.js";
-import { denyReason, gateSubject, indexedFilesUnder, isInside, isOsnovaToolName } from "./gate.js";
+import { denyReason, gateClientIds, gateDecisionPayload, gateSubject, indexedFilesUnder, isInside, isOsnovaToolName } from "./gate.js";
+import type { GateClient } from "./gate.js";
 import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
@@ -47,6 +48,8 @@ export interface HookInput {
   readonly sessionId?: string | undefined;
   readonly toolName?: string | undefined;
   readonly toolInput?: Readonly<Record<string, unknown>> | undefined;
+  /** Cursor reports an MCP call as a bare tool name with the server in its own field. */
+  readonly mcpServerName?: string | undefined;
 }
 
 export const hookToolContract = [
@@ -80,6 +83,7 @@ export function parseHookInput(raw: string): HookInput {
     sessionId: typeof record.session_id === "string" ? record.session_id : typeof record.conversation_id === "string" ? record.conversation_id : undefined,
     toolName: typeof record.tool_name === "string" ? record.tool_name : undefined,
     toolInput: record.tool_input !== null && typeof record.tool_input === "object" && !Array.isArray(record.tool_input) ? (record.tool_input as Record<string, unknown>) : undefined,
+    mcpServerName: typeof record.mcp_server_name === "string" ? record.mcp_server_name : undefined,
   };
 }
 
@@ -102,36 +106,65 @@ export function hookSettingsSnippet(command: readonly string[], client: HookClie
   return JSON.stringify(hookSettingsObject(command, client, shape), null, 2);
 }
 
-/** Clients whose pre-tool hook can return a deny decision. Only these get the gate. */
-export const gateClients: readonly HookClient[] = ["claude-code"];
+/**
+ * Clients whose pre-tool hook can return a deny decision, so the gate is worth installing.
+ * Claude Code: `PreToolUse` with `permissionDecision: "deny"`, observed live.
+ * Codex 0.155.1: the same nested object. Its binary carries the error strings "PreToolUse hook returned
+ *   unsupported permissionDecision:allow" and ":ask", so deny is the only decision it accepts there.
+ *   Codex runs no hook until the user trusts it under /hooks.
+ * Cursor: `beforeShellExecution` and `preToolUse`, with a flat `{"permission":"deny"}` object.
+ * OpenCode and Kilo are left out on purpose: their `tool.execute.before` returns void and has no deny
+ * channel, and Pi is an extension rather than a hook file, so it installs through `setup --plugin`.
+ */
+export const gateClients: readonly HookClient[] = ["claude-code", "codex", "cursor"];
 export function clientCanGate(client: HookClient): boolean {
   return gateClients.includes(client);
 }
 
+/** What is still unproven about the gate on this client, in the words the install preview prints. */
+export function gateCaveat(client: HookClient): string {
+  if (client === "codex") return " Codex runs no hook until you trust it under /hooks, so the gate does nothing until then. Its deny shape is read from the Codex binary rather than observed, and an unfamiliar payload allows the call instead of blocking it.";
+  if (client === "cursor") return " Cursor is fail-open by default: a hook that crashes or times out lets the search through. Set failClosed on the entry if you want the opposite.";
+  return "";
+}
+
+// Claude Code calls its search tools Grep, Glob and Bash. Codex calls them grep, glob, search and shell,
+// and emits Claude-style names for some tools, so its matcher carries both spellings. Cursor matches on
+// command text for beforeShellExecution, so it takes no matcher and the gate decides.
+export const gateToolMatcher = "Grep|Glob|Bash";
+export const codexGateToolMatcher = "shell|grep|glob|search|Bash|Grep|Glob";
+export const osnovaToolMatcher = "mcp__.*osnova.*";
+
 // The hook groups a client's file needs. Claude Code and Codex share one shape; Cursor's beforeSubmitPrompt cannot add context,
 // so Cursor gets the stop hook only, as a follow-up message.
-// The gate is the only hook that changes what the agent may do: PreToolUse on the search tools, denied until
-// osnova has run this turn, with a PostToolUse `mark` on the osnova tools to record that it did. It is on by
-// default because a text instruction is not enforcement: the model can skip text, and it did.
+// The gate is the only hook that changes what the agent may do: a pre-tool hook on the search tools, denied
+// until osnova has run this turn, with a post-tool `mark` on the osnova tools to record that it did. It is on
+// by default because a text instruction is not enforcement: the model can skip text, and it did.
 // The PostToolUse grep nudge is opt-in (`nudge`): measured, it did not change what the agent did after a grep.
 export function hookSettingsObject(command: readonly string[], client: HookClient, shape: HookInstallShape = {}): Record<string, unknown> {
   const quoted = command.map((part) => (/[\s"]/.test(part) ? JSON.stringify(part) : part)).join(" ");
   const suffix = client === "claude-code" ? "" : ` --client ${client}`;
-  if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
+  const gate = clientCanGate(client) && shape.gate !== false;
+  if (client === "cursor") {
+    const hooks: Record<string, unknown[]> = { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] };
+    if (gate) {
+      hooks.beforeShellExecution = [{ command: `${quoted} hook gate${suffix}`, timeout: 10 }];
+      hooks.preToolUse = [{ command: `${quoted} hook gate${suffix}`, timeout: 10 }];
+      hooks.afterMCPExecution = [{ command: `${quoted} hook mark${suffix}`, timeout: 5 }];
+    }
+    return { version: 1, hooks };
+  }
   const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
   const hooks: Record<string, unknown[]> = { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] };
   const post: unknown[] = [];
-  if (clientCanGate(client) && shape.gate !== false) {
-    hooks.PreToolUse = [{ matcher: gateToolMatcher, ...entry("gate", 10) }];
+  if (gate) {
+    hooks.PreToolUse = [{ matcher: client === "codex" ? codexGateToolMatcher : gateToolMatcher, ...entry("gate", 10) }];
     post.push({ matcher: osnovaToolMatcher, ...entry("mark", 5) });
   }
   if (client === "claude-code" && shape.nudge === true) post.push({ matcher: "Grep|Bash", ...entry("tool", 10) });
   if (post.length > 0) hooks.PostToolUse = post;
   return { hooks };
 }
-
-export const gateToolMatcher = "Grep|Glob|Bash";
-export const osnovaToolMatcher = "mcp__.*osnova.*";
 
 export type HookClient = "claude-code" | "codex" | "cursor";
 export const hookClients: readonly HookClient[] = ["claude-code", "codex", "cursor"];
@@ -194,7 +227,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       `osnova hook preview for ${client}: add these hooks to ${hookFileDescription(client)}, or run osnova setup --apply --hooks --client ${client}.`,
       `The stop hook continues the turn at most once per diff per session${client === "cursor" ? "" : ", and only when more than OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1) indexed dependents lie outside the change; otherwise it warns through systemMessage"}; its state lives under the osnova cache directory.`,
       gate
-        ? "The gate denies Grep, Glob and shell search inside an indexed workspace until an osnova tool has run in the turn; it allows a search whose target holds no indexed file, and allows every search once osnova has been tried. Turn it off for one run with OSNOVA_GATE=off, or install without it with --gate off."
+        ? `The gate denies Grep, Glob and shell search inside an indexed workspace until an osnova tool has run in the turn; it allows a search whose target holds no indexed file, and allows every search once osnova has been tried. Turn it off for one run with OSNOVA_GATE=off, or install without it with --gate off.${gateCaveat(client)}`
         : `${client} has no pre-tool hook that can deny a tool call, so the gate is not installed for it; its hooks only add text.`,
       hookSettingsSnippet(options.command ?? ["osnova"], client, { nudge: options.nudge === true, gate: options.gate }),
     ].join("\n"));
@@ -204,7 +237,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
   const workspace = options.workspace ?? workspaceRootFor(input.cwd ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
   const fail = (error: unknown): void => io.stderr(`osnova hook: ${error instanceof Error ? error.message : String(error)}`);
   if (event === "mark") {
-    if (!isOsnovaToolName(input.toolName)) return;
+    if (!isOsnovaToolName(input.toolName) && !isOsnovaToolName(input.mcpServerName)) return;
     try { await stampHookState(options.cacheDir, input.sessionId, "osnova"); } catch (error) { fail(error); }
     return;
   }
@@ -254,7 +287,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     return;
   }
   if (event === "tool") {
-    if (isOsnovaToolName(input.toolName)) {
+    if (isOsnovaToolName(input.toolName) || isOsnovaToolName(input.mcpServerName)) {
       try { await stampHookState(options.cacheDir, input.sessionId, "osnova"); } catch (error) { fail(error); }
       return;
     }
@@ -313,9 +346,8 @@ async function runGate(input: HookInput, io: CliIo, workspace: string, options: 
   let indexed = 0;
   for (const target of inside) indexed += indexedFilesUnder(cached, workspace, target);
   if (indexed === 0) return;
-  io.stdout(JSON.stringify({
-    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(subject.label, indexed, workspace) },
-  }));
+  const client = (options.client ?? "claude-code") as GateClient;
+  io.stdout(JSON.stringify(gateDecisionPayload(gateClientIds.includes(client) ? client : "claude-code", denyReason(subject.label, indexed, workspace))));
 }
 
 // One line per named definition, then the count of what the graph holds beyond them. Relationships are not

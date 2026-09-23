@@ -136,6 +136,37 @@ describe("osnova hook gate", () => {
     }
   });
 
+  it("speaks each client's deny shape", async () => {
+    await newTurn();
+    const raw = async (client: string) => {
+      const c = capture(JSON.stringify({ cwd: root, session_id: "gate-session", tool_name: "Grep", tool_input: { pattern: "total" } }));
+      await runCli(["hook", "gate", "--cache-dir", cacheDir, "--client", client], c.io);
+      return JSON.parse(c.out.join("")) as Record<string, never>;
+    };
+    expect(await raw("codex")).toMatchObject({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" } });
+    expect(await raw("cursor")).toMatchObject({ permission: "deny" });
+    expect((await raw("cursor")).agent_message).toContain("osnova_ground");
+    expect(await raw("pi")).toMatchObject({ block: true });
+    expect((await raw("pi")).reason).toContain("osnova_ground");
+  });
+
+  it("reads a call by its shape, so a lowercase codex tool and an argv list are gated too", async () => {
+    await newTurn();
+    expect((await gate({ tool_name: "grep", tool_input: { pattern: "total" } })).decision?.permissionDecision).toBe("deny");
+    expect((await gate({ tool_name: "search", tool_input: { queries: ["total"], path: root } })).decision?.permissionDecision).toBe("deny");
+    expect((await gate({ tool_name: "shell", tool_input: { command: ["rg", "foo"] } })).decision?.permissionDecision).toBe("deny");
+    expect((await gate({ tool_name: "shell", tool_input: { command: ["ls", "-la"] } })).decision).toBeUndefined();
+    expect((await gate({ tool_name: "grep", tool_input: { pattern: "total", path: outside } })).decision).toBeUndefined();
+  });
+
+  it("lifts the denial when the osnova server is named in its own field", async () => {
+    await newTurn();
+    expect((await gate(grep("total"))).decision?.permissionDecision).toBe("deny");
+    const c = capture(JSON.stringify({ cwd: root, session_id: "gate-session", tool_name: "osnova_ground", mcp_server_name: "osnova" }));
+    await runCli(["hook", "mark", "--cache-dir", cacheDir, "--client", "cursor"], c.io);
+    expect((await gate(grep("total"))).decision).toBeUndefined();
+  });
+
   it("allows everything when the workspace has no cache at all", async () => {
     const empty = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-gate-cold-"));
     const c = capture(JSON.stringify({ cwd: empty, session_id: "cold", tool_name: "Grep", tool_input: { pattern: "x" } }));

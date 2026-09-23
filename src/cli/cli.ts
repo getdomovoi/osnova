@@ -3,6 +3,7 @@ import { promises as fs, statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
 import { hookClients, hookEvents, runHook, workspaceRootFor } from "./hook.js";
+import { gateClientIds } from "./gate.js";
 import type { HookClient, HookEvent } from "./hook.js";
 import type { PluginClient } from "../diagnostics/setup-apply.js";
 import { refreshWorkspace } from "../api.js";
@@ -57,7 +58,7 @@ usage:
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--workspace <path>] [--cache-dir <path>]
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge] [--gate <on|off>]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
-  osnova hook <prompt|session|stop|tool|gate|mark|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--gate <on|off>] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
+  osnova hook <prompt|session|stop|tool|gate|mark|install-preview> [--client <claude-code|codex|cursor|pi>] [--nudge] [--gate <on|off>] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
   osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
@@ -495,7 +496,8 @@ export async function runCli(
       const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, gate: { type: "string" }, "full-contract": { type: "boolean" } } });
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
-      if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
+      const clientsFor = event === "gate" || event === "mark" ? gateClientIds : hookClients;
+      if (hookClient !== undefined && !(clientsFor as readonly string[]).includes(hookClient)) throw new Error(`osnova hook ${String(event)} --client must be one of: ${clientsFor.join(", ")}`);
       if (!hookEvents.includes(event as HookEvent)) throw new Error(`osnova hook needs one of: ${hookEvents.join(", ")}`);
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
       await runHook(event as HookEvent, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, gate: gateFlag(parsed.values.gate), fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });

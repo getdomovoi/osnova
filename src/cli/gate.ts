@@ -13,9 +13,13 @@ const searchCommands = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack", "fd
 // Words that stand in front of the command being run and are not the command itself.
 const wrapperWords = /^(?:\w+=\S*|sudo|command|exec|time|env|nice|nohup|xargs)$/;
 
-/** The osnova MCP tools under both install forms: `mcp__osnova__*` and any plugin-scoped prefix. */
+/**
+ * An osnova tool under every install form seen so far: `mcp__osnova__osnova_ground` for the plain MCP
+ * install, `mcp__plugin_<scope>_osnova__…` for the plugin install, and the bare `osnova_ground` that
+ * Cursor reports in `afterMCPExecution` with the server name in a separate field.
+ */
 export function isOsnovaToolName(name: string | undefined): boolean {
-  return name !== undefined && /^mcp__[^_]*_*.*osnova.*__/i.test(name);
+  return name !== undefined && /(?:^|_)osnova/i.test(name);
 }
 
 export function expandPath(value: string, cwd: string): string {
@@ -115,20 +119,60 @@ export interface GateSubject {
   readonly label: string;
 }
 
+// Every client names its tools differently: Claude Code has Grep, Glob and Bash; Codex has grep, glob,
+// search and shell; Cursor reports Shell and Grep; Pi has bash, grep and find. Rather than keep four
+// name tables that go stale, the gate reads the call's shape: a `command` field is a shell command, and
+// a tool named after a search tool searches the path it was given.
+const searchToolNames = new Set(["grep", "glob", "search", "find", "rg", "ripgrep", "codebase_search", "file_search"]);
+const commandFields = ["command", "cmd"] as const;
+const pathFields = ["path", "paths", "search_paths", "directory", "dir", "workdir", "cwd"] as const;
+
+function shellCommandOf(toolInput: Readonly<Record<string, unknown>> | undefined): string | null {
+  for (const field of commandFields) {
+    const value = toolInput?.[field];
+    if (typeof value === "string" && value.length > 0) return value;
+    // Codex and some MCP shells pass argv as a list; joining it is enough to read the head and its paths.
+    if (Array.isArray(value) && value.every((part) => typeof part === "string") && value.length > 0) return value.join(" ");
+  }
+  return null;
+}
+
+function givenPaths(toolInput: Readonly<Record<string, unknown>> | undefined): string[] {
+  const found: string[] = [];
+  for (const field of pathFields) {
+    const value = toolInput?.[field];
+    if (typeof value === "string" && value.length > 0) found.push(value);
+    else if (Array.isArray(value)) for (const part of value) if (typeof part === "string" && part.length > 0) found.push(part);
+  }
+  return found;
+}
+
 /** What this tool call searches, or null when the gate has nothing to say about it. */
 export function gateSubject(request: GateRequest): GateSubject | null {
   const { toolName, toolInput, cwd } = request;
-  if (toolName === "Grep" || toolName === "Glob") {
-    const given = toolInput?.path;
-    const target = typeof given === "string" && given.length > 0 ? expandPath(given, cwd) : cwd;
-    return { targets: [target], usedOsnova: false, label: toolName };
+  const command = shellCommandOf(toolInput);
+  if (command !== null) {
+    const { searches, usedOsnova } = scanShellCommand(command, cwd);
+    if (searches.length === 0) return { targets: [], usedOsnova, label: "grep/rg/find" };
+    return { targets: searches.flatMap((paths) => (paths.length > 0 ? [...paths] : [cwd])), usedOsnova, label: "grep/rg/find" };
   }
-  if (toolName !== "Bash") return null;
-  const command = toolInput?.command;
-  if (typeof command !== "string") return null;
-  const { searches, usedOsnova } = scanShellCommand(command, cwd);
-  if (searches.length === 0) return { targets: [], usedOsnova, label: "grep/rg/find" };
-  return { targets: searches.flatMap((paths) => (paths.length > 0 ? [...paths] : [cwd])), usedOsnova, label: "grep/rg/find" };
+  if (toolName === undefined || !searchToolNames.has(toolName.toLowerCase())) return null;
+  const given = givenPaths(toolInput);
+  const targets = given.length > 0 ? given.map((value) => expandPath(value, cwd)) : [cwd];
+  return { targets, usedOsnova: false, label: toolName };
+}
+
+export type GateClient = "claude-code" | "codex" | "cursor" | "pi";
+export const gateClientIds: readonly GateClient[] = ["claude-code", "codex", "cursor", "pi"];
+
+// One decision, three wire shapes. Claude Code and Codex read the same nested object (Codex 0.155.1
+// accepts only `deny` there: its binary carries the errors "PreToolUse hook returned unsupported
+// permissionDecision:allow" and ":ask"). Cursor reads a flat, snake_case object with a message for the
+// human and a message for the model. Pi's extension host takes a typed result from the handler.
+export function gateDecisionPayload(client: GateClient, reason: string): unknown {
+  if (client === "cursor") return { permission: "deny", user_message: "osnova: search the index first", agent_message: reason };
+  if (client === "pi") return { block: true, reason };
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
 }
 
 /** How many indexed files lie at or under an absolute path. Zero means osnova cannot answer a search there. */
