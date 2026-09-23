@@ -724,7 +724,10 @@ export function formatImpactFiles(result: ImpactResult): string[] {
 export function formatImpactUncertainty(uncertainty: ImpactResult["uncertainty"]): string {
   const phrases = uncertainty.notes.map((note) => {
     const short = note.match(/^diff-short-by-(\d+)-context-lines-treated-as-unchanged$/);
-    return short === null ? impactNoteText[note] ?? note : `diff ${short[1]} context lines short, treated unchanged`;
+    if (short !== null) return `diff ${short[1]} context lines short, treated unchanged`;
+    const unindexed = note.match(/^diff-files-not-in-index-(\d+):(.*)$/s);
+    if (unindexed !== null) return `${unindexed[1]} diff file${unindexed[1] === "1" ? "" : "s"} not in the index, first ${unindexed[2]}; diff paths are read relative to the workspace`;
+    return impactNoteText[note] ?? note;
   }).filter((text) => text !== "");
   return [`uncertainty: ${uncertainty.unresolvedEdges} unresolved edges not listed; a missing dependent is not proof of absence`, ...phrases].join("; ");
 }

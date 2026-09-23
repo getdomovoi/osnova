@@ -48,6 +48,7 @@ export interface ImpactDependent {
 export interface ImpactOptions {
   readonly diff?: string | undefined;
   readonly maxDepth?: number | undefined;
+  readonly diffPathPrefix?: string | undefined;
 }
 
 export interface ImpactResult {
@@ -147,7 +148,7 @@ function parseDiff(diff: string): DiffFile[] & { tolerated?: number } {
       else if (line.startsWith(" ") || line === "") { oldLine++; newLine++; oldLeft--; newLeft--; }
       else if (line.startsWith("@@") && oldLeft === newLeft) { finish(); }
       else throw new Error(`osnova: invalid unified diff hunk line ${number + 1}: the hunk header promised ${oldLeft} more old and ${newLeft} more new lines; pass the exact diff output, not a summary`);
-      if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts");
+      if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts; pass the exact diff output, not a summary");
       if (!line.startsWith("@@")) continue;
     }
     if (line.startsWith("diff --git ")) { finish(); file = undefined; }
@@ -201,6 +202,16 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   const beforeReceipt = indexReceipt(base), afterReceipt = indexReceipt(current);
   const diffs = options.diff === undefined ? null : parseDiff(options.diff);
   const sameIndex = base === current;
+  const prefix = options.diffPathPrefix === undefined || options.diffPathPrefix === "" ? null : `${options.diffPathPrefix.replace(/\/+$/, "")}/`;
+  const localPath = (file: string | null): string | null =>
+    file === null || prefix === null || base.files.has(file) || current.files.has(file) || !file.startsWith(prefix) ? file : file.slice(prefix.length);
+  for (const diff of diffs ?? []) { diff.before = localPath(diff.before); diff.after = localPath(diff.after); }
+  const unindexedDiffFiles = new Set<string>();
+  for (const diff of diffs ?? []) {
+    const named = diff.after ?? diff.before;
+    if (named === null) continue;
+    if (!base.files.has(diff.before ?? named) && !current.files.has(diff.after ?? named)) unindexedDiffFiles.add(named);
+  }
   const renames = new Map<string, { path: string; basis: "diff-rename" | "identical-file-hash" }>();
   for (const diff of diffs ?? []) {
     if (diff.before !== null && diff.after !== null && diff.before !== diff.after && base.files.has(diff.before) && current.files.has(diff.after)) {
@@ -350,6 +361,7 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
       relationshipEvidence(index, edge, index === base ? beforeReceipt : afterReceipt) === null).length, 0),
     notes: ["indexed-graph-only", ...(sameIndex ? ["base-snapshot-is-current-index", "deleted-symbols-not-visible"] : []), "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",
       ...(diffs === null ? [] : ["provided-diff-ranges-not-verified-against-source"]),
+      ...(unindexedDiffFiles.size > 0 ? [`diff-files-not-in-index-${unindexedDiffFiles.size}:${[...unindexedDiffFiles].sort(compareText)[0]}`] : []),
       ...((diffs?.tolerated ?? 0) > 0 ? [`diff-short-by-${diffs!.tolerated}-context-lines-treated-as-unchanged`] : []),
       ...(beforeReceipt.diagnostics + afterReceipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])] } };
 }

@@ -8,7 +8,7 @@ import {
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspace, indexGeneration } from "../api.js";
-import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
+import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -383,14 +383,24 @@ export function createOsnovaMcpServer(
         case "osnova_settle": {
           const baseRef = optionalString(args, "baseRef");
           const diff = optionalString(args, "diff");
-          if (baseRef === undefined && diff === undefined) throw new Error("osnova_settle needs diff or baseRef");
+          const useBaseRef = 'pass baseRef: "HEAD" and osnova computes the diff of your uncommitted edits itself';
+          if (baseRef === undefined && diff === undefined) throw new Error(`osnova_settle needs diff or baseRef; ${useBaseRef}`);
           const maxDepth = optionalNumber(args, "depth") ?? 1;
+          const diffPathPrefix = diff === undefined ? undefined : await workspaceGitPrefix(absRoot);
+          const measured = (run: () => ReturnType<typeof impact>): ReturnType<typeof impact> => {
+            try {
+              return run();
+            } catch (error) {
+              if (error instanceof Error && error.message.includes("pass the exact diff output")) throw new Error(`${error.message}, or ${useBaseRef}`);
+              throw error;
+            }
+          };
           let result;
-          if (baseRef === undefined) result = impact(index, index, { diff, maxDepth });
+          if (baseRef === undefined) result = measured(() => impact(index, index, { diff, maxDepth, diffPathPrefix }));
           else {
             const base = await materializeBaseRef(absRoot, baseRef, { cacheDir });
             const computed = diff ?? await baseDiff(absRoot, base.sha);
-            result = impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth });
+            result = measured(() => impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth, diffPathPrefix }));
           }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
