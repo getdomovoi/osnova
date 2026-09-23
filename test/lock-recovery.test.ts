@@ -25,18 +25,18 @@ const errno = (code: string): NodeJS.ErrnoException => Object.assign(new Error(c
 
 afterEach(() => vi.restoreAllMocks());
 
-it("recovers a dead owner even when the first rename and the first marker removal fail transiently", async () => {
+it("recovers a dead owner even when the first rename and the first directory removal of the reclaim fail transiently", async () => {
   const lockPath = await deadLock();
   const rename = fs.rename.bind(fs);
   const rmdir = fs.rmdir.bind(fs);
   let renameFailures = 1;
   let rmdirFailures = 1;
   vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-    if (renameFailures > 0 && String(from) === lockPath) { renameFailures -= 1; throw errno("EPERM"); }
+    if (renameFailures > 0 && String(from) === path.join(lockPath, "owner.json")) { renameFailures -= 1; throw errno("EPERM"); }
     return rename(from, to);
   });
   vi.spyOn(fs, "rmdir").mockImplementation(async (target, options) => {
-    if (rmdirFailures > 0 && String(target) === path.join(lockPath, "recovery")) { rmdirFailures -= 1; throw errno("EBUSY"); }
+    if (rmdirFailures > 0 && String(target) === lockPath) { rmdirFailures -= 1; throw errno("EBUSY"); }
     return rmdir(target, options);
   });
   let entered = 0;
@@ -56,12 +56,12 @@ it("does not recover a lock whose owner is alive", async () => {
 
 it("keeps polling when the lock directory cannot be created or its owner read for a moment, as Windows reports mid-rename", async () => {
   const lockPath = await deadLock();
-  const mkdir = fs.mkdir.bind(fs);
+  const rename = fs.rename.bind(fs);
   const readFile = fs.readFile.bind(fs);
   let mkdirFailures = 0, readFailures = 0;
-  vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
-    if (String(target) === lockPath && mkdirFailures < 1) { mkdirFailures += 1; throw errno("EPERM"); }
-    return mkdir(target, options as never) as Promise<undefined>;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(to) === lockPath && mkdirFailures < 1) { mkdirFailures += 1; throw errno("EPERM"); }
+    return rename(from, to);
   });
   vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
     if (String(target) === path.join(lockPath, "owner.json") && readFailures < 1) { readFailures += 1; throw errno("EBUSY"); }
@@ -72,4 +72,31 @@ it("keeps polling when the lock directory cannot be created or its owner read fo
   expect(mkdirFailures).toBe(1);
   expect(readFailures).toBe(1);
   await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("clears a lock directory it emptied itself, without waiting out the grace period", async () => {
+  const lockPath = await deadLock();
+  const rmdir = fs.rmdir.bind(fs);
+  const rename = fs.rename.bind(fs);
+  let rmdirFailures = 1;
+  vi.spyOn(fs, "rmdir").mockImplementation(async (target, options) => {
+    if (rmdirFailures > 0 && String(target) === lockPath) { rmdirFailures -= 1; throw errno("EBUSY"); }
+    return rmdir(target, options);
+  });
+  // Windows refuses to rename a directory onto an existing one even when that one is empty, so an
+  // empty lock directory cannot simply be taken over there the way it can on Linux and macOS.
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(to) === lockPath) {
+      let exists = true;
+      try { await fs.stat(lockPath); } catch { exists = false; }
+      if (exists) throw errno("EPERM");
+    }
+    return rename(from, to);
+  });
+  const started = performance.now();
+  await withCacheLock(lockPath, async () => {}, { lockTimeoutMs: 30_000, lockPollMs: 5 });
+  // What the reclaimer emptied a moment ago names nobody and cannot be held by anyone. Waiting
+  // abandonedLockGraceMs for it is the bug.
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(rmdirFailures).toBe(0);
 });

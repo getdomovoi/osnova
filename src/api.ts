@@ -5,7 +5,7 @@ import { resolveCacheDir, workspaceDirFor, workspaceLockPath, workspaceKey, cach
 import type { LoadIndexOptions, OsnovaIndex } from "./types.js";
 import { canonicalWorkspaceRoot, workspaceIdentity, validRelativePath } from "./index/workspace.js";
 import type { WorkspaceOptions } from "./index/workspace.js";
-import { withCacheLock } from "./cache/lock.js";
+import { cacheLockTimeoutIn, withCacheLock } from "./cache/lock.js";
 import { buildIndexSnapshot } from "./index/build.js";
 import { applyFreshnessReport, inspectFreshness, isStale } from "./index/incremental.js";
 import { loadVerification, saveVerification } from "./index/verification.js";
@@ -61,6 +61,23 @@ function rememberLoaded(key: string, index: OsnovaIndex, artifact: string | unde
   while (loadedIndexes.size > limit) loadedIndexes.delete(loadedIndexes.keys().next().value as string);
 }
 
+// A cached artifact is derived data. When it cannot be decoded, rebuilding it is the repair, the
+// same as for an inconsistent sidecar. A failure of the file system itself (a system error such as
+// EACCES or EIO) or of a lock is not repaired by rebuilding and is reported instead.
+function isRebuildableCacheFailure(error: unknown): boolean {
+  if (isSectionInconsistency(error)) return true;
+  let readFailure = false;
+  let cause: unknown = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (cause instanceof IndexingError && cause.diagnostic.code === "cache-read-failed") readFailure = true;
+    const next = (cause as { cause?: unknown } | null | undefined)?.cause;
+    if (next === undefined || next === null) break;
+    cause = next;
+  }
+  if (!readFailure || cause instanceof IndexingError) return false;
+  return cause instanceof Error && typeof (cause as NodeJS.ErrnoException).syscall !== "string";
+}
+
 async function readGeneration(root: string, cacheDir: string): Promise<string | undefined> {
   const file = path.join(workspaceDirFor(cacheDir, root), "index.sha");
   try {
@@ -101,7 +118,7 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
       try {
         index = await loadArtifact(canonicalRoot, canonicalCache);
       } catch (error) {
-        if (!isSectionInconsistency(error)) throw error;
+        if (!isRebuildableCacheFailure(error)) throw error;
         index = undefined;
       }
     }
@@ -151,7 +168,7 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
         known = inspection.metadata;
         dirty = true;
       } catch (error) {
-        if (rebuiltAfterSectionFailure || !isSectionInconsistency(error)) throw error;
+        if (rebuiltAfterSectionFailure || !isRebuildableCacheFailure(error)) throw error;
         rebuiltAfterSectionFailure = true;
         index = undefined;
         known = undefined;
@@ -159,7 +176,11 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
       }
     }
     throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
-  }, options);
+  }, options).catch((error: unknown) => {
+    // The lock a refresh actually waited on is often a nested one, such as the cache-wide eviction
+    // lock, wrapped in a read or write failure that names only the workspace directory.
+    throw cacheLockTimeoutIn(error) ?? error;
+  });
   refreshing.set(taskKey, task);
   try {
     return await task;
