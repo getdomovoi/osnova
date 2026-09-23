@@ -125,15 +125,21 @@ Every response opens with its index generation, says when the index is partial, 
 
 One global install serves every repository and every client: one entry in each client's global config, nothing per project, nothing written inside your repository. `osnova setup --preview --client <name>` shows the diff and writes nothing. What each hook prints, when it stays quiet, and what the trials measured are in the [reference](docs/reference.md#hooks-and-setup-in-full).
 
-| Client | How to wire | What it adds |
-| --- | --- | --- |
-| Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
-| Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace |
-| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently |
-| Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message |
-| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin: full contract in the system prompt, starting points on each message |
-| Kilo | `osnova setup --apply --client kilo --plugin` | MCP entry plus the same plugin |
-| Pi | `osnova setup --apply --client pi --plugin` | MCP entry through `pi-mcp-adapter` plus an extension that does the same |
+| Client | How to wire | What it adds | Gate |
+| --- | --- | --- | --- |
+| Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge | Yes, `PreToolUse` |
+| Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace | Yes |
+| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently | Yes, once trusted |
+| Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message | Yes, fail-open |
+| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin: full contract in the system prompt, starting points on each message | No deny channel |
+| Kilo | `osnova setup --apply --client kilo --plugin` | MCP entry plus the same plugin | No deny channel |
+| Pi | `osnova setup --apply --client pi --plugin` | MCP entry through `pi-mcp-adapter` plus an extension that does the same | Yes, `tool_call` |
+
+### The search gate
+
+Text asks; the gate refuses. Inside a workspace osnova has indexed, the gate denies `Grep`, `Glob` and shell search (`grep`, `rg`, `ag`, `ack`, `fd`, `find`, `git grep`) until an osnova tool has run in the current turn. After osnova has been tried, search is allowed again as a fallback for the files osnova does not index. A search that targets a path holding no indexed file is allowed at once, a command after a `|` is a filter rather than a search, and a path outside the workspace is never gated.
+
+It installs by default for every client that can deny a tool call, because an instruction the model can skip is not enforcement. To opt out: `osnova setup --apply --hooks --gate off` installs without it and removes one already there, and `OSNOVA_GATE=off` turns it off for a single run. `osnova doctor` reports, per client, whether the gate is installed and whether the mark that lifts it is installed with it.
 
 ## In CI
 
