@@ -34,4 +34,26 @@ describe.skipIf(process.platform === "win32")("settle-ci.sh", () => {
     expect(git(repo, "status", "--porcelain")).toBe("");
     await fs.rm(temporary, { recursive: true, force: true });
   });
+
+  const version = (createRequire(import.meta.url)(path.join(root, "package.json")) as { version: string }).version;
+  const resolved = (env: Record<string, string>): string =>
+    execFileSync("bash", [path.join(root, "scripts", "settle-ci.sh")], { encoding: "utf8", env: { ...process.env, OSNOVA: "", OSNOVA_VERSION: "", ...env, OSNOVA_PRINT_COMMAND: "1" } }).trim();
+
+  it("runs the version of its own checkout by default, floats only when asked, and yields to a command", () => {
+    expect(resolved({})).toBe(`npx -y @getdomovoi/osnova@${version}`);
+    expect(resolved({ OSNOVA_VERSION: "latest" })).toBe("npx -y @getdomovoi/osnova@latest");
+    expect(resolved({ OSNOVA_VERSION: "0.7.0" })).toBe("npx -y @getdomovoi/osnova@0.7.0");
+    expect(resolved({ OSNOVA: "node dist/bin.js", OSNOVA_VERSION: "latest" })).toBe("node dist/bin.js");
+  });
+
+  it("ships an action whose version input is empty by default and whose documented ref is this release", async () => {
+    const action = await fs.readFile(path.join(root, "action.yml"), "utf8");
+    expect(action).toMatch(/\n {2}version:\n {4}description: [^\n]*\n {4}default: ""\n/);
+    expect(action).not.toContain("format('npx");
+    for (const file of ["README.md", "docs/reference.md"]) {
+      const text = await fs.readFile(path.join(root, file), "utf8");
+      expect(text, file).toContain(`- uses: getdomovoi/osnova@v${version}`);
+      expect(text, file).not.toContain("- uses: getdomovoi/osnova@main");
+    }
+  });
 });
