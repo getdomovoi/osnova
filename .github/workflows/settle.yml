@@ -17,6 +17,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Extraction changes must move extractionVersion
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/extraction-version-guard.mjs "origin/$BASE_REF"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: ./

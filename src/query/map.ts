@@ -1,13 +1,18 @@
 import type { DirCluster, HubEntry, MapOptions, MapResult, OsnovaIndex } from "../types.js";
 import { depthOneReach, dirOf } from "./reach.js";
 
-const DEFAULT_MAX_DIRS = 16;
+// The documented default, and the one every surface uses: the CLI, MCP and the library all call map().
+export const defaultMaxDirs = 8;
 const HUBS_PER_DIR = 3;
 const HOTSPOT_LIMIT = 10;
 const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 
 export function map(index: OsnovaIndex, options?: MapOptions): MapResult {
-  const maxDirs = Math.max(1, options?.maxDirs ?? DEFAULT_MAX_DIRS);
+  const maxDirs = options?.maxDirs ?? defaultMaxDirs;
+  // Checked here rather than per surface, so no caller can clamp or truncate the map silently.
+  if (!Number.isSafeInteger(maxDirs) || maxDirs < 1) {
+    throw new RangeError("osnova: maxDirs must be a safe integer >= 1");
+  }
 
   interface DirStat {
     dir: string;

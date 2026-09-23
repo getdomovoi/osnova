@@ -21,7 +21,7 @@ import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
 import { unreferenced } from "../query/unreferenced.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFileDiagnostics, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -105,7 +105,7 @@ const toolDefinitions = [
       properties: {
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers (default), out = callees" },
-        depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
+        depth: { type: "number", description: "Hops to walk from the symbol (default 1); 2 also lists callers of callers, or callees of callees with direction=out" },
         full: { type: "boolean", description: "Print every call site with no per-symbol cap or summary (default false); output is still clipped at 16,384 code units" },
       },
       required: ["symbol"],
@@ -197,6 +197,28 @@ const toolDefinitions = [
   },
 ] as const;
 
+const argumentNames: ReadonlyMap<string, readonly string[]> = new Map(
+  toolDefinitions.map((tool) => [tool.name, Object.keys(tool.inputSchema.properties)]),
+);
+
+// The low-level Server validates the JSON-RPC envelope, never a tool's own inputSchema. An agent that
+// misspells an argument would otherwise get a confident answer to a question it did not ask.
+function checkArguments(name: string, args: unknown): Record<string, unknown> {
+  if (args === undefined) return {};
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    throw new Error(`arguments for ${name} must be an object`);
+  }
+  const record = args as Record<string, unknown>;
+  const known = argumentNames.get(name);
+  if (known === undefined) return record;
+  const unknown = Object.keys(record).filter((key) => !known.includes(key));
+  if (unknown.length > 0) {
+    const listed = unknown.map((key) => JSON.stringify(key)).join(", ");
+    throw new Error(`unknown argument${unknown.length > 1 ? "s" : ""} ${listed} for ${name}; expected one of ${known.join(", ")}`);
+  }
+  return record;
+}
+
 export interface OsnovaMcpWatchOptions {
   readonly debounceMs?: number;
   readonly maxStaleMs?: number;
@@ -280,8 +302,8 @@ export function createOsnovaMcpServer(
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
-    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
+      const args = checkArguments(name, request.params.arguments);
       const index = await current();
       const generation = `osnova generation ${indexGeneration(index).slice(0, mcpGenerationDigits)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
@@ -298,22 +320,21 @@ export function createOsnovaMcpServer(
         }
         case "osnova_thread": {
           const pattern = requireString(args, "pattern");
-          if (args.limit !== undefined && typeof args.limit !== "number") {
-            throw new RangeError("osnova: search limits must be nonnegative safe integers");
-          }
           const result = findTextDetailed(index, pattern, {
             fixed: optionalBoolean(args, "fixed"),
             ignoreCase: optionalBoolean(args, "ignoreCase"),
             in: optionalString(args, "in"),
-            limit: args.limit ?? 50,
+            limit: optionalNumber(args, "limit") ?? 50,
             matchesPerGroup: 10,
           });
           return textResult(`${prefix}\n${formatFindTextResult(result)}`);
         }
         case "osnova_outline": {
           const file = requireString(args, "file");
-          const available = maximumMcpSkeletonCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${formatSkeletonBounded(index, skeleton(index, file), available)}`);
+          const result = skeleton(index, file);
+          const head = [prefix, formatFileDiagnostics(index, result.file)].filter(Boolean).join("\n");
+          const available = maximumMcpSkeletonCodeUnits - head.length - 1;
+          return textResult(`${head}\n${formatSkeletonBounded(index, result, available)}`);
         }
         case "osnova_warp": {
           const symbol = requireString(args, "symbol");
@@ -321,10 +342,7 @@ export function createOsnovaMcpServer(
           if (direction !== undefined && direction !== "in" && direction !== "out") {
             throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
           }
-          if (args.depth !== undefined && typeof args.depth !== "number") {
-            throw new RangeError("osnova: caller depth must be a positive safe integer");
-          }
-          const depthValue = args.depth;
+          const depthValue = optionalNumber(args, "depth");
           const full = optionalBoolean(args, "full") ?? false;
           const result = callersDetailed(index, symbol, {
             ...(direction !== undefined ? { direction } : {}),
@@ -336,7 +354,7 @@ export function createOsnovaMcpServer(
         }
         case "osnova_groundwork": {
           const card = await renderMapCard(index, {
-            maxDirs: optionalNumber(args, "maxDirs") ?? 8,
+            maxDirs: optionalNumber(args, "maxDirs"),
             staleCount: 0,
             maxCodeUnits: Math.min(maximumOsnovaMapCardCodeUnits, maximumMcpMapCodeUnits) - generation.length - 1,
           });
@@ -350,9 +368,6 @@ export function createOsnovaMcpServer(
           const symbols = optionalStringArray(args, "symbols");
           const question = optionalString(args, "question");
           if (symbols === undefined && question === undefined) throw new Error("osnova_footing needs a question or a non-empty symbols array");
-          for (const key of ["limit", "depth"]) {
-            if (args[key] !== undefined && typeof args[key] !== "number") throw new RangeError(`osnova: footing ${key} must be a nonnegative safe integer`);
-          }
           const kinds = optionalStringArray(args, "kinds");
           for (const kind of kinds ?? []) {
             if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
@@ -369,9 +384,6 @@ export function createOsnovaMcpServer(
           const baseRef = optionalString(args, "baseRef");
           const diff = optionalString(args, "diff");
           if (baseRef === undefined && diff === undefined) throw new Error("osnova_settle needs diff or baseRef");
-          if (args.depth !== undefined && typeof args.depth !== "number") {
-            throw new RangeError("osnova: settle depth must be a nonnegative safe integer");
-          }
           const maxDepth = optionalNumber(args, "depth") ?? 1;
           let result;
           if (baseRef === undefined) result = impact(index, index, { diff, maxDepth });
@@ -389,7 +401,6 @@ export function createOsnovaMcpServer(
           if (sites === undefined) throw new Error("osnova_plumb needs a non-empty sites array of path:line");
           const direction = optionalString(args, "direction");
           if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
-          if (args.depth !== undefined && typeof args.depth !== "number") throw new RangeError("osnova: plumb depth must be a positive safe integer");
           const result = plumb(index, symbol, parseClaims(sites), { direction, depth: optionalNumber(args, "depth") });
           const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
@@ -398,8 +409,6 @@ export function createOsnovaMcpServer(
           const symbols = optionalStringArray(args, "symbols");
           const file = optionalString(args, "file");
           if ((symbols === undefined) === (file === undefined)) throw new Error("osnova_tests needs exactly one of a non-empty symbols array or a file");
-          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: tests limit must be a nonnegative safe integer");
-          if (args.includeImportOnly !== undefined && typeof args.includeImportOnly !== "boolean") throw new Error("osnova_tests includeImportOnly must be a boolean");
           const limit = optionalNumber(args, "limit");
           const includeImportOnly = optionalBoolean(args, "includeImportOnly");
           const available = maximumMcpTestsCodeUnits - prefix.length - 1;
@@ -411,9 +420,6 @@ export function createOsnovaMcpServer(
           for (const kind of kinds ?? []) {
             if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
           }
-          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: unreferenced limit must be a nonnegative safe integer");
-          if (args.scope !== undefined && typeof args.scope !== "string") throw new Error("osnova_unreferenced scope must be a string path prefix");
-          if (args.includeExported !== undefined && typeof args.includeExported !== "boolean") throw new Error("osnova_unreferenced includeExported must be a boolean");
           const result = unreferenced(index, {
             scope: optionalString(args, "scope"), kinds: kinds?.filter(isSymbolKind), limit: optionalNumber(args, "limit"), includeExported: optionalBoolean(args, "includeExported"),
           });
@@ -456,17 +462,23 @@ function errorResult(message: string, maxCodeUnits?: number): {
   return { ...textResult(`osnova error: ${message}`, maxCodeUnits), isError: true };
 }
 
+// Readers enforce the declared type and nothing else. Ranges stay with the engine, so the CLI and MCP
+// share one message for a value of the right type that is out of range.
+const typeName = (value: unknown): string => (value === null ? "null" : Array.isArray(value) ? "array" : typeof value);
+
 function requireString(args: Record<string, unknown>, key: string): string {
   const value = args[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`missing required string argument "${key}"`);
-  }
+  if (value === undefined) throw new Error(`missing required string argument "${key}"`);
+  if (typeof value !== "string") throw new Error(`argument "${key}" must be a string, got ${typeName(value)}`);
+  if (value.length === 0) throw new Error(`argument "${key}" must not be empty`);
   return value;
 }
 
 function optionalString(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error(`argument "${key}" must be a string, got ${typeName(value)}`);
+  return value.length > 0 ? value : undefined;
 }
 
 function optionalStringArray(args: Record<string, unknown>, key: string): readonly string[] | undefined {
@@ -480,12 +492,16 @@ function optionalStringArray(args: Record<string, unknown>, key: string): readon
 
 function optionalNumber(args: Record<string, unknown>, key: string): number | undefined {
   const value = args[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") throw new Error(`argument "${key}" must be a number, got ${typeName(value)}`);
+  return value;
 }
 
 function optionalBoolean(args: Record<string, unknown>, key: string): boolean | undefined {
   const value = args[key];
-  return typeof value === "boolean" ? value : undefined;
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`argument "${key}" must be a boolean, got ${typeName(value)}`);
+  return value;
 }
 
 export async function runMcpStdio(

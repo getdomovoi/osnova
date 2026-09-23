@@ -1,7 +1,38 @@
-import type { EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, FileCard, OsnovaEdge, RouteInfo } from "../types.js";
+import type { EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, ExportHop, FileCard, OsnovaEdge, ReceiverBasis, ReceiverMode, RouteInfo } from "../types.js";
 import { sha256Hex } from "./scan.js";
 
-export const edgeKinds: readonly EdgeKind[] = ["calls", "references", "imports", "extends", "routes"];
+// The position in this list is the stored encoding of an edge's kind, so the order is written down
+// rather than left to the order of a literal. A new kind takes the next number; renumbering one
+// reinterprets every stored edge and needs a format version bump.
+const edgeKindWireOrder = { calls: 0, references: 1, imports: 2, extends: 3, routes: 4 } satisfies Record<EdgeKind, number>;
+export const edgeKinds: readonly EdgeKind[] = (Object.keys(edgeKindWireOrder) as EdgeKind[])
+  .sort((a, b) => edgeKindWireOrder[a] - edgeKindWireOrder[b]);
+
+// A literal Record<T, true> must name every member of T and nothing else, so a validator built from
+// one cannot drift from its union: a new member is a compile error here, not an artifact that the
+// reader rejects as corrupt right after the writer produced it.
+export const membersOf = <T extends string>(members: Record<T, true>): ReadonlySet<string> => new Set(Object.keys(members));
+
+type PlainResolvedMethod = Extract<EdgeResolution, { status: "resolved"; via?: undefined }>["method"];
+type UnresolvedReason = Extract<EdgeResolution, { status: "unresolved" }>["reason"];
+type BlockedReason = Extract<EdgeBinding, { kind: "blocked" }>["reason"];
+type InstanceBasis = Extract<EdgeBinding, { kind: "instance" }>["basis"];
+
+const plainResolvedMethods = membersOf<PlainResolvedMethod>({
+  "import-path": true, "same-file-name": true, "imported-file-name": true, "unique-name": true, "import-binding": true, "lexical-definition": true,
+});
+const unresolvedReasons = membersOf<UnresolvedReason>({
+  "no-matching-symbol": true, "import-target-unresolved": true, "import-target-ambiguous": true, "binding-blocked": true,
+  "bound-symbol-missing": true, "shadowed-declaration": true, "route-handler-inline": true, "route-handler-wrapped": true,
+  "re-export-incomplete": true, "re-export-cycle": true, "receiver-unresolved": true, "unbound-global": true,
+});
+const receiverModes = membersOf<ReceiverMode>({ instance: true, class: true });
+const receiverBases = membersOf<ReceiverBasis>({ constructor: true, lexical: true, "class-reference": true, annotation: true, return: true });
+const blockedReasons = membersOf<BlockedReason>({
+  "local-value": true, unsupported: true, ambiguous: true, "unknown-receiver": true, unbound: true, "inline-handler": true, "wrapped-handler": true,
+});
+const instanceBases = membersOf<InstanceBasis>({ constructor: true, lexical: true, annotation: true, return: true });
+const exportHopKinds = membersOf<ExportHop["kind"]>({ named: true, star: true, namespace: true });
 
 export interface EdgeLayout {
   readonly bytes: Buffer;
@@ -112,20 +143,20 @@ export function validateEvidence(value: unknown): EdgeEvidence {
     if (evidence.source === "unknown") return { source: "unknown" };
     if (evidence.source === "syntax" && typeof evidence.resolution === "object" && evidence.resolution !== null) {
       const resolution = evidence.resolution as Partial<EdgeResolution>;
-      if (resolution.status === "resolved" && ["import-path", "same-file-name", "imported-file-name", "unique-name", "import-binding", "lexical-definition"].includes(resolution.method ?? "")) {
+      if (resolution.status === "resolved" && plainResolvedMethods.has(resolution.method ?? "")) {
         return value as EdgeEvidence;
       }
       if (resolution.status === "resolved" && resolution.method === "re-export-binding" && validHops(resolution.via)) return value as EdgeEvidence;
       if (resolution.status === "resolved" && resolution.method === "receiver-hint" &&
         typeof resolution.receiver === "object" && resolution.receiver !== null &&
-        typeof resolution.receiver.classSymbol === "string" && ["class", "instance"].includes(resolution.receiver.mode) &&
-        ["constructor", "lexical", "class-reference", "annotation", "return"].includes(resolution.receiver.basis) &&
+        typeof resolution.receiver.classSymbol === "string" && receiverModes.has(resolution.receiver.mode) &&
+        receiverBases.has(resolution.receiver.basis) &&
         (resolution.via === undefined || validHops(resolution.via))) return value as EdgeEvidence;
       if (resolution.status === "ambiguous" && Array.isArray(resolution.candidates) &&
         resolution.candidates.length > 1 && resolution.candidates.every((candidate: unknown) => typeof candidate === "string")) {
         return value as EdgeEvidence;
       }
-      if (resolution.status === "unresolved" && ["no-matching-symbol", "import-target-unresolved", "import-target-ambiguous", "binding-blocked", "bound-symbol-missing", "shadowed-declaration", "route-handler-inline", "route-handler-wrapped", "re-export-incomplete", "re-export-cycle", "receiver-unresolved", "unbound-global"].includes(resolution.reason ?? "") &&
+      if (resolution.status === "unresolved" && unresolvedReasons.has(resolution.reason ?? "") &&
         (resolution.external === undefined || (typeof resolution.external === "string" && resolution.external.length > 0 && resolution.reason === "import-target-unresolved"))) {
         return value as EdgeEvidence;
       }
@@ -139,7 +170,7 @@ function validHops(value: unknown): boolean {
     if (typeof hop !== "object" || hop === null) return false;
     const item = hop as Record<string, unknown>;
     return ["file", "source", "exportedName", "importedName", "targetFile"].every((key) => typeof item[key] === "string") &&
-      (item.kind === "named" || item.kind === "star" || item.kind === "namespace") && Number.isSafeInteger(item.line) && (item.line as number) > 0;
+      exportHopKinds.has(String(item.kind)) && Number.isSafeInteger(item.line) && (item.line as number) > 0;
   });
 }
 
@@ -162,7 +193,7 @@ export function validOwner(value: unknown, depth = 0): boolean {
   if (owner.unwrapped !== undefined && owner.unwrapped !== true) return false;
   const of = owner.of as Record<string, unknown> | undefined;
   if (validSymbolBinding(of)) return true;
-  return typeof of === "object" && of !== null && of.kind === "method" && typeof of.member === "string" && (of.mode === undefined || ["instance", "class"].includes(String(of.mode))) && validOwner(of.owner, depth + 1);
+  return typeof of === "object" && of !== null && of.kind === "method" && typeof of.member === "string" && (of.mode === undefined || receiverModes.has(String(of.mode))) && validOwner(of.owner, depth + 1);
 }
 
 export function validateBinding(value: unknown): EdgeBinding {
@@ -170,10 +201,10 @@ export function validateBinding(value: unknown): EdgeBinding {
     const binding = value as Partial<EdgeBinding>;
     if (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string") return value as EdgeBinding;
     if (binding.kind === "local" && typeof binding.name === "string") return value as EdgeBinding;
-    if (binding.kind === "blocked" && ["local-value", "unsupported", "ambiguous", "unknown-receiver", "unbound", "inline-handler", "wrapped-handler"].includes(binding.reason ?? "")) return value as EdgeBinding;
-    if (binding.kind === "instance" && validOwner(binding.owner) && ["constructor", "lexical", "annotation", "return"].includes(binding.basis ?? "")) return value as EdgeBinding;
+    if (binding.kind === "blocked" && blockedReasons.has(binding.reason ?? "")) return value as EdgeBinding;
+    if (binding.kind === "instance" && validOwner(binding.owner) && instanceBases.has(binding.basis ?? "")) return value as EdgeBinding;
     if (binding.kind === "member" && validOwner(binding.owner) && typeof binding.member === "string" &&
-      ["instance", "class"].includes(binding.mode ?? "") && ["constructor", "lexical", "class-reference", "annotation", "return"].includes(binding.basis ?? "")) return value as EdgeBinding;
+      receiverModes.has(binding.mode ?? "") && receiverBases.has(binding.basis ?? "")) return value as EdgeBinding;
   }
   throw new Error("osnova: corrupt binding metadata");
 }

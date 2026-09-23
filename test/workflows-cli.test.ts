@@ -57,9 +57,12 @@ it("compares preserved baseline evidence without overwriting its cache", async (
 
 it("keeps doctor read-only", async () => {
   const before = await fs.readdir(workspace);
-  const checked = await command(["doctor"]);
+  const checked = await command(["doctor", "--json"]);
   expect(checked.code).toBe(0);
   expect((JSON.parse(checked.text) as { readOnly: boolean }).readOnly).toBe(true);
+  const readable = await command(["doctor"]);
+  expect(readable.code).toBe(0);
+  expect(readable.text).toMatch(/^osnova doctor: ok, read-only\n/);
   expect(await fs.readdir(workspace)).toEqual(before);
 });
 

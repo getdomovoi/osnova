@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, leanAskBody, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, leanAskBody, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatDoctor, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
@@ -55,7 +55,7 @@ usage:
   osnova tests <symbol...> [--no-import-only] [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
-  osnova doctor [--workspace <path>] [--cache-dir <path>]
+  osnova doctor [--json] [--workspace <path>] [--cache-dir <path>]
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
@@ -451,9 +451,9 @@ export async function runCli(
       return result.outdated ? EXIT_STALE : EXIT_OK;
     }
     case "doctor": {
-      const parsed = parseArgs({ args: rest, options: { workspace: { type: "string" }, "cache-dir": { type: "string" } } });
+      const parsed = parseArgs({ args: rest, options: { json: { type: "boolean" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
       const report = await doctor(parsed.values.workspace ?? process.cwd(), { cacheDir: parsed.values["cache-dir"] });
-      io.stdout(jsonOutput(report, "doctor"));
+      io.stdout(parsed.values.json === true ? jsonOutput(report, "doctor") : formatDoctor(report));
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {

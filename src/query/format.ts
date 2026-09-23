@@ -15,8 +15,10 @@ import type {
   EdgeKind,
   UnresolvedCallerEdge,
 } from "../types.js";
+import { maximumIndexedFileSizeBytes } from "../types.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
+import type { DiagnosticCheck, DoctorReport, LanguageCapability } from "../diagnostics/doctor.js";
 import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 import { formatReach } from "./reach.js";
@@ -35,6 +37,9 @@ export function formatIndexDiagnostics(index: OsnovaIndex): string {
   return lines.join("\n");
 }
 
+const notIndexedCategory = "scan/file-too-large";
+const sizeCapText = `${maximumIndexedFileSizeBytes / 1_000_000} MB`;
+
 export function formatIndexHealthSummary(index: OsnovaIndex): string {
   if (index.diagnostics === undefined) return "osnova foundation: unverified";
   if (index.diagnostics.length === 0) return "";
@@ -44,10 +49,30 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
     const category = `${diagnostic.phase}/${code}`;
     counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  // A file above the size cap is absent from the index, so every count that could have included it
+  // is short. That is the one category a reader must never find folded into "+N categories".
+  const rank = (category: string): number => category === notIndexedCategory ? 0 : 1;
+  const categories = [...counts].sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
   const shown = categories.slice(0, 4).map(([category, count]) => `${category}=${count}`);
   if (categories.length > 4) shown.push(`+${categories.length - 4} categories`);
-  return `osnova foundation: partial (${shown.join(", ")}); some files did not parse fully`;
+  const tooLarge = counts.get(notIndexedCategory) ?? 0;
+  const reasons: string[] = [];
+  if (tooLarge > 0) {
+    reasons.push(`${tooLarge} ${tooLarge === 1 ? "file" : "files"} above the ${sizeCapText} size cap ${tooLarge === 1 ? "is" : "are"} not indexed`);
+  }
+  if (index.diagnostics.some((diagnostic) => diagnostic.phase === "parse")) reasons.push("some files did not parse fully");
+  if (reasons.length === 0) reasons.push("results may be incomplete");
+  return `osnova foundation: partial (${shown.join(", ")}); ${reasons.join("; ")}`;
+}
+
+// The summary above never names files, because it heads every MCP answer. A query about one file is
+// the exception: the agent already named that file, and cannot otherwise join the aggregate to it.
+export function formatFileDiagnostics(index: OsnovaIndex, file: string): string {
+  const entries = index.files.get(file)?.diagnostics ?? [];
+  return entries.map((diagnostic) => {
+    const effect = diagnostic.code === "file-too-large" ? "this file is not indexed" : "results for this file are incomplete";
+    return `osnova: ${file} ${diagnostic.phase}/${diagnostic.code}; ${effect}`;
+  }).join("\n");
 }
 
 function foldNestedHits(hits: readonly AskHit[]): Map<AskHit, string[]> {
@@ -721,12 +746,55 @@ export function formatCoverage(report: CoverageReport): string {
     `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve, ${report.total.unboundGlobalCalls} call a name with no binding in the file`,
     ...report.languages.map(row),
   ];
+  // Stated on stdout, beside the percentages it qualifies: the same notice on stderr is lost the moment
+  // the report is redirected to a file.
+  const skipped = report.oversizedFiles;
+  if (skipped.length > 0) {
+    lines.push(
+      `not indexed: ${skipped.length} ${skipped.length === 1 ? "file" : "files"} above the ${sizeCapText} size cap; ${skipped.length === 1 ? "its" : "their"} call sites are not counted above`,
+      ...skipped.slice(0, 10).map((file) => `- ${file.path}: ${file.size} bytes`),
+      ...(skipped.length > 10 ? [`- ${skipped.length - 10} more; coverage --json lists every one`] : []),
+    );
+  }
   const external = report.total.externalImportCalls;
   const detail = (reason: string, count: number): string => reason === "import-target-unresolved" && external > 0 ? ` (external ${external}, in-repo ${count - external})` : "";
   if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}${detail(reason, count)}`));
   const packages = Object.entries(report.total.byExternal).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1)).slice(0, 10);
   if (packages.length > 0) lines.push("external packages (top 10):", ...packages.map(([name, count]) => `- ${name}: ${count}`));
   lines.push(`limitations: ${report.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+const doctorTiers: ReadonlyArray<{ readonly extraction: LanguageCapability["extraction"]; readonly resolution: LanguageCapability["resolution"]; readonly label: string }> = [
+  { extraction: "syntax", resolution: "binding-and-receiver-hints", label: "syntax, binding and receiver hints" },
+  { extraction: "syntax", resolution: "name-heuristics", label: "syntax, name heuristics" },
+  { extraction: "tags", resolution: "binding-and-receiver-hints", label: "tags query, binding and receiver hints" },
+  { extraction: "tags", resolution: "name-heuristics", label: "tags query, name heuristics" },
+];
+
+// doctor is what a new user runs when nothing works, so its default form is read by a person. The
+// JSON form keeps every field, including the per-language limitation text this summary leaves out.
+export function formatDoctor(report: DoctorReport): string {
+  const statusCount = (status: DiagnosticCheck["status"]): number => report.checks.filter((check) => check.status === status).length;
+  const counts = (["ok", "warning", "error"] as const).map((status) => [status, statusCount(status)] as const).filter(([, count]) => count > 0);
+  const lines = [
+    `osnova doctor: ${report.ok ? "ok" : "failed"}, read-only`,
+    `checks: ${counts.length === 0 ? "none" : counts.map(([status, count]) => `${count} ${status}`).join(", ")}`,
+    ...report.checks.filter((check) => check.status !== "ok").map((check) => `  ${check.status} ${check.id}: ${check.message}`),
+    `language support, ${report.capabilities.length} languages:`,
+  ];
+  for (const tier of doctorTiers) {
+    const members = report.capabilities.filter((item) => item.extraction === tier.extraction && item.resolution === tier.resolution);
+    if (members.length === 0) continue;
+    const names = members.map((item) => item.status === "ok" ? item.language : `${item.language} (grammar failed to load)`);
+    lines.push(`  ${tier.label} (${members.length}): ${names.join(", ")}`);
+  }
+  lines.push(
+    "  no language has type inference: relationships are structural, not a type checker's",
+    ...(report.fallback.length > 0 ? [`other files: ${report.fallback}`] : []),
+    "grammar checks parse a short synthetic snippet: they show each packaged grammar loads, not that every real file parses",
+    "per-language limitations: osnova doctor --json",
+  );
   return lines.join("\n");
 }
 
