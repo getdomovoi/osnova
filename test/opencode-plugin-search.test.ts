@@ -16,7 +16,10 @@ process.stdin.on("data", (c) => { raw += c; });
 process.stdin.on("end", () => {
   require("node:fs").appendFileSync(${JSON.stringify(path.join(temporary, "seen.jsonl"))}, raw + "\\n");
   if (process.argv[2] === "hook" && process.argv[3] === "search" && raw.includes("refreshWorkspace")) {
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "[osnova] graph answer for refreshWorkspace" } }));
+    const payload = JSON.parse(raw);
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: payload.tool_name === "bash"
+      ? { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { ...payload.tool_input, command: "cat <<'OSNOVA_GRAPH_ANSWER'\\n[osnova] graph answer for refreshWorkspace\\nOSNOVA_GRAPH_ANSWER" } }
+      : { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "[osnova] graph answer for refreshWorkspace" } }));
   }
 });
 `);
@@ -31,10 +34,13 @@ afterAll(async () => {
 });
 
 describe("the OpenCode and Kilo plugin guards searches", () => {
-  it("throws the graph answer for a search the hook denies", async () => {
-    await expect(plugin["tool.execute.before"]({ tool: "bash", sessionID: "s" }, { args: { command: "rg -n refreshWorkspace src" } })).rejects.toThrow("[osnova] graph answer for refreshWorkspace");
+  it("rewrites a shell search to print the graph answer, and refuses the grep tool with it", async () => {
+    const args: Record<string, unknown> = { command: "rg -n refreshWorkspace src" };
+    await expect(plugin["tool.execute.before"]({ tool: "bash", sessionID: "s" }, { args })).resolves.toBeUndefined();
+    expect(args.command).toBe("cat <<'OSNOVA_GRAPH_ANSWER'\n[osnova] graph answer for refreshWorkspace\nOSNOVA_GRAPH_ANSWER");
+    await expect(plugin["tool.execute.before"]({ tool: "grep", sessionID: "s" }, { args: { pattern: "refreshWorkspace" } })).rejects.toThrow("[osnova] graph answer for refreshWorkspace");
     const seen = (await fs.readFile(path.join(temporary, "seen.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    expect(seen.at(-1)).toMatchObject({ session_id: "s", tool_name: "bash", tool_input: { command: "rg -n refreshWorkspace src" } });
+    expect(seen.at(-2)).toMatchObject({ session_id: "s", tool_name: "bash", tool_input: { command: "rg -n refreshWorkspace src" } });
   });
 
   it("lets other searches and other tools run", async () => {

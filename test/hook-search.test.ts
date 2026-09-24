@@ -37,35 +37,56 @@ async function search(toolName: string, toolInput: Record<string, unknown>, sess
   return out.join("\n");
 }
 
+// The answer a decision carries: a shell search is rewritten to print it, the Grep tool is denied with it.
+function answerOf(out: string): { kind: "rewrite" | "deny"; text: string; input?: Record<string, unknown> } {
+  const decision = JSON.parse(out).hookSpecificOutput;
+  expect(decision.hookEventName).toBe("PreToolUse");
+  if (decision.permissionDecision === "allow") {
+    const command: string = decision.updatedInput.command;
+    expect(command.startsWith("cat <<'OSNOVA_GRAPH_ANSWER'\n")).toBe(true);
+    expect(command.endsWith("\nOSNOVA_GRAPH_ANSWER")).toBe(true);
+    return { kind: "rewrite", text: command.split("\n").slice(1, -1).join("\n"), input: decision.updatedInput };
+  }
+  expect(decision.permissionDecision).toBe("deny");
+  return { kind: "deny", text: decision.permissionDecisionReason };
+}
+
 describe("osnova hook search (PreToolUse)", () => {
-  it("denies a grep for an indexed symbol and hands back the graph answer in the reason", async () => {
-    const out = await search("Bash", { command: 'rg -n "refreshWorkspace" src' }, "deny-1");
-    const decision = JSON.parse(out).hookSpecificOutput;
-    expect(decision.hookEventName).toBe("PreToolUse");
-    expect(decision.permissionDecision).toBe("deny");
-    const reason: string = decision.permissionDecisionReason;
+  it("rewrites a shell grep for an indexed symbol to print the complete graph answer", async () => {
+    const answer = answerOf(await search("Bash", { command: 'rg -n "refreshWorkspace" src', description: "find callers" }, "deny-1"));
+    expect(answer.kind).toBe("rewrite");
+    expect(answer.input?.description).toBe("find callers");
+    const reason = answer.text;
+    expect(reason).toContain("src/callers/c7.ts:3 caller7WithADescriptiveName");
     expect(reason).toContain("src/api.ts:1");
-    expect(reason).toMatch(/called from 22 sites in 21 files: src\/use\.ts:2,4 · /);
+    expect(reason).toMatch(/called from 22 sites in 21 files: src\/use\.ts:2 first,4 second · /);
+    expect(reason).not.toContain("more files");
     expect(reason).toContain("imported by 21 sites in 21 files");
     expect(reason).toMatch(/other text matches[^\n]*\n {2}at 1 site in 1 file: src\/text\.ts:1/);
-    expect(reason).toContain("Repeat the identical command to run the search");
+    expect(reason).toContain("[osnova] Answered from the call graph instead of running this search");
+    expect(reason).not.toContain("OSNOVA_GREP");
     expect(reason.length).toBeLessThanOrEqual(hookSearchCodeUnits);
   });
 
   it("lets the identical command through the second time in a session", async () => {
     const input = { command: "grep -rn refreshWorkspace src" };
-    expect(await search("Bash", input, "repeat")).toContain('"deny"');
+    expect(answerOf(await search("Bash", input, "repeat")).kind).toBe("rewrite");
     expect(await search("Bash", input, "repeat")).toBe("");
-    expect(await search("Bash", input, "another-session")).toContain('"deny"');
+    expect(answerOf(await search("Bash", input, "another-session")).kind).toBe("rewrite");
   });
 
-  it("answers the Grep tool the same way", async () => {
-    const out = await search("Grep", { pattern: "\\brefreshWorkspace\\b", path: "src", output_mode: "content" }, "grep-tool");
-    expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("deny");
+  it("runs the search itself when the command opts out with OSNOVA_GREP=1", async () => {
+    expect(await search("Bash", { command: "OSNOVA_GREP=1 rg -n refreshWorkspace src" }, "opt-out")).toBe("");
+  });
+
+  it("denies the Grep tool with the same answer, since that tool cannot print text", async () => {
+    const answer = answerOf(await search("Grep", { pattern: "\\brefreshWorkspace\\b", path: "src", output_mode: "content" }, "grep-tool"));
+    expect(answer.kind).toBe("deny");
+    expect(answer.text).toContain("called from 22 sites");
   });
 
   it("keeps only the sites inside the searched path", async () => {
-    const reason = JSON.parse(await search("Bash", { command: "rg refreshWorkspace src/callers" }, "scoped")).hookSpecificOutput.permissionDecisionReason as string;
+    const reason = answerOf(await search("Bash", { command: "rg refreshWorkspace src/callers" }, "scoped")).text;
     expect(reason).toContain("defined outside the searched paths (src/api.ts#refreshWorkspace)");
     expect(reason).toContain("called from 20 sites in 20 files");
     expect(reason).not.toContain("src/use.ts");
