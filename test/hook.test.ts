@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCli } from "../src/cli/cli.js";
+import { parseHookInput, runHook } from "../src/cli/hook.js";
 
 function capture(stdin = "") {
   const out: string[] = []; const err: string[] = [];
@@ -10,6 +11,30 @@ function capture(stdin = "") {
 }
 
 describe("osnova hook", () => {
+  it("normalizes native payloads and Cursor stop lifecycle fields", () => {
+    expect(parseHookInput(JSON.stringify({ workspace_roots: ["/project"], conversation_id: "session", generation_id: "turn", subagent_id: "child", tool_input: '{"file":"a.ts"}', result_json: "result" }))).toMatchObject({ cwd: "/project", sessionId: "session", turnId: "turn", agentId: "child", toolInput: { file: "a.ts" }, toolResponse: "result" });
+    expect(parseHookInput(JSON.stringify({ cwd: "/explicit", workspace_roots: ["/other"], session_id: "session", turn_id: "turn" }))).toMatchObject({ cwd: "/explicit", sessionId: "session", turnId: "turn" });
+    expect(parseHookInput('{"tool_input":"invalid"}').toolInput).toBeUndefined();
+    expect(parseHookInput('{"workspace_roots":["/a","/b"]}').cwd).toBeUndefined();
+    for (const payload of [{ loop_count: 1 }, { status: "aborted" }, { status: "error" }, { stop_hook_active: true }]) {
+      expect(parseHookInput(JSON.stringify(payload)).stopHookActive).toBe(true);
+    }
+  });
+
+  it("ignores prose prompts and unrelated tool results without reading a broken cache", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-skip-"));
+    try {
+      const cacheDir = path.join(temporary, "cache");
+      await fs.writeFile(cacheDir, "not a directory");
+      for (const [event, input] of [["prompt", { prompt: "please improve the project performance" }], ["mark", { session_id: "one", tool_name: "Bash" }], ["gate", { tool_name: "Bash", tool_input: { command: "pnpm test" } }]] as const) {
+        const c = capture();
+        await runHook(event, JSON.stringify({ ...input, cwd: temporary }), c.io, { cacheDir });
+        expect(c.out).toEqual([]);
+        expect(c.err).toEqual([]);
+      }
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+
   it("prints starting points for a prompt, nothing for a slash command, and the tool contract for a session", async () => {
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-"));
     try {
@@ -62,6 +87,9 @@ describe("osnova hook", () => {
       c = capture(JSON.stringify({ cwd: root }));
       expect(await runCli(["hook", "session", "--client", "codex", "--cache-dir", cacheDir], c.io)).toBe(0);
       expect(JSON.parse(c.out.join("\n")).hookSpecificOutput.hookEventName).toBe("SessionStart");
+      c = capture(JSON.stringify({ workspace_roots: [root], conversation_id: "cursor-session" }));
+      expect(await runCli(["hook", "session", "--client", "cursor", "--cache-dir", cacheDir], c.io)).toBe(0);
+      expect(JSON.parse(c.out.join("\n")).additional_context).toContain("osnova_footing");
       c = capture();
       expect(await runCli(["hook", "install-preview", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
       expect(c.out.join("\n").split("\n")[1]).toContain("at most once per diff per session, and only when more than OSNOVA_HOOK_SETTLE_BLOCK_AT");
@@ -69,7 +97,8 @@ describe("osnova hook", () => {
       expect(snippet.hooks.UserPromptSubmit[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook prompt");
       expect(snippet.hooks.SessionStart[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook session");
       expect(snippet.hooks.Stop[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook stop");
-      expect(snippet.hooks.PostToolUse).toBeUndefined();
+      expect(snippet.hooks.PreToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook gate");
+      expect(snippet.hooks.PostToolUse[0].hooks[0].command).toBe("node /opt/osnova/dist/bin.js hook mark");
       c = capture();
       expect(await runCli(["hook", "install-preview", "--nudge", "--command", "node", "--command", "/opt/osnova/dist/bin.js"], c.io)).toBe(0);
       const withNudge = JSON.parse(c.out.join("\n").split("\n").slice(2).join("\n"));
@@ -205,7 +234,10 @@ describe("osnova hook", () => {
       expect(warned.hookSpecificOutput).toBeUndefined();
       expect(warned.systemMessage).toContain("- use.ts: report:");
       expect(warned.systemMessage).toMatch(/1 indexed dependents in 1 files/);
-      await expect(fs.access(stateFile)).rejects.toThrow();
+      await expect(fs.access(stateFile)).resolves.toBeUndefined();
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
+      expect(c.out).toEqual([]);
       await fs.writeFile(path.join(root, "lib.ts"), lib("n", "n * 2"));
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
@@ -219,10 +251,7 @@ describe("osnova hook", () => {
       await expect(fs.access(stateFile)).resolves.toBeUndefined();
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
-      const repeated = JSON.parse(c.out.join("\n"));
-      expect(repeated.hookSpecificOutput).toBeUndefined();
-      expect(repeated.decision).toBeUndefined();
-      expect(repeated.systemMessage).toMatch(/2 indexed dependents in 2 files/);
+      expect(c.out).toEqual([]);
       await fs.writeFile(path.join(root, "lib.ts"), lib("n", "n * 4"));
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, session_id: session }), c.io, { cacheDir });
@@ -238,9 +267,7 @@ describe("osnova hook", () => {
       expect(codex.hookSpecificOutput).toBeUndefined();
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, session_id: `${session}-codex` }), c.io, { cacheDir, client: "codex" });
-      const codexAgain = JSON.parse(c.out.join("\n"));
-      expect(codexAgain.decision).toBeUndefined();
-      expect(codexAgain.systemMessage).toContain("- alt.ts: summary:");
+      expect(c.out).toEqual([]);
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, conversation_id: `${session}-cursor` }), c.io, { cacheDir, client: "cursor" });
       expect(JSON.parse(c.out.join("\n")).followup_message).toContain("- use.ts: report:");

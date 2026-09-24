@@ -154,7 +154,7 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
     for (const entry of entries) {
       const rel = relDir.length > 0 ? `${relDir}/${entry.name}` : entry.name;
       const abs = path.join(dir, entry.name);
-      const isCacheEntry = abs === cacheDir || (dir === cacheDir && /^[0-9a-f]{16}(?:\.lock(?:\.abandoned-[0-9a-f-]+)?)?$/.test(entry.name));
+      const isCacheEntry = abs === cacheDir || (dir === cacheDir && /^(?:v\d+-[0-9a-f]{16}-)?[0-9a-f]{16}(?:\.lock(?:\.abandoned-[0-9a-f-]+)?)?$/.test(entry.name));
       if (entry.isDirectory()) {
         if (isCacheEntry) continue;
         if (DEFAULT_SKIP_DIRS.has(entry.name)) continue;

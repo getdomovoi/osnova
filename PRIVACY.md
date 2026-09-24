@@ -4,11 +4,13 @@ Osnova runs on your machine and keeps nothing about you.
 
 ## What it reads
 
-Osnova reads the source files of the repository you point it at, applying the repository's `.gitignore` and an optional `.osnovaignore`. It reads the hook payloads a client hands it on stdin (the prompt text, the session id, the working directory) to produce its one-line answers. It reads nothing else.
+Osnova reads the source files of the repository you point it at, applying the repository's `.gitignore` and an optional `.osnovaignore`. It reads hook payloads on stdin, including prompts, session and agent ids, working directories, tool arguments and tool results. The exploration gate uses successful Osnova results to permit focused follow-up reads. Tool results are processed locally and are not stored in hook state.
 
 ## What it writes
 
 One cache directory per repository: the structural index, the source-text sidecar and hook state (a small per-session file keyed by the client's session id). The default location is under your user cache directory; `OSNOVA_CACHE_DIR` or `--cache-dir` moves it. Osnova writes nothing inside your repository and nothing outside the cache directory. `osnova setup --apply` is the one exception: it edits the client configuration files you name, backs each one up first, and shows the diff with `--preview` before touching anything.
+
+The exploration gate also stores random turn ids and file-hash receipts under `strict-hooks/` in that cache. Workspace, session, agent and file names are hashed in receipt paths. Old receipts can be removed with the cache; they are not part of the deterministic structural artifact.
 
 ## What it sends
 

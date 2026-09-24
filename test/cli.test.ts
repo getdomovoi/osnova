@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCli } from "../src/cli/cli.js";
+import { isWorkspaceCacheName } from "../src/cache/cache.js";
 
 function capture(): { lines: string[]; io: { stdout: (t: string) => void; stderr: (t: string) => void } } {
   const lines: string[] = [];
@@ -108,7 +109,7 @@ describe("cli", () => {
     try {
       expect(await runCli(["build", workspace, "--cache-dir", rebuiltCache], capture().io)).toBe(0);
       const published = (dir: string): string => {
-        const keys = fs.readdirSync(dir).filter((name) => /^[0-9a-f]{16}$/.test(name));
+        const keys = fs.readdirSync(dir).filter(isWorkspaceCacheName);
         expect(keys).toHaveLength(1);
         return path.join(dir, keys[0]!);
       };

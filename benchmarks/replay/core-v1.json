@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 1,
+  "id": "exploration-replay-v1",
+  "files": {
+    "src/ops.ts": "export function apply(value: number) {\n  return value + 1;\n}\n",
+    "src/client.ts": "import { apply } from \"./ops.js\";\nexport function run() { return apply(2); }\n",
+    "test/ops.test.ts": "import { apply } from \"../src/ops.js\";\nexport function testApply() { return apply(1); }\n",
+    "AGENTS.md": "Use the indexed graph before exploring source.\n"
+  },
+  "steps": [
+    {
+      "id": "first-prompt",
+      "kind": "prompt"
+    },
+    {
+      "id": "unseen-source",
+      "kind": "gate",
+      "tool": "Read",
+      "input": {
+        "file_path": "src/ops.ts"
+      },
+      "expected": "deny",
+      "maxTokens": 71
+    },
+    {
+      "id": "outline",
+      "kind": "query",
+      "tool": "osnova_outline",
+      "args": {
+        "file": "src/ops.ts"
+      },
+      "required": [
+        "function apply",
+        "src/ops.ts"
+      ],
+      "forbidden": [],
+      "maxTokens": 46
+    },
+    {
+      "id": "focused-read",
+      "kind": "read",
+      "file": "src/ops.ts",
+      "start": 1,
+      "end": 3,
+      "maxTokens": 18
+    },
+    {
+      "id": "duplicate-read",
+      "kind": "read",
+      "file": "src/ops.ts",
+      "start": 1,
+      "end": 3,
+      "maxTokens": 18
+    },
+    {
+      "id": "broad-search",
+      "kind": "gate",
+      "tool": "Bash",
+      "input": {
+        "command": "rg apply src"
+      },
+      "expected": "deny",
+      "maxTokens": 71
+    },
+    {
+      "id": "database-pipeline",
+      "kind": "gate",
+      "tool": "Bash",
+      "input": {
+        "command": "task db:reset -y > /dev/null 2>&1; task db:migrate 2>&1 | tail -1"
+      },
+      "expected": "allow",
+      "maxTokens": 0
+    },
+    {
+      "id": "status-filter",
+      "kind": "gate",
+      "tool": "Bash",
+      "input": {
+        "command": "git status --short | grep -v '^??'"
+      },
+      "expected": "allow",
+      "maxTokens": 0
+    },
+    {
+      "id": "remote-check-filter",
+      "kind": "gate",
+      "tool": "Bash",
+      "input": {
+        "command": "gh pr checks 1 2>&1 | tail -1"
+      },
+      "expected": "allow",
+      "maxTokens": 0
+    },
+    {
+      "id": "external-log",
+      "kind": "gate",
+      "tool": "Bash",
+      "input": {
+        "command": "tail -n 20 '{{scratch}}/test.log'"
+      },
+      "expected": "allow",
+      "maxTokens": 0
+    },
+    {
+      "id": "filter-file-operand",
+      "kind": "gate",
+      "tool": "Bash",
+      "input": {
+        "command": "git status | tail -1 src/client.ts"
+      },
+      "expected": "deny",
+      "maxTokens": 71
+    },
+    {
+      "id": "unrelated-edit",
+      "kind": "edit",
+      "file": "src/client.ts",
+      "text": "import { apply } from \"./ops.js\";\nexport function run() { return apply(2); }\nexport const unrelated = 1;\n"
+    },
+    {
+      "id": "unchanged-file-receipt",
+      "kind": "read",
+      "file": "src/ops.ts",
+      "start": 1,
+      "end": 3,
+      "maxTokens": 18
+    },
+    {
+      "id": "source-edit",
+      "kind": "edit",
+      "file": "src/ops.ts",
+      "text": "export function apply(value: number) {\n  return value + 2;\n}\n"
+    },
+    {
+      "id": "changed-file-revoked",
+      "kind": "gate",
+      "tool": "Read",
+      "input": {
+        "file_path": "src/ops.ts"
+      },
+      "expected": "deny",
+      "maxTokens": 71
+    },
+    {
+      "id": "refresh-definition",
+      "kind": "query",
+      "tool": "osnova_ground",
+      "args": {
+        "question": "apply",
+        "in": "src/ops.ts"
+      },
+      "required": [
+        "src/ops.ts",
+        "return value + 2"
+      ],
+      "forbidden": [
+        "return value + 1"
+      ],
+      "maxTokens": 56
+    },
+    {
+      "id": "edited-read",
+      "kind": "read",
+      "file": "src/ops.ts",
+      "start": 1,
+      "end": 3,
+      "maxTokens": 18
+    },
+    {
+      "id": "caller-preservation",
+      "kind": "query",
+      "tool": "osnova_warp",
+      "args": {
+        "symbol": "src/ops.ts#apply"
+      },
+      "required": [
+        "src/client.ts#run",
+        "test/ops.test.ts#testApply",
+        "import-binding"
+      ],
+      "forbidden": [],
+      "maxTokens": 127
+    },
+    {
+      "id": "test-preservation",
+      "kind": "query",
+      "tool": "osnova_tests",
+      "args": {
+        "symbols": [
+          "src/ops.ts#apply"
+        ]
+      },
+      "required": [
+        "test/ops.test.ts",
+        "resolved edge"
+      ],
+      "forbidden": [],
+      "maxTokens": 178
+    },
+    {
+      "id": "literal-search",
+      "kind": "query",
+      "tool": "osnova_thread",
+      "args": {
+        "pattern": "return",
+        "fixed": true
+      },
+      "required": [
+        "src/ops.ts",
+        "src/client.ts",
+        "test/ops.test.ts",
+        "3/3 matches, 3/3 groups",
+        "direct call to src/ops.ts#apply [import-binding; test caller]",
+        "Line evidence is not per-match classification"
+      ],
+      "forbidden": [],
+      "maxTokens": 200
+    },
+    {
+      "id": "clipped-search",
+      "kind": "query",
+      "tool": "osnova_thread",
+      "args": {
+        "pattern": "return",
+        "fixed": true,
+        "limit": 1
+      },
+      "required": [
+        "1/3 matches, 1/3 groups",
+        "2 matches omitted; 2 groups omitted"
+      ],
+      "forbidden": [],
+      "maxTokens": 110
+    },
+    {
+      "id": "next-prompt",
+      "kind": "prompt"
+    },
+    {
+      "id": "prompt-revoked",
+      "kind": "gate",
+      "tool": "Read",
+      "input": {
+        "file_path": "src/ops.ts"
+      },
+      "expected": "deny",
+      "maxTokens": 71
+    }
+  ]
+}

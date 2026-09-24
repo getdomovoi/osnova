@@ -3,12 +3,11 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { workspaceDirFor } from "./cache.js";
+import { workspaceDirFor, isWorkspaceCacheName } from "./cache.js";
 import { workspaceIdentity } from "../index/workspace.js";
 
 const execFileAsync = promisify(execFile);
 const familyVersion = 1;
-const WORKSPACE_KEY_RE = /^[0-9a-f]{16}$/;
 
 export interface FamilySidecar {
   readonly family: string | undefined;
@@ -101,7 +100,7 @@ export async function familySiblings(cacheDir: string, root: string, family: str
   }
   const siblings: FamilySibling[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || !WORKSPACE_KEY_RE.test(entry.name)) continue;
+    if (!entry.isDirectory() || !isWorkspaceCacheName(entry.name)) continue;
     const dir = path.join(cacheDir, entry.name);
     if (dir === own) continue;
     let sidecar: FamilySidecar | undefined;

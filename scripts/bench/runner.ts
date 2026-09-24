@@ -140,7 +140,7 @@ function evaluate(index: OsnovaIndex, item: BenchmarkCase, sources: ReadonlyMap<
       const answer = findTextDetailed(index, item.pattern, { fixed: item.fixed, in: item.in });
       result.actual = answer.groups.flatMap((group) => group.matches.map((match) => `${group.file}:${match.line}:${match.col}`));
       result.set = scoreSet(result.actual, item.expected);
-      text = formatFindTextResult(answer);
+      text = formatFindTextResult(answer, index);
     }
     const full = [formatIndexHealthSummary(index), text].filter(Boolean).join("\n");
     result.response = boundText(full);

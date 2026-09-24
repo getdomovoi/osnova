@@ -26,7 +26,7 @@ Node.js 22.13 or newer. Serve a repository to any MCP client:
 npx -y @getdomovoi/osnova mcp --workspace /path/to/repo
 ```
 
-Claude Code, one command after `npm install -g @getdomovoi/osnova`: the MCP entry and the session, prompt and stop hooks, with a backup of each file it changes.
+Claude Code, one command after `npm install -g @getdomovoi/osnova`: the MCP entry, exploration gate, and session, prompt and stop hooks, with a backup of each file it changes.
 
 ```sh
 osnova setup --apply --client claude-code --hooks
@@ -51,11 +51,11 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 `osnova warp src/api.ts#refreshWorkspace` on this repository, cut to twelve lines (`test/docs-readme-warp.test.ts` fails when the first two no longer reproduce):
 
 ```text
-function src/api.ts#refreshWorkspace: 83 indexed edges
-reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 9; tests 18
-d1 calls src/cli/cli.ts#ensureIndex:78 [import-binding]
-d1 calls src/cli/hook.ts#runHook:189,201,223,238 [import-binding]
-d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:257 [import-binding]
+function src/api.ts#refreshWorkspace: 85 indexed edges
+reach: d1 callers 85 in 16 files (3 dirs); d2 +78 in 6 files; unresolved same-name 9; tests 19
+d1 calls src/cli/cli.ts#ensureIndex:80 [import-binding]
+d1 calls src/cli/hook.ts#runHook:231,246,265,277 [import-binding]
+d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:254 [import-binding]
 d1 calls test/verification-fastpath.test.ts#<module>:37,47,48,51,53,57,58,64,68,74,78,85,110,114,132,145,154,166,171,197 [re-export-binding]
   via src/index.ts:65 refreshWorkspace -> src/api.ts (export refreshWorkspace)
 This does not prove absence of callers or that deletion is safe.
@@ -128,13 +128,15 @@ One global install serves every repository and every client: one entry in each c
 
 | Client | How to wire | What it adds |
 | --- | --- | --- |
-| Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
+| Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus exploration gate and session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
 | Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace |
-| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently |
-| Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message |
-| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin: full contract in the system prompt, starting points on each message |
+| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same hooks and exploration gate; trust them in `/hooks` or Codex skips them silently |
+| Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus session context, exploration gate and stop follow-up |
+| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus exploration gate, system contract and prompt starting points |
 | Kilo | `osnova setup --apply --client kilo --plugin` | MCP entry plus the same plugin |
 | Pi | `osnova setup --apply --client pi --plugin` | MCP entry through `pi-mcp-adapter` plus an extension that does the same |
+
+The gate blocks broad searches of indexed code. Use Osnova first; a successful result permits focused reads/searches of named files until the next prompt or a file change. Instructions and unindexed paths remain available. This is workflow enforcement, not a sandbox for arbitrary scripts. See the [gate contract and limits](docs/reference.md#exploration-gate).
 
 ## In CI
 

@@ -1,25 +1,20 @@
 ---
 name: osnova
-description: Use when the osnova_* tools are available and the task asks how code works, who calls a symbol, what a change affects, or whether a list of call sites is complete. Puts the indexed call graph before grep and file reads.
+description: Use available osnova_* tools for code exploration, caller analysis, change impact, test discovery, and unused-code candidates.
 ---
 
 # Osnova
 
-The `osnova_*` tools are a deterministic call graph with exact `file:line` and no type inference; the tool list is in the server instructions. What they return was resolved from syntax; what they do not return is unknown, not absent. Edges are calls, references, imports, declared heritage and framework routes; `osnova_ground` answers a verb and path such as `GET /users` with the registration and its handler.
+Await graph results before dependent reads/searches. Reuse supplied source, relationships and tests; read only missing spans. Query again for a specific evidence gap.
 
-## Order of work
+- Start cross-file work with `osnova_footing`; use `osnova_ground` for definitions (`lean: true` for locations), `osnova_outline` for file shape.
+- Fill gaps with `osnova_warp` (callers/callees), `osnova_thread` (text matches), or `osnova_tests` (test leads). Prefer `path/file.ext#Class.method`.
+- Caller lists include direct test calls. Verify claims with `osnova_plumb` at the claimed depth; address missing sites. Forwarded parameters do not prove valid inputs or unchanged caller behavior.
+- After edits, run relevant tests and `osnova_settle({"baseRef":"HEAD"})`; check dependents. This includes indexed untracked files. Inline `diff` only for supplied patches; another ref selects another baseline. Read-only work needs no settle.
+- Before deleting `osnova_unreferenced` candidates, check unresolved leads, mentions and tests. Follow omissions when completeness matters. Structural evidence is not runtime/type proof; absence from the index is not proof of absence; test references are not coverage.
 
-1. `osnova_footing` first (question or `symbols`, plus `task`); read source only where the excerpt is not enough.
-2. `osnova_ground` when footing found no seed; narrow with `in`.
-3. `osnova_warp` for every caller or callee: a `resolved` edge is a fact, an `unresolved` edge a lead whose `nameMatches` are candidates, not relationships.
-4. `osnova_plumb` on every list of call sites before acting on it, at the `depth` the claim was made.
-5. `osnova_tests` with `symbols` before editing to find the tests to run, or with `file` to see what one test reaches; a listed test is not coverage.
-6. `osnova_unreferenced` (narrow with `scope`) when asked what may be unused; every row is a candidate to check by hand through its same-name leads, mentions and tests, never a deletion verdict.
-7. `osnova_settle` with `git diff HEAD` before finishing; read or test each dependent.
+## Hook denials
 
-## Rules
+Grants cover named files until edits/new prompts; await queries before using grants. Known test/config paths and operational commands need no discovery. Unindexed paths need no source grant. Repository ls/find/glob/directory reads are discovery; never retry denied discovery through another tool or interpreter, or edit/disable hooks to evade it.
 
-- Do not re-read what a tool quoted with `file:line`.
-- No indexed callers is not proof of absence: reflection, dynamic dispatch and unindexed code are invisible. Say so when it matters.
-- Prefer a qualified name (`path/file.ext#Class.method`) once known.
-- Output is bounded and counts what was omitted; ask again with `in`, `limit` or a narrower symbol.
+Read the exact denial and follow its scoped guidance. Split mixed operational/source commands. If a permitted operation fails, report its exact command/reason and continue unblocked work. MCP reconnect does not repair a separate hook runtime.

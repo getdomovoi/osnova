@@ -12,6 +12,9 @@ import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import type { CliIo } from "./cli.js";
+import { gatePayload, isOsnovaQuery, markGate, resetGate, strictGate, strictSubject } from "./strict-gate.js";
+import type { GateClient } from "./strict-gate.js";
+import { toolContract } from "../tool-contract.js";
 
 // Editor hooks: a session hook prints the index size and one pointer to the tools (the MCP server's
 // `instructions` carry the contract; `--full-contract` restates it for a harness without MCP), a prompt
@@ -24,7 +27,7 @@ import type { CliIo } from "./cli.js";
 // outnumber OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1); otherwise it warns the user without continuing.
 // Its once-per-diff and once-per-nudge state lives under the cache directory, the one place the
 // hooks may write.
-export type HookEvent = "prompt" | "session" | "stop" | "tool" | "install-preview";
+export type HookEvent = "prompt" | "session" | "stop" | "tool" | "gate" | "mark" | "reset" | "install-preview";
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
@@ -42,22 +45,15 @@ export interface HookInput {
   readonly cwd?: string | undefined;
   readonly stopHookActive?: boolean | undefined;
   readonly sessionId?: string | undefined;
+  readonly agentId?: string | undefined;
+  readonly turnId?: string | undefined;
+  readonly toolUseId?: string | undefined;
   readonly toolName?: string | undefined;
   readonly toolInput?: Readonly<Record<string, unknown>> | undefined;
+  readonly toolResponse?: unknown;
 }
 
-export const hookToolContract = [
-  "[osnova] This repository is indexed by Osnova: a deterministic call graph with exact file:line, no type inference, no LLM. Use its tools before grep and file reads:",
-  "- osnova_footing: task context for a question or named symbols (definitions, callers, candidate tests). Start here.",
-  "- osnova_ground: symbol and text search ranked by definition evidence; a verb and path (GET /users) finds the route and its handler.",
-  "- osnova_thread: exhaustive regex search grouped by enclosing symbol.",
-  "- osnova_outline: one file's signatures and spans.",
-  "- osnova_warp: callers or callees of one symbol, direct or transitive, with the resolution basis of every edge; unresolved edges list same-name candidates.",
-  "- osnova_groundwork: repository map, hubs and hotspots.",
-  "- osnova_settle: dependents of a unified diff before you finish a change.",
-  "- osnova_plumb: check a claimed list of call sites against the index.",
-  "An answer that says a symbol has no indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
-].join("\n");
+export const hookToolContract = `[osnova] ${toolContract}`;
 
 const hookSessionPointer = "use the osnova_* MCP tools (osnova_footing first) before grep and file reads.";
 export function formatSessionContext(status: string, fullContract: boolean): string {
@@ -70,13 +66,22 @@ export function parseHookInput(raw: string): HookInput {
   try { parsed = JSON.parse(raw); } catch { return {}; }
   if (typeof parsed !== "object" || parsed === null) return {};
   const record = parsed as Record<string, unknown>;
+  let toolInput: unknown = record.tool_input;
+  if (typeof toolInput === "string") {
+    try { toolInput = JSON.parse(toolInput); } catch { toolInput = undefined; }
+  }
+  const roots = Array.isArray(record.workspace_roots) ? record.workspace_roots.filter((root): root is string => typeof root === "string") : [];
   return {
     prompt: typeof record.prompt === "string" ? record.prompt : undefined,
-    cwd: typeof record.cwd === "string" ? record.cwd : undefined,
-    stopHookActive: typeof record.stop_hook_active === "boolean" ? record.stop_hook_active : undefined,
+    cwd: typeof record.cwd === "string" ? record.cwd : roots.length === 1 ? roots[0] : undefined,
+    stopHookActive: record.stop_hook_active === true || typeof record.loop_count === "number" && record.loop_count > 0 || record.status === "aborted" || record.status === "error",
     sessionId: typeof record.session_id === "string" ? record.session_id : typeof record.conversation_id === "string" ? record.conversation_id : undefined,
+    agentId: typeof record.agent_id === "string" ? record.agent_id : typeof record.subagent_id === "string" ? record.subagent_id : undefined,
+    turnId: typeof record.turn_id === "string" ? record.turn_id : typeof record.generation_id === "string" ? record.generation_id : undefined,
+    toolUseId: typeof record.tool_use_id === "string" ? record.tool_use_id : undefined,
     toolName: typeof record.tool_name === "string" ? record.tool_name : undefined,
-    toolInput: record.tool_input !== null && typeof record.tool_input === "object" && !Array.isArray(record.tool_input) ? (record.tool_input as Record<string, unknown>) : undefined,
+    toolInput: toolInput !== null && typeof toolInput === "object" && !Array.isArray(toolInput) ? toolInput as Record<string, unknown> : undefined,
+    toolResponse: record.tool_response ?? record.tool_output ?? record.result_json,
   };
 }
 
@@ -99,10 +104,20 @@ export function hookSettingsSnippet(command: readonly string[], client: HookClie
 export function hookSettingsObject(command: readonly string[], client: HookClient, nudge = false): Record<string, unknown> {
   const quoted = command.map((part) => (/[\s"]/.test(part) ? JSON.stringify(part) : part)).join(" ");
   const suffix = client === "claude-code" ? "" : ` --client ${client}`;
-  if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
+  if (client === "cursor") return { version: 1, hooks: {
+    sessionStart: [{ command: `${quoted} hook session${suffix}`, timeout: 15 }],
+    stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }],
+    beforeSubmitPrompt: [{ command: `${quoted} hook reset${suffix}`, timeout: 10 }],
+    subagentStart: [{ command: `${quoted} hook reset${suffix}`, timeout: 10 }],
+    preToolUse: [{ command: `${quoted} hook gate${suffix}`, timeout: 30, failClosed: true }],
+    postToolUse: [{ command: `${quoted} hook mark${suffix}`, timeout: 30 }],
+  } };
   const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
   const hooks: Record<string, unknown[]> = { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] };
   if (client === "claude-code" && nudge) hooks.PostToolUse = [{ matcher: "Grep|Bash", ...entry("tool", 10) }];
+  hooks.PreToolUse = [entry("gate", 30)];
+  hooks.PostToolUse = [...(hooks.PostToolUse ?? []), entry("mark", 30)];
+  hooks.SubagentStart = [entry("reset", 10)];
   return { hooks };
 }
 
@@ -112,6 +127,7 @@ export const hookClients: readonly HookClient[] = ["claude-code", "codex", "curs
 export interface HookOptions {
   /** Which harness reads the output: Claude Code takes plain text, Codex takes additionalContext JSON, Cursor takes followup_message on stop. On stop, Claude Code continues through hookSpecificOutput.additionalContext, Codex through decision block; both warn through systemMessage otherwise. */
   readonly client?: HookClient | undefined;
+  readonly gateClient?: GateClient | undefined;
   readonly workspace?: string | undefined;
   readonly cacheDir?: string | undefined;
   readonly command?: readonly string[] | undefined;
@@ -135,6 +151,7 @@ function defaultBackgroundBuild(workspace: string, cacheDir: string | undefined)
 // The same context, shaped for the harness that asked: plain text for Claude Code; for Codex the hook
 // output object it validates, `hookSpecificOutput` with the event name and `additionalContext`.
 function emitContext(io: CliIo, client: HookClient, event: "prompt" | "session", text: string): void {
+  if (client === "cursor") { if (event === "session") io.stdout(JSON.stringify({ additional_context: text })); return; }
   if (client === "codex") { io.stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event === "prompt" ? "UserPromptSubmit" : "SessionStart", additionalContext: text } })); return; }
   io.stdout(text);
 }
@@ -168,8 +185,33 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     return;
   }
   const input = parseHookInput(raw);
-  const workspace = options.workspace ?? workspaceRootFor(input.cwd ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
+  if (event === "mark" && (input.sessionId === undefined || !isOsnovaQuery(input.toolName))) return;
+  if (event === "reset" && input.sessionId === undefined) return;
+  if (event === "stop" && (input.stopHookActive === true || process.env.OSNOVA_HOOK_SETTLE === "off")) return;
+  const directory = input.cwd ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  if (event === "gate" && !(isOsnovaQuery(input.toolName) && input.sessionId !== undefined && input.toolUseId !== undefined) && strictSubject(input, options.workspace ?? directory) === null) return;
+  const prompt = (input.prompt ?? "").trim();
+  const terms = event === "prompt" && prompt.length >= minimumPromptLength && !prompt.startsWith("/") ? promptCodeNames(prompt) : [];
+  if (event === "prompt" && terms.length === 0 && input.sessionId === undefined) return;
+  const workspace = options.workspace ?? workspaceRootFor(directory);
   const fail = (error: unknown): void => io.stderr(`osnova hook: ${error instanceof Error ? error.message : String(error)}`);
+  if (event === "gate") {
+    try {
+      const reason = await strictGate(input, workspace, options.cacheDir);
+      if (reason !== null) io.stdout(JSON.stringify(gatePayload(options.gateClient ?? client, reason)));
+    } catch (error) {
+      fail(error);
+      if (strictSubject(input, workspace) !== null) io.stdout(JSON.stringify(gatePayload(options.gateClient ?? client, "osnova gate: index verification failed. Use an Osnova query to diagnose the failure before repository exploration.")));
+    }
+    return;
+  }
+  if (event === "mark" || event === "reset") {
+    try { await (event === "mark" ? markGate : resetGate)(input, workspace, options.cacheDir); } catch (error) { fail(error); }
+    return;
+  }
+  if (event === "prompt") {
+    try { await resetGate(input, workspace, options.cacheDir); } catch (error) { fail(error); }
+  }
   if (event === "session") {
     try {
       let cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
@@ -192,21 +234,21 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     return;
   }
   if (event === "stop") {
-    if (input.stopHookActive === true || process.env.OSNOVA_HOOK_SETTLE === "off") return;
     try {
-      const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
-      if (cached === undefined) return;
       const { stdout: diff } = await execFileAsync("git", ["-C", workspace, "diff", "HEAD", "--no-color", "--no-ext-diff"], { encoding: "utf8", maxBuffer: maximumDiffBytes });
       if (diff.trim().length === 0) return;
+      const digest = createHash("sha256").update(JSON.stringify([workspace, input.agentId ?? "", diff])).digest("hex").slice(0, 16);
+      const stateFile = input.sessionId === undefined ? undefined : hookStateFile(options.cacheDir, input.sessionId);
+      const state = stateFile === undefined ? emptyHookState : await readHookState(stateFile);
+      if (state.settled.includes(digest)) return;
+      const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
+      if (cached === undefined) return;
       const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
       const result = impact(index, index, { diff, maxDepth: 1 });
       const dependents = result.dependents.filter((dependent) => dependent.snapshot === "current");
       if (dependents.length === 0) return;
-      const digest = createHash("sha256").update(diff).digest("hex").slice(0, 16);
-      const stateFile = input.sessionId === undefined ? undefined : hookStateFile(options.cacheDir, input.sessionId);
-      const state = stateFile === undefined ? emptyHookState : await readHookState(stateFile);
-      const continues = !state.settled.includes(digest) && (client === "cursor" || dependents.length > settleContinueThreshold());
-      if (continues && stateFile !== undefined) await writeHookState(stateFile, { ...state, settled: [...state.settled, digest] });
+      const continues = client === "cursor" || dependents.length > settleContinueThreshold();
+      if (stateFile !== undefined) await writeHookState(stateFile, { ...state, settled: [...state.settled, digest] });
       emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits), continues);
     } catch (error) { fail(error); }
     return;
@@ -228,13 +270,10 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     } catch (error) { fail(error); }
     return;
   }
-  const prompt = (input.prompt ?? "").trim();
-  if (prompt.length < minimumPromptLength || prompt.startsWith("/")) return;
+  if (terms.length === 0) return;
   try {
     const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
     if (cached === undefined) return;
-    const terms = promptCodeNames(prompt);
-    if (terms.length === 0) return;
     const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
     const seeds = symbolsNamed(index, terms, 8);
     if (seeds.length === 0) return;

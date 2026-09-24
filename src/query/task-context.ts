@@ -33,13 +33,17 @@ export interface CandidateTest {
   readonly basis: "test-path-and-graph-relationship";
 }
 
+export interface ContextRelationship extends RelationshipEvidence {
+  readonly excerpt?: string | undefined;
+}
+
 export interface TaskContextResult {
   readonly task: TaskContextOptions["task"];
   readonly scope: string;
   readonly receipt: IndexReceipt;
   readonly sources: readonly SourceReceipt[];
   readonly definitions: readonly ContextDefinition[];
-  readonly relationships: readonly RelationshipEvidence[];
+  readonly relationships: readonly ContextRelationship[];
   readonly candidateTests: readonly CandidateTest[];
   readonly omitted: {
     readonly definitions: number;
@@ -95,10 +99,19 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   }
   const sources = [...new Set(seeds.map((symbol) => symbol.file))].sort(compareText).map((file) => sourceReceipt(index, file, receipt));
   const definitions = new Map<string, ContextDefinition>();
+  const sourceLines = new Map<string, string[]>();
+  const linesFor = (file: string): string[] => {
+    let lines = sourceLines.get(file);
+    if (lines === undefined) {
+      lines = index.files.get(file)!.text.split("\n");
+      sourceLines.set(file, lines);
+    }
+    return lines;
+  };
   const reach = reachCounter(index);
   const addDefinition = (symbol: OsnovaSymbol, seed = false): void => {
     if (definitions.has(symbol.qualifiedName)) return;
-    const lines = index.files.get(symbol.file)!.text.split("\n").slice(symbol.span.startLine - 1, symbol.span.endLine);
+    const lines = linesFor(symbol.file).slice(symbol.span.startLine - 1, symbol.span.endLine);
     const keepWhole = seed && options.inlineShortDefinitions !== undefined && lines.length <= options.inlineShortDefinitions;
     const excerpt = !keepWhole && excerptLines !== undefined && lines.length > excerptLines
       ? `${lines.slice(0, excerptLines).join("\n")}\n[+${lines.length - excerptLines} more lines]`
@@ -106,7 +119,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     definitions.set(symbol.qualifiedName, { symbol, receipt: sourceReceipt(index, symbol.file, receipt), excerpt, ...(seed ? { reach: reach(symbol) } : {}) });
   };
   for (const seed of seeds) addDefinition(seed, true);
-  const relationships = new Map<number, RelationshipEvidence>();
+  const relationships = new Map<number, ContextRelationship>();
   const candidateTests = new Map<string, CandidateTest>();
   const frontier = new Set<string>();
   let uncertain = 0, outside = 0;
@@ -149,7 +162,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   }
   const result = {
     task: options.task, scope, receipt, sources,
-    definitions: [] as ContextDefinition[], relationships: [] as RelationshipEvidence[], candidateTests: [] as CandidateTest[],
+    definitions: [] as ContextDefinition[], relationships: [] as ContextRelationship[], candidateTests: [] as CandidateTest[],
     omitted: { definitions: definitions.size, relationships: relationships.size, candidateTests: candidateTests.size,
       retrievalHits, uncertainEdges: uncertain, outOfScopeEdges: outside, depthFrontier: frontier.size, unknownSymbols },
     limitations: ["indexed-structural-evidence-only", "test-candidates-not-coverage", "receipts-not-disk-freshness", "uncertainty-counts-cover-entire-index",
@@ -172,5 +185,14 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relatedDefinitions, result.definitions, "definitions");
+  for (let i = 0; i < result.relationships.length; i++) {
+    const relationship = result.relationships[i]!;
+    const { edge } = relationship;
+    const line = edge.kind === "calls" ? (linesFor(relationship.source.file)[edge.line - 1] ?? "").trim() : "";
+    const keep = (line.charCodeAt(239) & 0xfc00) === 0xd800 ? 239 : 240;
+    const excerpt = line.length <= 240 ? line : `${line.slice(0, keep)}… [+${line.length - keep} code units]`;
+    result.relationships[i] = { ...relationship, excerpt };
+    if (size() > maxCodeUnits) result.relationships[i] = relationship;
+  }
   return result;
 }

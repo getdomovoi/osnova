@@ -23,6 +23,7 @@ import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 import { formatReach } from "./reach.js";
 import type { SymbolsUnderTestResult, TestFileEvidence, TestSite, TestsForResult } from "./tests.js";
+import { isTestFile as isIndexedTestFile } from "./tests.js";
 import type { UnreferencedResult } from "./unreferenced.js";
 import { entryPointRuleText, unreferencedNotice } from "./unreferenced.js";
 
@@ -193,32 +194,67 @@ function threadRows(matches: readonly FindTextMatch[]): ThreadRow[] {
   return rows;
 }
 
-export function formatFindText(groups: readonly FindTextGroup[]): string {
+function threadEvidence(index: OsnovaIndex, group: FindTextGroup): Map<number, string[]> {
+  const matched = new Set(group.matches.map((match) => match.line));
+  const labels = new Map<number, string[]>();
+  const add = (line: number, label: string): void => {
+    if (!matched.has(line)) return;
+    const items = labels.get(line) ?? [];
+    if (!items.includes(label)) items.push(label);
+    labels.set(line, items);
+  };
+  for (const symbol of index.files.get(group.file)?.symbols ?? []) {
+    add(symbol.span.startLine, `defines ${compactField(symbol.qualifiedName, 160)}`);
+  }
+  for (const edge of index.edgesForFile(group.file)) {
+    if (!matched.has(edge.line) || edge.evidence?.source !== "syntax") continue;
+    if (edge.kind === "imports") {
+      add(edge.line, `imports ${compactField(edge.toName, 160)}`);
+    } else if (edge.kind === "calls") {
+      const resolution = edge.evidence.resolution;
+      const test = isIndexedTestFile(group.file) ? "; test caller" : "";
+      const target = edge.toSymbol === undefined ? undefined : index.symbols.get(edge.toSymbol);
+      add(edge.line, resolution.status === "resolved" && target !== undefined
+        ? `direct call to ${compactField(target.qualifiedName, 160)} [${resolution.method}${test}]`
+        : `call ${compactField(edge.toName, 160)} [${resolution.status === "unresolved" ? resolution.reason : resolution.status === "ambiguous" ? "ambiguous" : "target-not-indexed"}${test}]`);
+    }
+  }
+  for (const items of labels.values()) items.sort();
+  return labels;
+}
+
+export function formatFindText(groups: readonly FindTextGroup[], index?: OsnovaIndex): string {
   if (groups.length === 0) return "no matches";
   const blocks: string[] = [];
   for (const group of groups) {
+    const evidence = index === undefined ? undefined : threadEvidence(index, group);
     const label =
       group.symbol !== null
         ? `${group.symbol.kind} ${group.symbol.qualifiedName} (${group.incomingEdges} in)`
         : `<module> ${group.file} (${group.incomingEdges} in)`;
     const hits = threadRows(group.matches)
-      .map((row) => `${group.file}:${row.line}:${row.cols.join(",")}: ${clipThreadText(row.text, row.start, row.end)}`)
+      .map((row) => {
+        const labels = evidence?.get(row.line) ?? [];
+        const detail = labels.length === 0 ? "" : `\n  line evidence: ${labels.slice(0, 3).join("; ")}${labels.length > 3 ? `; +${labels.length - 3} labels omitted` : ""}`;
+        return `${group.file}:${row.line}:${row.cols.join(",")}: ${clipThreadText(row.text, row.start, row.end)}${detail}`;
+      })
       .join("\n");
     blocks.push(`${label}\n${hits}`);
   }
   return blocks.join("\n");
 }
 
-export function formatFindTextResult(result: FindTextResult): string {
+export function formatFindTextResult(result: FindTextResult, index?: OsnovaIndex): string {
   const shown = result.totalMatches - result.omittedMatches;
   const summary = `indexed-text search: ${shown}/${result.totalMatches} matches, ${result.groups.length}/${result.totalGroups} groups`;
   const lines = [summary];
+  if (index !== undefined && result.groups.length > 0) lines.push("Line evidence is not per-match classification. Use warp/plumb for callers; include direct test calls in the same caller list.");
   if (result.truncated) {
     lines.push(`truncated: ${result.omittedMatches} matches omitted; ${result.omittedGroups} groups omitted`);
     lines.push("Use findTextDetailed without limits to retrieve all matches in indexed text.");
   }
   if (result.totalMatches === 0) lines.push("no matches in indexed text");
-  else if (result.groups.length > 0) lines.push(formatFindText(result.groups));
+  else if (result.groups.length > 0) lines.push(formatFindText(result.groups, index));
   return lines.join("\n");
 }
 
@@ -678,7 +714,8 @@ export function formatTaskContext(result: TaskContextResult): string {
   const lines = [
     `osnova footing: ${result.task}, scope ${result.scope === "" ? "." : result.scope}, ${result.definitions.length} definitions, ${result.relationships.length} relationships, ${result.candidateTests.length} candidate tests`,
   ];
-  if (result.definitions.length > 0) lines.push("definitions:");
+  if (result.definitions.length > 0) lines.push(result.relationships.some((item) => item.excerpt !== undefined)
+    ? "definitions (indexed source; reuse unchanged spans):" : "definitions:");
   for (const definition of result.definitions) {
     const { symbol } = definition;
     lines.push(`- ${symbol.qualifiedName} ${symbol.kind} lines ${symbol.span.startLine}-${symbol.span.endLine}`);
@@ -689,7 +726,13 @@ export function formatTaskContext(result: TaskContextResult): string {
   for (const relationship of result.relationships) {
     const { edge } = relationship;
     const via = relationship.viaSources.length > 0 ? ` via ${relationship.viaSources.map((source) => source.file).join(", ")}` : "";
-    lines.push(`- ${edge.fromSymbol || edge.fromFile} -> ${edge.toSymbol ?? edge.toFile ?? edge.toName} ${edge.kind} line ${edge.line}${via}`);
+    const resolution = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined;
+    const basis = relationship.excerpt !== undefined && resolution?.status === "resolved"
+      ? ` [${resolution.method}${isIndexedTestFile(edge.fromFile) ? "; test" : ""}]` : "";
+    lines.push(`- ${edge.fromSymbol || edge.fromFile} -> ${edge.toSymbol ?? edge.toFile ?? edge.toName} ${edge.kind} line ${edge.line}${basis}${via}`);
+    const quoted = result.definitions.some((definition) => definition.symbol.file === edge.fromFile &&
+      definition.excerpt.split("\n")[edge.line - definition.symbol.span.startLine]?.trim() === relationship.excerpt);
+    if (relationship.excerpt && !quoted) lines.push(`  ${edge.fromFile}:${edge.line}: ${relationship.excerpt}`);
   }
   if (result.candidateTests.length > 0) lines.push("candidate tests:");
   for (const test of result.candidateTests) lines.push(`- ${test.file}${test.symbol === null ? "" : ` via ${test.symbol.qualifiedName}`}`);
@@ -735,6 +778,7 @@ export function formatImpact(result: ImpactResult): string {
     ...result.changes.map((change) => `${change.kind}: ${change.before?.symbol.qualifiedName ?? "<new>"} -> ${change.after?.symbol.qualifiedName ?? "<deleted>"}`),
     ...formatImpactFiles(result),
     ...result.dependents.map(formatImpactDependent),
+    ...(result.dependents.length > 0 ? ["behavior: inspect each caller's actual arguments; fixed arguments cannot forward newly handled values; forwarding callers can change for newly handled inputs; compare old/new outcomes before claiming a dependent is unaffected. Passing tests do not establish untested boundary coverage."] : []),
     formatImpactUncertainty(result.uncertainty),
   ].join("\n");
 }

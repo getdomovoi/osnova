@@ -53,6 +53,10 @@ describe("settle on a single index", () => {
     expect(text.split("\n")[0]).toBe("osnova settle: 1 symbol changes; 1 dependents; 1 frontier items omitted");
     expect(text).toContain("changed: a.ts#target -> a.ts#target");
     expect(text).toContain("current d1 b.ts#middle");
+    expect(text).toContain("forwarding callers can change for newly handled inputs");
+    expect(text).toContain("fixed arguments cannot forward newly handled values");
+    expect(text).toContain("compare old/new outcomes before claiming a dependent is unaffected");
+    expect(text).toContain("Passing tests do not establish untested boundary coverage");
     expect(text).toContain("uncertainty: 0 unresolved edges not listed");
   });
 

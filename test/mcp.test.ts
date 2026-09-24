@@ -6,6 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
+import { hookToolContract, hookSessionCodeUnits } from "../src/cli/hook.js";
+import { responseTokens } from "../scripts/bench/tokenizer.js";
 
 let workspace: string;
 let cacheDir: string;
@@ -48,6 +50,12 @@ describe("mcp stdio server", () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
+      expect(responseTokens(JSON.stringify(tools)).count).toBeLessThanOrEqual(1450);
+      const instructions = client.getInstructions()!;
+      expect(hookToolContract).toBe(`[osnova] ${instructions}`);
+      expect(responseTokens(hookToolContract).count).toBeLessThanOrEqual(200);
+      expect(`${hookToolContract}\nIndexed: 100000 files, 1000000 symbols.`.length).toBeLessThan(hookSessionCodeUnits);
+      for (const tool of tools) expect(instructions).toContain(`- ${tool.name}:`);
       expect(tools.map((t) => t.name)).toEqual([
         "osnova_ground",
         "osnova_thread",

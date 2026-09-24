@@ -58,7 +58,7 @@ export async function resolveGitRef(root: string, ref: string): Promise<{ sha: s
 }
 
 export async function baseDiff(root: string, sha: string): Promise<string> {
-  return git(root, ["-c", "core.quotePath=false", "diff", sha, "--relative", "--no-color", "--no-ext-diff", "--", "."]);
+  return git(root, ["-c", "core.quotePath=false", "diff", sha, "--relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "."]);
 }
 
 async function readAccess(dir: string): Promise<number> {

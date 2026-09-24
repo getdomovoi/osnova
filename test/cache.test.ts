@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveCacheDir, workspaceDirFor, evictLru } from "../src/cache/cache.js";
+import { resolveCacheDir, workspaceDirFor, workspaceKey, evictLru, isWorkspaceCacheName } from "../src/cache/cache.js";
 import { saveArtifact, loadArtifact } from "../src/index/serialize.js";
 import { buildIndex } from "../src/index/build.js";
 
@@ -41,11 +41,32 @@ describe("cache dir resolution", () => {
     const a = workspaceDirFor(tmpDir(), path.resolve("test/fixtures/sample-repo"));
     const b = workspaceDirFor(tmpDir(), path.resolve("test/fixtures/sample-repo"));
     expect(path.basename(a)).toBe(path.basename(b));
-    expect(path.basename(a)).toMatch(/^[0-9a-f]{16}$/);
+    expect(isWorkspaceCacheName(path.basename(a))).toBe(true);
   });
 });
 
 describe("artifact save and load", () => {
+  it("preserves incompatible caches through build, load and eviction", async () => {
+    const cacheDir = tmpDir();
+    const root = fixtureCopy();
+    const key = workspaceKey(root);
+    const names = [key, `v12-0123456789abcdef-${key}`, `v13-0000000000000000-${key}`];
+    try {
+      for (const name of names) {
+        fs.mkdirSync(path.join(cacheDir, name));
+        fs.writeFileSync(path.join(cacheDir, name, "index.json"), "incompatible artifact");
+        fs.writeFileSync(path.join(cacheDir, name, "access"), "invalid to this runtime");
+      }
+      await buildIndex(root, { cacheDir });
+      expect(await loadArtifact(root, cacheDir)).toBeDefined();
+      await evictLru(cacheDir, 0);
+      for (const name of names) expect(fs.readFileSync(path.join(cacheDir, name, "index.json"), "utf8")).toBe("incompatible artifact");
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("round-trips an index through the cache", async () => {
     const cacheDir = tmpDir();
     const root = fixtureCopy();
@@ -85,7 +106,7 @@ describe("artifact save and load", () => {
       const remaining = fs.readdirSync(cacheDir);
       expect(remaining).toHaveLength(2);
       for (const dir of remaining) {
-        expect(dir).toMatch(/^[0-9a-f]{16}$/);
+        expect(isWorkspaceCacheName(dir)).toBe(true);
       }
       for (const root of roots) {
         fs.rmSync(root, { recursive: true, force: true });

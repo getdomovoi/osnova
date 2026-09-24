@@ -9,6 +9,7 @@ import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { runCli } from "../src/cli/cli.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
+import { baseDiff } from "../src/index/base-ref.js";
 
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: gitEnv }).trim();
@@ -77,6 +78,49 @@ describe.skipIf(process.platform === "win32")("settle --base-ref", () => {
     expect(result.text).toContain("added: <new> -> entry.ts#extra");
   });
 
+  it.each([false, true])("includes indexed untracked files alongside tracked edits=%s without staging them", async (tracked) => {
+    await fs.writeFile(path.join(repo, "new file.ts"), "export function fresh() { return 5; }\n");
+    await fs.writeFile(path.join(repo, "caller.ts"), "import { fresh } from './new file.js';\nexport function caller() { return fresh(); }\n");
+    if (tracked) await fs.writeFile(path.join(repo, "api.ts"), "export function work() { return 3; }\n");
+    const before = git(repo, "status", "--porcelain=v1", "-uall");
+    const first = await settle(["--base-ref", "HEAD"]);
+    expect(first.code).toBe(0);
+    expect(first.text).toContain("added: <new> -> new file.ts#fresh");
+    expect(first.text).toContain("added: <new> -> caller.ts#caller");
+    if (tracked) expect(first.text).toContain("changed: api.ts#work -> api.ts#work");
+    expect((await settle(["--base-ref", "HEAD"])).text).toBe(first.text);
+    expect(git(repo, "status", "--porcelain=v1", "-uall")).toBe(before);
+  });
+
+  it("respects workspace boundaries and ignores when collecting untracked changes", async () => {
+    const nested = path.join(repo, "nested");
+    await fs.mkdir(nested);
+    await fs.writeFile(path.join(nested, "base.ts"), "export function base() {}\n");
+    await fs.writeFile(path.join(nested, ".gitignore"), "ignored.ts\n");
+    await fs.writeFile(path.join(nested, ".osnovaignore"), "excluded.ts\n");
+    git(repo, "add", "."); git(repo, "commit", "-q", "-m", "nested fixture");
+    await fs.writeFile(path.join(nested, "new.ts"), "export function fresh() {}\n");
+    await fs.writeFile(path.join(nested, "ignored.ts"), "export function ignored() {}\n");
+    await fs.writeFile(path.join(nested, "excluded.ts"), "export function excluded() {}\n");
+    await fs.writeFile(path.join(repo, "outside.ts"), "export function outside() {}\n");
+    await fs.symlink(path.join(repo, "outside.ts"), path.join(nested, "linked.ts"));
+    const result = await settle(["--base-ref", "HEAD"], nested);
+    expect(result.text).toContain("added: <new> -> new.ts#fresh");
+    expect(result.text).not.toMatch(/ignored.ts|excluded.ts|outside.ts|linked.ts/);
+  });
+
+  it("uses raw source diffs regardless of Git textconv and display configuration", async () => {
+    await fs.writeFile(path.join(repo, ".gitattributes"), "*.ts diff=fixture\n");
+    git(repo, "config", "diff.fixture.textconv", "echo masked");
+    git(repo, "config", "diff.mnemonicPrefix", "true");
+    git(repo, "config", "diff.noprefix", "true");
+    const diff = await baseDiff(repo, git(repo, "rev-parse", "HEAD~1"));
+    expect(diff).toContain("--- a/api.ts");
+    expect(diff).toContain("+++ b/api.ts");
+    expect(diff).toContain("-export function work() { return 1; }");
+    expect(diff).toContain("+export function work() { return 2; }");
+  });
+
   it("fails closed on an unknown ref", async () => {
     await expect(settle(["--base-ref", "no-such-ref"])).rejects.toThrow("osnova settle: unknown git ref: no-such-ref");
     await expect(settle(["--base-ref", "HEAD", "--base-cache", cache])).rejects.toThrow("osnova settle: use either --base-ref or --base-cache");
@@ -123,5 +167,31 @@ describe.skipIf(process.platform === "win32")("settle --base-ref", () => {
     } finally {
       await client.close();
     }
+  });
+
+  it("returns identical MCP evidence for local and inline diffs, including staged, unstaged, deleted and untracked changes", async () => {
+    await fs.writeFile(path.join(repo, "api.ts"), "export function work() { return 3; }\n");
+    git(repo, "add", "api.ts");
+    await fs.writeFile(path.join(repo, "api.ts"), "export function work() { return 4; }\n");
+    await fs.unlink(path.join(repo, "entry.ts"));
+    await fs.writeFile(path.join(repo, "new.ts"), "import { work } from './api.js';\nexport function fresh() { return work(); }\n");
+    const status = git(repo, "status", "--porcelain=v1", "-uall");
+    const inline = { baseRef: "HEAD", diff: git(repo, "diff", "HEAD", "--no-ext-diff", "--no-textconv") + "\n" };
+    const { server } = createOsnovaMcpServer(repo, { cacheDir: cache });
+    const client = new Client({ name: "osnova-test", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const local = await client.callTool({ name: "osnova_settle", arguments: { baseRef: "HEAD" } });
+      const explicit = await client.callTool({ name: "osnova_settle", arguments: inline });
+      expect(local.isError, JSON.stringify(local)).toBeFalsy();
+      expect(local.content).toEqual(explicit.content);
+      const text = JSON.stringify(local.content);
+      expect(text).toContain("changed: api.ts#work -> api.ts#work");
+      expect(text).toContain("deleted: entry.ts#start -> <deleted>");
+      expect(text).toContain("added: <new> -> new.ts#fresh");
+      expect(text).toContain("unresolved edges not listed; a missing dependent is not proof of absence");
+      expect(git(repo, "status", "--porcelain=v1", "-uall")).toBe(status);
+    } finally { await client.close(); }
   });
 });

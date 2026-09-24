@@ -1,0 +1,15 @@
+export const toolContract = [
+  "Graph first. Reuse source; query gaps only.",
+  "- osnova_footing: context.",
+  "- osnova_ground: definitions; lean=true for locations.",
+  "- osnova_thread: text search.",
+  "- osnova_outline: signatures.",
+  "- osnova_warp: callers/callees.",
+  "- osnova_groundwork: repo map.",
+  "- osnova_plumb: check callers and tests.",
+  "- osnova_tests: test leads.",
+  "- osnova_unreferenced: deletion leads only.",
+  "- osnova_settle: baseRef=HEAD; dependents.",
+  "Call args prove no value bounds. Graph lacks runtime/type proof; missing evidence is not proof of absence. Test refs are leads, not coverage; passing tests prove exercised assertions only. ls/glob/find and directory reads are discovery. After denial, use Osnova or named files; never retry via Read/shell/another tool or edit hooks.",
+  "No chat between tools. Final: findings, blockers, limits.",
+].join("\n");

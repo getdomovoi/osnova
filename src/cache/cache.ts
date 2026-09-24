@@ -3,9 +3,15 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { workspaceIdentity } from "../index/workspace.js";
+import { indexFormatVersion } from "../types.js";
+import { extractionVersion } from "../index/version.js";
 import { CacheLockTimeoutError, holdsCacheLock, lockOwnerExited, parseOwner, sweepLockDebris, withCacheLock } from "./lock.js";
 
-const WORKSPACE_KEY_RE = /^[0-9a-f]{16}$/;
+const workspacePrefix = `v${indexFormatVersion}-${createHash("sha256").update(extractionVersion).digest("hex").slice(0, 16)}-`;
+
+export function isWorkspaceCacheName(name: string): boolean {
+  return name.startsWith(workspacePrefix) && /^[0-9a-f]{16}$/.test(name.slice(workspacePrefix.length));
+}
 
 // A process that loads an artifact reads its text and edge sidecars lazily, long after the workspace
 // lock is released, so the lock alone cannot tell eviction what is in use. Each loader leaves one
@@ -67,7 +73,7 @@ export function workspaceKey(absRoot: string): string {
 }
 
 export function workspaceDirFor(cacheDir: string, absRoot: string): string {
-  return path.join(cacheDir, workspaceKey(absRoot));
+  return path.join(cacheDir, `${workspacePrefix}${workspaceKey(absRoot)}`);
 }
 
 export const defaultLruCap = 32;
@@ -96,7 +102,7 @@ export async function touchWorkspace(dir: string): Promise<void> {
   await withCacheLock(path.join(cacheDir, ".eviction.lock"), async () => {
     let latest = Date.now();
     for (const entry of await fs.readdir(cacheDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !WORKSPACE_KEY_RE.test(entry.name)) continue;
+      if (!entry.isDirectory() || !isWorkspaceCacheName(entry.name)) continue;
       try {
         const value = Number(await fs.readFile(path.join(cacheDir, entry.name, "access"), "utf8"));
         if (!Number.isSafeInteger(value) || value <= 0) throw new Error("osnova: corrupt cache access metadata");
@@ -144,7 +150,7 @@ export async function evictLru(cacheDir: string, policy: number | CachePolicy = 
     await sweepLockDebris(cacheDir);
     const candidates: Array<{ dir: string; access: number; bytes: number }> = [];
     for (const entry of entries) {
-      if (!entry.isDirectory() || !WORKSPACE_KEY_RE.test(entry.name)) continue;
+      if (!entry.isDirectory() || !isWorkspaceCacheName(entry.name)) continue;
       const dir = path.join(cacheDir, entry.name);
       try {
         const artifacts = await fs.readdir(dir);
