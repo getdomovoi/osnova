@@ -489,7 +489,7 @@ export async function runCli(
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
       if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
-      if (event !== "prompt" && event !== "session" && event !== "stop" && event !== "tool" && event !== "install-preview") throw new Error("osnova hook needs one of: prompt, session, stop, tool, install-preview");
+      if (event !== "prompt" && event !== "session" && event !== "stop" && event !== "tool" && event !== "search" && event !== "install-preview") throw new Error("osnova hook needs one of: prompt, session, stop, tool, search, install-preview");
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
       await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;

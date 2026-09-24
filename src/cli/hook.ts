@@ -12,6 +12,8 @@ import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import type { CliIo } from "./cli.js";
+import { parseSearchCall, symbolHuntNames } from "./search-guard.js";
+import { existsSync } from "node:fs";
 
 // Editor hooks: a session hook prints the index size and one pointer to the tools (the MCP server's
 // `instructions` carry the contract; `--full-contract` restates it for a harness without MCP), a prompt
@@ -24,10 +26,13 @@ import type { CliIo } from "./cli.js";
 // outnumber OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1); otherwise it warns the user without continuing.
 // Its once-per-diff and once-per-nudge state lives under the cache directory, the one place the
 // hooks may write.
-export type HookEvent = "prompt" | "session" | "stop" | "tool" | "install-preview";
+export type HookEvent = "prompt" | "session" | "stop" | "tool" | "search" | "install-preview";
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
+export const hookSearchCodeUnits = 1_536;
+/** A name with more definitions than this is too generic for a graph answer; the search runs. */
+const searchMaximumDefinitions = 5;
 const minimumPromptLength = 12;
 const maximumDiffBytes = 4 * 1024 * 1024;
 const defaultSettleContinueThreshold = 1;
@@ -102,6 +107,7 @@ export function hookSettingsObject(command: readonly string[], client: HookClien
   if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
   const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
   const hooks: Record<string, unknown[]> = { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] };
+  if (client === "claude-code") hooks.PreToolUse = [{ matcher: "Grep|Bash", ...entry("search", 10) }];
   if (client === "claude-code" && nudge) hooks.PostToolUse = [{ matcher: "Grep|Bash", ...entry("tool", 10) }];
   return { hooks };
 }
@@ -208,6 +214,14 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       const continues = !state.settled.includes(digest) && (client === "cursor" || dependents.length > settleContinueThreshold());
       if (continues && stateFile !== undefined) await writeHookState(stateFile, { ...state, settled: [...state.settled, digest] });
       emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits), continues);
+    } catch (error) { fail(error); }
+    return;
+  }
+  if (event === "search") {
+    if (client !== "claude-code") return;
+    try {
+      const reason = await searchAnswer(input, workspace, options.cacheDir);
+      if (reason !== null) io.stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
     } catch (error) { fail(error); }
     return;
   }
@@ -383,8 +397,10 @@ export function formatGrepNudge(index: OsnovaIndex, name: string): string | null
 interface HookState {
   readonly nudges: readonly string[];
   readonly settled: readonly string[];
+  /** Digests of searches the search hook already answered; the same search again runs. */
+  readonly denied: readonly string[];
 }
-const emptyHookState: HookState = { nudges: [], settled: [] };
+const emptyHookState: HookState = { nudges: [], settled: [], denied: [] };
 
 function hookStateFile(cacheDir: string | undefined, sessionId: string): string {
   return path.join(resolveCacheDir(cacheDir), "hook-state", `${sessionId.replace(/[^\w.-]/g, "_")}.json`);
@@ -393,10 +409,107 @@ async function readHookState(file: string): Promise<HookState> {
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<Record<keyof HookState, unknown>>;
     const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
-    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled) };
+    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled), denied: strings(parsed.denied) };
   } catch { return emptyHookState; }
 }
+// Written to a unique name and renamed into place, so a reader never sees half a file.
 async function writeHookState(file: string, state: HookState): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify({ nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)] }));
+  const staged = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(staged, JSON.stringify({ nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)], denied: [...new Set(state.denied)] }));
+  await fs.rename(staged, file);
+}
+
+// The search hook's decision: the graph answer to deny the search with, or null to let it run.
+// Null on any doubt: not a single repository search, not a pure name hunt, a path that is dynamic,
+// missing or outside the workspace, no index, a name the index does not define or defines too often,
+// nothing in scope, or the same search already answered once this session.
+export async function searchAnswer(input: HookInput, workspace: string, cacheDir: string | undefined): Promise<string | null> {
+  const call = parseSearchCall(input.toolName, input.toolInput);
+  if (call === null) return null;
+  const names = symbolHuntNames(call.patterns);
+  if (names === null) return null;
+  const cwd = path.resolve(input.cwd ?? workspace, call.base);
+  const scopes: string[] = [];
+  for (const written of call.paths.length === 0 ? ["."] : call.paths) {
+    const absolute = path.resolve(cwd, written);
+    const relative = path.relative(workspace, absolute).split(path.sep).join("/");
+    if (relative.startsWith("..") || path.isAbsolute(relative) || !existsSync(absolute)) return null;
+    scopes.push(relative);
+  }
+  const digest = createHash("sha256").update(JSON.stringify([input.toolName, input.toolInput])).digest("hex").slice(0, 16);
+  const stateFile = input.sessionId === undefined ? undefined : hookStateFile(cacheDir, input.sessionId);
+  const state = stateFile === undefined ? emptyHookState : await readHookState(stateFile);
+  if (state.denied.includes(digest)) return null;
+  if ((await loadIndex(workspace, { cacheDir })) === undefined) return null;
+  const index = await refreshWorkspace(workspace, { cacheDir });
+  const text = formatSearchAnswer(index, names, scopes);
+  if (text === null) return null;
+  if (stateFile !== undefined) await writeHookState(stateFile, { ...state, denied: [...state.denied, digest] });
+  return text;
+}
+
+const SEARCH_DEFINITION_KINDS = new Set(["function", "method", "class", "interface", "struct", "enum", "trait", "module", "type", "constant"]);
+const inAnyScope = (file: string, scopes: readonly string[]): boolean => scopes.some((scope) => scope === "" || file === scope || file.startsWith(`${scope}/`));
+const SITE_LABELS = ["called from", "imported by", "referenced by", "routed from", "unresolved same-name calls"] as const;
+
+// Definitions, then resolved sites grouped by kind and file with every line, then unresolved same-name
+// calls; each group lists files until the budget and counts the rest exactly. Null when a name is not
+// defined, is defined more than searchMaximumDefinitions times, or has nothing inside the searched paths.
+export function formatSearchAnswer(index: OsnovaIndex, names: readonly string[], scopes: readonly string[], maxCodeUnits = hookSearchCodeUnits): string | null {
+  const scopeText = scopes.every((scope) => scope === "") ? "the workspace" : scopes.map((scope) => (scope === "" ? "." : scope)).join(", ");
+  const head = `[osnova] Search not run: ${names.map((name) => `\`${name}\``).join(", ")} ${names.length === 1 ? "is an indexed symbol" : "are indexed symbols"}, so this is the graph answer for ${scopeText} (exact file:line; comments and strings are not included). Repeat the identical command to run it anyway; rg stays the right tool for plain text.`;
+  const blocks: { title: string; groups: { label: string; files: [string, number[]][] }[] }[] = [];
+  for (const name of names) {
+    const definitions = [...index.symbols.values()].filter((symbol) => symbol.name === name && SEARCH_DEFINITION_KINDS.has(symbol.kind));
+    if (definitions.length === 0 || definitions.length > searchMaximumDefinitions) return null;
+    const byLabel = new Map<string, Map<string, Set<number>>>();
+    const add = (label: string, file: string, line: number): void => {
+      if (!inAnyScope(file, scopes)) return;
+      const byFile = byLabel.get(label) ?? new Map<string, Set<number>>(); byLabel.set(label, byFile);
+      const lines = byFile.get(file) ?? new Set<number>(); byFile.set(file, lines); lines.add(line);
+    };
+    for (const symbol of definitions) {
+      for (const edge of index.incoming(symbol.qualifiedName)) {
+        add(edge.kind === "calls" ? "called from" : edge.kind === "imports" ? "imported by" : edge.kind === "routes" ? "routed from" : "referenced by", edge.fromFile, edge.line);
+      }
+    }
+    // An import edge points at a file; it imports this name when its line spells the name.
+    const definingFiles = new Set(definitions.map((symbol) => symbol.file));
+    const word = new RegExp(`\\b${name}\\b`);
+    const lineCache = new Map<string, string[]>();
+    const lineOf = (file: string, line: number): string => {
+      let lines = lineCache.get(file);
+      if (lines === undefined) { lines = (index.files.get(file)?.text ?? "").split("\n"); lineCache.set(file, lines); }
+      return lines[line - 1] ?? "";
+    };
+    for (const edge of index.edges) {
+      if (edge.kind === "calls" && edge.toSymbol === undefined && edge.toName === name) add("unresolved same-name calls", edge.fromFile, edge.line);
+      else if (edge.kind === "imports" && edge.toFile !== undefined && definingFiles.has(edge.toFile) && word.test(lineOf(edge.fromFile, edge.line))) add("imported by", edge.fromFile, edge.line);
+    }
+    const shown = definitions.filter((symbol) => inAnyScope(symbol.file, scopes));
+    if (shown.length === 0 && byLabel.size === 0) continue;
+    const title = `${name}: ${shown.length === 0 ? `defined outside the searched paths (${definitions.map((symbol) => symbol.qualifiedName).join(", ")})` : shown.map((symbol) => `${symbol.kind} ${symbol.file}:${symbol.span.startLine}`).join("; ")}`;
+    const groups = SITE_LABELS.flatMap((label) => {
+      const byFile = byLabel.get(label);
+      if (byFile === undefined) return [];
+      const files = [...byFile.entries()].map(([file, set]): [string, number[]] => [file, [...set].sort((a, b) => a - b)])
+        .sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
+      return [{ label, files }];
+    });
+    blocks.push({ title, groups });
+  }
+  if (blocks.length === 0) return null;
+  // Fit the budget by listing fewer files per group, always keeping exact totals.
+  const render = (limit: number): string => [head, ...blocks.flatMap((block) => [block.title, ...block.groups.map(({ label, files }) => {
+    const sites = files.reduce((sum, [, lines]) => sum + lines.length, 0);
+    const listed = files.slice(0, limit).map(([file, lines]) => `${file}:${lines.join(",")}`).join(" · ");
+    const rest = files.length > limit ? ` · and ${files.length - limit} more files (osnova_warp lists them)` : "";
+    return `  ${label} ${sites} site${sites === 1 ? "" : "s"} in ${files.length} file${files.length === 1 ? "" : "s"}: ${listed}${rest}`;
+  })])].join("\n");
+  for (let limit = 12; limit >= 1; limit -= 1) {
+    const text = render(limit);
+    if (text.length <= maxCodeUnits) return text;
+  }
+  return boundText(render(1), maxCodeUnits);
 }
