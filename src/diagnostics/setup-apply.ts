@@ -124,7 +124,7 @@ export function instructionsBlock(): string {
     instructionsStart,
     "## Osnova",
     "",
-    "This repository is indexed by Osnova, an MCP server of `osnova_*` tools: a deterministic call graph with exact file:line, no type inference. Use them before grep and file reads; start with osnova_footing, finish a change with osnova_settle.",
+    "Osnova indexes this repository as a call graph: `osnova_*` MCP tools, exact file:line, no type inference. Use them for callers, impact, tests and unused code; one answer replaces a chain of grep and reads. Use rg to find a string. Start a multi-file task with osnova_footing; finish a change with osnova_settle.",
     "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
     instructionsEnd,
   ].join("\n");

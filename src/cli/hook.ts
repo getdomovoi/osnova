@@ -47,8 +47,8 @@ export interface HookInput {
 }
 
 export const hookToolContract = [
-  "[osnova] This repository is indexed by Osnova: a deterministic call graph with exact file:line, no type inference, no LLM. Use its tools before grep and file reads:",
-  "- osnova_footing: task context for a question or named symbols (definitions, callers, candidate tests). Start here.",
+  "[osnova] This repository is indexed by Osnova: a deterministic call graph with exact file:line, no type inference, no LLM. Use its tools for relationship questions: who calls a symbol, what a change affects, which tests reach it, what is unused, which handler serves a route. One answer replaces a chain of grep and file reads. To find a string, plain rg is smaller than osnova_thread. Tools:",
+  "- osnova_footing: task context for a question or named symbols (definitions, callers, candidate tests). Start here when a task spans several files.",
   "- osnova_ground: symbol and text search ranked by definition evidence; a verb and path (GET /users) finds the route and its handler.",
   "- osnova_thread: exhaustive regex search grouped by enclosing symbol.",
   "- osnova_outline: one file's signatures and spans.",
@@ -59,7 +59,7 @@ export const hookToolContract = [
   "An answer that says a symbol has no indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
 
-const hookSessionPointer = "use the osnova_* MCP tools (osnova_footing first) before grep and file reads.";
+const hookSessionPointer = "use osnova_* for callers, impact, tests, unused code (osnova_footing for multi-file tasks); rg is fine for a string.";
 export function formatSessionContext(status: string, fullContract: boolean): string {
   return fullContract ? `${hookToolContract}\n${status}` : `[osnova] ${status.replace(/\.$/, "")}; ${hookSessionPointer}`;
 }
