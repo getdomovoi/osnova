@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSearchCall, symbolHuntNames } from "../src/cli/search-guard.js";
+import { parseSearchCall, searchRegExp, symbolHuntNames } from "../src/cli/search-guard.js";
 
 const bash = (command: string) => parseSearchCall("Bash", { command });
 
@@ -70,5 +70,22 @@ describe("symbolHuntNames keeps only patterns that are nothing but code names", 
   it("needs every -e pattern to be a name", () => {
     expect(symbolHuntNames(["foo", "bar"])).toEqual(["bar", "foo"]);
     expect(symbolHuntNames(["foo", "some text"])).toBeNull();
+  });
+});
+
+describe("searchRegExp matches what the search itself would print", () => {
+  const regex = (command: string) => { const call = parseSearchCall("Bash", { command }); return call === null ? null : searchRegExp(call); };
+  it("reads grep's basic syntax: \\| alternates, a bare ( is a literal paren", () => {
+    const r = regex('grep -rn "def foo\\|foo(" .')!;
+    expect(r.test("def foo(x):")).toBe(true);
+    expect(r.test("  y = foo(1)")).toBe(true);
+    expect(r.test("foobar")).toBe(false);
+  });
+  it("reads rg's extended syntax, -F, -w and -i", () => {
+    expect(regex("rg 'foo\\(' src")!.test("foo(1)")).toBe(true);
+    expect(regex("rg -F 'a.b(' src")!.test("axb(")).toBe(false);
+    expect(regex("rg -w foo src")!.test("foobar")).toBe(false);
+    expect(regex("rg -i FOO src")!.test("foo")).toBe(true);
+    expect(regex("grep -rnE 'foo|bar' .")!.test("bar")).toBe(true);
   });
 });

@@ -16,7 +16,11 @@ beforeAll(async () => {
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   await fs.writeFile(path.join(root, "src", "api.ts"), "export function refreshWorkspace() { return 1; }\nexport function helper() { return 2; }\n");
   await fs.writeFile(path.join(root, "src", "use.ts"), "import { refreshWorkspace } from './api.js';\nexport function first() { return refreshWorkspace(); }\nexport function second() {\n  return refreshWorkspace() + 1;\n}\n");
-  await fs.writeFile(path.join(root, "src", "text.ts"), "// cache miss is logged here\nexport const message = 'cache miss';\n");
+  await fs.writeFile(path.join(root, "src", "text.ts"), "// cache miss is logged here; refreshWorkspace is not called from this file\nexport const message = 'cache miss';\n");
+  await fs.mkdir(path.join(root, "src", "callers"));
+  for (let i = 0; i < 20; i += 1) {
+    await fs.writeFile(path.join(root, "src", "callers", `c${i}.ts`), `import { refreshWorkspace } from '../api.js';\nexport function caller${i}WithADescriptiveName(argumentOne: number, argumentTwo: string): number {\n  return refreshWorkspace() + argumentOne + argumentTwo.length;\n}\n`);
+  }
   for (let i = 0; i < 6; i += 1) await fs.writeFile(path.join(root, "src", `g${i}.ts`), `export class C${i} { get(): number { return ${i}; } }\n`);
   const { buildIndex } = await import("../src/index.js");
   await buildIndex(root, { cacheDir });
@@ -41,9 +45,10 @@ describe("osnova hook search (PreToolUse)", () => {
     expect(decision.permissionDecision).toBe("deny");
     const reason: string = decision.permissionDecisionReason;
     expect(reason).toContain("src/api.ts:1");
-    expect(reason).toMatch(/called from 2 sites in 1 file: src\/use\.ts:2,4/);
-    expect(reason).toContain("imported by 1 site in 1 file: src/use.ts:1");
-    expect(reason).toContain("Repeat the identical command to run it anyway");
+    expect(reason).toMatch(/called from 22 sites in 21 files: src\/use\.ts:2,4 · /);
+    expect(reason).toContain("imported by 21 sites in 21 files");
+    expect(reason).toMatch(/other text matches[^\n]*\n {2}at 1 site in 1 file: src\/text\.ts:1/);
+    expect(reason).toContain("Repeat the identical command to run the search");
     expect(reason.length).toBeLessThanOrEqual(hookSearchCodeUnits);
   });
 
@@ -55,18 +60,31 @@ describe("osnova hook search (PreToolUse)", () => {
   });
 
   it("answers the Grep tool the same way", async () => {
-    const out = await search("Grep", { pattern: "\\brefreshWorkspace\\b", path: "src" }, "grep-tool");
+    const out = await search("Grep", { pattern: "\\brefreshWorkspace\\b", path: "src", output_mode: "content" }, "grep-tool");
     expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   it("keeps only the sites inside the searched path", async () => {
-    const reason = JSON.parse(await search("Bash", { command: "rg refreshWorkspace src/api.ts" }, "scoped")).hookSpecificOutput.permissionDecisionReason as string;
-    expect(reason).toContain("src/api.ts:1");
+    const reason = JSON.parse(await search("Bash", { command: "rg refreshWorkspace src/callers" }, "scoped")).hookSpecificOutput.permissionDecisionReason as string;
+    expect(reason).toContain("defined outside the searched paths (src/api.ts#refreshWorkspace)");
+    expect(reason).toContain("called from 20 sites in 20 files");
     expect(reason).not.toContain("src/use.ts");
+  });
+
+  it("lets a search run when its output is already smaller than the answer", async () => {
+    expect(await search("Bash", { command: "rg -n refreshWorkspace src/api.ts" }, "tiny")).toBe("");
+  });
+
+  it("lets a definition-only search run: grep prints one line, the graph answer would be larger", async () => {
+    expect(await search("Bash", { command: 'rg -n "function refreshWorkspace" src' }, "definition-only")).toBe("");
   });
 
   it.each([
     ["plain text", "Bash", { command: 'rg -n "cache miss" src' }],
+    ["a file list", "Bash", { command: "rg -l refreshWorkspace src" }],
+    ["a count", "Bash", { command: "grep -rc refreshWorkspace src" }],
+    ["lines with context", "Bash", { command: "rg -n -A 20 refreshWorkspace src" }],
+    ["the Grep tool's default file list", "Grep", { pattern: "refreshWorkspace", path: "src" }],
     ["a name nothing defines", "Bash", { command: "rg -n notDefinedAnywhere src" }],
     ["a name with more than five definitions", "Bash", { command: "rg -n get src" }],
     ["a pipe filter", "Bash", { command: "cat src/use.ts | grep refreshWorkspace" }],

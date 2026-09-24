@@ -7,13 +7,14 @@ import { loadIndex, refreshWorkspace } from "../api.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
+import { findTextDetailed } from "../query/findText.js";
 import { boundText } from "../query/budget.js";
 import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import type { CliIo } from "./cli.js";
-import { parseSearchCall, symbolHuntNames } from "./search-guard.js";
-import { existsSync } from "node:fs";
+import { parseSearchCall, searchRegExp, symbolHuntNames } from "./search-guard.js";
+import { existsSync, statSync } from "node:fs";
 
 // Editor hooks: a session hook prints the index size and one pointer to the tools (the MCP server's
 // `instructions` carry the contract; `--full-contract` restates it for a harness without MCP), a prompt
@@ -421,12 +422,15 @@ async function writeHookState(file: string, state: HookState): Promise<void> {
 }
 
 // The search hook's decision: the graph answer to deny the search with, or null to let it run.
-// Null on any doubt: not a single repository search, not a pure name hunt, a path that is dynamic,
-// missing or outside the workspace, no index, a name the index does not define or defines too often,
-// nothing in scope, or the same search already answered once this session.
+// The hook exists to cut what the agent reads, so it denies only when its answer is clearly smaller
+// than the lines the search would print, estimated from the indexed text, and it lists every text
+// match the graph does not cover by location, so nothing the search would find goes unmentioned.
+// Null on any doubt: not a single line-printing repository search, not a pure name hunt, a path that
+// is dynamic, missing or outside the workspace, a file in scope too large to index, no index, a name
+// the index does not define or defines too often, or the same search already answered this session.
 export async function searchAnswer(input: HookInput, workspace: string, cacheDir: string | undefined): Promise<string | null> {
   const call = parseSearchCall(input.toolName, input.toolInput);
-  if (call === null) return null;
+  if (call === null || call.shape !== "lines") return null;
   const names = symbolHuntNames(call.patterns);
   if (names === null) return null;
   const cwd = path.resolve(input.cwd ?? workspace, call.base);
@@ -443,29 +447,67 @@ export async function searchAnswer(input: HookInput, workspace: string, cacheDir
   if (state.denied.includes(digest)) return null;
   if ((await loadIndex(workspace, { cacheDir })) === undefined) return null;
   const index = await refreshWorkspace(workspace, { cacheDir });
-  const text = formatSearchAnswer(index, names, scopes);
-  if (text === null) return null;
+  // The lines the search itself would print, found with its own pattern and flags in the indexed text.
+  const regex = searchRegExp(call);
+  if (regex === null) return null;
+  const textMatches = new Map<string, string>();
+  for (const scope of scopes) {
+    const found = findTextDetailed(index, regex.source, { in: scope, ignoreCase: regex.flags.includes("i"), matchesPerGroup: Number.MAX_SAFE_INTEGER });
+    if (found.unsearchedFiles.length > 0 || found.truncated) return null;
+    for (const group of found.groups) for (const match of group.matches) textMatches.set(`${group.file}:${match.line}`, match.text);
+  }
+  if (textMatches.size === 0) return null;
+  const answer = formatSearchAnswer(index, names, scopes, textMatches);
+  if (answer === null) return null;
+  // What the search would print: file:line:text, without the file when it searches one file, cut at a head.
+  const singleFile = call.paths.length === 1 && statSync(path.resolve(cwd, call.paths[0]!)).isFile();
+  const printed = [...textMatches.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, call.maxLines ?? Number.MAX_SAFE_INTEGER);
+  const searchChars = printed.reduce((sum, [site, text]) => sum + (singleFile ? site.length - site.lastIndexOf(":") - 1 : site.length) + text.length + 2, 0);
+  if (answer.text.length > searchChars * searchAnswerMaximumShare || answer.otherMatches > answer.codeSites) return null;
   if (stateFile !== undefined) await writeHookState(stateFile, { ...state, denied: [...state.denied, digest] });
-  return text;
+  return answer.text;
 }
 
+/** The answer must be at most this share of the search output it replaces, or the search runs. */
+const searchAnswerMaximumShare = 0.8;
 const SEARCH_DEFINITION_KINDS = new Set(["function", "method", "class", "interface", "struct", "enum", "trait", "module", "type", "constant"]);
 const inAnyScope = (file: string, scopes: readonly string[]): boolean => scopes.some((scope) => scope === "" || file === scope || file.startsWith(`${scope}/`));
 const SITE_LABELS = ["called from", "imported by", "referenced by", "routed from", "unresolved same-name calls"] as const;
+type SiteGroup = { readonly label: string; readonly files: readonly (readonly [string, readonly number[]])[] };
+
+function siteGroups(byLabel: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<number>>>, labels: readonly string[]): SiteGroup[] {
+  return labels.flatMap((label) => {
+    const byFile = byLabel.get(label);
+    if (byFile === undefined) return [];
+    const files = [...byFile.entries()].map(([file, set]) => [file, [...set].sort((a, b) => a - b)] as const)
+      .sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
+    return [{ label, files }];
+  });
+}
 
 // Definitions, then resolved sites grouped by kind and file with every line, then unresolved same-name
-// calls; each group lists files until the budget and counts the rest exactly. Null when a name is not
-// defined, is defined more than searchMaximumDefinitions times, or has nothing inside the searched paths.
-export function formatSearchAnswer(index: OsnovaIndex, names: readonly string[], scopes: readonly string[], maxCodeUnits = hookSearchCodeUnits): string | null {
-  const scopeText = scopes.every((scope) => scope === "") ? "the workspace" : scopes.map((scope) => (scope === "" ? "." : scope)).join(", ");
-  const head = `[osnova] Search not run: ${names.map((name) => `\`${name}\``).join(", ")} ${names.length === 1 ? "is an indexed symbol" : "are indexed symbols"}, so this is the graph answer for ${scopeText} (exact file:line; comments and strings are not included). Repeat the identical command to run it anyway; rg stays the right tool for plain text.`;
-  const blocks: { title: string; groups: { label: string; files: [string, number[]][] }[] }[] = [];
+// calls, then the text matches (comments, strings, other files) the graph does not cover; each group
+// lists files until the budget and counts the rest exactly. Null when a name is not defined, is defined
+// more than searchMaximumDefinitions times, or has nothing inside the searched paths.
+export interface SearchAnswer {
+  readonly text: string;
+  /** Distinct code lines the answer names: definitions and graph sites inside the searched paths. */
+  readonly codeSites: number;
+  /** Text matches inside the searched paths that no code site covers: comments, strings, other files. */
+  readonly otherMatches: number;
+}
+
+export function formatSearchAnswer(index: OsnovaIndex, names: readonly string[], scopes: readonly string[], textMatches: ReadonlyMap<string, string> = new Map(), maxCodeUnits = hookSearchCodeUnits): SearchAnswer | null {
+  const head = "[osnova] Graph answer in place of this search: code sites with exact file:line, then any other text matches by location. Repeat the identical command to run the search.";
+  const covered = new Set<string>();
+  const blocks: { title: string; groups: SiteGroup[] }[] = [];
   for (const name of names) {
     const definitions = [...index.symbols.values()].filter((symbol) => symbol.name === name && SEARCH_DEFINITION_KINDS.has(symbol.kind));
     if (definitions.length === 0 || definitions.length > searchMaximumDefinitions) return null;
     const byLabel = new Map<string, Map<string, Set<number>>>();
     const add = (label: string, file: string, line: number): void => {
       if (!inAnyScope(file, scopes)) return;
+      covered.add(`${file}:${line}`);
       const byFile = byLabel.get(label) ?? new Map<string, Set<number>>(); byLabel.set(label, byFile);
       const lines = byFile.get(file) ?? new Set<number>(); byFile.set(file, lines); lines.add(line);
     };
@@ -488,28 +530,32 @@ export function formatSearchAnswer(index: OsnovaIndex, names: readonly string[],
       else if (edge.kind === "imports" && edge.toFile !== undefined && definingFiles.has(edge.toFile) && word.test(lineOf(edge.fromFile, edge.line))) add("imported by", edge.fromFile, edge.line);
     }
     const shown = definitions.filter((symbol) => inAnyScope(symbol.file, scopes));
+    for (const symbol of shown) covered.add(`${symbol.file}:${symbol.span.startLine}`);
     if (shown.length === 0 && byLabel.size === 0) continue;
     const title = `${name}: ${shown.length === 0 ? `defined outside the searched paths (${definitions.map((symbol) => symbol.qualifiedName).join(", ")})` : shown.map((symbol) => `${symbol.kind} ${symbol.file}:${symbol.span.startLine}`).join("; ")}`;
-    const groups = SITE_LABELS.flatMap((label) => {
-      const byFile = byLabel.get(label);
-      if (byFile === undefined) return [];
-      const files = [...byFile.entries()].map(([file, set]): [string, number[]] => [file, [...set].sort((a, b) => a - b)])
-        .sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
-      return [{ label, files }];
-    });
-    blocks.push({ title, groups });
+    blocks.push({ title, groups: siteGroups(byLabel, SITE_LABELS) });
   }
   if (blocks.length === 0) return null;
+  const other = new Map<string, Set<number>>();
+  for (const site of textMatches.keys()) {
+    if (covered.has(site)) continue;
+    const colon = site.lastIndexOf(":");
+    const file = site.slice(0, colon);
+    const lines = other.get(file) ?? new Set<number>(); other.set(file, lines); lines.add(Number(site.slice(colon + 1)));
+  }
+  if (other.size > 0) blocks.push({ title: "other text matches (comments, strings, non-code files):", groups: siteGroups(new Map([["at", other]]), ["at"]) });
+  const otherMatches = [...other.values()].reduce((sum, lines) => sum + lines.size, 0);
   // Fit the budget by listing fewer files per group, always keeping exact totals.
   const render = (limit: number): string => [head, ...blocks.flatMap((block) => [block.title, ...block.groups.map(({ label, files }) => {
     const sites = files.reduce((sum, [, lines]) => sum + lines.length, 0);
     const listed = files.slice(0, limit).map(([file, lines]) => `${file}:${lines.join(",")}`).join(" · ");
-    const rest = files.length > limit ? ` · and ${files.length - limit} more files (osnova_warp lists them)` : "";
+    const rest = files.length > limit ? ` · and ${files.length - limit} more files` : "";
     return `  ${label} ${sites} site${sites === 1 ? "" : "s"} in ${files.length} file${files.length === 1 ? "" : "s"}: ${listed}${rest}`;
   })])].join("\n");
+  let text = boundText(render(1), maxCodeUnits);
   for (let limit = 12; limit >= 1; limit -= 1) {
-    const text = render(limit);
-    if (text.length <= maxCodeUnits) return text;
+    const candidate = render(limit);
+    if (candidate.length <= maxCodeUnits) { text = candidate; break; }
   }
-  return boundText(render(1), maxCodeUnits);
+  return { text, codeSites: covered.size, otherMatches };
 }
