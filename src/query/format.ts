@@ -219,6 +219,10 @@ export function formatFindTextResult(result: FindTextResult): string {
   }
   if (result.totalMatches === 0) lines.push("no matches in indexed text");
   else if (result.groups.length > 0) lines.push(formatFindText(result.groups));
+  const unsearched = result.unsearchedFiles.length;
+  if (unsearched > 0) {
+    lines.push(`${unsearched} ${unsearched === 1 ? "file in this scope is" : "files in this scope are"} above the ${maximumIndexedFileSizeBytes / 1_000_000} MB size cap and ${unsearched === 1 ? "was" : "were"} not searched: ${result.unsearchedFiles.slice(0, 3).join(", ")}${unsearched > 3 ? `, and ${unsearched - 3} more` : ""}`);
+  }
   return lines.join("\n");
 }
 

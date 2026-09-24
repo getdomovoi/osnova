@@ -54,9 +54,11 @@ function reference(index: OsnovaIndex, pattern: string, options: FindTextDetaile
   let totalMatches = 0;
   const groups: { file: string; symbolQ: string | null; matches: FindTextMatch[] }[] = [];
   const byKey = new Map<string, (typeof groups)[number]>();
+  const unsearchedFiles: string[] = [];
   for (const file of [...index.files.keys()].sort()) {
     if (!matchInPath([file], options.in ?? "")) continue;
     const card = index.files.get(file)!;
+    if (card.diagnostics?.some((diagnostic) => diagnostic.code === "file-too-large") === true) unsearchedFiles.push(file);
     if (card.text.length === 0) continue;
     const lines = card.text.split("\n");
     for (let i = 0; i < lines.length; i += 1) {
@@ -96,7 +98,7 @@ function reference(index: OsnovaIndex, pattern: string, options: FindTextDetaile
   const omittedMatches = totalMatches - selected.reduce((count, group) => count + group.matches.length, 0);
   return {
     scope: "indexed-text", groups: selected, totalGroups: groups.length, totalMatches,
-    omittedGroups: groups.length - selected.length, omittedMatches, truncated: omittedMatches > 0,
+    omittedGroups: groups.length - selected.length, omittedMatches, truncated: omittedMatches > 0, unsearchedFiles,
   };
 }
 
