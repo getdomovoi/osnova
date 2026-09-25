@@ -60,16 +60,52 @@ describe("setup preview", () => {
     expect(JSON.parse(preview.merged)).toEqual({ numStartups: 3, mcpServers: { osnova: { command: "osnova", args: ["mcp"] } } });
   });
 
-  it("reports unchanged and conflict for an existing osnova entry", async () => {
+  it("reports unchanged, repoints an osnova entry from another install, and refuses one that does not launch osnova", async () => {
     const file = path.join(home, ".pi", "agent", "mcp.json");
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "osnova", args: ["mcp"] } } }, null, 2));
     expect((await previewSetup("pi", { home })).action).toBe("unchanged");
-    await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "/old/osnova", args: ["mcp"] } } }, null, 2));
+    await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "/old/osnova", args: ["mcp", "--watch"], env: { A: "1" } } } }, null, 2));
+    const update = await previewSetup("pi", { home });
+    expect(update.action).toBe("update");
+    expect(update.diff).toContain('+      "command": "osnova",');
+    expect(update.notice).toContain("repointed");
+    expect(JSON.parse(update.merged)).toEqual({ mcpServers: { osnova: { command: "osnova", args: ["mcp", "--watch"], env: { A: "1" } } } });
+    await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "elsewhere", args: ["mcp"] } } }, null, 2));
     const conflict = await previewSetup("pi", { home });
     expect(conflict.action).toBe("conflict");
     expect(conflict.diff).toBe("");
-    expect(conflict.notice).toContain("already has an osnova entry");
+    expect(conflict.notice).toContain("does not launch osnova");
+  });
+
+  it("edits only the top-level entry in ~/.claude.json, never a project's", async () => {
+    const file = path.join(home, ".claude.json");
+    const project = '{\n  "projects": {\n    "/p": {\n      "mcpServers": {\n        "osnova": { "command": "node", "args": ["/p/osnova/bin.js", "mcp"] }\n      }\n    }\n  },\n';
+    await fs.writeFile(file, `${project}  "mcpServers": {\n    "osnova": {\n      "type": "stdio",\n      "command": "node",\n      "args": ["/x/osnova-strict/dist/bin.js", "mcp", "--watch"],\n      "env": {}\n    }\n  },\n  "theme": "dark"\n}\n`);
+    const update = await previewSetup("claude-code", { home });
+    expect(update.action).toBe("update");
+    expect(update.merged.startsWith(project)).toBe(true);
+    expect(JSON.parse(update.merged)).toEqual({
+      projects: { "/p": { mcpServers: { osnova: { command: "node", args: ["/p/osnova/bin.js", "mcp"] } } } },
+      mcpServers: { osnova: { type: "stdio", command: "osnova", args: ["mcp", "--watch"], env: {} } },
+      theme: "dark",
+    });
+    await fs.writeFile(file, `${project}  "mcpServers": {\n    "other": { "command": "other" }\n  }\n}\n`);
+    const append = await previewSetup("claude-code", { home });
+    expect(append.action).toBe("append");
+    expect(JSON.parse(append.merged).projects).toEqual({ "/p": { mcpServers: { osnova: { command: "node", args: ["/p/osnova/bin.js", "mcp"] } } } });
+    expect(JSON.parse(append.merged).mcpServers).toEqual({ other: { command: "other" }, osnova: { command: "osnova", args: ["mcp"] } });
+  });
+
+  it("repoints a kilo command array and keeps comments and other keys", async () => {
+    const file = path.join(home, ".config", "kilo", "kilo.jsonc");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '{\n  // mine\n  "mcp": {\n    "osnova": {\n      "type": "local",\n      "command": ["node", "/x/osnova-strict/dist/bin.js", "mcp"],\n      "enabled": true\n    }\n  }\n}\n');
+    const update = await previewSetup("kilo", { home });
+    expect(update.action).toBe("update");
+    expect(update.merged).toContain("// mine");
+    expect(update.merged).toContain('"command": ["osnova", "mcp"]');
+    expect(JSON.parse(update.merged.replace(/^\s*\/\/.*$/gm, ""))).toEqual({ mcp: { osnova: { type: "local", command: ["osnova", "mcp"], enabled: true } } });
   });
 
   it("uses the opencode and kilo local server shape", async () => {
@@ -92,6 +128,18 @@ describe("setup preview", () => {
     expect((await previewSetup("codex", { home })).action).toBe("unchanged");
     await fs.writeFile(file, '[mcp_servers.osnova]\ncommand = "elsewhere"\n');
     expect((await previewSetup("codex", { home })).action).toBe("conflict");
+  });
+
+  it("repoints the codex table and keeps its other keys and tool approval tables", async () => {
+    const file = path.join(home, ".codex", "config.toml");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tools = '[mcp_servers.osnova.tools.osnova_footing]\napproval_mode = "approve"\n';
+    await fs.writeFile(file, `model = "gpt"\n\n[mcp_servers.osnova]\ncommand = "/opt/node"\nargs = ["/x/osnova-strict/dist/bin.js", "mcp"]\nstartup_timeout_sec = 30\n\n${tools}`);
+    const update = await previewSetup("codex", { home });
+    expect(update.action).toBe("update");
+    expect(update.merged).toBe(`model = "gpt"\n\n[mcp_servers.osnova]\ncommand = "osnova"\nargs = ["mcp"]\nstartup_timeout_sec = 30\n\n${tools}`);
+    await fs.writeFile(file, update.merged);
+    expect((await previewSetup("codex", { home })).action).toBe("unchanged");
   });
 
   it("honors a custom command and an explicit config path", async () => {
