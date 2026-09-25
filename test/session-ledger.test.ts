@@ -119,6 +119,23 @@ it("reads a Kilo database read-only and bills reasoning apart from visible outpu
   expect(summary.usage.costUsd).toEqual({ total: 0.75, missing: 0 });
 });
 
+it("reads Kilo rows still held in the write-ahead log without touching the source files", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-ledger-kilo-wal-")); temporary.push(dir);
+  const file = path.join(dir, "kilo.db");
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("pragma journal_mode = wal; pragma wal_autocheckpoint = 0; create table message (id text, data text); create table part (id text, message_id text, data text);");
+    db.exec("pragma wal_checkpoint(truncate)");
+    db.prepare("insert into message values (?, ?)").run("a1", JSON.stringify({ role: "assistant", cost: 0.5, tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1000, completed: 2000 } }));
+    const snapshot = async () => Promise.all((await fs.readdir(dir)).sort().map(async (name) => [name, await fs.readFile(path.join(dir, name))] as const));
+    const before = await snapshot();
+    expect(before.map(([name]) => name)).toContain("kilo.db-wal");
+    const session = loadKiloSession(file);
+    expect(session.requests.map((request) => request.usage.costUsd)).toEqual([0.5]);
+    expect(await snapshot()).toEqual(before);
+  } finally { db.close(); }
+});
+
 it("compares arms on correct runs only and keeps excluded pairs visible", () => {
   const row = (task: string, arm: string, correct: boolean, cost: number, elapsedMs: number) => ({ task, arm, correct, summary: { ...summarizeSession({ host: "kilo", requests: [], calls: [], settleContinuations: 0, malformedRecords: 0 }), elapsedMs, usage: { uncachedInput: { total: 1, missing: 0 }, cacheRead: { total: 1, missing: 0 }, cacheWrite: { total: null, missing: 0 }, output: { total: 1, missing: 0 }, reasoning: { total: null, missing: 1 }, costUsd: { total: cost, missing: 0 } } } });
   const report = compareArms([row("t1", "osnova", true, 1, 10), row("t1", "none", true, 2, 30), row("t2", "osnova", false, 1, 10), row("t2", "none", true, 3, 5)], "osnova", "none");

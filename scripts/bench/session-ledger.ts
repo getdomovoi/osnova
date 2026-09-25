@@ -1,5 +1,7 @@
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { parseSearchCall, shellPipelines } from "./shell-search.js";
 
 // A session ledger: provider-reported usage per model request and a class for every tool call, read from
@@ -237,11 +239,20 @@ export function parseCodexSession(lines: Iterable<string>): LedgerSession {
 }
 
 // Kilo and OpenCode keep sessions in SQLite: assistant messages carry tokens (input excludes cache reads,
-// output excludes reasoning) and cost; tool parts carry the call. The file is opened immutable, never written.
+// output excludes reasoning) and cost; tool parts carry the call. Kilo writes in WAL mode, so recent rows,
+// and every row of a session killed mid-run, can sit only in `kilo.db-wal`, which an immutable open ignores.
+// The database and its log are copied to a private folder and read there; the source files are only copied, never opened by SQLite.
 export function loadKiloSession(file: string): LedgerSession {
-  const url = pathToFileURL(file);
-  url.searchParams.set("immutable", "1");
-  const db = new DatabaseSync(url, { readOnly: true });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "osnova-ledger-"));
+  try {
+    const copy = path.join(dir, "kilo.db");
+    copyFileSync(file, copy);
+    if (existsSync(`${file}-wal`)) copyFileSync(`${file}-wal`, `${copy}-wal`);
+    return readKiloSession(new DatabaseSync(copy));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+function readKiloSession(db: DatabaseSync): LedgerSession {
   try {
     const rows = (sql: string) => db.prepare(sql).all() as { id: string; message_id?: string; data: string }[];
     const messages = rows("select id, data from message").map((row) => ({ id: row.id, data: parseLine(row.data) ?? {} }));
