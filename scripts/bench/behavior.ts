@@ -156,7 +156,12 @@ export function compareBehavior(candidate: BehaviorReport, baseline: BehaviorRep
     const old = before.get(key(row))!;
     if (old.status === "passed" && row.status !== "passed") regressions.push(`${key(row)}:lost-pass`);
     if (old.status !== "passed" || row.status !== "passed") return [];
-    return [{ cohort: row.cohort, taskId: row.taskId, sample: row.sample, durationDeltaMs: row.metrics.durationMs - old.metrics.durationMs, toolCallDelta: row.metrics.toolCalls - old.metrics.toolCalls, toolResponseTokenDelta: row.metrics.toolResponseTokens - old.metrics.toolResponseTokens }];
+    const tokenDelta = (name: keyof BehaviorTrial["usage"]): number | null => {
+      const current = row.metrics.providerUsage[name], previous = old.metrics.providerUsage[name];
+      return current === null || previous === null ? null : current - previous;
+    };
+    return [{ cohort: row.cohort, taskId: row.taskId, sample: row.sample, durationDeltaMs: row.metrics.durationMs - old.metrics.durationMs, toolCallDelta: row.metrics.toolCalls - old.metrics.toolCalls, toolResponseTokenDelta: row.metrics.toolResponseTokens - old.metrics.toolResponseTokens,
+      providerTokenDelta: { inputTokens: tokenDelta("inputTokens"), outputTokens: tokenDelta("outputTokens"), cacheReadTokens: tokenDelta("cacheReadTokens"), cacheWriteTokens: tokenDelta("cacheWriteTokens") } }];
   });
-  return { regressions, pairs, excludedPairs: candidate.rows.length - pairs.length, interpretation: "paired observations only; no significance or billing savings claim" };
+  return { regressions, pairs, excludedPairs: candidate.rows.length - pairs.length, interpretation: "paired observations only; null provider deltas mean unavailable usage, not zero; no significance or billing savings claim" };
 }

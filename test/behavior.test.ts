@@ -134,11 +134,19 @@ it("rejects unknown schema fields, stale suites and duplicate trials", () => {
 });
 
 it("compares paired successful trials and excludes incorrect or incomplete candidates from savings", () => {
-  const before = bundle(), after = structuredClone(before);
-  for (const run of after.trials) { run.skill = "b".repeat(64); run.durationMs = 80; }
+  const before = bundle();
+  for (const run of before.trials) run.usage = { inputTokens: 100, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: null };
+  const after = structuredClone(before);
+  for (const run of after.trials) {
+    run.skill = "b".repeat(64); run.durationMs = 80;
+    run.usage = { inputTokens: 90, outputTokens: 220, cacheReadTokens: 330, cacheWriteTokens: null };
+  }
   const comparison = compareBehavior(evaluateBehavior(after), evaluateBehavior(before));
   expect(comparison.pairs).toHaveLength(5);
   expect(comparison.pairs[0]?.durationDeltaMs).toBe(-20);
+  expect(comparison.pairs[0]?.providerTokenDelta).toEqual({ inputTokens: -10, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: null });
+  after.trials[0]!.usage.outputTokens = null;
+  expect(compareBehavior(evaluateBehavior(after), evaluateBehavior(before)).pairs.find((pair) => pair.taskId === after.trials[0]!.taskId)?.providerTokenDelta.outputTokens).toBeNull();
   after.trials[0]!.review[0]!.verdict = "fail";
   const failed = compareBehavior(evaluateBehavior(after), evaluateBehavior(before));
   expect(failed.regressions).toHaveLength(1);
