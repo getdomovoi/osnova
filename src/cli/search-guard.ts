@@ -12,7 +12,7 @@ export interface SearchCall {
   readonly word: boolean;
 }
 
-interface Word { readonly text: string; readonly dynamic: boolean }
+interface Word { readonly text: string; readonly dynamic: boolean; readonly glob: boolean }
 type Token = { readonly kind: "word"; readonly word: Word } | { readonly kind: "op"; readonly op: string };
 
 
@@ -20,8 +20,8 @@ type Token = { readonly kind: "word"; readonly word: Word } | { readonly kind: "
 // subshells, heredocs, unterminated quotes.
 function tokenize(command: string): Token[] | null {
   const tokens: Token[] = [];
-  let text = "", dynamic = false, inWord = false;
-  const flush = (): void => { if (inWord) tokens.push({ kind: "word", word: { text, dynamic } }); text = ""; dynamic = false; inWord = false; };
+  let text = "", dynamic = false, glob = false, inWord = false;
+  const flush = (): void => { if (inWord) tokens.push({ kind: "word", word: { text, dynamic, glob } }); text = ""; dynamic = false; glob = false; inWord = false; };
   for (let i = 0; i < command.length; i += 1) {
     const c = command[i]!;
     if (c === "'") {
@@ -60,6 +60,7 @@ function tokenize(command: string): Token[] | null {
       while (command[j] === ">" || command[j] === "&") j += 1;
       tokens.push({ kind: "op", op: c === "<" ? "input" : "redirect" }); i = j - 1; continue;
     }
+    if ("*?[]".includes(c)) glob = true;
     text += c; inWord = true;
   }
   flush();
@@ -74,9 +75,13 @@ export function shellWords(command: string): readonly string[] | null {
 }
 
 export function shellPipelines(command: string): readonly (readonly (readonly string[])[])[] | null {
+  return shellPipelinesWithGlobs(command)?.map((pipeline) => pipeline.map((words) => words.map((word) => word.text))) ?? null;
+}
+
+export function shellPipelinesWithGlobs(command: string): readonly (readonly (readonly { readonly text: string; readonly glob: boolean }[])[])[] | null {
   const tokens = tokenize(command);
   if (tokens === null || tokens.some((token) => token.kind === "word" ? token.word.dynamic : token.op === "input")) return null;
-  return pipelines(tokens).map((pipeline) => pipeline.commands.map((words) => words.map((word) => word.text)));
+  return pipelines(tokens).map((pipeline) => pipeline.commands.map((words) => words.map((word) => ({ text: word.text, glob: word.glob }))));
 }
 
 interface Pipeline { readonly commands: readonly Simple[] }

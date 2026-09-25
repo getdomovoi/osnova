@@ -41,11 +41,11 @@ describe("distribution manifests", () => {
   });
 
   it("wire the plugin hooks exactly as osnova setup would", () => {
-    expect(read<unknown>("integrations/claude-code/hooks/hooks.json")).toEqual(hookSettingsObject(["npx", "-y", "@getdomovoi/osnova"], "claude-code"));
+    expect(read<unknown>("integrations/claude-code/hooks/hooks.json")).toEqual(hookSettingsObject(["npx", "-y", `${pkg.name}@${pkg.version}`], "claude-code"));
   });
 
   it("serve the plugin MCP entry through the same package", () => {
-    expect(read<Mcp>("integrations/claude-code/.mcp.json").mcpServers.osnova).toEqual({ command: "npx", args: ["-y", "@getdomovoi/osnova", "mcp"] });
+    expect(read<Mcp>("integrations/claude-code/.mcp.json").mcpServers.osnova).toEqual({ command: "npx", args: ["-y", `${pkg.name}@${pkg.version}`, "mcp"] });
     expect(read<Marketplace>(".claude-plugin/marketplace.json").plugins[0].source).toBe("./integrations/claude-code");
   });
 });

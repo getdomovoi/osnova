@@ -69,8 +69,8 @@
       "input": {
         "command": "task db:reset -y > /dev/null 2>&1; task db:migrate 2>&1 | tail -1"
       },
-      "expected": "deny",
-      "maxTokens": 71
+      "expected": "allow",
+      "maxTokens": 0
     },
     {
       "id": "status-filter",

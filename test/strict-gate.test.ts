@@ -29,9 +29,15 @@ async function mark(text: unknown, sessionId = "one"): Promise<void> {
 }
 
 describe("strict exploration gate", () => {
+  it("denies a cold source read without building the index inside the hook", async () => {
+    const artifact = path.join(workspaceDirFor(cacheDir, await fs.realpath(workspace)), "index.sha");
+    expect(await strictGate(input("Read", { file_path: "src/a.ts" }), workspace, cacheDir)).toContain("osnova gate:");
+    await expect(fs.access(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("explains directory discovery separately from missing file evidence without changing grants", async () => {
     const read = input("Read", { file_path: "src/a.ts" });
-    expect(await strictGate(read, workspace, cacheDir)).toContain("indexed file has no current grant");
+    expect(await strictGate(read, workspace, cacheDir)).toContain("source file has no current grant");
     await mark(await answer());
     expect(await strictGate(read, workspace, cacheDir)).toBeNull();
     const calls = [input("Bash", { command: "ls; cat package.json 2>/dev/null" }),
@@ -43,7 +49,7 @@ describe("strict exploration gate", () => {
       expect(reason).toContain("do not retry discovery through another tool/interpreter");
     }
     expect(await strictGate(input("Bash", { command: "cat package.json" }), workspace, cacheDir)).toBeNull();
-    expect(await strictGate(input("Bash", { command: "pnpm test" }), workspace, cacheDir)).toContain("earlier source denial remains unresolved");
+    expect(await strictGate(input("Bash", { command: "pnpm test" }), workspace, cacheDir)).toBeNull();
     await fs.appendFile(path.join(workspace, "src/a.ts"), "export const changed = 1;\n");
     expect(await strictGate(read, workspace, cacheDir)).toContain("indexed file has no current grant");
   });
@@ -56,6 +62,32 @@ describe("strict exploration gate", () => {
     expect(await strictGate(input("Read", { file_path: "src/a.ts" }), workspace, cacheDir)).toBeNull();
     expect(await fs.readFile(artifact, "utf8")).toBe(generation);
     expect(await strictGate(input("Read", { file_path: "src/b.ts" }), workspace, cacheDir)).not.toBeNull();
+  });
+
+  it("does not reindex source changes to permit an unsupported regular file", async () => {
+    await answer();
+    const artifact = path.join(workspaceDirFor(cacheDir, await fs.realpath(workspace)), "index.sha");
+    const generation = await fs.readFile(artifact, "utf8");
+    await fs.appendFile(path.join(workspace, "src/b.ts"), "export const changed = 1;\n");
+    expect(await strictGate(input("Read", { file_path: "AGENTS.md" }), workspace, cacheDir)).toBeNull();
+    expect(await fs.readFile(artifact, "utf8")).toBe(generation);
+  });
+
+  it("denies known indexed files and directories without rescanning unrelated edits", async () => {
+    await answer();
+    const artifact = path.join(workspaceDirFor(cacheDir, await fs.realpath(workspace)), "index.sha");
+    const generation = await fs.readFile(artifact, "utf8");
+    await fs.appendFile(path.join(workspace, "src/b.ts"), "export const changed = 1;\n");
+    expect(await strictGate(input("Read", { file_path: "src/a.ts" }), workspace, cacheDir)).not.toBeNull();
+    expect(await strictGate(input("Read", { file_path: "src" }), workspace, cacheDir)).not.toBeNull();
+    expect(await fs.readFile(artifact, "utf8")).toBe(generation);
+  });
+
+  it("clears a cold source denial when the completed index excludes that file", async () => {
+    await fs.writeFile(path.join(workspace, ".osnovaignore"), "src/b.ts\n");
+    expect(await strictGate(input("Read", { file_path: "src/b.ts" }), workspace, cacheDir)).not.toBeNull();
+    await mark(await answer());
+    expect(await strictGate(input("Bash", { command: "pnpm test" }), workspace, cacheDir)).toBeNull();
   });
 
   it("rejects changed query sources and same-size edits with restored modification time", async () => {
@@ -240,6 +272,35 @@ describe("strict exploration gate", () => {
     }
     for (const command of ["git log -p", "git log --patch", "git status -vv"]) {
       expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).toContain("completed Osnova query");
+    }
+  });
+
+  it("does not mistake quoted arguments or external redirections for source discovery", async () => {
+    await mark(await answer());
+    for (const command of [
+      "git commit -m 'fix: find callers in tree'",
+      "git commit -m \"$(cat <<'EOF'\nfix: find callers\nEOF\n)\"",
+      `cat > '${temporary}/note.txt'`,
+      "echo 'src/*'",
+    ]) expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).toBeNull();
+  });
+
+  it("requires file evidence for Git source reads and listings", async () => {
+    await mark(await answer());
+    for (const command of ["git show HEAD:src/b.ts", "git ls-tree -r HEAD src", "tac src/b.ts", "bat src/b.ts", "echo src/*"]) {
+      expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).not.toBeNull();
+    }
+  });
+
+  it("does not grant user-claimed plumb sites", async () => {
+    const header = (await answer()).split("\n")[0]!;
+    await markGate({ ...input("osnova_plumb", { symbol: "alpha", sites: ["src/b.ts:1"] }), toolResponse: `${header}\nno-call src/b.ts:1` }, workspace, cacheDir);
+    expect(await strictGate(input("Read", { file_path: "src/b.ts" }), workspace, cacheDir)).not.toBeNull();
+  });
+
+  it("recognizes host discovery names and directory argument keys", async () => {
+    for (const call of [input("ls", { path: "src" }), input("list_dir", { dir_path: "src" }), input("grep_grep_search", { pattern: "alpha", path: "src" })]) {
+      expect(await strictGate(call, workspace, cacheDir)).not.toBeNull();
     }
   });
 

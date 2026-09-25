@@ -52,7 +52,7 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 
 ```text
 function src/api.ts#refreshWorkspace: 85 indexed edges
-reach: d1 callers 85 in 16 files (3 dirs); d2 +37 in 6 files; unresolved same-name 9; tests 19
+reach: d1 callers 85 in 16 files (3 dirs); d2 +43 in 6 files; unresolved same-name 9; tests 19
 d1 calls src/cli/cli.ts#ensureIndex:80 [import-binding]
 d1 calls src/cli/hook.ts#runHook:231,246,265,277 [import-binding]
 d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:254 [import-binding]
@@ -129,7 +129,7 @@ One global install serves every repository and every client: one entry in each c
 | Client | How to wire | What it adds |
 | --- | --- | --- |
 | Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus exploration gate and session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
-| Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace |
+| Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, pinned to the plugin's package version with no global install; updates follow the marketplace |
 | Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same hooks and exploration gate; trust them in `/hooks` or Codex skips them silently |
 | Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus session context, exploration gate and stop follow-up |
 | OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus exploration gate, system contract and prompt starting points |

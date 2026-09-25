@@ -18,7 +18,7 @@ export interface BehaviorTrial {
   usage: { inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null };
 }
 function queryName(tool: string): string | undefined {
-  return tool.match(/^(?:(?:mcp__[^_]+__)|(?:[^.]+[.]))?(osnova_(?:ground|thread|outline|warp|groundwork|footing|settle|plumb|tests|unreferenced))$/)?.[1];
+  return tool.match(/^(?:(?:mcp__[A-Za-z0-9_]+__)|(?:osnova_)|(?:[^.]+[.]))?(osnova_(?:ground|thread|outline|warp|groundwork|footing|settle|plumb|tests|unreferenced))$/)?.[1];
 }
 function object(value: unknown, allowed: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !allowed.includes(key))) throw new Error("invalid object or unknown field");

@@ -71,7 +71,7 @@ async function driver(client: GateClient, query = "osnova_ground", args: Record<
         try { await hooks["tool.execute.before"]({ tool: "bash", sessionID: "one" }, { args: { command } }); return true; }
         catch (error) { expect(String(error)).toContain("osnova gate:"); return false; }
       },
-      mark: (result, callID) => hooks["tool.execute.after"]({ tool: `osnova_${query}`, sessionID: "one", callID, args }, client === "kilo" ? { output: JSON.stringify(result) } : result as { content: unknown; isError?: boolean }),
+      mark: (result, callID) => hooks["tool.execute.after"]({ tool: `osnova_${query}`, sessionID: "one", callID }, client === "kilo" ? { output: JSON.stringify(result) } : result as { content: unknown; isError?: boolean }),
     };
   }
   if (client === "pi") {
@@ -170,6 +170,25 @@ it("Pi's MCP proxy records the underlying Osnova query before unlocking executio
   await handlers.get("tool_call")!(other, otherCtx);
   await handlers.get("tool_result")!({ ...other, content: result.content, isError: false }, otherCtx);
   expect(await handlers.get("tool_call")!(script, otherCtx)).toMatchObject({ block: true });
+});
+
+it("OpenCode keeps outline arguments when the after event omits them", async () => {
+  const hooks = await OsnovaPlugin({ directory: workspace });
+  const input = { tool: "osnova_outline", sessionID: "outline", callID: "one" };
+  const result = await mcp.callTool({ name: "osnova_outline", arguments: { file: "a.ts" } });
+  if (!Array.isArray(result.content)) throw new Error("missing outline content");
+  const header = (result.content[0] as { text: string }).text.split("\n")[0]!;
+  await hooks["tool.execute.before"](input, { args: { file: "a.ts" } });
+  await hooks["tool.execute.after"](input, { content: [{ type: "text", text: `${header}\nno definitions` }] });
+  await hooks["tool.execute.before"]({ tool: "read", sessionID: "outline" }, { args: { filePath: "a.ts" } });
+});
+
+it("Pi blocks its native ls tool on an indexed directory", async () => {
+  type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>;
+  const handlers = new Map<string, Handler>();
+  osnovaPi({ on: (event: string, handler: unknown) => { handlers.set(event, handler as Handler); } });
+  const decision = await handlers.get("tool_call")!({ toolName: "ls", input: { path: "." } }, { cwd: workspace, sessionManager: { getSessionId: () => "pi-ls" } });
+  expect(decision).toMatchObject({ block: true });
 });
 
 

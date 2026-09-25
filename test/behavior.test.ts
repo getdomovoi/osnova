@@ -32,6 +32,12 @@ it("scores all tasks without treating synthetic evidence as a live adoption resu
   expect(JSON.stringify(report)).not.toMatch(/private agent|private model|evidence|mcp__osnova/);
 });
 
+it.each(["mcp__plugin_osnova_osnova__osnova_ground", "osnova_osnova_ground"])("accepts installed query tool name %s", (tool) => {
+  const run = trial();
+  run.events[0]!.tool = tool;
+  expect(evaluateBehavior(bundle([run])).status).toBe("incomplete");
+});
+
 it("leaves missing correctness reviews and missing tasks incomplete", () => {
   const run = trial(); run.review = [];
   const report = evaluateBehavior(bundle([run]));

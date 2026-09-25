@@ -28,14 +28,14 @@ export const OsnovaPlugin = async ({ directory, worktree }) => {
   const pending = new Map();
   const key = (input) => typeof input.sessionID === "string" && typeof input.callID === "string" ? `${input.sessionID}\0${input.callID}` : undefined;
   const finish = (input) => pending.get(key(input))?.finish();
-  const track = (input) => {
+  const track = (input, args) => {
     const id = key(input);
     if (id === undefined) return;
     let resolve;
     const done = new Promise((complete) => { resolve = complete; });
     const timer = setTimeout(() => finish(input), 30_000);
     timer.unref?.();
-    pending.set(id, { sessionID: input.sessionID, done, finish: () => { clearTimeout(timer); pending.delete(id); resolve(); } });
+    pending.set(id, { sessionID: input.sessionID, args, done, finish: () => { clearTimeout(timer); pending.delete(id); resolve(); } });
   };
   const waitForPending = async (sessionID) => {
     const waits = [...pending.values()].filter((entry) => entry.sessionID === sessionID).map((entry) => entry.done);
@@ -56,11 +56,11 @@ export const OsnovaPlugin = async ({ directory, worktree }) => {
     },
     "tool.execute.before": async (input, output) => {
       const query = input.tool.includes("osnova_");
-      if (query) track(input);
+      if (query) track(input, output.args);
       try {
         const check = () => hook("gate", { session_id: input.sessionID, tool_use_id: input.callID, cwd, tool_name: input.tool, tool_input: output.args }, cwd, "--client", "opencode");
         let decision = gateDecision(await check());
-        if (!query && decision?.permissionDecision === "deny" && decision.permissionDecisionReason?.startsWith("osnova gate: indexed file has no current grant.")) {
+        if (!query && decision?.permissionDecision === "deny" && ["osnova gate: indexed file has no current grant.", "osnova gate: source file has no current grant."].some((prefix) => decision.permissionDecisionReason?.startsWith(prefix))) {
           const hadPending = [...pending.values()].some((entry) => entry.sessionID === input.sessionID);
           if (hadPending) {
             await waitForPending(input.sessionID);
@@ -78,7 +78,7 @@ export const OsnovaPlugin = async ({ directory, worktree }) => {
     "tool.execute.after": async (input, output) => {
       if (!input.tool.includes("osnova_")) return;
       try {
-        await hook("mark", { session_id: input.sessionID, tool_use_id: input.callID, cwd, tool_name: input.tool, tool_input: input.args, tool_response: output }, cwd, "--client", "opencode");
+        await hook("mark", { session_id: input.sessionID, tool_use_id: input.callID, cwd, tool_name: input.tool, tool_input: pending.get(key(input))?.args ?? input.args, tool_response: output }, cwd, "--client", "opencode");
       } finally { finish(input); }
     },
     "chat.message": async (input, output) => {
