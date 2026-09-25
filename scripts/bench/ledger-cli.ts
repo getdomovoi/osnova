@@ -24,9 +24,16 @@ async function walk(root: string, accept: (file: string) => boolean, found: stri
   return found;
 }
 async function lines(file: string): Promise<string[]> {
-  const stat = await fs.stat(file);
-  if (stat.size > maximumFileBytes) throw new Error("session file over 256 MiB");
   return (await fs.readFile(file, "utf8")).split("\n");
+}
+// Oversized session files are skipped and counted, so one runaway session cannot stop a whole survey.
+async function sized(files: readonly string[], skipped: { count: number }): Promise<string[]> {
+  const kept: string[] = [];
+  for (const file of files) {
+    if ((await fs.stat(file)).size > maximumFileBytes) skipped.count += 1;
+    else kept.push(file);
+  }
+  return kept;
 }
 
 interface Outcome { readonly task: string; readonly arm: string; readonly correct: boolean }
@@ -41,18 +48,18 @@ function parseOutcomes(raw: unknown): Map<string, Outcome> {
   return outcomes;
 }
 
-async function sessions(host: LedgerHost, inputs: readonly string[]): Promise<Map<string, SessionSummary>> {
+async function sessions(host: LedgerHost, inputs: readonly string[], skipped: { count: number }): Promise<Map<string, SessionSummary>> {
   const result = new Map<string, SessionSummary>();
   for (const input of inputs) {
     const root = path.resolve(input);
     if (host === "kilo") {
-      for (const file of await walk(root, (name) => path.basename(name) === "kilo.db")) result.set(path.relative(root, file) || path.basename(file), summarizeSession(loadKiloSession(file)));
+      for (const file of await sized(await walk(root, (name) => path.basename(name) === "kilo.db"), skipped)) result.set(path.relative(root, file) || path.basename(file), summarizeSession(loadKiloSession(file)));
     } else if (host === "codex") {
-      for (const file of await walk(root, (name) => name.endsWith(".jsonl"))) result.set(path.relative(root, file) || path.basename(file), summarizeSession(parseCodexSession(await lines(file))));
+      for (const file of await sized(await walk(root, (name) => name.endsWith(".jsonl")), skipped)) result.set(path.relative(root, file) || path.basename(file), summarizeSession(parseCodexSession(await lines(file))));
     } else {
       // Subagent transcripts carry their parent's session id, so records group by session id, not by file.
       const grouped = new Map<string, string[]>();
-      for (const file of await walk(root, (name) => name.endsWith(".jsonl"))) {
+      for (const file of await sized(await walk(root, (name) => name.endsWith(".jsonl")), skipped)) {
         for (const line of await lines(file)) {
           const id = /"sessionId":"([^"]+)"/.exec(line)?.[1] ?? `file:${file}`;
           const list = grouped.get(id) ?? [];
@@ -74,13 +81,15 @@ async function main(): Promise<void> {
   const host = values.host as LedgerHost;
   if (!hosts.includes(host) || values.input === undefined || values.input.length === 0) throw new Error("usage: --host claude-code|codex|kilo --input PATH [--input PATH] [--outcomes FILE --candidate ARM --baseline ARM] [--output FILE]");
   const outcomes = values.outcomes === undefined ? undefined : parseOutcomes(JSON.parse(await fs.readFile(values.outcomes, "utf8")));
-  const found = await sessions(host, values.input);
+  const skipped = { count: 0 };
+  const found = await sessions(host, values.input, skipped);
   const rows = [...found].map(([key, summary]) => ({ key, outcome: outcomes?.get(key), summary }));
   const labelled = rows.filter((row): row is typeof row & { outcome: Outcome } => row.outcome !== undefined);
   const report = {
     schemaVersion: 1, mode: "session-ledger", host,
     sessions: rows.map((row) => ({ session: row.outcome === undefined ? createHash("sha256").update(JSON.stringify(row.key)).digest("hex").slice(0, 12) : `${row.outcome.task}:${row.outcome.arm}`, ...(row.outcome === undefined ? {} : { correct: row.outcome.correct }), summary: row.summary }))
       .sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0)),
+    skippedOversizeFiles: skipped.count,
     unmatchedOutcomes: outcomes === undefined ? 0 : [...outcomes.keys()].filter((key) => !found.has(key)).length,
     comparison: values.candidate !== undefined && values.baseline !== undefined
       ? compareArms(labelled.map((row): ArmRow => ({ task: row.outcome.task, arm: row.outcome.arm, correct: row.outcome.correct, summary: row.summary })), values.candidate, values.baseline)

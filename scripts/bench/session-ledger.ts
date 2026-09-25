@@ -166,12 +166,17 @@ export function parseClaudeSession(lines: Iterable<string>): LedgerSession {
   return { host: "claude-code", requests: [...requests].map(([key, value]) => ({ key, ...value })), calls: [...calls.values()], settleContinuations, malformedRecords };
 }
 
-// Codex emits a token_count event after each model response; the tool calls it issued precede it. A
-// repeated event with an unchanged running total is the same request. input_tokens includes cached input.
+// Code-mode wrappers run a script that issues the real operations; Codex reports those as completed items.
+const codexWrappers = new Set(["exec", "js"]);
+
+// Codex emits a token_count event after each model response; the tool calls it issued, and the items they
+// completed, precede it. A repeated event with an unchanged running total is the same request. input_tokens
+// includes cached input; cache writes are reported only by versions that emit cache_write_input_tokens.
 export function parseCodexSession(lines: Iterable<string>): LedgerSession {
   const requests: LedgerRequest[] = [];
   const calls = new Map<string, LedgerCall>();
   let pending: string[] = [], started: number | null = null, lastTotal: unknown, malformedRecords = 0, settleContinuations = 0;
+  const add = (call: LedgerCall): void => { if (!calls.has(call.key)) pending.push(call.key); calls.set(call.key, call); };
   for (const line of lines) {
     if (line.trim().length === 0) continue;
     const record = parseLine(line);
@@ -184,20 +189,41 @@ export function parseCodexSession(lines: Iterable<string>): LedgerSession {
       const total = JSON.stringify(info?.total_token_usage ?? null);
       if (last === undefined || total === lastTotal) continue;
       lastTotal = total;
-      const input = count(last.input_tokens), cached = count(last.cached_input_tokens);
+      const input = count(last.input_tokens), cached = count(last.cached_input_tokens), written = count(last.cache_write_input_tokens);
       requests.push({ key: `r${requests.length + 1}`, startMs: started ?? at, endMs: at, calls: pending,
-        usage: { uncachedInput: input === null ? null : Math.max(0, input - (cached ?? 0)), cacheRead: cached, cacheWrite: null, output: count(last.output_tokens), reasoning: count(last.reasoning_output_tokens), costUsd: null } });
+        usage: { uncachedInput: input === null ? null : Math.max(0, input - (cached ?? 0) - (written ?? 0)), cacheRead: cached, cacheWrite: written, output: count(last.output_tokens), reasoning: count(last.reasoning_output_tokens), costUsd: null } });
       pending = []; started = null;
+      continue;
+    }
+    if (record.type === "event_msg" && payload.type === "item_completed") {
+      const item = (payload.item ?? {}) as Record<string, unknown>;
+      const id = typeof item.id === "string" ? item.id : undefined;
+      if (id === undefined) continue;
+      started ??= at;
+      if (item.type === "CommandExecution") {
+        const call = calls.get(id) ?? makeCall(id, "exec_command", { command: item.command });
+        add(call);
+        settle(call, textOf(item.aggregated_output), typeof item.exit_code === "number" && item.exit_code !== 0 || item.status === "failed");
+      } else if (item.type === "FileChange") {
+        const call = calls.get(id) ?? makeCall(id, "apply_patch", {});
+        add(call);
+        settle(call, "", item.status === "failed");
+      } else if (item.type === "McpToolCall" && typeof item.tool === "string") {
+        const call = calls.get(id) ?? makeCall(id, `mcp__${String(item.server)}__${item.tool}`, item.arguments);
+        add(call);
+        const result = typeof item.result === "string" ? parseLine(item.result) ?? item.result : item.result;
+        settle(call, textOf(result), item.status === "failed" || (result as Record<string, unknown> | null)?.isError === true || item.error !== undefined && item.error !== null);
+      } else if (item.type === "HookPrompt" && textOf(item.fragments).includes("[osnova settle]")) settleContinuations += 1;
       continue;
     }
     if (record.type !== "response_item") continue;
     started ??= at;
     const id = typeof payload.call_id === "string" ? payload.call_id : undefined;
     if ((payload.type === "function_call" || payload.type === "custom_tool_call" || payload.type === "local_shell_call") && id !== undefined && !calls.has(id)) {
+      if (typeof payload.name === "string" && codexWrappers.has(payload.name)) continue;
       let input: unknown = payload.type === "custom_tool_call" ? { input: payload.input } : payload.type === "local_shell_call" ? (payload.action as Record<string, unknown> | undefined) : payload.arguments;
       if (typeof input === "string") input = parseLine(input) ?? {};
-      calls.set(id, makeCall(id, typeof payload.name === "string" ? payload.name : "local_shell", input));
-      pending.push(id);
+      add(makeCall(id, typeof payload.name === "string" ? payload.name : "local_shell", input));
     } else if ((payload.type === "function_call_output" || payload.type === "custom_tool_call_output") && id !== undefined) {
       const raw = payload.output;
       const parsed = typeof raw === "string" ? parseLine(raw) : null;

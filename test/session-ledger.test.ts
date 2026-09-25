@@ -75,6 +75,26 @@ it("reads Codex rollouts: calls belong to the next new token count, cached input
   expect(summarizeSession(session).firstRequestInput).toBe(1000);
 });
 
+it("reads Codex code-mode items instead of their script wrapper, with reported cache writes", () => {
+  const item = (value: Record<string, unknown>) => ({ timestamp: "2026-01-01T00:00:01Z", type: "event_msg", payload: { type: "item_completed", item: value } });
+  const tokens = (total: number) => ({ timestamp: "2026-01-01T00:00:02Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1000, cached_input_tokens: 700, cache_write_input_tokens: 100, output_tokens: 20, reasoning_output_tokens: 5 }, total_token_usage: { total_tokens: total } } } });
+  const session = parseCodexSession(jsonl([
+    { timestamp: "2026-01-01T00:00:00Z", type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "w1", input: "await tools.exec_command({cmd: 'rg alpha'})" } },
+    item({ type: "CommandExecution", id: "e1", command: ["/bin/zsh", "-lc", "rg -n alpha src"], exit_code: 1, status: "completed", aggregated_output: "" }),
+    item({ type: "McpToolCall", id: "e2", server: "osnova", tool: "osnova_ground", arguments: { question: "alpha" }, status: "completed", result: JSON.stringify({ content: [{ type: "text", text: "osnova generation 1\nsrc/a.ts:1 alpha" }] }) }),
+    tokens(1020),
+    item({ type: "FileChange", id: "e3", changes: {}, status: "completed" }),
+    item({ type: "CommandExecution", id: "e4", command: ["/bin/zsh", "-lc", "rg -n alpha src"], exit_code: 0, status: "completed", aggregated_output: "src/a.ts:1" }),
+    item({ type: "HookPrompt", id: "h1", fragments: [{ text: "[osnova settle] The uncommitted diff touches 1 indexed symbols" }] }),
+    tokens(2040),
+  ]));
+  expect(session.calls.map((call) => [call.kind, call.outcome])).toEqual([["search", "error"], ["osnova", "ok"], ["edit", "ok"], ["search", "ok"]]);
+  expect(session.requests.map((request) => request.calls.length)).toEqual([2, 2]);
+  expect(session.requests[0]!.usage).toEqual({ uncachedInput: 200, cacheRead: 700, cacheWrite: 100, output: 20, reasoning: 5, costUsd: null });
+  expect(session.settleContinuations).toBe(1);
+  expect(summarizeSession(session).grepAfterOsnova).toBe(1);
+});
+
 it("reads a Kilo database read-only and bills reasoning apart from visible output", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-ledger-kilo-")); temporary.push(dir);
   const file = path.join(dir, "kilo.db");
