@@ -1,14 +1,19 @@
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const transport = vi.hoisted(() => ({ response: "", code: 0, calls: [] as Array<{ args: string[]; payload: Record<string, unknown> }> }));
+const transport = vi.hoisted(() => ({
+  response: "", code: 0, holdMark: false, releaseMark: undefined as (() => void) | undefined,
+  calls: [] as Array<{ args: string[]; payload: Record<string, unknown> }>,
+}));
 vi.mock("node:child_process", () => ({
   spawn: (_exe: string, args: string[]) => {
     const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stdin: EventEmitter & { end(text: string): void }; kill(): void };
     child.stdout = new EventEmitter();
     child.stdin = Object.assign(new EventEmitter(), { end(text: string) {
       transport.calls.push({ args, payload: JSON.parse(text) as Record<string, unknown> });
-      queueMicrotask(() => { child.stdout.emit("data", transport.response); child.emit("close", transport.code); });
+      const complete = () => { child.stdout.emit("data", transport.response); child.emit("close", transport.code); };
+      if (args[1] === "mark" && transport.holdMark) transport.releaseMark = complete;
+      else queueMicrotask(complete);
     } });
     child.kill = () => undefined;
     return child;
@@ -18,7 +23,10 @@ vi.mock("node:child_process", () => ({
 import { OsnovaPlugin } from "../integrations/opencode/osnova.js";
 import osnovaPi from "../integrations/pi/osnova.js";
 
-afterEach(() => { transport.response = ""; transport.code = 0; transport.calls = []; });
+afterEach(() => {
+  transport.response = ""; transport.code = 0; transport.holdMark = false;
+  transport.releaseMark = undefined; transport.calls = [];
+});
 
 describe("blocking plugin transports", () => {
   it("keeps prompt text and attachments intact with isolated per-message context", async () => {
@@ -72,9 +80,49 @@ describe("blocking plugin transports", () => {
     const hooks = await OsnovaPlugin({});
     transport.response = "bad json";
     await expect(hooks["tool.execute.before"]({ tool: "read", sessionID: "one" }, { args: { filePath: "a.ts" } })).rejects.toThrow("invalid decision");
+    transport.response = "{}";
+    await expect(hooks["tool.execute.before"]({ tool: "read", sessionID: "one" }, { args: { filePath: "a.ts" } })).rejects.toThrow("unsupported decision");
     transport.response = "";
     transport.code = 1;
     await expect(hooks["tool.execute.before"]({ tool: "read", sessionID: "one" }, { args: { filePath: "a.ts" } })).rejects.toThrow("unavailable");
+  });
+
+  it("OpenCode/Kilo rechecks a denied read after an overlapping query is marked", async () => {
+    const hooks = await OsnovaPlugin({ directory: process.cwd() });
+    const query = { tool: "osnova_osnova_footing", sessionID: "one", callID: "query-one", args: { question: "alpha" } };
+    await hooks["tool.execute.before"](query, { args: query.args });
+    transport.holdMark = true;
+    const marking = hooks["tool.execute.after"](query, { output: "osnova generation abc\nsrc/a.ts:1" });
+    expect(transport.releaseMark).toBeTypeOf("function");
+    transport.response = JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "osnova gate: indexed file has no current grant." } });
+    const reading = hooks["tool.execute.before"](
+      { tool: "read", sessionID: "one", callID: "read-one" },
+      { args: { filePath: "src/a.ts" } },
+    );
+    await vi.waitFor(() => expect(transport.calls.filter((call) => call.args[1] === "gate" && call.payload.tool_name === "read")).toHaveLength(1));
+    transport.response = "";
+    transport.releaseMark!();
+    await marking;
+    await expect(reading).resolves.toBeUndefined();
+    expect(transport.calls.filter((call) => call.args[1] === "gate" && call.payload.tool_name === "read")).toHaveLength(2);
+  });
+
+  it("OpenCode/Kilo keeps the denial when an overlapping query grants nothing", async () => {
+    const hooks = await OsnovaPlugin({ directory: process.cwd() });
+    const query = { tool: "osnova_osnova_footing", sessionID: "one", callID: "query-two", args: { question: "alpha" } };
+    await hooks["tool.execute.before"](query, { args: query.args });
+    transport.holdMark = true;
+    const marking = hooks["tool.execute.after"](query, { isError: true, output: "failed" });
+    transport.response = JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "osnova gate: indexed file has no current grant." } });
+    const reading = hooks["tool.execute.before"](
+      { tool: "read", sessionID: "one", callID: "read-two" },
+      { args: { filePath: "src/a.ts" } },
+    );
+    await vi.waitFor(() => expect(transport.calls.filter((call) => call.args[1] === "gate" && call.payload.tool_name === "read")).toHaveLength(1));
+    transport.releaseMark!();
+    await marking;
+    await expect(reading).rejects.toThrow("indexed file has no current grant");
+    expect(transport.calls.filter((call) => call.args[1] === "gate" && call.payload.tool_name === "read")).toHaveLength(2);
   });
 
   it("OpenCode/Kilo reset the right session even for a message with no text", async () => {

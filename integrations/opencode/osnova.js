@@ -25,22 +25,61 @@ function hook(event, payload, cwd, ...flags) {
 export const OsnovaPlugin = async ({ directory, worktree }) => {
   const cwd = worktree || directory || process.cwd();
   let contract;
+  const pending = new Map();
+  const key = (input) => typeof input.sessionID === "string" && typeof input.callID === "string" ? `${input.sessionID}\0${input.callID}` : undefined;
+  const finish = (input) => pending.get(key(input))?.finish();
+  const track = (input) => {
+    const id = key(input);
+    if (id === undefined) return;
+    let resolve;
+    const done = new Promise((complete) => { resolve = complete; });
+    const timer = setTimeout(() => finish(input), 30_000);
+    timer.unref?.();
+    pending.set(id, { sessionID: input.sessionID, done, finish: () => { clearTimeout(timer); pending.delete(id); resolve(); } });
+  };
+  const waitForPending = async (sessionID) => {
+    const waits = [...pending.values()].filter((entry) => entry.sessionID === sessionID).map((entry) => entry.done);
+    if (waits.length === 0) return;
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 2_000);
+      Promise.all(waits).then(() => { clearTimeout(timer); resolve(); });
+    });
+  };
+  const gateDecision = (raw) => {
+    if (raw.length === 0) return null;
+    try { return JSON.parse(raw).hookSpecificOutput; } catch { throw new Error("osnova gate returned an invalid decision."); }
+  };
   return {
     "experimental.chat.system.transform": async (_input, output) => {
       contract ??= await hook("session", { cwd }, cwd, "--full-contract");
       if (contract.length > 0) output.system.push(contract);
     },
     "tool.execute.before": async (input, output) => {
-      const raw = await hook("gate", { session_id: input.sessionID, tool_use_id: input.callID, cwd, tool_name: input.tool, tool_input: output.args }, cwd, "--client", "opencode");
-      if (raw.length === 0) return;
-      let decision;
-      try { decision = JSON.parse(raw).hookSpecificOutput; } catch { throw new Error("osnova gate returned an invalid decision."); }
-      if (decision?.permissionDecision === "deny") throw new Error(decision.permissionDecisionReason);
-      throw new Error("osnova gate returned an unsupported decision.");
+      const query = input.tool.includes("osnova_");
+      if (query) track(input);
+      try {
+        const check = () => hook("gate", { session_id: input.sessionID, tool_use_id: input.callID, cwd, tool_name: input.tool, tool_input: output.args }, cwd, "--client", "opencode");
+        let decision = gateDecision(await check());
+        if (!query && decision?.permissionDecision === "deny" && decision.permissionDecisionReason?.startsWith("osnova gate: indexed file has no current grant.")) {
+          const hadPending = [...pending.values()].some((entry) => entry.sessionID === input.sessionID);
+          if (hadPending) {
+            await waitForPending(input.sessionID);
+            decision = gateDecision(await check());
+          }
+        }
+        if (decision === null) return;
+        if (decision?.permissionDecision === "deny") throw new Error(decision.permissionDecisionReason);
+        throw new Error("osnova gate returned an unsupported decision.");
+      } catch (error) {
+        if (query) finish(input);
+        throw error;
+      }
     },
     "tool.execute.after": async (input, output) => {
       if (!input.tool.includes("osnova_")) return;
-      await hook("mark", { session_id: input.sessionID, tool_use_id: input.callID, cwd, tool_name: input.tool, tool_input: input.args, tool_response: output }, cwd, "--client", "opencode");
+      try {
+        await hook("mark", { session_id: input.sessionID, tool_use_id: input.callID, cwd, tool_name: input.tool, tool_input: input.args, tool_response: output }, cwd, "--client", "opencode");
+      } finally { finish(input); }
     },
     "chat.message": async (input, output) => {
       const text = output.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
