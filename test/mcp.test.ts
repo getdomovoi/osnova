@@ -50,7 +50,7 @@ describe("mcp stdio server", () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
-      expect(responseTokens(JSON.stringify(tools)).count).toBeLessThanOrEqual(1450);
+      expect(responseTokens(JSON.stringify(tools)).count).toBeLessThanOrEqual(1150);
       const instructions = client.getInstructions()!;
       expect(hookToolContract).toBe(`[osnova] ${instructions}`);
       expect(responseTokens(hookToolContract).count).toBeLessThanOrEqual(200);
@@ -99,6 +99,12 @@ describe("mcp stdio server", () => {
       }
       const repeated = [...owners.values()].filter((sites) => sites.length > 1);
       expect(repeated).toEqual([]);
+      for (const tool of tools) {
+        const properties = (tool.inputSchema.properties ?? {}) as Record<string, { description?: string }>;
+        for (const [argument, schema] of Object.entries(properties)) {
+          expect(schema.description?.trim().length, `${tool.name}.${argument}`).toBeGreaterThan(0);
+        }
+      }
     } finally {
       await client.close();
     }

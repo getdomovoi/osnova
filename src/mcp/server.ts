@@ -53,15 +53,15 @@ const toolDefinitions = [
   {
     name: "osnova_ground",
     description:
-      "Search: definitions/routes (GET /users), file:line, source (whole if <=40 lines; otherwise 8). Reuse source; lean/full control detail.",
+      "Search: definitions/routes (GET /users), file:line, source (whole <=40 lines, else excerpt). lean/full select detail.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        question: { type: "string", description: "Keywords, identifier or route" },
-        in: { type: "string", description: "Repo-relative file/directory scope" },
-        limit: { type: "number", description: "Maximum hits (default 8)" },
-        full: { type: "boolean", description: "Whole definitions, not excerpts" },
-        lean: { type: "boolean", description: "Locations/signatures only; overrides full" },
+        question: { type: "string", description: "Keywords, name or route" },
+        in: { type: "string", description: "Repo-relative scope" },
+        limit: { type: "number", description: "Hits; default 8" },
+        full: { type: "boolean", description: "Whole definitions" },
+        lean: { type: "boolean", description: "Signatures only; overrides full" },
       },
       required: ["question"],
     },
@@ -69,26 +69,26 @@ const toolDefinitions = [
   {
     name: "osnova_thread",
     description:
-      "Text search: indexed matches grouped by definition, ranked by dependents; 10/group, exact omissions. For callers use warp/plumb.",
+      "Text search: indexed regex matches grouped by definition; exact omissions. Callers: warp/plumb.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        pattern: { type: "string", description: "Regex, or literal with fixed=true" },
-        fixed: { type: "boolean", description: "Literal matching" },
-        ignoreCase: { type: "boolean", description: "Ignore case" },
-        in: { type: "string", description: "Repo-relative file/directory scope" },
-        limit: { type: "number", description: "Maximum groups (default 50)" },
+        pattern: { type: "string", description: "Regex; literal if fixed" },
+        fixed: { type: "boolean", description: "Literal pattern" },
+        ignoreCase: { type: "boolean", description: "Case insensitive" },
+        in: { type: "string", description: "Repo-relative scope" },
+        limit: { type: "number", description: "Groups; default 50" },
       },
       required: ["pattern"],
     },
   },
   {
     name: "osnova_outline",
-    description: "Outline: file signatures/spans by connectivity; 4096 code units, exact omissions. Read missing spans only.",
+    description: "Outline: file signatures/spans by connectivity, with omission counts.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        file: { type: "string", description: "Repo-relative file path" },
+        file: { type: "string", description: "Repo-relative file" },
       },
       required: ["file"],
     },
@@ -96,14 +96,14 @@ const toolDefinitions = [
   {
     name: "osnova_warp",
     description:
-      "Call graph: callers/callees, file:line, resolution basis. Include direct test calls alongside production calls; verify with plumb.",
+      "Call graph: callers/callees, including tests; file:line and resolution basis. Verify claims with plumb.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        symbol: { type: "string", description: "Name, Class.method or file#Class.method" },
-        direction: { type: "string", enum: ["in", "out"], description: "in: callers (default); out: callees" },
-        depth: { type: "number", description: "Walk hops (default 1)" },
-        full: { type: "boolean", description: "All sites; still capped at 16,384 code units (default false)" },
+        symbol: { type: "string", description: "Name or file#Class.method" },
+        direction: { type: "string", enum: ["in", "out"], description: "in callers (default); out callees" },
+        depth: { type: "number", description: "Walk hops; default 1" },
+        full: { type: "boolean", description: "All sites; 16,384-unit cap" },
       },
       required: ["symbol"],
     },
@@ -111,55 +111,55 @@ const toolDefinitions = [
   {
     name: "osnova_groundwork",
     description:
-      "Repository map: clusters/hubs/hotspots, 2048 code units. Start unfamiliar-repo exploration here.",
+      "Repository map: clusters, hubs and hotspots. Start unfamiliar repos here.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        maxDirs: { type: "number", description: "Maximum directory clusters (default 8)" },
+        maxDirs: { type: "number", description: "Directories; default 8" },
       },
     },
   },
   {
     name: "osnova_footing",
     description:
-      "Task context: definitions, relationships and candidate tests within 4096 code units; exact omissions. Start cross-file work here; use ground/warp for one symbol. Reuse source; written arguments do not prove runtime value constraints.",
+      "Task context: definitions, edges and test leads. Start cross-file work here; ground/warp for one symbol. Written arguments do not prove runtime values.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        question: { type: "string", description: "Seed query; ignored with symbols" },
-        symbols: { type: "array", items: { type: "string" }, description: "Seeds as file#Class.method" },
-        task: { type: "string", enum: ["understand", "change", "review"], description: "Task shape (default understand)" },
-        in: { type: "string", description: "Repo-relative file/directory scope" },
-        limit: { type: "number", description: "Maximum retrieval seeds (default 8)" },
-        depth: { type: "number", description: "Relationship walk depth (default 3)" },
-        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Seed kinds (default all); non-test definitions preferred" },
+        question: { type: "string", description: "Seed query; symbols override" },
+        symbols: { type: "array", items: { type: "string" }, description: "file#Class.method seeds" },
+        task: { type: "string", enum: ["understand", "change", "review"], description: "Shape; default understand" },
+        in: { type: "string", description: "Repo-relative scope" },
+        limit: { type: "number", description: "Seeds; default 8" },
+        depth: { type: "number", description: "Hops; default 3" },
+        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Seed kinds; default all" },
       },
     },
   },
   {
     name: "osnova_settle",
     description:
-      "Change impact: after edits use baseRef=HEAD to collect local changes, including indexed untracked files. Returns changes/dependents within 4096 code units. Check dependents, not just the call's success. Explicit diff only for supplied patches; without baseRef, deletions are invisible. Missing dependents do not prove absence.",
+      "Change impact: after edits use baseRef=HEAD for local changes, including indexed untracked files. Check dependents. Explicit diff for supplied patches; without baseRef deletions are invisible. Missing edges prove nothing.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        diff: { type: "string", description: "Explicit unified patch; omit with baseRef for local changes" },
-        baseRef: { type: "string", description: "Baseline commit/ref; HEAD for working changes, no checkout" },
-        depth: { type: "number", description: "Dependent walk depth (default 1)" },
+        diff: { type: "string", description: "Unified patch; omit with baseRef" },
+        baseRef: { type: "string", description: "Commit/ref; HEAD for local changes" },
+        depth: { type: "number", description: "Dependent hops; default 1" },
       },
     },
   },
   {
     name: "osnova_plumb",
     description:
-      "Check claims: verify path:line call sites, including tests. Reports confirmed edges, name-only leads, no-call/not-indexed sites and missing edges. Address missing sites before claiming completeness; confirmed means indexed, not runtime proof.",
+      "Check claims: verify path:line sites, including tests. Reports confirmed, uncertain and missing edges. Indexed is not runtime proof.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        symbol: { type: "string", description: "Name, Class.method or file#Class.method" },
-        sites: { type: "array", items: { type: "string" }, description: "Claims as repo-relative path:line" },
-        direction: { type: "string", enum: ["in", "out"], description: "Claimed callers (in, default) or callees (out)" },
-        depth: { type: "number", description: "Claim depth (default 1); 2 includes callers of callers" },
+        symbol: { type: "string", description: "Name or file#Class.method" },
+        sites: { type: "array", items: { type: "string" }, description: "Claimed repo path:line" },
+        direction: { type: "string", enum: ["in", "out"], description: "Claimed in callers (default); out callees" },
+        depth: { type: "number", description: "Claim hops; default 1" },
       },
       required: ["symbol", "sites"],
     },
@@ -167,28 +167,28 @@ const toolDefinitions = [
   {
     name: "osnova_tests",
     description:
-      "Tests: symbols -> test files (resolved sites vs import-only); file -> non-test symbols/imports. Exactly one of symbols/file. Leads, not coverage.",
+      "Tests: symbol to test files (resolved vs import-only), or test file to symbols. Choose one input. Leads, not coverage.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        symbols: { type: "array", items: { type: "string" }, description: "Names or file#Class.method to find tests for" },
-        file: { type: "string", description: "Repo-relative test file to inspect" },
-        limit: { type: "number", description: "Files/symbol (default 20) or symbols/file (default 50)" },
-        includeImportOnly: { type: "boolean", description: "Include import-only test leads (default true)" },
+        symbols: { type: "array", items: { type: "string" }, description: "Names or file#Class.method" },
+        file: { type: "string", description: "Repo-relative test file" },
+        limit: { type: "number", description: "Files 20; symbols 50" },
+        includeImportOnly: { type: "boolean", description: "Include import-only leads; default true" },
       },
     },
   },
   {
     name: "osnova_unreferenced",
     description:
-      "Unreferenced candidates: no external-to-definition resolved non-test call/reference; file/line order. Inspect unresolved leads/tests/text before deletion. Excludes main/default exports/index files/bin/tests/constructors.",
+      "Unreferenced candidates: no resolved non-test callers. Excludes main, exports, index, bin, tests and constructors. Inspect leads before deletion; absence is not proof.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        scope: { type: "string", description: "Repo-relative prefix (default whole index)" },
-        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Default function/method/class; constants/types/interfaces lack edges" },
-        limit: { type: "number", description: "Candidate cap (default 50); exact omissions" },
-        includeExported: { type: "boolean", description: "Include exports, which may have external users (default false)" },
+        scope: { type: "string", description: "Repo-relative prefix" },
+        kinds: { type: "array", items: { type: "string", enum: [...symbolKinds] }, description: "Kinds; default function/method/class" },
+        limit: { type: "number", description: "Candidates; default 50" },
+        includeExported: { type: "boolean", description: "Include public exports" },
       },
     },
   },
