@@ -21,6 +21,8 @@ export interface LedgerUsage {
 export interface LedgerRequest { readonly key: string; readonly startMs: number | null; readonly endMs: number | null; readonly usage: LedgerUsage; readonly calls: readonly string[] }
 export interface LedgerCall {
   readonly key: string;
+  /** Tool arguments, kept in memory for diagnosis; never reported. */
+  readonly input?: Readonly<Record<string, unknown>> | undefined;
   readonly tool: string;
   readonly kind: CallKind;
   readonly identifier: string | null;
@@ -113,7 +115,7 @@ function parseLine(line: string): Record<string, unknown> | null {
 }
 function makeCall(key: string, tool: string, input: unknown): LedgerCall {
   const args = input !== null && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
-  return { key, tool, ...classifyCall(tool, args), outcome: "unknown", output: "" };
+  return { key, tool, input: args, ...classifyCall(tool, args), outcome: "unknown", output: "" };
 }
 function settle(call: LedgerCall | undefined, output: string, error: boolean): void {
   if (call === undefined) return;

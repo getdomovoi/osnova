@@ -10,6 +10,7 @@ import type { ArmRow, LedgerHost, SessionSummary } from "./session-ledger.js";
 // text is printed. Sessions are keyed by an outcomes-file label when one is given, otherwise by a digest.
 const maximumFileBytes = 256 * 1024 * 1024;
 const hosts: readonly LedgerHost[] = ["claude-code", "codex", "kilo"];
+const sessionName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 async function walk(root: string, accept: (file: string) => boolean, found: string[] = []): Promise<string[]> {
   const stat = await fs.lstat(root);
@@ -57,17 +58,23 @@ async function sessions(host: LedgerHost, inputs: readonly string[], skipped: { 
     } else if (host === "codex") {
       for (const file of await sized(await walk(root, (name) => name.endsWith(".jsonl")), skipped)) result.set(path.relative(root, file) || path.basename(file), summarizeSession(parseCodexSession(await lines(file))));
     } else {
-      // Subagent transcripts carry their parent's session id, so records group by session id, not by file.
-      const grouped = new Map<string, string[]>();
+      // A session is `<id>.jsonl` plus its subagent transcripts under `<id>/`; they are read together, one
+      // session at a time, so a survey of many projects never holds more than one session in memory.
+      const grouped = new Map<string, { id: string; files: string[] }>();
       for (const file of await sized(await walk(root, (name) => name.endsWith(".jsonl")), skipped)) {
-        for (const line of await lines(file)) {
-          const id = /"sessionId":"([^"]+)"/.exec(line)?.[1] ?? `file:${file}`;
-          const list = grouped.get(id) ?? [];
-          list.push(line);
-          grouped.set(id, list);
-        }
+        const parts = path.relative(root, file).split(path.sep);
+        const at = parts.findIndex((part) => sessionName.test(part.replace(/\.jsonl$/, "")));
+        const id = at < 0 ? file : parts[at]!.replace(/\.jsonl$/, "");
+        const key = at < 0 ? file : path.join(root, ...parts.slice(0, at), id);
+        const group = grouped.get(key) ?? { id, files: [] };
+        group.files.push(file);
+        grouped.set(key, group);
       }
-      for (const [id, records] of grouped) result.set(id, summarizeSession(parseClaudeSession(records)));
+      for (const group of grouped.values()) {
+        const records: string[] = [];
+        for (const file of group.files) records.push(...await lines(file));
+        result.set(group.id, summarizeSession(parseClaudeSession(records)));
+      }
     }
   }
   return result;
