@@ -27,6 +27,19 @@ interface BeforeAgentStart { readonly prompt?: string; readonly systemPrompt: st
 interface Context { readonly cwd?: string; readonly sessionManager?: { getSessionId(): string } }
 interface ToolCall { readonly toolName: string; readonly toolCallId?: string | undefined; readonly input: Record<string, unknown> }
 interface ToolResult extends ToolCall { readonly content: unknown; readonly isError: boolean }
+const queryTools = new Set(["osnova_ground", "osnova_thread", "osnova_outline", "osnova_warp", "osnova_groundwork", "osnova_footing", "osnova_settle", "osnova_plumb", "osnova_tests", "osnova_unreferenced"]);
+function call(event: ToolCall): { toolName: string; toolInput: Record<string, unknown> } {
+  if (event.toolName !== "mcp" || typeof event.input.tool !== "string" || event.input.server !== undefined && event.input.server !== "osnova") {
+    return { toolName: event.toolName, toolInput: event.input };
+  }
+  const name = event.input.tool.split(/[.:/]/).at(-1)!;
+  if (!queryTools.has(name)) return { toolName: event.toolName, toolInput: event.input };
+  let args: unknown = event.input.args;
+  if (typeof args === "string") {
+    try { args = JSON.parse(args); } catch { args = undefined; }
+  }
+  return { toolName: name, toolInput: args !== null && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {} };
+}
 interface PiApi {
   on(event: "before_agent_start", handler: (event: BeforeAgentStart, ctx: Context) => Promise<{ systemPrompt?: string } | undefined>): void;
   on(event: "tool_call", handler: (event: ToolCall, ctx: Context) => Promise<{ block: true; reason: string } | undefined>): void;
@@ -47,16 +60,18 @@ export default function osnova(pi: PiApi): void {
   });
   pi.on("tool_call", async (event, ctx) => {
     const cwd = ctx.cwd ?? process.cwd();
+    const normalized = call(event);
     try {
-      const raw = await hook("gate", { session_id: session(ctx), tool_use_id: event.toolCallId, cwd, tool_name: event.toolName, tool_input: event.input }, cwd, "--client", "pi");
+      const raw = await hook("gate", { session_id: session(ctx), tool_use_id: event.toolCallId, cwd, tool_name: normalized.toolName, tool_input: normalized.toolInput }, cwd, "--client", "pi");
       if (raw.length === 0) return undefined;
       const decision = JSON.parse(raw) as { block?: boolean; reason?: string };
       return { block: true, reason: decision.block === true && typeof decision.reason === "string" ? decision.reason : "osnova gate returned an invalid decision." };
     } catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
   });
   pi.on("tool_result", async (event, ctx) => {
-    if (!event.toolName.includes("osnova_")) return;
+    const normalized = call(event);
+    if (!normalized.toolName.includes("osnova_")) return;
     const cwd = ctx.cwd ?? process.cwd();
-    await hook("mark", { session_id: session(ctx), tool_use_id: event.toolCallId, cwd, tool_name: event.toolName, tool_input: event.input, tool_response: { content: event.content, isError: event.isError } }, cwd, "--client", "pi");
+    await hook("mark", { session_id: session(ctx), tool_use_id: event.toolCallId, cwd, tool_name: normalized.toolName, tool_input: normalized.toolInput, tool_response: { content: event.content, isError: event.isError } }, cwd, "--client", "pi");
   });
 }

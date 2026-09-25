@@ -43,7 +43,7 @@ describe("strict exploration gate", () => {
       expect(reason).toContain("do not retry discovery through another tool/interpreter");
     }
     expect(await strictGate(input("Bash", { command: "cat package.json" }), workspace, cacheDir)).toBeNull();
-    expect(await strictGate(input("Bash", { command: "pnpm test" }), workspace, cacheDir)).toBeNull();
+    expect(await strictGate(input("Bash", { command: "pnpm test" }), workspace, cacheDir)).toContain("earlier source denial remains unresolved");
     await fs.appendFile(path.join(workspace, "src/a.ts"), "export const changed = 1;\n");
     expect(await strictGate(read, workspace, cacheDir)).toContain("indexed file has no current grant");
   });
@@ -67,6 +67,7 @@ describe("strict exploration gate", () => {
     await fs.utimes(file, stat.atime, stat.mtime);
     await mark(text);
     expect(await strictGate(input("Read", { file_path: "src/a.ts" }), workspace, cacheDir)).not.toBeNull();
+    expect(await strictGate(input("Bash", { command: "node -e 'process.exit(0)'" }), workspace, cacheDir)).toContain("completed Osnova query");
     await mark(await answer());
     expect(await strictGate(input("Read", { file_path: "src/a.ts" }), workspace, cacheDir)).toBeNull();
     await fs.writeFile(file, original);
@@ -110,8 +111,10 @@ describe("strict exploration gate", () => {
   it("revokes permissions on the next prompt and when the file changes", async () => {
     const read = input("Read", { file_path: "src/a.ts" });
     await mark(await answer());
+    expect(await strictGate(input("Bash", { command: "node -e 'process.exit(0)'" }), workspace, cacheDir)).toBeNull();
     await resetGate(read, workspace, cacheDir);
     expect(await strictGate(read, workspace, cacheDir)).not.toBeNull();
+    expect(await strictGate(input("Bash", { command: "node -e 'process.exit(0)'" }), workspace, cacheDir)).toContain("completed Osnova query");
     await mark(await answer());
     expect(await strictGate(read, workspace, cacheDir)).toBeNull();
     await fs.writeFile(path.join(workspace, "src", "a.ts"), "export function alpha() { return 333; }\n");
@@ -160,10 +163,11 @@ describe("strict exploration gate", () => {
     expect(await strictGate(input("Read", { file_path: "src/a.ts" }), other, cacheDir)).not.toBeNull();
   });
 
-  it("allows instructions, unindexed paths, edits, tests and Osnova itself", async () => {
-    for (const call of [input("Read", { file_path: "AGENTS.md" }), input("Read", { file_path: "trace.log" }), input("Grep", { path: path.join(temporary, "logs"), pattern: "x" }), input("Edit", { file_path: "src/a.ts" }), input("Bash", { command: "pnpm test" }), input("Bash", { command: "git status | grep modified" }), input("mcp__osnova__osnova_footing", { question: "alpha" })]) {
+  it("allows instructions, unindexed paths, edits, passive operations and Osnova itself", async () => {
+    for (const call of [input("Read", { file_path: "AGENTS.md" }), input("Read", { file_path: "trace.log" }), input("Grep", { path: path.join(temporary, "logs"), pattern: "x" }), input("Edit", { file_path: "src/a.ts" }), input("Bash", { command: "git status | grep modified" }), input("mcp__osnova__osnova_footing", { question: "alpha" })]) {
       expect(await strictGate(call, workspace, cacheDir)).toBeNull();
     }
+    expect(await strictGate(input("Bash", { command: "pnpm test" }), workspace, cacheDir)).toContain("completed Osnova query");
   });
 
   it("blocks searches through a parent directory and a symlink into indexed code", async () => {
@@ -181,10 +185,13 @@ describe("strict exploration gate", () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
-  it("keeps operational commands and external log reads available with a broken cache", async () => {
+  it("keeps passive operations and external log reads available with a broken cache", async () => {
     await fs.writeFile(cacheDir, "not a directory");
-    for (const command of ["gh pr checks 95", "git status --short", "task api:test", "gh pr checks 95 2>&1 | tail -1", "cd src; git status --short | grep -v '^??'", "task api:test | head -n 10", `tail -n 30 '${temporary}/test.log'`, `cat '${temporary}/test.log' | grep -i fail`]) {
+    for (const command of ["gh pr checks 95", "git status --short", "gh pr checks 95 2>&1 | tail -1", "cd src; git status --short | grep -v '^??'", `tail -n 30 '${temporary}/test.log'`, `cat '${temporary}/test.log' | grep -i fail`]) {
       expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).toBeNull();
+    }
+    for (const command of ["task api:test", "task api:test | head -n 10"]) {
+      await expect(strictGate(input("Bash", { command }), workspace, cacheDir)).rejects.toThrow("ENOTDIR");
     }
   });
 
@@ -213,6 +220,37 @@ describe("strict exploration gate", () => {
     expect(await strictGate(input("Bash", { command: "cd src; cat a.ts | tail -1" }), workspace, cacheDir)).toBeNull();
   });
 
+  it("keeps print-only pipeline filters scoped to the granted input file", async () => {
+    await mark(await answer());
+    for (const command of ["nl -ba src/a.ts | sed -n '1,5p'", "rg alpha src/a.ts | sed -n '1,5p'", "sed -n '1,5p' src/a.ts | cat -n"]) {
+      expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).toBeNull();
+    }
+    expect(await strictGate(input("Bash", { command: "nl -ba src/a.ts | sed -n '1e cat src/b.ts'" }), workspace, cacheDir)).not.toBeNull();
+  });
+
+  it("expands a home-relative pipeline target before checking indexed scope", () => {
+    expect(strictSubject(input("Bash", { command: "rg alpha ~/projects/osnova/src | head -10" }), workspace)).toEqual({
+      targets: [path.join(os.homedir(), "projects/osnova/src")], cwd: workspace,
+    });
+  });
+
+  it("keeps Git metadata commands available without treating patch output as passive", async () => {
+    for (const command of ["git status --short", "git branch --show-current", "git log --oneline -3", "git rev-parse --show-toplevel", "git merge-base HEAD main"]) {
+      expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).toBeNull();
+    }
+    for (const command of ["git log -p", "git log --patch", "git status -vv"]) {
+      expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).toContain("completed Osnova query");
+    }
+  });
+
+  it("does not hide an opaque command beside an external file read", async () => {
+    const scratchpad = path.join(temporary, "scratchpad");
+    await fs.mkdir(scratchpad);
+    for (const command of [`git add src/a.ts; ls '${scratchpad}'`, `node -e 'process.exit(0)' && ls '${scratchpad}'`, `ls '${scratchpad}' | cat; task api:test`]) {
+      expect(await strictGate(input("Bash", { command }), workspace, cacheDir), command).toContain("completed Osnova query");
+    }
+  });
+
   it("resolves shell working directories before granting file scope", () => {
     expect(strictSubject({ ...input("Bash", { command: "rg alpha a.ts", workdir: "src" }), cwd: workspace }, workspace)).toEqual({ cwd: path.join(workspace, "src"), targets: ["a.ts"] });
   });
@@ -234,4 +272,51 @@ it.each(["- src/a.tsx", "- other/src/a.ts", "- src", "- src/a.ts omitted", "- sr
   const header = (await answer()).split("\n")[0]!;
   await mark(`${header}\ncandidate tests:\n${line}`);
   expect(await strictGate(input("Read", { file_path: "src/a.ts" }), workspace, cacheDir)).not.toBeNull();
+});
+
+it("holds Claude shell launchers behind a completed query, including dynamically generated scripts", async () => {
+  const script = path.join(temporary, "run.sh");
+  await fs.writeFile(script, "#!/bin/sh\ncommand=$(printf '%s%s' r g)\nexec \"$command\" alpha src/a.ts\n");
+  const decision = async (command: string, sessionId = "claude-shell") => {
+    const out: string[] = [];
+    const code = await runCli(["hook", "gate", "--client", "claude-code", "--workspace", workspace, "--cache-dir", cacheDir], {
+      stdin: async () => JSON.stringify({ hook_event_name: "PreToolUse", session_id: sessionId, cwd: workspace,
+        tool_use_id: `tool-${command}`, tool_name: "Bash", tool_input: { command, description: "Run a project command" } }),
+      stdout: (text) => out.push(text), stderr: () => undefined,
+    });
+    expect(code).toBe(0);
+    return out.length === 0 ? null : JSON.parse(out.join("")) as { hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string } };
+  };
+  expect((await decision("rg alpha src/a.ts"))?.hookSpecificOutput.permissionDecision).toBe("deny");
+  const wrappers = [
+    `sh ${script}`, `bash ${script}`, `./${path.relative(workspace, script)}`,
+    "sh -c 'rg alpha src/a.ts'", "node -e 'require(\"child_process\").execFileSync(\"rg\", [\"alpha\", \"src/a.ts\"])'",
+    "python3 -c 'import subprocess; subprocess.run([\"rg\", \"alpha\", \"src/a.ts\"])'",
+    `cd src && bash ${script}`, "git add src/a.ts", "task api:test",
+  ];
+  for (const command of wrappers) {
+    expect((await decision(command))?.hookSpecificOutput.permissionDecision, command).toBe("deny");
+  }
+  expect(await decision("git status --short")).toBeNull();
+  await mark(await answer("src/a.ts"), "claude-shell");
+  for (const command of wrappers) expect(await decision(command), command).toBeNull();
+});
+
+it("keeps a denied source target unresolved when a query grants a different file", async () => {
+  const script = path.join(temporary, "denied.sh");
+  await fs.writeFile(script, "#!/bin/sh\ncommand=$(printf '%s%s' r g)\nexec \"$command\" beta src/b.ts\n");
+  const denied = input("Bash", { command: "rg beta src/b.ts" }, "pending");
+  expect(await strictGate(denied, workspace, cacheDir)).not.toBeNull();
+  await mark(await answer("src/a.ts"), "pending");
+  const wrappers = [
+    `sh ${script}`, `bash ${script}`, `./${path.relative(workspace, script)}`,
+    "sh -c 'rg beta src/b.ts'", "node -e 'require(\"child_process\").execFileSync(\"rg\", [\"beta\", \"src/b.ts\"])'",
+    "python3 -c 'import subprocess; subprocess.run([\"rg\", \"beta\", \"src/b.ts\"])'",
+    `cd src && sh ${script}`, "git add src/b.ts", "task api:test",
+  ];
+  for (const command of wrappers) {
+    expect(await strictGate(input("Bash", { command }, "pending"), workspace, cacheDir), command).not.toBeNull();
+  }
+  await mark(await answer("src/b.ts"), "pending");
+  for (const command of wrappers) expect(await strictGate(input("Bash", { command }, "pending"), workspace, cacheDir), command).toBeNull();
 });

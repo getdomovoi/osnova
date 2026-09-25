@@ -109,13 +109,16 @@ export async function markGate(input: GateInput, workspace: string, cacheDir?: s
   const directory = path.join(root, turn, digest(input.turnId ?? ""));
   const scope = input.toolInput?.file ?? input.toolInput?.in;
   const scopedFile = typeof scope === "string" ? path.relative(index.root, path.resolve(index.root, scope)).split(path.sep).join("/") : undefined;
+  let granted = false;
   for (const [file, card] of index.files) {
     const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     if (file !== scopedFile && !new RegExp(`(?:^|[\\s(])${escaped}(?::\\d|#)|^- ${escaped}\\r?$`, "m").test(text)) continue;
     if (!await matchesSource(path.join(index.root, file), card.hash)) continue;
     await fs.mkdir(directory, { recursive: true });
     await fs.writeFile(path.join(directory, digest(file)), card.hash);
+    granted = true;
   }
+  if (granted) await fs.writeFile(path.join(directory, "query"), indexGeneration(index));
 }
 
 function pathsOf(args: Readonly<Record<string, unknown>>): string[] {
@@ -125,12 +128,14 @@ function pathsOf(args: Readonly<Record<string, unknown>>): string[] {
   });
 }
 
-export interface GateSubject { readonly targets: readonly string[]; readonly cwd: string }
+export interface GateSubject { readonly targets: readonly string[]; readonly cwd: string; readonly opaque?: true }
 const exploration = /(?:^|[\s;|&(/])(?:rg|grep|egrep|fgrep|ag|ack|fd|find|cat|head|tail|sed|awk|nl|ls|tree|Get-Content|Select-String|Get-ChildItem)(?:\s|$)|\bgit\s+(?:grep|ls-files)\b/i;
 
 function outputFilter(words: readonly string[]): boolean {
   const [name, ...args] = words;
   if (name === "head" || name === "tail") return args.length === 0 || args.length === 1 && /^-\d+$/.test(args[0]!) || args.length === 2 && /^-[nc]$/.test(args[0]!) && /^\d+$/.test(args[1]!);
+  if (name === "sed") return args.length === 2 && args[0] === "-n" && /^\d+(?:,\d+)?p$/.test(args[1]!);
+  if (name === "cat") return args.length === 0 || args.length === 1 && ["-n", "-b"].includes(args[0]!);
   if (name !== "grep" && name !== "rg") return false;
   let i = 0;
   while (/^-[ivnEcq]+$/.test(args[i] ?? "")) i += 1;
@@ -138,10 +143,15 @@ function outputFilter(words: readonly string[]): boolean {
   return i === args.length - 1 && !args[i]!.startsWith("-");
 }
 
-function pipelineTargets(command: string, cwd: string): readonly string[] | null {
+function shellPath(directory: string, target: string): string {
+  return path.resolve(directory, target === "~" || target.startsWith("~/") ? path.join(os.homedir(), target.slice(1)) : target);
+}
+
+function pipelineTargets(command: string, cwd: string): { targets: readonly string[]; opaque: boolean } | null {
   const parsed = shellPipelines(command);
   if (parsed === null) return null;
   const targets: string[] = [];
+  let opaque = false;
   let directory = cwd;
   for (const pipeline of parsed) {
     for (const [i, words] of pipeline.entries()) {
@@ -154,12 +164,14 @@ function pipelineTargets(command: string, cwd: string): readonly string[] | null
       const literal = words.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(" ");
       const read = readPaths(literal);
       const search = parseSearchCall("Bash", { command: literal });
-      if (read !== null) targets.push(...read.map((file) => path.resolve(directory, file)));
-      else if (search !== null) targets.push(...(search.paths.length > 0 ? search.paths : ["."]).map((file) => path.resolve(directory, file)));
+      if (read !== null) targets.push(...read.map((file) => shellPath(directory, file)));
+      else if (search !== null) targets.push(...(search.paths.length > 0 ? search.paths : ["."]).map((file) => shellPath(directory, file)));
+      else if (passiveOperation(literal)) continue;
       else if (exploration.test(words.join(" "))) return null;
+      else opaque = true;
     }
   }
-  return targets;
+  return { targets, opaque };
 }
 
 function readPaths(command: string): readonly string[] | null {
@@ -182,6 +194,23 @@ function readPaths(command: string): readonly string[] | null {
   return paths.length > 0 && !paths.includes("-") ? paths : null;
 }
 
+function passiveOperation(command: string): boolean {
+  const parsed = shellPipelines(command);
+  return parsed !== null && parsed.length > 0 && parsed.every((pipeline) => pipeline.every((words, position) => {
+    const [name, first, second] = words;
+    if (name === "cd") return pipeline.length === 1 && words.length === 2 && !first!.startsWith("-") && !/[~*?[\]$`]/.test(first!);
+    if (position > 0 && outputFilter(words)) return true;
+    if (name === "git") {
+      const args = words.slice(2);
+      if (first === "status") return args.every((arg) => ["--short", "-s", "--porcelain", "--porcelain=v1", "--branch", "-b"].includes(arg));
+      if (first === "branch") return args.every((arg) => ["--show-current", "--list", "-a", "-r"].includes(arg));
+      if (first === "log") return args.every((arg) => ["--oneline", "--decorate", "--all"].includes(arg) || /^-\d+$/.test(arg));
+      return first === "rev-parse" || first === "merge-base";
+    }
+    return name === "gh" && first === "pr" && ["checks", "view", "status"].includes(second ?? "");
+  }));
+}
+
 export function strictSubject(input: GateInput, workspace: string): GateSubject | null {
   const name = (input.toolName ?? "").split("__").at(-1)!.toLowerCase();
   if (isOsnovaQuery(input.toolName)) return null;
@@ -200,10 +229,42 @@ export function strictSubject(input: GateInput, workspace: string): GateSubject 
   // A simple file read can use a receipt. Compound or dynamic exploration must be split into scoped calls.
   const read = readPaths(command);
   if (read !== null) return { targets: read, cwd };
-  if (!exploration.test(command)) return null;
-  const targets = pipelineTargets(command, cwd);
-  if (targets !== null) return targets.length === 0 ? null : { targets, cwd };
-  return { targets: ["."], cwd };
+  if (passiveOperation(command)) return null;
+  const parsed = pipelineTargets(command, cwd);
+  if (parsed !== null) return parsed.targets.length === 0 && !parsed.opaque ? null : { targets: parsed.targets, cwd, ...(parsed.opaque ? { opaque: true as const } : {}) };
+  return exploration.test(command) ? { targets: ["."], cwd } : { targets: [], cwd, opaque: true };
+}
+
+async function gateState(input: GateInput, workspace: string, cacheDir?: string): Promise<string | undefined> {
+  if (input.sessionId === undefined) return undefined;
+  const root = receiptRoot(workspace, input.sessionId, cacheDir, input.agentId);
+  return path.join(root, await epoch(root), digest(input.turnId ?? ""));
+}
+
+async function recordDenial(state: string | undefined, workspace: string, target: string): Promise<void> {
+  if (state === undefined) return;
+  const relative = path.relative(workspace, target).split(path.sep).join("/") || ".";
+  const directory = path.join(state, "denied");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, digest(relative)), relative);
+}
+
+async function unresolvedDenial(state: string, workspace: string): Promise<boolean> {
+  const directory = path.join(state, "denied");
+  const names = await fs.readdir(directory).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  });
+  for (const name of names) {
+    const relative = await fs.readFile(path.join(directory, name), "utf8");
+    if (relative === "." || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) return true;
+    const receipt = await fs.readFile(path.join(state, digest(relative)), "utf8").catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    });
+    if (!await matchesSource(path.join(workspace, relative), receipt)) return true;
+  }
+  return false;
 }
 
 async function canonicalTarget(target: string): Promise<string> {
@@ -220,22 +281,10 @@ async function canonicalTarget(target: string): Promise<string> {
   }
 }
 
-export async function strictGate(input: GateInput, workspace: string, cacheDir?: string): Promise<string | null> {
-  if (isOsnovaQuery(input.toolName)) {
-    if (input.sessionId !== undefined && input.toolUseId !== undefined) {
-      const root = receiptRoot(await fs.realpath(workspace), input.sessionId, cacheDir, input.agentId);
-      const directory = path.join(root, await epoch(root), "queries");
-      await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(path.join(directory, digest(input.toolUseId)), digest(input.toolName!));
-    }
-    return null;
-  }
-  const subject = strictSubject(input, workspace);
-  if (subject === null || workspace === os.homedir() || workspace === path.parse(workspace).root) return null;
-  const canonicalWorkspace = await fs.realpath(workspace);
+async function sourceDenial(input: GateInput, workspace: string, canonicalWorkspace: string, subject: GateSubject, cacheDir?: string): Promise<string | null> {
   const targets: string[] = [];
   for (const target of subject.targets) {
-    const absolute = path.resolve(subject.cwd, target.startsWith("~") ? path.join(os.homedir(), target.slice(1)) : target);
+    const absolute = shellPath(subject.cwd, target);
     const canonical = await canonicalTarget(absolute);
     const relative = path.relative(canonicalWorkspace, canonical);
     const parent = path.relative(canonical, canonicalWorkspace);
@@ -269,9 +318,38 @@ export async function strictGate(input: GateInput, workspace: string, cacheDir?:
     if (file?.language === "fallback") continue;
     const covered = file !== undefined || [...index.files].some(([name, card]) => card.language !== "fallback" && (relative === "" || name.startsWith(`${relative}/`)));
     if (!covered && !/[*?[\]$`]/.test(canonical)) continue;
+    await recordDenial(await gateState(input, canonicalWorkspace, cacheDir), canonicalWorkspace, canonical);
     return file !== undefined
       ? "osnova gate: indexed file has no current grant. Query this file with osnova_outline or find it with osnova_ground/footing; await the result, then read/search named files. Edits/new prompts require fresh evidence."
-      : "osnova gate: repository discovery or unscoped source command blocked. Use osnova_ground/footing/thread, then read named files. Queries never grant directory listings; do not retry discovery through another tool/interpreter. Operational commands and unindexed paths allowed; split mixed commands.";
+      : "osnova gate: repository discovery or unscoped source command blocked. Use osnova_ground/footing/thread, then read named files. Queries never grant directory listings; do not retry discovery through another tool/interpreter. Passive operations and unindexed paths remain available; scripts need a successful query. Split mixed commands.";
+  }
+  return null;
+}
+
+export async function strictGate(input: GateInput, workspace: string, cacheDir?: string): Promise<string | null> {
+  if (isOsnovaQuery(input.toolName)) {
+    if (input.sessionId !== undefined && input.toolUseId !== undefined) {
+      const root = receiptRoot(await fs.realpath(workspace), input.sessionId, cacheDir, input.agentId);
+      const directory = path.join(root, await epoch(root), "queries");
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, digest(input.toolUseId)), digest(input.toolName!));
+    }
+    return null;
+  }
+  const subject = strictSubject(input, workspace);
+  if (subject === null || workspace === os.homedir() || workspace === path.parse(workspace).root) return null;
+  const canonicalWorkspace = await fs.realpath(workspace);
+  const denied = await sourceDenial(input, workspace, canonicalWorkspace, subject, cacheDir);
+  if (denied !== null || !subject.opaque) return denied;
+  if (subject.opaque) {
+    const state = await gateState(input, canonicalWorkspace, cacheDir);
+    const query = state === undefined ? "" : await fs.readFile(path.join(state, "query"), "utf8").catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    });
+    if (!/^[a-f0-9]{64}$/.test(query)) return "osnova gate: executable command needs a completed Osnova query in this prompt; await its result before running scripts or operations.";
+    if (await unresolvedDenial(state!, canonicalWorkspace)) return "osnova gate: earlier source denial remains unresolved; query the denied file before running an opaque command. Directory discovery cannot be granted by a file query.";
+    return null;
   }
   return null;
 }

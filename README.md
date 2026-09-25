@@ -52,7 +52,7 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 
 ```text
 function src/api.ts#refreshWorkspace: 85 indexed edges
-reach: d1 callers 85 in 16 files (3 dirs); d2 +78 in 6 files; unresolved same-name 9; tests 19
+reach: d1 callers 85 in 16 files (3 dirs); d2 +37 in 6 files; unresolved same-name 9; tests 19
 d1 calls src/cli/cli.ts#ensureIndex:80 [import-binding]
 d1 calls src/cli/hook.ts#runHook:231,246,265,277 [import-binding]
 d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:254 [import-binding]

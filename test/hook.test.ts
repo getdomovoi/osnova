@@ -26,12 +26,16 @@ describe("osnova hook", () => {
     try {
       const cacheDir = path.join(temporary, "cache");
       await fs.writeFile(cacheDir, "not a directory");
-      for (const [event, input] of [["prompt", { prompt: "please improve the project performance" }], ["mark", { session_id: "one", tool_name: "Bash" }], ["gate", { tool_name: "Bash", tool_input: { command: "pnpm test" } }]] as const) {
+      for (const [event, input] of [["prompt", { prompt: "please improve the project performance" }], ["mark", { session_id: "one", tool_name: "Bash" }]] as const) {
         const c = capture();
         await runHook(event, JSON.stringify({ ...input, cwd: temporary }), c.io, { cacheDir });
         expect(c.out).toEqual([]);
         expect(c.err).toEqual([]);
       }
+      const c = capture();
+      await runHook("gate", JSON.stringify({ tool_name: "Bash", tool_input: { command: "pnpm test" }, cwd: temporary }), c.io, { cacheDir });
+      expect(JSON.parse(c.out.join("")).hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(c.err).toEqual([]);
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 

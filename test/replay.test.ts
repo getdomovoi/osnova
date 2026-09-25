@@ -20,7 +20,7 @@ it("replays incident-shaped operations, preserved answers, source edits and prom
   expect(result.status).toBe("passed");
   expect(result.summary.failures).toBe(0);
   expect(result.summary.duplicateResponseTokens).toBeGreaterThan(0);
-  expect(result.rows.find((r) => r.id === "database-pipeline")?.outcomes).toEqual(["allow", "allow", "allow"]);
+  expect(result.rows.find((r) => r.id === "database-pipeline")?.outcomes).toEqual(["deny", "deny", "deny"]);
   expect(result.rows.find((r) => r.id === "changed-file-revoked")?.outcomes).toEqual(["deny", "deny", "deny"]);
   expect(result.rows.every((r) => new Set(r.responseHashes).size === 1)).toBe(true);
   expect(compareReplay(result, result)).toEqual([]);
@@ -41,7 +41,7 @@ it("goes red for a missing answer, excess tokens and an incorrectly allowed oper
   const query = manifest.steps.find((step) => step.kind === "query")!;
   if (query.kind !== "query") throw new Error("fixture query missing");
   query.required.push("this evidence does not exist"); query.maxTokens = 0;
-  const gate = manifest.steps.find((step) => step.id === "database-pipeline")!;
+  const gate = manifest.steps.find((step) => step.id === "status-filter")!;
   if (gate.kind !== "gate") throw new Error("fixture gate missing");
   gate.expected = "deny";
   const result = await runReplay(manifest, 1);
