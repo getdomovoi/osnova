@@ -47,6 +47,7 @@ The extraction version moves to `structural-9.30` and the artifact format to 13,
 
 ### Added
 
+- `osnova_ground` and `ask` rank a definition above test code that repeats its words, unless the question mentions tests. A test file's text match counts half; an exact name keeps its priority. On 120 questions from a fixing-patch retrieval eval (50 pinned tasks), the first hit named a file the fix changed for 48% of questions instead of 42%, and a top-three hit for 67% instead of 59%; 17 questions ranked better and none worse.
 - `PRIVACY.md` states what Osnova reads, writes and sends, with the two carve-outs, and is linked from the README and `SECURITY.md`.
 - `osnova doctor --json`.
 - An `implements` edge kind. A written `implements` clause on a TypeScript, TSX or JavaScript class was recorded and reported as `extends`, which misstated the relation on the one product property that every edge carries its own basis. It is now its own kind, resolved by the same rule as `extends` (same-file, then imports, filtered to class, interface, struct and trait candidates), stored at wire position 5 so no existing edge renumbers, and counted by coverage as `implements` and `implementsResolved`.
