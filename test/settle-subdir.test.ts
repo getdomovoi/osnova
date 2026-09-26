@@ -101,6 +101,29 @@ describe.skipIf(process.platform === "win32")("settle in a workspace below the r
     expect(result.text).toContain("../../entry.ts");
   });
 
+  it("refuses to guess when a repository-root path also names a workspace file", async () => {
+    await fs.mkdir(path.join(workspace, "packages", "lib"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "packages", "lib", "api.ts"), "export function mirror() { return 1; }\n");
+    git(repo, "add", "packages/lib/packages"); git(repo, "commit", "-q", "-m", "mirror");
+    const diff = git(repo, "diff");
+    expect(diff).toContain("a/packages/lib/api.ts");
+    const result = await mcpSettle({ diff, baseRef: "HEAD" });
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).not.toContain("mirror");
+    expect(result.text).toMatch(/1 diff path names both a workspace file and a repository-root file, first packages\/lib\/api\.ts/);
+  });
+
+  it("notes a rename from outside the workspace whose source the index does not hold", async () => {
+    await fs.writeFile(path.join(repo, "moved.ts"), "export function moved() { return 1; }\n");
+    git(repo, "add", "moved.ts"); git(repo, "commit", "-q", "-m", "root file");
+    git(repo, "mv", "moved.ts", "packages/lib/moved.ts");
+    const diff = git(repo, "diff", "HEAD", "-M");
+    expect(diff).toContain("rename to packages/lib/moved.ts");
+    const result = await mcpSettle({ diff, baseRef: "HEAD" });
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toContain("../../moved.ts");
+  });
+
   it("notes a rename whose destination the index does not hold", async () => {
     await fs.writeFile(path.join(workspace, ".gitignore"), "*.bin\n");
     git(repo, "add", "packages/lib/.gitignore"); git(repo, "commit", "-q", "-m", "ignore bin");

@@ -725,6 +725,8 @@ export function formatImpactUncertainty(uncertainty: ImpactResult["uncertainty"]
   const phrases = uncertainty.notes.map((note) => {
     const short = note.match(/^diff-short-by-(\d+)-context-lines-treated-as-unchanged$/);
     if (short !== null) return `diff ${short[1]} context lines short, treated unchanged`;
+    const ambiguous = note.match(/^diff-paths-ambiguous-(\d+):(.*)$/s);
+    if (ambiguous !== null) return `${ambiguous[1]} diff path${ambiguous[1] === "1" ? " names" : "s name"} both a workspace file and a repository-root file, first ${ambiguous[2]}; left out: pass a diff made inside the workspace, or call osnova_settle with no arguments`;
     const unindexed = note.match(/^diff-files-not-in-index-(\d+):(.*)$/s);
     if (unindexed !== null) return `${unindexed[1]} diff file${unindexed[1] === "1" ? "" : "s"} not in the index, first ${unindexed[2]}; diff paths are read relative to the workspace, or from the repository root when the diff names the workspace folder`;
     return impactNoteText[note] ?? note;
