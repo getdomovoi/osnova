@@ -881,7 +881,7 @@ export function formatUnreferenced(result: UnreferencedResult): string {
   lines.push(`${result.withoutLeads} of ${listed} listed candidates have no lead at all (no unresolved same-name site, no test site, no text mention); a lead is a place to check by hand, not a caller.`);
   const entries = result.entryPoints;
   lines.push(
-    `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}`,
+    `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}, python dunder ${entries["python-dunder"]}`,
     entryPointRuleText,
     result.exportedNotListed > 0 ? "exported symbols are entry points for external consumers and are listed only with includeExported." : "",
     result.shadowedNotListed > 0 ? "shadowed symbols (a name the file declares in more than one scope) are never listed: the index records no edge to them, so their absence from the graph is not evidence." : "",

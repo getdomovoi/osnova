@@ -75,16 +75,16 @@ describe.skipIf(process.platform === "win32")("settle in a workspace below the r
     expect(result.text).toMatch(/1 diff file not in the index/);
   });
 
-  it("points an agent at baseRef when it sends no diff or a diff with wrong hunk counts", async () => {
-    const missing = await mcpSettle({});
-    expect(missing.isError).toBe(true);
-    expect(missing.text).toContain("diff or baseRef");
-    expect(missing.text).toContain('baseRef: "HEAD"');
+  it("settles the uncommitted edits with no arguments, and points a wrong-hunk diff at that call", async () => {
+    const none = await mcpSettle({});
+    expect(none.isError, none.text).toBe(false);
+    expect(none.text).toContain("changed: api.ts#work -> api.ts#work");
+    expect(none.text).toContain("entry.ts#start");
     const summary = "diff --git a/api.ts b/api.ts\n--- a/api.ts\n+++ b/api.ts\n@@ -1,3 +1,3 @@\n-export function work() { return 1; }\n+export function work() { return 2; }\n" +
       "diff --git a/entry.ts b/entry.ts\n--- a/entry.ts\n+++ b/entry.ts\n@@ -2,1 +2,1 @@\n-export function start() { return work(); }\n+export function start() { return work() + 0; }\n";
     const wrong = await mcpSettle({ diff: summary });
     expect(wrong.isError).toBe(true);
     expect(wrong.text).toContain("pass the exact diff output");
-    expect(wrong.text).toContain('baseRef: "HEAD"');
+    expect(wrong.text).toContain("call osnova_settle with no arguments");
   });
 });

@@ -51,6 +51,83 @@ describe("osnova setup --apply", () => {
     expect(c.out.join("\n")).toContain("hooks, unchanged");
   });
 
+  it("repoints osnova hooks at this install, removes hooks it cannot run and duplicates, and leaves other hooks alone", async () => {
+    const old = "node /opt/osnova-strict/dist/bin.js";
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.writeFile(settingsPath, JSON.stringify({
+      theme: "dark",
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: `${old} hook session`, timeout: 7 }] }],
+        UserPromptSubmit: [{ hooks: [{ type: "command", command: `${old} hook prompt`, timeout: 15 }] }, { hooks: [{ type: "command", command: "osnova hook prompt", timeout: 15 }] }],
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: "node other.js" }, { type: "command", command: `${old} hook gate`, timeout: 30 }] },
+          { matcher: "*", hooks: [{ type: "command", command: `${old} hook reset`, timeout: 5 }] },
+        ],
+        PostToolUse: [{ matcher: "Grep|Bash", hooks: [{ type: "command", command: `${old} hook tool`, timeout: 10 }] }, { matcher: "*", hooks: [{ type: "command", command: `${old} hook mark`, timeout: 5 }] }],
+        Stop: [{ hooks: [{ type: "command", command: `${old} hook stop`, timeout: 30 }] }],
+      },
+    }, null, 2));
+    let c = capture();
+    expect(await runCli(["setup", "--preview", "--hooks", "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    const preview = c.out.join("\n");
+    expect(preview).toMatch(/hooks, update, .*settings\.json/);
+    expect(preview).toMatch(/removed .*gate.*mark.*reset/);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    expect(c.out.join("\n")).toMatch(/applied: hooks, update, .*settings\.json \(backup .*settings\.json\.bak-osnova-/);
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    expect(settings.theme).toBe("dark");
+    expect(settings.hooks.SessionStart).toEqual([{ hooks: [{ type: "command", command: "osnova hook session", timeout: 7 }] }]);
+    expect(settings.hooks.UserPromptSubmit).toEqual([{ hooks: [{ type: "command", command: "osnova hook prompt", timeout: 15 }] }]);
+    expect(settings.hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "node other.js" }] }]);
+    expect(settings.hooks.PostToolUse).toEqual([{ matcher: "Grep|Bash", hooks: [{ type: "command", command: "osnova hook tool", timeout: 10 }] }]);
+    expect(settings.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "osnova hook stop", timeout: 30 }] }]);
+    c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("hooks, unchanged");
+  });
+
+  it("never rewrites a shell-wrapped osnova hook or a foreign hook that only mentions osnova in its flags", async () => {
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+    const wrapped = { type: "command", command: "bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"" };
+    const foreign = { type: "command", command: "other-tool hook gate --note osnova" };
+    const shellGate = { type: "command", command: "sh -c 'node /opt/osnova-strict/dist/bin.js hook gate'" };
+    await fs.writeFile(settingsPath, JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [wrapped] }], PreToolUse: [{ hooks: [foreign, shellGate] }] } }));
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    expect(settings.hooks.UserPromptSubmit).toEqual([{ hooks: [wrapped] }]);
+    expect(settings.hooks.PreToolUse).toEqual([{ hooks: [foreign, shellGate] }]);
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("osnova hook session");
+  });
+
+  it("never touches a user's own script that only lives under a folder named osnova", async () => {
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+    const own = { type: "command", command: "/Users/me/osnova-notes/tool.sh hook pre-commit" };
+    const ownPrompt = { type: "command", command: "/Users/me/osnova-notes/tool.sh hook prompt" };
+    await fs.writeFile(settingsPath, JSON.stringify({ hooks: { PreToolUse: [{ hooks: [own] }], UserPromptSubmit: [{ hooks: [ownPrompt] }] } }));
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    expect(settings.hooks.PreToolUse[0]).toEqual({ hooks: [own] });
+    expect(settings.hooks.UserPromptSubmit[0]).toEqual({ hooks: [ownPrompt] });
+    expect(settings.hooks.UserPromptSubmit.flatMap((g: { hooks: { command: string }[] }) => g.hooks.map((h) => h.command))).toContain("osnova hook prompt");
+  });
+
+  it("repoints Codex hooks and keeps their client flag", async () => {
+    const hooksPath = path.join(home, ".codex", "hooks.json");
+    await fs.mkdir(path.dirname(hooksPath), { recursive: true });
+    await fs.writeFile(hooksPath, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "node /opt/osnova-strict/dist/bin.js hook stop --client codex", timeout: 30 }] }], PreToolUse: [{ hooks: [{ type: "command", command: "node /opt/osnova-strict/dist/bin.js hook gate --client codex" }] }] } }));
+    const c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--client", "codex", "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("open /hooks in Codex");
+    const codex = JSON.parse(await fs.readFile(hooksPath, "utf8"));
+    expect(codex.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "osnova hook stop --client codex", timeout: 30 }] }]);
+    expect(codex.hooks.PreToolUse).toBeUndefined();
+    expect(codex.hooks.SessionStart[0].hooks[0].command).toBe("osnova hook session --client codex");
+  });
+
   it("refuses to write when the MCP entry conflicts, and writes nothing else either", async () => {
     await fs.writeFile(path.join(home, ".claude.json"), '{ "mcpServers": { "osnova": { "command": "elsewhere", "args": ["mcp"] } } }\n');
     const c = capture();

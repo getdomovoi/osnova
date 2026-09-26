@@ -85,7 +85,8 @@
     "check:package": "node scripts/check-package.mjs",
     "test:package": "pnpm build && node scripts/package-smoke.mjs",
     "test:install": "pnpm build && node scripts/clean-install-smoke.mjs",
-    "prepublishOnly": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "ledger": "tsx scripts/bench/ledger-cli.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
