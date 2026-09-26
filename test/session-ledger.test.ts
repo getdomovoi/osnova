@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { classifyCall, compareArms, loadKiloSession, parseClaudeSession, parseCodexSession, summarizeSession } from "../scripts/bench/session-ledger.js";
+import { addSession, classifyCall, compareArms, loadKiloSession, parseClaudeSession, parseCodexSession, summarizeSession } from "../scripts/bench/session-ledger.js";
 
 const temporary: string[] = [];
 afterEach(async () => { for (const dir of temporary.splice(0)) await fs.rm(dir, { recursive: true, force: true }); });
@@ -142,4 +142,23 @@ it("compares arms on correct runs only and keeps excluded pairs visible", () => 
   expect(report.arms.osnova).toMatchObject({ sessions: 2, correct: 1, costPerCorrect: 2 });
   expect(report.arms.none).toMatchObject({ sessions: 2, correct: 2, costPerCorrect: 2.5 });
   expect(report.pairs).toMatchObject({ bothCorrect: 1, excluded: 1, candidateOnly: 0, baselineOnly: 1, candidateCheaper: 1, costDelta: { median: -1 }, elapsedDeltaMs: { median: -20 } });
+  expect(() => compareArms([row("t1", "osnova", true, 1, 10), row("t1", "osnova", false, 1, 10), row("t1", "none", true, 2, 30)], "osnova", "none")).toThrow("t1");
+});
+
+it("orders Claude requests by time when subagent transcripts are read after the main one", () => {
+  const usage = { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
+  const session = parseClaudeSession(jsonl([
+    { type: "assistant", sessionId: "s", timestamp: "2026-01-01T00:00:05Z", message: { id: "late", usage, content: [] } },
+    { type: "assistant", sessionId: "s", isSidechain: true, timestamp: "2026-01-01T00:00:01Z", message: { id: "early", usage, content: [] } },
+    { type: "assistant", sessionId: "s", timestamp: "2026-01-01T00:00:05Z", message: { id: "tie", usage, content: [] } },
+  ]));
+  expect(session.requests.map((request) => request.key)).toEqual(["early", "late", "tie"]);
+});
+
+it("refuses two sessions with the same key instead of keeping only the last", () => {
+  const summary = summarizeSession({ host: "kilo", requests: [], calls: [], settleContinuations: 0, malformedRecords: 0 });
+  const sessions = new Map();
+  addSession(sessions, "run/kilo.db", summary);
+  expect(() => addSession(sessions, "run/kilo.db", summary)).toThrow("run/kilo.db");
+  expect(sessions.size).toBe(1);
 });

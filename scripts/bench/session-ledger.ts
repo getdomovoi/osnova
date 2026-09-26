@@ -167,7 +167,9 @@ export function parseClaudeSession(lines: Iterable<string>): LedgerSession {
       }
     }
   }
-  return { host: "claude-code", requests: [...requests].map(([key, value]) => ({ key, ...value })), calls: [...calls.values()], settleContinuations, malformedRecords };
+  // Subagent transcripts are read after the main one, so file order is not time order; the sort is stable for ties.
+  const ordered = [...requests].map(([key, value]) => ({ key, ...value })).sort((a, b) => (a.startMs ?? 0) - (b.startMs ?? 0));
+  return { host: "claude-code", requests: ordered, calls: [...calls.values()], settleContinuations, malformedRecords };
 }
 
 // Code-mode wrappers run a script that issues the real operations; Codex reports those as completed items.
@@ -412,6 +414,12 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
     };
   };
   const tasks = [...new Set(rows.map((row) => row.task))].sort();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const id = `${row.task}\u0000${row.arm}`;
+    if (seen.has(id)) throw new Error(`two sessions for task ${row.task} in arm ${row.arm}; give each repeat its own task name`);
+    seen.add(id);
+  }
   const find = (task: string, name: string) => rows.find((row) => row.task === task && row.arm === name);
   let bothCorrect = 0, excluded = 0, candidateOnly = 0, baselineOnly = 0, candidateCheaper = 0;
   const costDeltas: number[] = [], elapsedDeltas: number[] = [], tokenDeltas: number[] = [];
@@ -435,4 +443,11 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
     pairs: { tasks: tasks.length, bothCorrect, excluded, candidateOnly, baselineOnly, candidateCheaper, costDelta: spread(costDeltas), elapsedDeltaMs: spread(elapsedDeltas), tokenDelta: spread(tokenDeltas) },
     interpretation: "cost and time per correct session are primary; paired deltas cover tasks both arms solved; call and request counts explain, they are not savings; null means the host did not report the field",
   };
+}
+
+// Adds a session under its key and refuses a second one, so two inputs with the same relative path or session id
+// cannot silently replace each other.
+export function addSession(sessions: Map<string, SessionSummary>, key: string, summary: SessionSummary): void {
+  if (sessions.has(key)) throw new Error(`two sessions share the key ${key}; pass inputs whose session paths do not overlap`);
+  sessions.set(key, summary);
 }

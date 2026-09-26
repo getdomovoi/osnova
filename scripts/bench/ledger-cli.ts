@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { compareArms, loadKiloSession, parseClaudeSession, parseCodexSession, summarizeSession } from "./session-ledger.js";
+import { addSession, compareArms, loadKiloSession, parseClaudeSession, parseCodexSession, summarizeSession } from "./session-ledger.js";
 import type { ArmRow, LedgerHost, SessionSummary } from "./session-ledger.js";
 
 // Session ledger CLI: reads a host's session records (Claude Code JSONL, Codex rollouts, Kilo/OpenCode
@@ -54,9 +54,9 @@ async function sessions(host: LedgerHost, inputs: readonly string[], skipped: { 
   for (const input of inputs) {
     const root = path.resolve(input);
     if (host === "kilo") {
-      for (const file of await sized(await walk(root, (name) => path.basename(name) === "kilo.db"), skipped)) result.set(path.relative(root, file) || path.basename(file), summarizeSession(loadKiloSession(file)));
+      for (const file of await sized(await walk(root, (name) => path.basename(name) === "kilo.db"), skipped)) addSession(result, path.relative(root, file) || path.basename(file), summarizeSession(loadKiloSession(file)));
     } else if (host === "codex") {
-      for (const file of await sized(await walk(root, (name) => name.endsWith(".jsonl")), skipped)) result.set(path.relative(root, file) || path.basename(file), summarizeSession(parseCodexSession(await lines(file))));
+      for (const file of await sized(await walk(root, (name) => name.endsWith(".jsonl")), skipped)) addSession(result, path.relative(root, file) || path.basename(file), summarizeSession(parseCodexSession(await lines(file))));
     } else {
       // A session is `<id>.jsonl` plus its subagent transcripts under `<id>/`; they are read together, one
       // session at a time, so a survey of many projects never holds more than one session in memory.
@@ -73,7 +73,7 @@ async function sessions(host: LedgerHost, inputs: readonly string[], skipped: { 
       for (const group of grouped.values()) {
         const records: string[] = [];
         for (const file of group.files) records.push(...await lines(file));
-        result.set(group.id, summarizeSession(parseClaudeSession(records)));
+        addSession(result, group.id, summarizeSession(parseClaudeSession(records)));
       }
     }
   }
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
     comparison: values.candidate !== undefined && values.baseline !== undefined
       ? compareArms(labelled.map((row): ArmRow => ({ task: row.outcome.task, arm: row.outcome.arm, correct: row.outcome.correct, summary: row.summary })), values.candidate, values.baseline)
       : undefined,
-    limitations: ["host-reported usage only; null means the host did not report the field", "output includes reasoning; reasoning is the reported part", "Codex input splits cached input from its total; Codex reports no cache writes", "call classes come from tool names and literal shell words, not from what a command read", "grep-after-Osnova matches an identifier search to a name printed by an earlier successful Osnova result"],
+    limitations: ["host-reported usage only; null means the host did not report the field", "output includes reasoning; reasoning is the reported part", "Codex input splits cached input and, when the Codex version reports them, cache writes from its total; otherwise cache writes are null", "call classes come from tool names and literal shell words, not from what a command read", "grep-after-Osnova matches an identifier search to a name printed by an earlier successful Osnova result"],
   };
   const encoded = JSON.stringify(report, null, 2) + "\n";
   if (values.output === undefined) process.stdout.write(encoded);
