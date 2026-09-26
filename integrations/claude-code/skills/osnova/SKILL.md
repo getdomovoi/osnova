@@ -1,6 +1,6 @@
 ---
 name: osnova
-description: Use when the osnova_* tools are available and the task asks how code works, who calls a symbol, what a change affects, or whether a list of call sites is complete. Puts the indexed call graph before grep and file reads.
+description: Use when the osnova_* tools are available and the task asks how code works, who calls a symbol, what a change affects, or whether a list of call sites is complete. Answers relationship questions from the indexed call graph instead of chains of grep and file reads; plain text search stays with rg.
 ---
 
 # Osnova

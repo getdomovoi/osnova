@@ -244,6 +244,8 @@ export interface FindTextResult {
   readonly omittedGroups: number;
   readonly omittedMatches: number;
   readonly truncated: boolean;
+  /** Files inside the search scope that are above the size cap, so their text was never indexed or searched. */
+  readonly unsearchedFiles: readonly string[];
 }
 
 export interface SkeletonEntry {
