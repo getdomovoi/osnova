@@ -33,7 +33,8 @@ afterAll(async () => {
   await fs.rm(temporary, { recursive: true, force: true });
 });
 
-describe("the OpenCode and Kilo plugin guards searches", () => {
+// The stub is a #! script, which Windows cannot spawn directly; the plugin test on dev skips Windows the same way.
+describe.skipIf(process.platform === "win32")("the OpenCode and Kilo plugin guards searches", () => {
   it("rewrites a shell search to print the graph answer, and refuses the grep tool with it", async () => {
     const args: Record<string, unknown> = { command: "rg -n refreshWorkspace src" };
     await expect(plugin["tool.execute.before"]({ tool: "bash", sessionID: "s" }, { args })).resolves.toBeUndefined();
