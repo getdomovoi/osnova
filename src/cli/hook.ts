@@ -25,6 +25,8 @@ import type { CliIo } from "./cli.js";
 // Its once-per-diff and once-per-nudge state lives under the cache directory, the one place the
 // hooks may write.
 export type HookEvent = "prompt" | "session" | "stop" | "tool" | "install-preview";
+export const hookEvents: readonly HookEvent[] = ["prompt", "session", "stop", "tool", "install-preview"];
+export function isHookEvent(value: unknown): value is HookEvent { return (hookEvents as readonly unknown[]).includes(value); }
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
