@@ -130,6 +130,23 @@ describe.skipIf(process.platform === "win32")("settle in a workspace below the r
     expect(result.text).not.toContain("changed: api.ts#work");
   });
 
+  it("reports a root file as ambiguous when the only workspace path in the diff is one the index skips", async () => {
+    await fs.writeFile(path.join(repo, "entry.ts"), "export function rootEntry() { return 0; }\n");
+    await fs.mkdir(path.join(workspace, "node_modules"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "node_modules", "sentinel.ts"), "export const s = 1;\n");
+    git(repo, "add", "-f", "entry.ts", "packages/lib/node_modules"); git(repo, "commit", "-q", "-m", "root entry and sentinel");
+    git(repo, "checkout", "-q", "--", "packages/lib/api.ts");
+    await fs.writeFile(path.join(repo, "entry.ts"), "export function rootEntry() { return 9; }\n");
+    await fs.writeFile(path.join(workspace, "node_modules", "sentinel.ts"), "export const s = 2;\n");
+    const diff = git(repo, "diff");
+    expect(diff).toContain("a/entry.ts");
+    expect(diff).toContain("a/packages/lib/node_modules/sentinel.ts");
+    const result = await mcpSettle({ diff, baseRef: "HEAD" });
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).not.toContain("changed: entry.ts#start");
+    expect(result.text).toMatch(/diff path names both a workspace file and a repository-root file, first entry\.ts/);
+  });
+
   it("notes a rename from outside the workspace whose source the index does not hold", async () => {
     await fs.writeFile(path.join(repo, "moved.ts"), "export function moved() { return 1; }\n");
     git(repo, "add", "moved.ts"); git(repo, "commit", "-q", "-m", "root file");

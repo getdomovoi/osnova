@@ -214,10 +214,18 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
     file === null || !rootBased || prefix === null ? file : file.startsWith(prefix) ? file.slice(prefix.length) : path.posix.relative(prefix, file);
   // Without that evidence, a path that names a workspace file both as written and with the folder stripped (a folder
   // nested under its own name) has no single reading; it is left out and reported rather than guessed.
+  // A path under the folder that is indexed under neither reading leaves the basis undecided unless another path
+  // settles it: then a path outside the folder that names a workspace file may be a repository-root file too.
   const ambiguousDiffPaths = new Set<string>();
+  const paths = (diffs ?? []).flatMap((diff) => [diff.before, diff.after]).filter((file): file is string => file !== null);
+  const undecided = prefix !== null && !rootBased
+    && paths.some((file) => file.startsWith(prefix) && !indexed(file) && !indexed(file.slice(prefix.length)))
+    && !paths.some((file) => file.startsWith(prefix) && indexed(file) && !indexed(file.slice(prefix.length)));
   if (!rootBased && prefix !== null && diffs !== null) {
     for (let i = diffs.length - 1; i >= 0; i--) {
-      const both = [diffs[i]!.before, diffs[i]!.after].filter((file): file is string => file !== null && file.startsWith(prefix) && indexed(file) && indexed(file.slice(prefix.length)));
+      const both = [diffs[i]!.before, diffs[i]!.after].filter((file): file is string => file !== null && (file.startsWith(prefix)
+        ? indexed(file) && indexed(file.slice(prefix.length))
+        : undecided && indexed(file)));
       if (both.length === 0) continue;
       for (const file of both) ambiguousDiffPaths.add(file);
       diffs.splice(i, 1);
