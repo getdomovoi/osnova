@@ -119,6 +119,10 @@ function makeCall(key: string, tool: string, input: unknown): LedgerCall {
   const args = input !== null && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
   return { key, tool, input: args, ...classifyCall(tool, args), outcome: "unknown", output: "" };
 }
+// grep and rg exit 1 when nothing matched; that is a finished search, not a failed one.
+function failedExit(call: LedgerCall | undefined, code: unknown): boolean {
+  return typeof code === "number" && code !== 0 && !(code === 1 && call?.kind === "search");
+}
 function settle(call: LedgerCall | undefined, output: string, error: boolean): void {
   if (call === undefined) return;
   call.output = output;
@@ -163,7 +167,9 @@ export function parseClaudeSession(lines: Iterable<string>): LedgerSession {
       requests.set(message.id, entry);
     } else if (record.type === "user") {
       for (const block of message.content as Record<string, unknown>[]) {
-        if (block?.type === "tool_result" && typeof block.tool_use_id === "string") settle(calls.get(block.tool_use_id), textOf(block.content), block.is_error === true);
+        if (block?.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+        const call = calls.get(block.tool_use_id), text = textOf(block.content);
+        settle(call, text, block.is_error === true && (text.trim() !== "Exit code 1" || failedExit(call, 1)));
       }
     }
   }
@@ -209,7 +215,7 @@ export function parseCodexSession(lines: Iterable<string>): LedgerSession {
       if (item.type === "CommandExecution") {
         const call = calls.get(id) ?? makeCall(id, "exec_command", { command: item.command });
         add(call);
-        settle(call, textOf(item.aggregated_output), typeof item.exit_code === "number" && item.exit_code !== 0 || item.status === "failed");
+        settle(call, textOf(item.aggregated_output), failedExit(call, item.exit_code) || item.status === "failed" && item.exit_code === undefined);
       } else if (item.type === "FileChange") {
         const call = calls.get(id) ?? makeCall(id, "apply_patch", {});
         add(call);
@@ -234,7 +240,7 @@ export function parseCodexSession(lines: Iterable<string>): LedgerSession {
       const raw = payload.output;
       const parsed = typeof raw === "string" ? parseLine(raw) : null;
       const exit = (parsed?.metadata as Record<string, unknown> | undefined)?.exit_code;
-      settle(calls.get(id), textOf(parsed ?? raw), typeof exit === "number" && exit !== 0);
+      settle(calls.get(id), textOf(parsed ?? raw), failedExit(calls.get(id), exit));
     } else if (payload.type === "message" && textOf(payload.content).includes("[osnova settle]")) settleContinuations += 1;
   }
   return { host: "codex", requests, calls: [...calls.values()], settleContinuations, malformedRecords };

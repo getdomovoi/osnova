@@ -88,7 +88,7 @@ it("reads Codex code-mode items instead of their script wrapper, with reported c
     item({ type: "HookPrompt", id: "h1", fragments: [{ text: "[osnova settle] The uncommitted diff touches 1 indexed symbols" }] }),
     tokens(2040),
   ]));
-  expect(session.calls.map((call) => [call.kind, call.outcome])).toEqual([["search", "error"], ["osnova", "ok"], ["edit", "ok"], ["search", "ok"]]);
+  expect(session.calls.map((call) => [call.kind, call.outcome])).toEqual([["search", "ok"], ["osnova", "ok"], ["edit", "ok"], ["search", "ok"]]);
   expect(session.requests.map((request) => request.calls.length)).toEqual([2, 2]);
   expect(session.requests[0]!.usage).toEqual({ uncachedInput: 200, cacheRead: 700, cacheWrite: 100, output: 20, reasoning: 5, costUsd: null });
   expect(session.settleContinuations).toBe(1);
@@ -161,4 +161,16 @@ it("refuses two sessions with the same key instead of keeping only the last", ()
   addSession(sessions, "run/kilo.db", summary);
   expect(() => addSession(sessions, "run/kilo.db", summary)).toThrow("run/kilo.db");
   expect(sessions.size).toBe(1);
+});
+
+it("counts a search that exits 1 with no match as a finished search, and every other nonzero exit as an error", () => {
+  const item = (id: string, command: string, code: number) => ({ timestamp: "2026-01-01T00:00:01Z", type: "event_msg", payload: { type: "item_completed", item: { type: "CommandExecution", id, command: ["/bin/zsh", "-lc", command], exit_code: code, status: "completed", aggregated_output: "" } } });
+  const codex = parseCodexSession(jsonl([item("a", "rg -n alpha src", 1), item("b", "rg -n 'alpha(' src", 2), item("c", "git diff --quiet", 1)]));
+  expect(codex.calls.map((call) => [call.kind, call.outcome])).toEqual([["search", "ok"], ["search", "error"], ["shell", "error"]]);
+  const usage = { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
+  const claude = parseClaudeSession(jsonl([
+    { type: "assistant", sessionId: "s", timestamp: "2026-01-01T00:00:00Z", message: { id: "m1", usage, content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "rg -n alpha src" } }, { type: "tool_use", id: "t2", name: "Bash", input: { command: "rg -n beta src/*.zz" } }] } },
+    { type: "user", sessionId: "s", timestamp: "2026-01-01T00:00:01Z", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "Exit code 1", is_error: true }, { type: "tool_result", tool_use_id: "t2", content: "Exit code 1 (eval):1: no matches found: src/*.zz", is_error: true }] } },
+  ]));
+  expect(claude.calls.map((call) => call.outcome)).toEqual(["ok", "error"]);
 });
