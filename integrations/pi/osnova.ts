@@ -5,12 +5,14 @@
 import { spawn } from "node:child_process";
 
 const executable = process.env.OSNOVA_BIN ?? "osnova";
+// On Windows the osnova command is an npm .cmd shim, which Node starts only through a shell.
+const windows = process.platform === "win32";
 
 function hook(event: string, payload: unknown, cwd: string, ...flags: readonly string[]): Promise<string> {
   return new Promise((resolve) => {
     let out = "";
     try {
-      const child = spawn(executable, ["hook", event, ...flags], { cwd, stdio: ["pipe", "pipe", "ignore"] });
+      const child = spawn(windows ? `"${executable}"` : executable, ["hook", event, ...flags], { cwd, stdio: ["pipe", "pipe", "ignore"], shell: windows, windowsHide: true });
       const timer = setTimeout(() => { child.kill(); resolve(""); }, 15_000);
       child.stdout.on("data", (chunk: Buffer | string) => { out += chunk; });
       child.on("error", () => { clearTimeout(timer); resolve(""); });
