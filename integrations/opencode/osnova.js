@@ -7,13 +7,21 @@ import { spawn } from "node:child_process";
 const executable = process.env.OSNOVA_BIN ?? "osnova";
 // On Windows the osnova command is an npm .cmd shim, which Node starts only through a shell.
 const windows = process.platform === "win32";
+// cmd.exe reads quotes, &, |, <, >, ^, ! and % in a command line even inside quotes, so such a path is not run.
+const unsafeOnWindows = /["%&|<>^!\r\n]/;
 
 function hook(event, payload, cwd, ...flags) {
   return new Promise((resolve) => {
     let out = "";
+    if (windows && unsafeOnWindows.test(executable)) { resolve(""); return; }
     try {
       const child = spawn(windows ? `"${executable}"` : executable, ["hook", event, ...flags], { cwd, stdio: ["pipe", "pipe", "ignore"], shell: windows, windowsHide: true });
-      const timer = setTimeout(() => { child.kill(); resolve(""); }, 15_000);
+      // Through a shell, kill() ends only cmd.exe; taskkill /t also ends the osnova process it started.
+      const stop = () => {
+        if (windows && child.pid !== undefined) spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
+        else child.kill();
+      };
+      const timer = setTimeout(() => { stop(); resolve(""); }, 15_000);
       child.stdout.on("data", (chunk) => { out += chunk; });
       child.on("error", () => { clearTimeout(timer); resolve(""); });
       child.on("close", () => { clearTimeout(timer); resolve(out.trim()); });
