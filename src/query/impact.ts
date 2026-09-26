@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { FileCard, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { knownIndexGeneration, rememberIndexGeneration } from "../index/generation.js";
 import { serializeArtifact } from "../index/serialize.js";
@@ -48,6 +49,7 @@ export interface ImpactDependent {
 export interface ImpactOptions {
   readonly diff?: string | undefined;
   readonly maxDepth?: number | undefined;
+  readonly diffPathPrefix?: string | undefined;
 }
 
 export interface ImpactResult {
@@ -147,7 +149,7 @@ function parseDiff(diff: string): DiffFile[] & { tolerated?: number } {
       else if (line.startsWith(" ") || line === "") { oldLine++; newLine++; oldLeft--; newLeft--; }
       else if (line.startsWith("@@") && oldLeft === newLeft) { finish(); }
       else throw new Error(`osnova: invalid unified diff hunk line ${number + 1}: the hunk header promised ${oldLeft} more old and ${newLeft} more new lines; pass the exact diff output, not a summary`);
-      if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts");
+      if (oldLeft < 0 || newLeft < 0) throw new Error("osnova: invalid unified diff hunk counts; pass the exact diff output, not a summary");
       if (!line.startsWith("@@")) continue;
     }
     if (line.startsWith("diff --git ")) { finish(); file = undefined; }
@@ -201,6 +203,45 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   const beforeReceipt = indexReceipt(base), afterReceipt = indexReceipt(current);
   const diffs = options.diff === undefined ? null : parseDiff(options.diff);
   const sameIndex = base === current;
+  const prefix = options.diffPathPrefix === undefined || options.diffPathPrefix === "" ? null : `${options.diffPathPrefix.replace(/\/+$/, "")}/`;
+  const indexed = (file: string): boolean => base.files.has(file) || current.files.has(file);
+  // One basis for the whole diff: when a path names the workspace folder from the repository root, every path is
+  // read from the root, and one outside the folder stays outside (`../name`) instead of matching a workspace file.
+  // Evidence is a path that is not a workspace file as written but is one with the folder stripped; a path indexed
+  // under neither reading (an ignored or unsupported file) says nothing about the basis.
+  const rootBased = prefix !== null && (diffs ?? []).some((diff) => [diff.before, diff.after].some((file) => file !== null && file.startsWith(prefix) && !indexed(file) && indexed(file.slice(prefix.length))));
+  const localPath = (file: string | null): string | null =>
+    file === null || !rootBased || prefix === null ? file : file.startsWith(prefix) ? file.slice(prefix.length) : path.posix.relative(prefix, file);
+  // Without that evidence, a path that names a workspace file both as written and with the folder stripped (a folder
+  // nested under its own name) has no single reading; it is left out and reported rather than guessed.
+  // A path under the folder that is indexed under neither reading leaves the basis undecided unless another path
+  // settles it: then a path outside the folder that names a workspace file may be a repository-root file too.
+  const ambiguousDiffPaths = new Set<string>();
+  const paths = (diffs ?? []).flatMap((diff) => [diff.before, diff.after]).filter((file): file is string => file !== null);
+  const undecided = prefix !== null && !rootBased
+    && paths.some((file) => file.startsWith(prefix) && !indexed(file) && !indexed(file.slice(prefix.length)))
+    && !paths.some((file) => file.startsWith(prefix) && indexed(file) && !indexed(file.slice(prefix.length)));
+  if (!rootBased && prefix !== null && diffs !== null) {
+    for (let i = diffs.length - 1; i >= 0; i--) {
+      const both = [diffs[i]!.before, diffs[i]!.after].filter((file): file is string => file !== null && (file.startsWith(prefix)
+        ? indexed(file) && indexed(file.slice(prefix.length))
+        : undecided && indexed(file)));
+      if (both.length === 0) continue;
+      for (const file of both) ambiguousDiffPaths.add(file);
+      diffs.splice(i, 1);
+    }
+  }
+  for (const diff of diffs ?? []) { diff.before = localPath(diff.before); diff.after = localPath(diff.after); }
+  const unindexedDiffFiles = new Set<string>();
+  for (const diff of diffs ?? []) {
+    const named = diff.after ?? diff.before;
+    if (named === null) continue;
+    if (!base.files.has(diff.before ?? named) && !current.files.has(diff.after ?? named)) unindexedDiffFiles.add(named);
+    else if (diff.before !== null && diff.after !== null && diff.before !== diff.after && !current.files.has(diff.after)) unindexedDiffFiles.add(diff.after);
+    // With a base index, a rename's source is checked on its own; in diff-only mode the base is the current index,
+    // where a renamed-away source is always absent.
+    if (!sameIndex && diff.before !== null && diff.after !== null && diff.before !== diff.after && !base.files.has(diff.before)) unindexedDiffFiles.add(diff.before);
+  }
   const renames = new Map<string, { path: string; basis: "diff-rename" | "identical-file-hash" }>();
   for (const diff of diffs ?? []) {
     if (diff.before !== null && diff.after !== null && diff.before !== diff.after && base.files.has(diff.before) && current.files.has(diff.after)) {
@@ -350,6 +391,8 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
       relationshipEvidence(index, edge, index === base ? beforeReceipt : afterReceipt) === null).length, 0),
     notes: ["indexed-graph-only", ...(sameIndex ? ["base-snapshot-is-current-index", "deleted-symbols-not-visible"] : []), "receipts-identify-indexed-content-not-disk-freshness", "rename-identity-is-not-proven", "one-shortest-path-per-dependent",
       ...(diffs === null ? [] : ["provided-diff-ranges-not-verified-against-source"]),
+      ...(unindexedDiffFiles.size > 0 ? [`diff-files-not-in-index-${unindexedDiffFiles.size}:${[...unindexedDiffFiles].sort(compareText)[0]}`] : []),
+      ...(ambiguousDiffPaths.size > 0 ? [`diff-paths-ambiguous-${ambiguousDiffPaths.size}:${[...ambiguousDiffPaths].sort(compareText)[0]}`] : []),
       ...((diffs?.tolerated ?? 0) > 0 ? [`diff-short-by-${diffs!.tolerated}-context-lines-treated-as-unchanged`] : []),
       ...(beforeReceipt.diagnostics + afterReceipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])] } };
 }

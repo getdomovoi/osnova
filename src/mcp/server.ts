@@ -8,7 +8,7 @@ import {
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspace, indexGeneration } from "../api.js";
-import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
+import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -386,16 +386,26 @@ export function createOsnovaMcpServer(
           // With neither argument the caller means "what did I change": agents made that call on a large share of
           // settle requests and paid a retry each time, so it compares HEAD with the working tree.
           const baseRef = explicitRef ?? (diff === undefined ? "HEAD" : undefined);
+          const useBaseRef = "call osnova_settle with no arguments and osnova computes the diff of your uncommitted edits itself";
           const maxDepth = optionalNumber(args, "depth") ?? 1;
+          const diffPathPrefix = diff === undefined ? undefined : await workspaceGitPrefix(absRoot);
+          const measured = (run: () => ReturnType<typeof impact>): ReturnType<typeof impact> => {
+            try {
+              return run();
+            } catch (error) {
+              if (error instanceof Error && error.message.includes("pass the exact diff output")) throw new Error(`${error.message}, or ${useBaseRef}`);
+              throw error;
+            }
+          };
           let result;
-          if (baseRef === undefined) result = impact(index, index, { diff, maxDepth });
+          if (baseRef === undefined) result = measured(() => impact(index, index, { diff, maxDepth, diffPathPrefix }));
           else {
             const base = await materializeBaseRef(absRoot, baseRef, { cacheDir }).catch((error: unknown) => {
               if (explicitRef !== undefined) throw error;
               throw new Error(`osnova_settle with no arguments compares against HEAD, which failed here (${error instanceof Error ? error.message : String(error)}); pass diff with a unified diff instead`);
             });
             const computed = diff ?? await baseDiff(absRoot, base.sha);
-            result = impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth });
+            result = measured(() => impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth, diffPathPrefix }));
           }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);

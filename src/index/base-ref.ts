@@ -44,17 +44,30 @@ async function git(root: string, args: readonly string[]): Promise<string> {
   }
 }
 
-export async function resolveGitRef(root: string, ref: string): Promise<{ sha: string; prefix: string }> {
-  if (ref.length === 0 || ref.startsWith("-")) throw new Error(`osnova settle: invalid git ref: ${ref}`);
-  const top = (await git(root, ["rev-parse", "--show-toplevel"])).trim();
-  const prefix = path.relative(await fs.realpath(top), root).split(path.sep).join("/");
+async function gitTopAndPrefix(root: string): Promise<{ top: string; prefix: string }> {
+  const top = await fs.realpath((await git(root, ["rev-parse", "--show-toplevel"])).trim());
+  const prefix = path.relative(top, root).split(path.sep).join("/");
   if (prefix.startsWith("..")) throw new Error(`osnova settle: workspace is not a git repository: ${root}`);
+  return { top, prefix };
+}
+
+export async function workspaceGitPrefix(root: string): Promise<string> {
+  try {
+    return (await gitTopAndPrefix(await fs.realpath(root))).prefix;
+  } catch {
+    return "";
+  }
+}
+
+export async function resolveGitRef(root: string, ref: string): Promise<{ sha: string; prefix: string; top: string }> {
+  if (ref.length === 0 || ref.startsWith("-")) throw new Error(`osnova settle: invalid git ref: ${ref}`);
+  const { top, prefix } = await gitTopAndPrefix(root);
   const sha = (await git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).catch((error: Error) => {
     if (error.message.startsWith("osnova settle:")) throw error;
     return "";
   })).trim();
   if (!SHA_RE.test(sha)) throw new Error(`osnova settle: unknown git ref: ${ref}`);
-  return { sha, prefix };
+  return { sha, prefix, top };
 }
 
 export async function baseDiff(root: string, sha: string): Promise<string> {
@@ -88,11 +101,11 @@ async function listBaseTrees(baseRoot: string): Promise<{ name: string; dir: str
   return trees.sort((a, b) => a.access - b.access || (a.name < b.name ? -1 : 1));
 }
 
-async function extractTree(root: string, sha: string, prefix: string, tree: string): Promise<void> {
+async function extractTree(top: string, sha: string, prefix: string, tree: string): Promise<void> {
   await fs.mkdir(tree, { recursive: true });
   const archive = `${tree}.tar`;
   try {
-    await git(root, ["archive", "--format=tar", "-o", archive, prefix.length === 0 ? sha : `${sha}:${prefix}`]);
+    await git(top, ["archive", "--format=tar", "-o", archive, prefix.length === 0 ? sha : `${sha}:${prefix}`]);
     try {
       await execFileAsync("tar", ["-xf", archive, "-C", tree], { encoding: "utf8" });
     } catch (error) {
@@ -107,7 +120,7 @@ async function extractTree(root: string, sha: string, prefix: string, tree: stri
 export async function materializeBaseRef(workspace: string, ref: string, options: { cacheDir?: string | undefined } = {}): Promise<BaseTree> {
   const root = await canonicalWorkspaceRoot(workspace);
   const cacheDir = resolveCacheDir(options.cacheDir);
-  const { sha, prefix } = await resolveGitRef(root, ref);
+  const { sha, prefix, top } = await resolveGitRef(root, ref);
   const baseRoot = path.join(workspaceDirFor(cacheDir, root), "base");
   await fs.mkdir(baseRoot, { recursive: true });
   return withCacheLock(path.join(baseRoot, ".lock"), async () => {
@@ -125,7 +138,7 @@ export async function materializeBaseRef(workspace: string, ref: string, options
       await fs.rm(dir, { recursive: true, force: true });
       const staging = path.join(baseRoot, `${sha}.tmp-${randomUUID()}`);
       try {
-        await extractTree(root, sha, prefix, path.join(staging, "tree"));
+        await extractTree(top, sha, prefix, path.join(staging, "tree"));
         await fs.rename(staging, dir);
         index = await buildIndex(tree, { cacheDir: treeCache });
       } catch (error) {
