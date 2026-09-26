@@ -7,8 +7,9 @@ import { spawn } from "node:child_process";
 const executable = process.env.OSNOVA_BIN ?? "osnova";
 // On Windows the osnova command is an npm .cmd shim, which Node starts only through a shell.
 const windows = process.platform === "win32";
-// cmd.exe reads quotes, &, |, <, >, ^, ! and % in a command line even inside quotes, so such a path is not run.
-const unsafeOnWindows = /["%&|<>^!\r\n]/;
+// Inside double quotes cmd.exe reads &, |, <, >, and ^ literally, but a quote ends the quoting and % or ! expands
+// a variable, so a path holding one of those, or a line break, is not run.
+const unsafeOnWindows = /["%!\r\n]/;
 
 function hook(event: string, payload: unknown, cwd: string, ...flags: readonly string[]): Promise<string> {
   return new Promise((resolve) => {
@@ -18,8 +19,11 @@ function hook(event: string, payload: unknown, cwd: string, ...flags: readonly s
       const child = spawn(windows ? `"${executable}"` : executable, ["hook", event, ...flags], { cwd, stdio: ["pipe", "pipe", "ignore"], shell: windows, windowsHide: true });
       // Through a shell, kill() ends only cmd.exe; taskkill /t also ends the osnova process it started.
       const stop = () => {
-        if (windows && child.pid !== undefined) spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
-        else child.kill();
+        if (!windows || child.pid === undefined) { child.kill(); return; }
+        // When taskkill cannot start or fails, ending the shell is still better than nothing.
+        const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+        killer.on("error", () => child.kill());
+        killer.on("exit", (code) => { if (code !== 0) child.kill(); });
       };
       const timer = setTimeout(() => { stop(); resolve(""); }, 15_000);
       child.stdout.on("data", (chunk: Buffer | string) => { out += chunk; });
