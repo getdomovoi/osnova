@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
@@ -7,11 +8,17 @@ if (["true", "1"].includes(process.env.CI ?? "") && process.getuid?.() === 0) {
   throw new Error("osnova: CI must not run the tests as root; the file-unreadable tests would be skipped");
 }
 
+// Tests that index a workspace without a cacheDir must not land in the user's default cache, where the
+// workspace cap would evict real repositories. Each run gets its own folder, and test/cache-per-worker.ts gives
+// each worker a subfolder: files that index the same fixture in parallel otherwise wait on one lock and time out.
+const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-vitest-cache-"));
+process.env.OSNOVA_VITEST_CACHE_ROOT = cacheRoot;
+
 export default defineConfig({
   test: {
-    // Tests that index a temporary workspace without a cacheDir must not land in the user's
-    // default cache, where the workspace cap would evict real repositories.
-    env: { OSNOVA_CACHE_DIR: path.join(os.tmpdir(), "osnova-vitest-cache") },
+    env: { OSNOVA_CACHE_DIR: cacheRoot },
+    setupFiles: ["test/cache-per-worker.ts"],
+    globalSetup: ["test/cache-cleanup.ts"],
     include: ["test/**/*.test.ts"],
     testTimeout: 120_000,
     hookTimeout: 60_000,

@@ -6,11 +6,13 @@ import { loadIndex } from "../src/api.js";
 import { resolveCacheDir } from "../src/cache/cache.js";
 import type { OsnovaIndex } from "../src/types.js";
 
+const coverageCache = path.join(process.env.OSNOVA_CACHE_DIR ?? ".tmp-coverage-cache", "coverage");
+
 describe("python import resolution", () => {
   let index: OsnovaIndex;
   beforeAll(async () => {
     index = await buildIndex(path.join(import.meta.dirname, "fixtures", "sample-repo"), {
-      cacheDir: ".tmp-coverage-cache",
+      cacheDir: coverageCache,
     });
   });
 
@@ -82,17 +84,19 @@ function resolveImportFor(fromFile: string, spec: string, known: Set<string>): s
 
 describe("loadIndex frozen API", () => {
   it("round-trips an index through the default cache dir override", async () => {
-    process.env.OSNOVA_CACHE_DIR = ".tmp-coverage-cache";
+    const previous = process.env.OSNOVA_CACHE_DIR;
+    process.env.OSNOVA_CACHE_DIR = coverageCache;
     try {
       const loaded = await loadIndex(path.join(import.meta.dirname, "fixtures", "sample-repo"));
       expect(loaded).toBeDefined();
       expect(loaded?.symbols.has("src/util.ts#pad")).toBe(true);
       const missing = await loadIndex("/definitely-not-a-workspace", {
-        cacheDir: resolveCacheDir(".tmp-coverage-cache"),
+        cacheDir: resolveCacheDir(coverageCache),
       });
       expect(missing).toBeUndefined();
     } finally {
-      delete process.env.OSNOVA_CACHE_DIR;
+      if (previous === undefined) delete process.env.OSNOVA_CACHE_DIR;
+      else process.env.OSNOVA_CACHE_DIR = previous;
     }
   });
 });
