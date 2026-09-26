@@ -184,7 +184,7 @@ const toolDefinitions = [
   {
     name: "osnova_unreferenced",
     description:
-      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
+      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors, Python dunders) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
     inputSchema: {
       type: "object" as const,
       properties: {
