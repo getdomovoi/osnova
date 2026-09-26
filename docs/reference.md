@@ -38,7 +38,7 @@ The structured APIs return complete results with omission counts. The text budge
 
 1. `osnova_footing` with `task: "change"` and the question. The agent gets the seed definitions, who calls them, and which tests touch them.
 2. Edit.
-3. `git diff` into `osnova_settle`. The agent gets the indexed dependents of the changed spans to the requested depth (one hop by default, with the frontier beyond it counted) and checks them before it finishes.
+3. `osnova_settle` with no arguments, which compares HEAD with the working tree. The agent gets the indexed dependents of the changed spans to the requested depth (one hop by default, with the frontier beyond it counted) and checks them before it finishes.
 
 ### Definition retrieval
 
@@ -328,7 +328,7 @@ osnova update-check [--json]   # the only command that opens a network connectio
 
 ### Settle in CI
 
-Locally, `osnova settle --base-ref <ref>` compares the working tree with any commit: it exports the commit's tree with `git archive` into the cache directory (no checkout, no worktree), indexes it there once per commit (the two most recent base trees per workspace are kept), takes `git diff <ref>` as the changed spans and lists every indexed dependent of the changed symbols. Over MCP the same comparison is `osnova_settle` with `baseRef`; without `baseRef` the tool compares against the current index only. It fails closed when `git` is missing, the ref is unknown or the workspace is not a git repository.
+Locally, `osnova settle --base-ref <ref>` compares the working tree with any commit: it exports the commit's tree with `git archive` into the cache directory (no checkout, no worktree), indexes it there once per commit (the two most recent base trees per workspace are kept), takes `git diff <ref>` as the changed spans and lists every indexed dependent of the changed symbols. Over MCP the same comparison is `osnova_settle` with `baseRef`, and a call with neither `baseRef` nor `diff` uses `HEAD`; a `diff` without `baseRef` compares against the current index only. It fails closed when `git` is missing, the ref is unknown or the workspace is not a git repository.
 
 The same check runs on every pull request without an agent. The action runs `osnova settle --base-ref` against the pull request base, then lists every indexed dependent of the symbols the pull request changed in the job summary, and as a comment when asked:
 
