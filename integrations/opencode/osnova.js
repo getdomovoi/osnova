@@ -28,6 +28,18 @@ export const OsnovaPlugin = async ({ directory, worktree }) => {
       contract ??= await hook("session", { cwd }, cwd, "--full-contract");
       if (contract.length > 0) output.system.push(contract);
     },
+    // A grep or rg for an indexed code name gets the graph answer instead, when that answer is smaller than
+    // the search output: a shell search prints the answer, the grep tool is refused with it.
+    "tool.execute.before": async (input, output) => {
+      if (input.tool !== "grep" && input.tool !== "bash") return;
+      const raw = await hook("search", { session_id: input.sessionID, cwd, tool_name: input.tool, tool_input: output.args }, cwd);
+      if (raw.length === 0) return;
+      let decision;
+      try { decision = JSON.parse(raw).hookSpecificOutput; } catch { return; }
+      // A shell search is rewritten to print the answer; a grep tool call is refused with the answer.
+      if (decision?.updatedInput !== undefined && typeof decision.updatedInput.command === "string") { output.args.command = decision.updatedInput.command; return; }
+      if (typeof decision?.permissionDecisionReason === "string" && decision.permissionDecision === "deny") throw new Error(decision.permissionDecisionReason);
+    },
     "chat.message": async (_input, output) => {
       const text = output.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
       if (text.trim().length === 0) return;

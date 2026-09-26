@@ -7,11 +7,14 @@ import { loadIndex, refreshWorkspace } from "../api.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { taskContext } from "../query/task-context.js";
 import { impact } from "../query/impact.js";
+import { findTextDetailed } from "../query/findText.js";
 import { boundText } from "../query/budget.js";
 import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
 import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
 import type { CliIo } from "./cli.js";
+import { parseSearchCall, searchRegExp, symbolHuntNames } from "./search-guard.js";
+import { existsSync, statSync } from "node:fs";
 
 // Editor hooks: a session hook prints the index size and one pointer to the tools (the MCP server's
 // `instructions` carry the contract; `--full-contract` restates it for a harness without MCP), a prompt
@@ -24,12 +27,16 @@ import type { CliIo } from "./cli.js";
 // outnumber OSNOVA_HOOK_SETTLE_BLOCK_AT (default 1); otherwise it warns the user without continuing.
 // Its once-per-diff and once-per-nudge state lives under the cache directory, the one place the
 // hooks may write.
-export type HookEvent = "prompt" | "session" | "stop" | "tool" | "install-preview";
-export const hookEvents: readonly HookEvent[] = ["prompt", "session", "stop", "tool", "install-preview"];
+export type HookEvent = "prompt" | "session" | "stop" | "tool" | "search" | "install-preview";
+export const hookEvents: readonly HookEvent[] = ["prompt", "session", "stop", "tool", "search", "install-preview"];
 export function isHookEvent(value: unknown): value is HookEvent { return (hookEvents as readonly unknown[]).includes(value); }
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
+/** The longest complete answer the search hook gives; above it the search runs. */
+export const hookSearchCodeUnits = 8_192;
+/** A name with more definitions than this is too generic for a graph answer; the search runs. */
+const searchMaximumDefinitions = 5;
 const minimumPromptLength = 12;
 const maximumDiffBytes = 4 * 1024 * 1024;
 const defaultSettleContinueThreshold = 1;
@@ -104,6 +111,7 @@ export function hookSettingsObject(command: readonly string[], client: HookClien
   if (client === "cursor") return { version: 1, hooks: { stop: [{ command: `${quoted} hook stop${suffix}`, timeout: 30 }] } };
   const entry = (event: HookEvent, timeout: number) => ({ hooks: [{ type: "command", command: `${quoted} hook ${event}${suffix}`, timeout }] });
   const hooks: Record<string, unknown[]> = { SessionStart: [entry("session", 15)], UserPromptSubmit: [entry("prompt", 15)], Stop: [entry("stop", 30)] };
+  if (client === "claude-code") hooks.PreToolUse = [{ matcher: "Grep|Bash", ...entry("search", 10) }];
   if (client === "claude-code" && nudge) hooks.PostToolUse = [{ matcher: "Grep|Bash", ...entry("tool", 10) }];
   return { hooks };
 }
@@ -210,6 +218,20 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       const continues = !state.settled.includes(digest) && (client === "cursor" || dependents.length > settleContinueThreshold());
       if (continues && stateFile !== undefined) await writeHookState(stateFile, { ...state, settled: [...state.settled, digest] });
       emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits), continues);
+    } catch (error) { fail(error); }
+    return;
+  }
+  if (event === "search") {
+    if (client !== "claude-code") return;
+    try {
+      const answer = await searchAnswer(input, workspace, options.cacheDir);
+      if (answer === null) return;
+      // A Bash search is rewritten to print the answer, so the tool succeeds with it and there is nothing to
+      // retry; the Grep tool cannot print text, so it is denied with the answer as the reason.
+      const bash = input.toolName === "Bash" || input.toolName === "bash";
+      io.stdout(JSON.stringify({ hookSpecificOutput: bash
+        ? { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "osnova answered this search from the call graph", updatedInput: { ...input.toolInput, command: printCommand(answer) } }
+        : { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: answer } }));
     } catch (error) { fail(error); }
     return;
   }
@@ -385,8 +407,10 @@ export function formatGrepNudge(index: OsnovaIndex, name: string): string | null
 interface HookState {
   readonly nudges: readonly string[];
   readonly settled: readonly string[];
+  /** Digests of searches the search hook already answered; the same search again runs. */
+  readonly denied: readonly string[];
 }
-const emptyHookState: HookState = { nudges: [], settled: [] };
+const emptyHookState: HookState = { nudges: [], settled: [], denied: [] };
 
 function hookStateFile(cacheDir: string | undefined, sessionId: string): string {
   return path.join(resolveCacheDir(cacheDir), "hook-state", `${sessionId.replace(/[^\w.-]/g, "_")}.json`);
@@ -395,10 +419,159 @@ async function readHookState(file: string): Promise<HookState> {
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<Record<keyof HookState, unknown>>;
     const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
-    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled) };
+    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled), denied: strings(parsed.denied) };
   } catch { return emptyHookState; }
 }
+// Written to a unique name and renamed into place, so a reader never sees half a file.
 async function writeHookState(file: string, state: HookState): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify({ nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)] }));
+  const staged = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(staged, JSON.stringify({ nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)], denied: [...new Set(state.denied)] }));
+  await fs.rename(staged, file);
+}
+
+// The search hook's decision: the graph answer to deny the search with, or null to let it run.
+// The hook exists to cut what the agent reads, so it denies only when its answer is clearly smaller
+// than the lines the search would print, estimated from the indexed text, and it lists every text
+// match the graph does not cover by location, so nothing the search would find goes unmentioned.
+// Null on any doubt: not a single line-printing repository search, not a pure name hunt, a path that
+// is dynamic, missing or outside the workspace, a file in scope too large to index, no index, a name
+// the index does not define or defines too often, or the same search already answered this session.
+const searchOptOut = /(?:^|[\s;&|])OSNOVA_GREP=1(?:\s|$)/;
+const answerDelimiter = "OSNOVA_GRAPH_ANSWER";
+// A shell command that prints the answer verbatim: a quoted heredoc expands nothing.
+export function printCommand(answer: string): string {
+  const safe = answer.split("\n").map((line) => (line === answerDelimiter ? ` ${line}` : line)).join("\n");
+  return `cat <<'${answerDelimiter}'\n${safe}\n${answerDelimiter}`;
+}
+
+export async function searchAnswer(input: HookInput, workspace: string, cacheDir: string | undefined): Promise<string | null> {
+  if (typeof input.toolInput?.command === "string" && searchOptOut.test(input.toolInput.command)) return null;
+  const call = parseSearchCall(input.toolName, input.toolInput);
+  if (call === null || call.shape !== "lines") return null;
+  const names = symbolHuntNames(call.patterns);
+  if (names === null) return null;
+  const cwd = path.resolve(input.cwd ?? workspace, call.base);
+  const scopes: string[] = [];
+  for (const written of call.paths.length === 0 ? ["."] : call.paths) {
+    const absolute = path.resolve(cwd, written);
+    const relative = path.relative(workspace, absolute).split(path.sep).join("/");
+    if (relative.startsWith("..") || path.isAbsolute(relative) || !existsSync(absolute)) return null;
+    scopes.push(relative);
+  }
+  const digest = createHash("sha256").update(JSON.stringify([input.toolName, input.toolInput])).digest("hex").slice(0, 16);
+  const stateFile = input.sessionId === undefined ? undefined : hookStateFile(cacheDir, input.sessionId);
+  const state = stateFile === undefined ? emptyHookState : await readHookState(stateFile);
+  if (state.denied.includes(digest)) return null;
+  if ((await loadIndex(workspace, { cacheDir })) === undefined) return null;
+  const index = await refreshWorkspace(workspace, { cacheDir });
+  // The lines the search itself would print, found with its own pattern and flags in the indexed text.
+  const regex = searchRegExp(call);
+  if (regex === null) return null;
+  const textMatches = new Map<string, string>();
+  for (const scope of scopes) {
+    const found = findTextDetailed(index, regex.source, { in: scope, ignoreCase: regex.flags.includes("i"), matchesPerGroup: Number.MAX_SAFE_INTEGER });
+    if (found.unsearchedFiles.length > 0 || found.truncated) return null;
+    for (const group of found.groups) for (const match of group.matches) textMatches.set(`${group.file}:${match.line}`, match.text);
+  }
+  if (textMatches.size === 0) return null;
+  const answer = formatSearchAnswer(index, names, scopes, textMatches);
+  if (answer === null) return null;
+  // What the search would print: file:line:text, without the file when it searches one file, cut at a head.
+  const singleFile = call.paths.length === 1 && statSync(path.resolve(cwd, call.paths[0]!)).isFile();
+  const printed = [...textMatches.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, call.maxLines ?? Number.MAX_SAFE_INTEGER);
+  const searchChars = printed.reduce((sum, [site, text]) => sum + (singleFile ? site.length - site.lastIndexOf(":") - 1 : site.length) + text.length + 2, 0);
+  if (answer.text.length > searchChars * searchAnswerMaximumShare || answer.otherMatches > answer.codeSites) return null;
+  if (stateFile !== undefined) await writeHookState(stateFile, { ...state, denied: [...state.denied, digest] });
+  return answer.text;
+}
+
+/** The answer must be at most this share of the search output it replaces, or the search runs. */
+const searchAnswerMaximumShare = 0.8;
+const SEARCH_DEFINITION_KINDS = new Set(["function", "method", "class", "interface", "struct", "enum", "trait", "module", "type", "constant"]);
+const inAnyScope = (file: string, scopes: readonly string[]): boolean => scopes.some((scope) => scope === "" || file === scope || file.startsWith(`${scope}/`));
+const SITE_LABELS = ["called from", "imported by", "referenced by", "routed from", "unresolved same-name calls"] as const;
+type SiteGroup = { readonly label: string; readonly files: readonly (readonly [string, readonly string[]])[] };
+
+// Each file's sites as `line` or `line name`, where name is the enclosing definition that makes the call.
+function siteGroups(byLabel: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<number, string>>>, labels: readonly string[]): SiteGroup[] {
+  return labels.flatMap((label) => {
+    const byFile = byLabel.get(label);
+    if (byFile === undefined) return [];
+    const files = [...byFile.entries()].map(([file, lines]) => [file, [...lines.entries()].sort((a, b) => a[0] - b[0]).map(([line, name]) => (name === "" ? `${line}` : `${line} ${name}`))] as const)
+      .sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1));
+    return [{ label, files }];
+  });
+}
+
+// Definitions, then resolved sites grouped by kind and file with every line, then unresolved same-name
+// calls, then the text matches (comments, strings, other files) the graph does not cover; each group
+// lists files until the budget and counts the rest exactly. Null when a name is not defined, is defined
+// more than searchMaximumDefinitions times, or has nothing inside the searched paths.
+export interface SearchAnswer {
+  readonly text: string;
+  /** Distinct code lines the answer names: definitions and graph sites inside the searched paths. */
+  readonly codeSites: number;
+  /** Text matches inside the searched paths that no code site covers: comments, strings, other files. */
+  readonly otherMatches: number;
+}
+
+export function formatSearchAnswer(index: OsnovaIndex, names: readonly string[], scopes: readonly string[], textMatches: ReadonlyMap<string, string> = new Map(), maxCodeUnits = hookSearchCodeUnits): SearchAnswer | null {
+  const head = "[osnova] Answered from the call graph instead of running this search: every code site with exact file:line and the definition at each site, then any other text matches by location.";
+  const covered = new Set<string>();
+  const blocks: { title: string; groups: SiteGroup[] }[] = [];
+  for (const name of names) {
+    const definitions = [...index.symbols.values()].filter((symbol) => symbol.name === name && SEARCH_DEFINITION_KINDS.has(symbol.kind));
+    if (definitions.length === 0 || definitions.length > searchMaximumDefinitions) return null;
+    const byLabel = new Map<string, Map<string, Map<number, string>>>();
+    const add = (label: string, file: string, line: number, from = ""): void => {
+      if (!inAnyScope(file, scopes)) return;
+      covered.add(`${file}:${line}`);
+      const byFile = byLabel.get(label) ?? new Map<string, Map<number, string>>(); byLabel.set(label, byFile);
+      const lines = byFile.get(file) ?? new Map<number, string>(); byFile.set(file, lines);
+      if (!lines.has(line)) lines.set(line, from.includes("#") ? from.slice(from.indexOf("#") + 1) : "");
+    };
+    for (const symbol of definitions) {
+      for (const edge of index.incoming(symbol.qualifiedName)) {
+        const label = edge.kind === "calls" ? "called from" : edge.kind === "imports" ? "imported by" : edge.kind === "routes" ? "routed from" : "referenced by";
+        add(label, edge.fromFile, edge.line, label === "imported by" ? "" : edge.fromSymbol);
+      }
+    }
+    // An import edge points at a file; it imports this name when its line spells the name.
+    const definingFiles = new Set(definitions.map((symbol) => symbol.file));
+    const word = new RegExp(`\\b${name}\\b`);
+    const lineCache = new Map<string, string[]>();
+    const lineOf = (file: string, line: number): string => {
+      let lines = lineCache.get(file);
+      if (lines === undefined) { lines = (index.files.get(file)?.text ?? "").split("\n"); lineCache.set(file, lines); }
+      return lines[line - 1] ?? "";
+    };
+    for (const edge of index.edges) {
+      if (edge.kind === "calls" && edge.toSymbol === undefined && edge.toName === name) add("unresolved same-name calls", edge.fromFile, edge.line, edge.fromSymbol);
+      else if (edge.kind === "imports" && edge.toFile !== undefined && definingFiles.has(edge.toFile) && word.test(lineOf(edge.fromFile, edge.line))) add("imported by", edge.fromFile, edge.line);
+    }
+    const shown = definitions.filter((symbol) => inAnyScope(symbol.file, scopes));
+    for (const symbol of shown) covered.add(`${symbol.file}:${symbol.span.startLine}`);
+    if (shown.length === 0 && byLabel.size === 0) continue;
+    const title = `${name}: ${shown.length === 0 ? `defined outside the searched paths (${definitions.map((symbol) => symbol.qualifiedName).join(", ")})` : shown.map((symbol) => `${symbol.kind} ${symbol.file}:${symbol.span.startLine}`).join("; ")}`;
+    blocks.push({ title, groups: siteGroups(byLabel, SITE_LABELS) });
+  }
+  if (blocks.length === 0) return null;
+  const other = new Map<string, Map<number, string>>();
+  for (const site of textMatches.keys()) {
+    if (covered.has(site)) continue;
+    const colon = site.lastIndexOf(":");
+    const file = site.slice(0, colon);
+    const lines = other.get(file) ?? new Map<number, string>(); other.set(file, lines); lines.set(Number(site.slice(colon + 1)), "");
+  }
+  if (other.size > 0) blocks.push({ title: "other text matches (comments, strings, non-code files):", groups: siteGroups(new Map([["at", other]]), ["at"]) });
+  const otherMatches = [...other.values()].reduce((sum, lines) => sum + lines.size, 0);
+  // Every site is listed: an answer cut short sends the agent back to grep, which costs more than no answer.
+  const text = [head, ...blocks.flatMap((block) => [block.title, ...block.groups.map(({ label, files }) => {
+    const sites = files.reduce((sum, [, lines]) => sum + lines.length, 0);
+    const listed = files.map(([file, lines]) => `${file}:${lines.join(",")}`).join(" · ");
+    return `  ${label} ${sites} site${sites === 1 ? "" : "s"} in ${files.length} file${files.length === 1 ? "" : "s"}: ${listed}`;
+  })])].join("\n");
+  if (text.length > maxCodeUnits) return null;
+  return { text, codeSites: covered.size, otherMatches };
 }

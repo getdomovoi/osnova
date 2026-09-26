@@ -51,10 +51,11 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 `osnova warp src/api.ts#refreshWorkspace` on this repository, cut to twelve lines (`test/docs-readme-warp.test.ts` fails when the first two no longer reproduce):
 
 ```text
-function src/api.ts#refreshWorkspace: 83 indexed edges
-reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 9; tests 18
+function src/api.ts#refreshWorkspace: 84 indexed edges
+reach: d1 callers 84 in 14 files (3 dirs); d2 +17 in 3 files; unresolved same-name 9; tests 18
 d1 calls src/cli/cli.ts#ensureIndex:78 [import-binding]
-d1 calls src/cli/hook.ts#runHook:189,201,223,238 [import-binding]
+d1 calls src/cli/hook.ts#runHook:196,208,238,253 [import-binding]
+d1 calls src/cli/hook.ts#searchAnswer:449 [import-binding]
 d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:257 [import-binding]
 d1 calls test/verification-fastpath.test.ts#<module>:37,47,48,51,53,57,58,64,68,74,78,85,110,114,132,145,154,166,171,197 [re-export-binding]
   via src/index.ts:65 refreshWorkspace -> src/api.ts (export refreshWorkspace)
