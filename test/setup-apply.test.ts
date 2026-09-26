@@ -242,11 +242,14 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
     expect(await fs.readFile(path.join(home, ".config", "kilo", "plugins", "osnova.js"), "utf8")).toContain("chat.message");
   });
 
-  it.skipIf(process.platform === "win32")("the OpenCode plugin appends starting points to the user message and the contract to the system prompt", async () => {
+  it("the OpenCode plugin appends starting points to the user message and the contract to the system prompt", async () => {
     const fake = path.join(home, "fake-osnova.mjs");
     await fs.writeFile(fake, "let raw=''; process.stdin.on('data',(d)=>raw+=d); process.stdin.on('end',()=>{ const e=process.argv[3]; const p=JSON.parse(raw||'{}'); process.stdout.write(e==='session'?'CONTRACT':e==='prompt'?`POINTS for ${p.prompt}`:''); });\n");
-    const wrapper = path.join(home, "osnova-bin.sh");
-    await fs.writeFile(wrapper, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 });
+    // On Windows the osnova command is an npm .cmd shim, so the stand-in is one too.
+    const wrapper = path.join(home, process.platform === "win32" ? "osnova-bin.cmd" : "osnova-bin.sh");
+    await fs.writeFile(wrapper, process.platform === "win32"
+      ? `@"${process.execPath}" "${fake}" %*\r\n`
+      : `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 });
     process.env.OSNOVA_BIN = wrapper;
     try {
       const { OsnovaPlugin } = await import("../integrations/opencode/osnova.js");
