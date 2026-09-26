@@ -4,10 +4,11 @@ import { buildIndex } from "../src/index/build.js";
 import type { OsnovaIndex } from "../src/types.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
+const coverageCache = path.join(process.env.OSNOVA_CACHE_DIR ?? ".tmp-coverage-cache", "coverage");
 
 let index: OsnovaIndex;
 beforeAll(async () => {
-  index = await buildIndex(FIXTURE, { cacheDir: ".tmp-coverage-cache" });
+  index = await buildIndex(FIXTURE, { cacheDir: coverageCache });
 });
 
 function symbolsOf(file: string): string[] {

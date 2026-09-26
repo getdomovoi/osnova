@@ -34,7 +34,7 @@ export interface SetupPreview {
   readonly mode: "preview";
   readonly client: SetupClientId;
   readonly path: string;
-  readonly action: "create" | "append" | "unchanged" | "conflict";
+  readonly action: "create" | "append" | "update" | "unchanged" | "conflict";
   readonly diff: string;
   readonly merged: string;
   readonly notice: string;
@@ -60,10 +60,11 @@ export async function previewSetup(client: SetupClientId, options: SetupPreviewO
   const existing = await readExisting(target);
   const result = spec.shape === "codex-toml" ? mergeToml(existing, command) : mergeJson(existing, spec.shape, command);
   const action: SetupPreview["action"] = existing === null ? "create" : result.state;
-  const diff = action === "create" || action === "append" ? unifiedDiff(target, existing ?? "", result.merged) : "";
+  const diff = action === "create" || action === "append" || action === "update" ? unifiedDiff(target, existing ?? "", result.merged) : "";
   const notice = action === "conflict"
-    ? `${target} already has an osnova entry that differs from the proposal; osnova never edits it. Compare by hand.`
+    ? `${target} already has an osnova entry that does not launch osnova; osnova never edits it. Compare by hand.`
     : action === "unchanged" ? `${target} already contains this entry.`
+    : action === "update" ? `The osnova entry in ${target} is repointed at ${command.join(" ")}; flags after mcp and every other key are kept.`
     : `osnova never applies this change. Review the diff, then paste it into ${target} yourself.`;
   return { mode: "preview", client, path: target, action, diff, merged: result.merged, notice };
 }
@@ -84,7 +85,27 @@ async function readExisting(file: string): Promise<string | null> {
   return fs.readFile(file, "utf8");
 }
 
-interface Merge { readonly state: "append" | "unchanged" | "conflict"; readonly merged: string; }
+interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"; readonly merged: string; }
+
+// The program a launch runs is its last part before `mcp` or `hook`. It is osnova's own only when it is the
+// `osnova` executable, the `@getdomovoi/osnova` package, or a `dist/bin.js` inside a folder named for osnova; a
+// user's script that merely lives under such a folder is not.
+export function isOsnovaLauncher(parts: readonly string[]): boolean {
+  const program = (parts.at(-1) ?? "").replace(/^(["'])(.*)\1$/, "$2").replace(/\\/g, "/");
+  const segments = program.split("/");
+  const base = segments.at(-1) ?? "";
+  if (/^osnova(?:\.(?:cmd|exe|js|mjs))?$/.test(base)) return true;
+  if (/^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program)) return true;
+  return base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment));
+}
+
+// An existing entry is osnova's own when its launch runs `mcp` through an osnova launcher. Only such an entry
+// is repointed; the flags after `mcp` are the user's and stay.
+function osnovaLaunchTail(launch: readonly unknown[]): string[] | undefined {
+  if (!launch.every((part): part is string => typeof part === "string")) return undefined;
+  const at = launch.indexOf("mcp");
+  return at > 0 && isOsnovaLauncher(launch.slice(0, at)) ? launch.slice(at + 1) : undefined;
+}
 
 function entryFor(shape: Shape, command: readonly string[]): unknown {
   if (shape === "opencode") return { type: "local", command: [...command, "mcp"], enabled: true };
@@ -144,13 +165,27 @@ function mergeJson(existing: string | null, shape: Shape, command: readonly stri
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("osnova setup: the existing config is not a JSON object");
   const root = (parsed as Record<string, unknown>)[rootKey];
   const current = root !== null && typeof root === "object" && !Array.isArray(root) ? (root as Record<string, unknown>).osnova : undefined;
-  if (current !== undefined) return { state: sameJson(current, entry) ? "unchanged" : "conflict", merged: existing };
   const indent = detectIndent(existing);
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
+  if (current !== undefined) {
+    if (sameJson(current, entry)) return { state: "unchanged", merged: existing };
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return { state: "conflict", merged: existing };
+    const record = current as Record<string, unknown>;
+    const launch = shape === "opencode" ? record.command : [record.command, ...(Array.isArray(record.args) ? record.args : [])];
+    const tail = Array.isArray(launch) ? osnovaLaunchTail(launch) : undefined;
+    if (tail === undefined) return { state: "conflict", merged: existing };
+    const desired = [...command, "mcp", ...tail];
+    if (sameJson(launch, desired)) return { state: "unchanged", merged: existing };
+    const next = shape === "opencode" ? { ...record, command: desired } : { ...record, command: desired[0], args: desired.slice(1) };
+    const span = locateObject(existing, [rootKey, "osnova"]);
+    if (span === null) throw new Error(`osnova setup: cannot locate the ${rootKey}.osnova object in the existing config`);
+    return { state: "update", merged: `${existing.slice(0, span.open)}${render(next, indent, 2).replace(/\n/g, eol)}${existing.slice(span.close + 1)}` };
+  }
   const entryText = render({ osnova: entry }, indent).split("\n").slice(1, -1).join(eol);
   if (root !== undefined && root !== null && typeof root === "object" && !Array.isArray(root)) {
-    const position = findObjectClose(existing, rootKey);
-    if (position === null) throw new Error(`osnova setup: cannot locate the ${rootKey} object in the existing config`);
+    const span = locateObject(existing, [rootKey]);
+    if (span === null) throw new Error(`osnova setup: cannot locate the ${rootKey} object in the existing config`);
+    const position = { lastContentEnd: lastContentBefore(existing, span.close) };
     const empty = Object.keys(root as object).length === 0;
     const inner = entryText.split(eol).map((line) => indent + line).join(eol);
     const head = existing.slice(0, position.lastContentEnd);
@@ -173,19 +208,51 @@ function lastContentBefore(text: string, index: number): number {
   return i;
 }
 
-function findObjectClose(text: string, key: string): { lastContentEnd: number } | null {
-  const keyPattern = new RegExp(`"${key}"\\s*:\\s*\\{`);
-  const match = keyPattern.exec(stripJsoncKeepingOffsets(text));
-  if (match === null) return null;
-  let depth = 0, inString = false;
-  for (let i = match.index + match[0].length - 1; i < text.length; i++) {
+// The object value at `keys`, walked member by member from the top-level object, as offsets of its braces.
+// A key of the same name nested elsewhere (a project's own mcpServers in ~/.claude.json) is never matched.
+function locateObject(text: string, keys: readonly string[]): { open: number; close: number } | null {
+  const plain = stripJsoncKeepingOffsets(text);
+  let open = plain.indexOf("{");
+  if (open < 0) return null;
+  let close = matchingClose(plain, open);
+  for (const key of keys) {
+    const member = memberObject(plain, open, close, key);
+    if (member === null) return null;
+    ({ open, close } = member);
+  }
+  return { open, close };
+}
+
+function stringEnd(text: string, start: number): number {
+  let i = start + 1;
+  while (i < text.length && text[i] !== "\"") i += text[i] === "\\" ? 2 : 1;
+  return i;
+}
+
+function matchingClose(text: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
     const ch = text[i]!;
-    if (inString) { if (ch === "\\") i++; else if (ch === "\"") inString = false; continue; }
-    if (ch === "\"") { inString = true; continue; }
-    if (ch === "/" && text[i + 1] === "/") { while (i < text.length && text[i] !== "\n") i++; continue; }
-    if (ch === "/" && text[i + 1] === "*") { i += 2; while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++; i++; continue; }
-    if (ch === "{") depth++;
-    else if (ch === "}") { depth--; if (depth === 0) return { lastContentEnd: lastContentBefore(text, i) }; }
+    if (ch === "\"") { i = stringEnd(text, i); continue; }
+    if (ch === "{" || ch === "[") depth++;
+    else if ((ch === "}" || ch === "]") && --depth === 0) return i;
+  }
+  return text.length - 1;
+}
+
+function memberObject(text: string, open: number, close: number, key: string): { open: number; close: number } | null {
+  let i = open + 1;
+  while (i < close) {
+    while (i < close && /[\s,]/.test(text[i]!)) i++;
+    if (i >= close || text[i] !== "\"") return null;
+    const nameEnd = stringEnd(text, i);
+    const name = JSON.parse(text.slice(i, nameEnd + 1)) as string;
+    i = nameEnd + 1;
+    while (i < close && /[\s:]/.test(text[i]!)) i++;
+    const valueStart = i;
+    if (text[i] === "{" || text[i] === "[") i = matchingClose(text, i) + 1;
+    else while (i < close && text[i] !== "," && text[i] !== "}") i = text[i] === "\"" ? stringEnd(text, i) + 1 : i + 1;
+    if (name === key && text[valueStart] === "{") return { open: valueStart, close: i - 1 };
   }
   return null;
 }
@@ -208,6 +275,8 @@ function mergeToml(existing: string | null, command: readonly string[]): Merge {
   if (existing === null || existing.trim() === "") return { state: "append", merged: block };
   const table = /^\s*\[mcp_servers\.osnova\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(existing);
   if (table !== null) {
+    const repointed = repointToml(existing, table.index + table[0].length - table[1]!.length, table[1]!, command);
+    if (repointed !== undefined) return repointed;
     const body = table[1]!.split("\n").map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#")).sort();
     const want = block.split("\n").slice(1).map((line) => line.trim()).filter((line) => line.length > 0).sort();
     return { state: JSON.stringify(body) === JSON.stringify(want) ? "unchanged" : "conflict", merged: existing };
@@ -215,6 +284,23 @@ function mergeToml(existing: string | null, command: readonly string[]): Merge {
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
   const base = existing.endsWith(eol) ? existing : existing + eol;
   return { state: "append", merged: `${base}${eol}${block.replace(/\n/g, eol)}` };
+}
+
+// The table's `command` and `args` lines, when both are plain double-quoted values, rewritten for this install;
+// every other key and the `[mcp_servers.osnova.tools.*]` tables that follow stay as written.
+function repointToml(existing: string, bodyStart: number, body: string, command: readonly string[]): Merge | undefined {
+  const commandLine = /^[ \t]*command[ \t]*=[ \t]*(".*")[ \t]*$/m.exec(body), argsLine = /^[ \t]*args[ \t]*=[ \t]*(\[.*\])[ \t]*$/m.exec(body);
+  if (commandLine === null || argsLine === null) return undefined;
+  let launch: unknown[];
+  try { launch = [JSON.parse(commandLine[1]!), ...(JSON.parse(argsLine[1]!) as unknown[])]; } catch { return undefined; }
+  const tail = osnovaLaunchTail(launch);
+  if (tail === undefined) return undefined;
+  const desired = [...command, "mcp", ...tail];
+  if (sameJson(launch, desired)) return { state: "unchanged", merged: existing };
+  const next = body
+    .replace(commandLine[0], commandLine[0].replace(commandLine[1]!, JSON.stringify(desired[0])))
+    .replace(argsLine[0], argsLine[0].replace(argsLine[1]!, JSON.stringify(desired.slice(1)).replace(/","/g, "\", \"")));
+  return { state: "update", merged: `${existing.slice(0, bodyStart)}${next}${existing.slice(bodyStart + body.length)}` };
 }
 
 export function unifiedDiff(file: string, before: string, after: string, context = 3): string {

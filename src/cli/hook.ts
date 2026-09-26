@@ -28,6 +28,8 @@ import { existsSync, statSync } from "node:fs";
 // Its once-per-diff and once-per-nudge state lives under the cache directory, the one place the
 // hooks may write.
 export type HookEvent = "prompt" | "session" | "stop" | "tool" | "search" | "install-preview";
+export const hookEvents: readonly HookEvent[] = ["prompt", "session", "stop", "tool", "search", "install-preview"];
+export function isHookEvent(value: unknown): value is HookEvent { return (hookEvents as readonly unknown[]).includes(value); }
 export const hookPromptCodeUnits = 1_024;
 export const hookSessionCodeUnits = 1_536;
 export const hookStopCodeUnits = 1_536;
@@ -61,7 +63,7 @@ export const hookToolContract = [
   "- osnova_outline: one file's signatures and spans.",
   "- osnova_warp: callers or callees of one symbol, direct or transitive, with the resolution basis of every edge; unresolved edges list same-name candidates.",
   "- osnova_groundwork: repository map, hubs and hotspots.",
-  "- osnova_settle: dependents of a unified diff before you finish a change.",
+  "- osnova_settle: dependents of your uncommitted changes (no arguments) before you finish a change.",
   "- osnova_plumb: check a claimed list of call sites against the index.",
   "An answer that says a symbol has no indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
