@@ -207,7 +207,9 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   const indexed = (file: string): boolean => base.files.has(file) || current.files.has(file);
   // One basis for the whole diff: when a path names the workspace folder from the repository root, every path is
   // read from the root, and one outside the folder stays outside (`../name`) instead of matching a workspace file.
-  const rootBased = prefix !== null && (diffs ?? []).some((diff) => [diff.before, diff.after].some((file) => file !== null && file.startsWith(prefix) && !indexed(file)));
+  // Evidence is a path that is not a workspace file as written but is one with the folder stripped; a path indexed
+  // under neither reading (an ignored or unsupported file) says nothing about the basis.
+  const rootBased = prefix !== null && (diffs ?? []).some((diff) => [diff.before, diff.after].some((file) => file !== null && file.startsWith(prefix) && !indexed(file) && indexed(file.slice(prefix.length))));
   const localPath = (file: string | null): string | null =>
     file === null || !rootBased || prefix === null ? file : file.startsWith(prefix) ? file.slice(prefix.length) : path.posix.relative(prefix, file);
   // Without that evidence, a path that names a workspace file both as written and with the folder stripped (a folder
