@@ -63,7 +63,7 @@ describe("unreferenced", () => {
     expect(twins.map((c) => [c.symbol.qualifiedName, c.mentions])).toEqual([["src/lib.ts#other.twin", 2]]);
     expect(result.exportedNotListed).toBe(8);
     expect(index.edges.filter((e) => e.kind === "references" && e.toSymbol === "src/lib.ts#comparator").map((e) => `${e.fromSymbol}:${e.line}`)).toEqual(["src/lib.ts#sorted:10"]);
-    expect(result.entryPoints).toEqual({ main: 1, "default-export": 1, "index-file": 1, "package-bin": 1, "test-file": 1, constructor: 1 });
+    expect(result.entryPoints).toEqual({ main: 1, "default-export": 1, "index-file": 1, "package-bin": 1, "test-file": 1, constructor: 1, "python-dunder": 0 });
     expect(result.mentionsScanned).toBe(true);
     expect(result.withoutLeads).toBe(1);
     const withExported = unreferenced(index, { includeExported: true });
@@ -115,5 +115,43 @@ describe("unreferenced", () => {
     expect(text).toContain("Candidates only: no indexed caller is not proof of no caller. Dynamic calls, reflection, string references and external consumers are not indexed.");
     expect(text).toContain("limitations:");
     expect(formatUnreferenced(unreferenced(index, { includeExported: true }))).toContain("- function src/lib.ts#unusedExported src/lib.ts:2 (exported): 0 unresolved same-name sites, 1 test sites, 0 text mentions in non-test files");
+  });
+});
+
+describe("unreferenced Python runtime hooks", () => {
+  const pyWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-unref-py-ws-"));
+  const pyCache = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-unref-py-cache-"));
+  let pyIndex: OsnovaIndex;
+
+  beforeAll(async () => {
+    fs.mkdirSync(path.join(pyWorkspace, "pkg"), { recursive: true });
+    fs.writeFileSync(path.join(pyWorkspace, "pkg", "utils.py"), [
+      "def __getattr__(name):",
+      "    raise AttributeError(name)",
+      "",
+      "class Box:",
+      "    def __init__(self):",
+      "        self.v = 1",
+      "    def __repr__(self):",
+      "        return 'Box'",
+      "",
+      "def _dead():",
+      "    return 1",
+      "",
+    ].join("\n"));
+    pyIndex = await buildIndex(pyWorkspace, { cacheDir: pyCache });
+  }, 60_000);
+
+  afterAll(() => {
+    fs.rmSync(pyWorkspace, { recursive: true, force: true });
+    fs.rmSync(pyCache, { recursive: true, force: true });
+  });
+
+  it("never lists a Python dunder, since the runtime calls it without a call site", () => {
+    const result = unreferenced(pyIndex, { includeExported: true });
+    expect(result.candidates.map((c) => c.symbol.qualifiedName)).toEqual(["pkg/utils.py#Box", "pkg/utils.py#_dead"]);
+    expect(result.entryPoints.constructor).toBe(1);
+    expect(result.entryPoints["python-dunder"]).toBe(2);
+    expect(formatUnreferenced(result)).toContain("constructor 1, python dunder 2");
   });
 });
