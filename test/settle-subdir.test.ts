@@ -87,4 +87,28 @@ describe.skipIf(process.platform === "win32")("settle in a workspace below the r
     expect(wrong.text).toContain("pass the exact diff output");
     expect(wrong.text).toContain("call osnova_settle with no arguments");
   });
+
+  it("reads a whole repository-root diff on one basis, so a root file never stands in for a workspace file", async () => {
+    await fs.writeFile(path.join(repo, "entry.ts"), "// root\nexport function start() { return 0; }\n");
+    git(repo, "add", "entry.ts"); git(repo, "commit", "-q", "-m", "root entry");
+    await fs.writeFile(path.join(repo, "entry.ts"), "// root\nexport function start() { return 9; }\n");
+    const diff = git(repo, "diff");
+    expect(diff).toContain("a/entry.ts");
+    const result = await mcpSettle({ diff });
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toContain("changed: api.ts#work -> api.ts#work");
+    expect(result.text).not.toContain("changed: entry.ts#start");
+    expect(result.text).toContain("../../entry.ts");
+  });
+
+  it("notes a rename whose destination the index does not hold", async () => {
+    await fs.writeFile(path.join(workspace, ".gitignore"), "*.bin\n");
+    git(repo, "add", "packages/lib/.gitignore"); git(repo, "commit", "-q", "-m", "ignore bin");
+    git(repo, "mv", "packages/lib/entry.ts", "packages/lib/entry.bin");
+    const diff = git(repo, "diff", "--cached", "-M");
+    expect(diff).toContain("rename to packages/lib/entry.bin");
+    const result = await mcpSettle({ diff, baseRef: "HEAD" });
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toMatch(/diff file not in the index, first entry\.bin/);
+  });
 });

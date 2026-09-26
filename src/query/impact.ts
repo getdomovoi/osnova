@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { FileCard, OsnovaEdge, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { knownIndexGeneration, rememberIndexGeneration } from "../index/generation.js";
 import { serializeArtifact } from "../index/serialize.js";
@@ -203,14 +204,19 @@ export function impact(base: OsnovaIndex, current: OsnovaIndex, options: ImpactO
   const diffs = options.diff === undefined ? null : parseDiff(options.diff);
   const sameIndex = base === current;
   const prefix = options.diffPathPrefix === undefined || options.diffPathPrefix === "" ? null : `${options.diffPathPrefix.replace(/\/+$/, "")}/`;
+  const indexed = (file: string): boolean => base.files.has(file) || current.files.has(file);
+  // One basis for the whole diff: when a path names the workspace folder from the repository root, every path is
+  // read from the root, and one outside the folder stays outside (`../name`) instead of matching a workspace file.
+  const rootBased = prefix !== null && (diffs ?? []).some((diff) => [diff.before, diff.after].some((file) => file !== null && file.startsWith(prefix) && !indexed(file)));
   const localPath = (file: string | null): string | null =>
-    file === null || prefix === null || base.files.has(file) || current.files.has(file) || !file.startsWith(prefix) ? file : file.slice(prefix.length);
+    file === null || !rootBased || prefix === null ? file : file.startsWith(prefix) ? file.slice(prefix.length) : path.posix.relative(prefix, file);
   for (const diff of diffs ?? []) { diff.before = localPath(diff.before); diff.after = localPath(diff.after); }
   const unindexedDiffFiles = new Set<string>();
   for (const diff of diffs ?? []) {
     const named = diff.after ?? diff.before;
     if (named === null) continue;
     if (!base.files.has(diff.before ?? named) && !current.files.has(diff.after ?? named)) unindexedDiffFiles.add(named);
+    else if (diff.before !== null && diff.after !== null && diff.before !== diff.after && !current.files.has(diff.after)) unindexedDiffFiles.add(diff.after);
   }
   const renames = new Map<string, { path: string; basis: "diff-rename" | "identical-file-hash" }>();
   for (const diff of diffs ?? []) {
