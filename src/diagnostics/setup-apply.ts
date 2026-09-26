@@ -2,7 +2,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { previewSetup, unifiedDiff } from "./setup-preview.js";
+import { isOsnovaLauncher, previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
 import { hookSettingsObject, isHookEvent } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
@@ -73,7 +73,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
   const reconcile = (event: string, item: unknown): unknown => {
     const command = item !== null && typeof item === "object" ? (item as { command?: unknown }).command : undefined;
     const hook = typeof command === "string" ? splitHook(command) : undefined;
-    if (hook === undefined || !/osnova/.test(hook.prefix)) return item;
+    if (hook === undefined || !isOsnovaLauncher(hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [])) return item;
     // A shell-wrapped command cannot be rewritten safely: it still counts as present, but is never changed.
     if (!plainCommand(hook)) { if (isHookEvent(hook.name)) kept.add(hook.name); return item; }
     if (!isHookEvent(hook.name)) { unknown.add(hook.name); return undefined; }

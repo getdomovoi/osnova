@@ -76,6 +76,12 @@ describe("setup preview", () => {
     expect(conflict.action).toBe("conflict");
     expect(conflict.diff).toBe("");
     expect(conflict.notice).toContain("does not launch osnova");
+    await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "/Users/me/osnova-notes/run.sh", args: ["mcp"] } } }, null, 2));
+    expect((await previewSetup("pi", { home })).action).toBe("conflict");
+    for (const launch of [["npx", "-y", "@getdomovoi/osnova@0.8.1"], ["node", "/opt/osnova-strict/dist/bin.js"], ["/usr/local/bin/osnova"]]) {
+      await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: launch[0], args: [...launch.slice(1), "mcp"] } } }, null, 2));
+      expect((await previewSetup("pi", { home })).action).toBe("update");
+    }
   });
 
   it("edits only the top-level entry in ~/.claude.json, never a project's", async () => {

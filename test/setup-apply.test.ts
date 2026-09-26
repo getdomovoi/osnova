@@ -102,6 +102,19 @@ describe("osnova setup --apply", () => {
     expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("osnova hook session");
   });
 
+  it("never touches a user's own script that only lives under a folder named osnova", async () => {
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+    const own = { type: "command", command: "/Users/me/osnova-notes/tool.sh hook pre-commit" };
+    const ownPrompt = { type: "command", command: "/Users/me/osnova-notes/tool.sh hook prompt" };
+    await fs.writeFile(settingsPath, JSON.stringify({ hooks: { PreToolUse: [{ hooks: [own] }], UserPromptSubmit: [{ hooks: [ownPrompt] }] } }));
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    expect(settings.hooks.PreToolUse[0]).toEqual({ hooks: [own] });
+    expect(settings.hooks.UserPromptSubmit[0]).toEqual({ hooks: [ownPrompt] });
+    expect(settings.hooks.UserPromptSubmit.flatMap((g: { hooks: { command: string }[] }) => g.hooks.map((h) => h.command))).toContain("osnova hook prompt");
+  });
+
   it("repoints Codex hooks and keeps their client flag", async () => {
     const hooksPath = path.join(home, ".codex", "hooks.json");
     await fs.mkdir(path.dirname(hooksPath), { recursive: true });

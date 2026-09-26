@@ -87,13 +87,24 @@ async function readExisting(file: string): Promise<string | null> {
 
 interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"; readonly merged: string; }
 
-// An existing entry is osnova's own when its launch runs `mcp` and a part before it names osnova (a path to
-// another install, `npx @getdomovoi/osnova`, a bare `osnova`). Only such an entry is repointed; the flags after
-// `mcp` are the user's and stay.
+// The program a launch runs is its last part before `mcp` or `hook`. It is osnova's own only when it is the
+// `osnova` executable, the `@getdomovoi/osnova` package, or a `dist/bin.js` inside a folder named for osnova; a
+// user's script that merely lives under such a folder is not.
+export function isOsnovaLauncher(parts: readonly string[]): boolean {
+  const program = (parts.at(-1) ?? "").replace(/^(["'])(.*)\1$/, "$2").replace(/\\/g, "/");
+  const segments = program.split("/");
+  const base = segments.at(-1) ?? "";
+  if (/^osnova(?:\.(?:cmd|exe|js|mjs))?$/.test(base)) return true;
+  if (/^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program)) return true;
+  return base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment));
+}
+
+// An existing entry is osnova's own when its launch runs `mcp` through an osnova launcher. Only such an entry
+// is repointed; the flags after `mcp` are the user's and stay.
 function osnovaLaunchTail(launch: readonly unknown[]): string[] | undefined {
   if (!launch.every((part): part is string => typeof part === "string")) return undefined;
   const at = launch.indexOf("mcp");
-  return at > 0 && launch.slice(0, at).some((part) => /osnova/.test(part)) ? launch.slice(at + 1) : undefined;
+  return at > 0 && isOsnovaLauncher(launch.slice(0, at)) ? launch.slice(at + 1) : undefined;
 }
 
 function entryFor(shape: Shape, command: readonly string[]): unknown {
