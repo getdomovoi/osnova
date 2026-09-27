@@ -3,9 +3,49 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { workspaceIdentity } from "../index/workspace.js";
-import { CacheLockTimeoutError, holdsCacheLock, withCacheLock } from "./lock.js";
+import { CacheLockTimeoutError, holdsCacheLock, lockOwnerExited, parseOwner, sweepLockDebris, withCacheLock } from "./lock.js";
 
 const WORKSPACE_KEY_RE = /^[0-9a-f]{16}$/;
+
+// A process that loads an artifact reads its text and edge sidecars lazily, long after the workspace
+// lock is released, so the lock alone cannot tell eviction what is in use. Each loader leaves one
+// lease file per pid under readers/; eviction spares a workspace whose lease names a live process
+// and drops the leases of processes that have exited.
+const READERS_DIR = "readers";
+
+export async function recordReader(dir: string): Promise<void> {
+  const readers = path.join(dir, READERS_DIR);
+  await fs.mkdir(readers, { recursive: true });
+  const temporary = path.join(readers, `${process.pid}.json.tmp-${randomUUID()}`);
+  try {
+    await fs.writeFile(temporary, JSON.stringify({ pid: process.pid, host: os.hostname(), token: randomUUID() }), { flag: "wx" });
+    await fs.rename(temporary, path.join(readers, `${process.pid}.json`));
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}
+
+// True when any lease names a process that may still be running. A lease from another host cannot
+// be checked and counts as live; a lease that names an exited process is removed here.
+async function hasLiveReader(dir: string): Promise<boolean> {
+  const readers = path.join(dir, READERS_DIR);
+  let names: string[];
+  try {
+    names = await fs.readdir(readers);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  let live = false;
+  for (const name of names) {
+    if (!/^\d+\.json$/.test(name)) continue;
+    const file = path.join(readers, name);
+    const owner = parseOwner(await fs.readFile(file, "utf8").catch(() => ""));
+    if (owner !== undefined && !lockOwnerExited(owner)) live = true;
+    else await fs.rm(file, { force: true });
+  }
+  return live;
+}
 
 export function resolveCacheDir(explicit?: string): string {
   if (explicit !== undefined && explicit.length > 0) return explicit;
@@ -75,6 +115,22 @@ export async function touchWorkspace(dir: string): Promise<void> {
   });
 }
 
+async function removeBaseTrees(base: string): Promise<void> {
+  await sweepLockDebris(base);
+  for (const name of await fs.readdir(base)) {
+    if (name === ".lock" || name.startsWith(".lock.")) continue;
+    await fs.rm(path.join(base, name), { recursive: true, force: true });
+  }
+}
+
+async function removeIfEmpty(dir: string): Promise<void> {
+  try {
+    await fs.rmdir(dir);
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
+}
+
 export async function evictLru(cacheDir: string, policy: number | CachePolicy = defaultLruCap): Promise<void> {
   const limits = cacheLimits(typeof policy === "number" ? { maxWorkspaces: policy } : policy);
   await withCacheLock(path.join(cacheDir, ".eviction.lock"), async () => {
@@ -85,6 +141,7 @@ export async function evictLru(cacheDir: string, policy: number | CachePolicy = 
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
+    await sweepLockDebris(cacheDir);
     const candidates: Array<{ dir: string; access: number; bytes: number }> = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || !WORKSPACE_KEY_RE.test(entry.name)) continue;
@@ -121,14 +178,27 @@ export async function evictLru(cacheDir: string, policy: number | CachePolicy = 
       try {
         await withCacheLock(`${victim.dir}.lock`, async () => {
           const names = await fs.readdir(victim.dir);
-          const owned = names.filter((name) => ["index.json", "index.json.gz", "text.bin", "edges.json", "index.sha", "access", "verification.json", "base", "family.json"].includes(name));
+          const owned = names.filter((name) => ["index.json", "index.json.gz", "text.bin", "edges.json", "index.sha", "access", "verification.json", "base", "family.json", READERS_DIR].includes(name));
           const access = Number(await fs.readFile(path.join(victim.dir, "access"), "utf8").catch((error: unknown) => {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") return "0";
             throw error;
           }));
           if (access > victim.access) return;
-          for (const name of owned) await fs.rm(path.join(victim.dir, name), { recursive: name === "base", force: true });
-          if (owned.length === names.length) await fs.rmdir(victim.dir);
+          if (await hasLiveReader(victim.dir)) return;
+          const base = path.join(victim.dir, "base");
+          const remove = async (): Promise<void> => {
+            for (const name of owned) {
+              if (name === "base") await removeBaseTrees(base);
+              else if (name === READERS_DIR) await fs.rm(path.join(victim.dir, name), { recursive: true, force: true });
+              else await fs.rm(path.join(victim.dir, name), { force: true });
+            }
+          };
+          // Base trees are written under their own lock, not the workspace lock, so a victim whose
+          // base lock is busy is skipped like a victim whose workspace lock is busy.
+          if (owned.includes("base")) await withCacheLock(path.join(base, ".lock"), remove, { lockTimeoutMs: 0 });
+          else await remove();
+          if (owned.includes("base")) await removeIfEmpty(base);
+          if (owned.length === names.length) await removeIfEmpty(victim.dir);
           count -= 1;
           bytes -= victim.bytes;
         }, { lockTimeoutMs: 0 });

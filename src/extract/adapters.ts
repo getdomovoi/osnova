@@ -1,5 +1,4 @@
 import { Query } from "web-tree-sitter";
-import { EMPTY_ADAPTER_OUTPUT } from "./adapter.js";
 import type { LanguageAdapter } from "./adapter.js";
 import { makeTsLikeAdapter } from "./typescript.js";
 import { pythonAdapter } from "./python.js";
@@ -47,8 +46,3 @@ export function adapterFor(language: LanguageId): LanguageAdapter {
   if (adapter === undefined) throw new Error(`osnova: no adapter for ${language}`);
   return adapter;
 }
-
-export const fallbackAdapter: LanguageAdapter = {
-  language: "fallback",
-  extract: () => EMPTY_ADAPTER_OUTPUT,
-};

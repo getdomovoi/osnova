@@ -43,8 +43,6 @@ export interface LanguageAdapter {
   extract(tree: Tree, source: string): AdapterOutput;
 }
 
-export const EMPTY_ADAPTER_OUTPUT: AdapterOutput = { definitions: [], edges: [] };
-
 export function makeSpan(startRow: number, endRow: number, startCol: number, endCol: number): SourceSpan {
   return {
     startLine: startRow + 1,
@@ -59,14 +57,4 @@ export function makeSignature(text: string, maxLen = 160): string {
   const collapsed = firstLine.replace(/\s+/g, " ").trim();
   if (collapsed.length <= maxLen) return collapsed;
   return `${collapsed.slice(0, maxLen - 1)}…`;
-}
-
-const UPPER_SNAKE = /^[A-Z][A-Z0-9_]*$/;
-
-export function isUpperSnake(name: string): boolean {
-  return name.length >= 2 && UPPER_SNAKE.test(name);
-}
-
-export function nameOfIdentifier(node: unknown): string {
-  return String((node as { text?: string }).text ?? "").trim();
 }

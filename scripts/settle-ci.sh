@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 # Compare the call graph of a base commit with the checked-out head and report every indexed
 # dependent of the changed symbols. Used by action.yml; runnable by hand.
-#   OSNOVA    command that runs osnova (default: npx -y @getdomovoi/osnova)
-#   BASE_REF  commit or ref to compare against (required)
-#   DEPTH     dependent depth (default 1)
-#   WORKSPACE repository root (default: current directory)
-#   REPORT    file to write the report to (default: osnova-settle.txt in the runner temp dir)
+#   OSNOVA          command that runs osnova; when unset, npx runs the version below
+#   OSNOVA_VERSION  npm version for npx when OSNOVA is unset (default: the version in this
+#                   checkout's package.json, so an action pinned to a tag runs that tag's
+#                   release; "latest" floats on purpose)
+#   BASE_REF        commit or ref to compare against (required)
+#   DEPTH           dependent depth (default 1)
+#   WORKSPACE       repository root (default: current directory)
+#   REPORT          file to write the report to (default: osnova-settle.txt in the runner temp dir)
+#   OSNOVA_PRINT_COMMAND  when set, print the resolved command and exit
 set -euo pipefail
-OSNOVA=${OSNOVA:-"npx -y @getdomovoi/osnova"}
+if [ -z "${OSNOVA:-}" ]; then
+  version=${OSNOVA_VERSION:-}
+  if [ -z "$version" ]; then
+    version=$(node -p "require(process.argv[1]).version" "$(cd "$(dirname "$0")/.." && pwd)/package.json")
+  fi
+  OSNOVA="npx -y @getdomovoi/osnova@$version"
+fi
+if [ -n "${OSNOVA_PRINT_COMMAND:-}" ]; then
+  echo "$OSNOVA"
+  exit 0
+fi
 DEPTH=${DEPTH:-1}
 WORKSPACE=$(cd "${WORKSPACE:-.}" && pwd)
 TEMP=${RUNNER_TEMP:-${TMPDIR:-/tmp}}

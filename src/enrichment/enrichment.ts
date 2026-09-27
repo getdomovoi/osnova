@@ -1,10 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveCacheDir, workspaceDirFor } from "../cache/cache.js";
-import { lockOwnerExited, type LockOwner } from "../cache/lock.js";
+import { CacheLockTimeoutError, withCacheLock } from "../cache/lock.js";
 import { indexFormatVersion, type LanguageId, type OsnovaIndex } from "../types.js";
 import { isRecord, LspClient, resolveLspLimits } from "./client.js";
 import { sourceText } from "../index/scan.js";
@@ -130,66 +129,41 @@ async function serialized<T>(key: string, operation: () => Promise<T>): Promise<
   try { return await current; } finally { if (queues.get(key) === current) queues.delete(key); }
 }
 
-function parseLockOwner(text: string): LockOwner | undefined {
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { return undefined; }
-  if (!isRecord(value) || !Number.isSafeInteger(value.pid) || (value.pid as number) <= 0 || typeof value.host !== "string" ||
-    typeof value.token !== "string" || !/^[0-9a-f-]{36}$/.test(value.token)) return undefined;
-  return { pid: value.pid as number, host: value.host, token: value.token };
-}
-
-async function reclaimExitedWriter(lockPath: string): Promise<boolean> {
-  const stale = parseLockOwner(await fs.readFile(lockPath, "utf8").catch(() => ""));
-  if (stale === undefined || !lockOwnerExited(stale)) return false;
-  const abandoned = `${lockPath}.abandoned-${randomUUID()}`;
-  try { await fs.rename(lockPath, abandoned); } catch { return false; }
-  if (parseLockOwner(await fs.readFile(abandoned, "utf8").catch(() => ""))?.token === stale.token) {
-    await fs.unlink(abandoned).catch(() => {});
-    return true;
-  }
-  await fs.rename(abandoned, lockPath).catch(() => fs.unlink(abandoned).catch(() => {}));
-  return false;
-}
-
-async function acquireWriterLock(lockPath: string, owner: LockOwner): Promise<fs.FileHandle> {
-  for (let attempt = 0; ; attempt++) {
-    const handle = await fs.open(lockPath, "wx", 0o600).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "EEXIST") throw new Error("cache-unavailable", { cause: error });
-      return undefined;
-    });
-    if (handle !== undefined) {
-      try { await handle.writeFile(JSON.stringify(owner)); } catch (error) {
-        await handle.close().catch(() => {});
-        await fs.unlink(lockPath).catch(() => {});
-        throw new Error("cache-unavailable", { cause: error });
-      }
-      return handle;
-    }
-    if (attempt > 0 || !(await reclaimExitedWriter(lockPath))) throw new Error("cache-busy");
-  }
-}
+// The sidecar shares the cache's lock primitive: a directory holding owner.json, reclaimed only under a
+// marker inside that same directory and released only by its owner. A plain file at the lock path is a
+// lock written by an older osnova, still treated as held.
+const writerLockTimeoutMs = 250;
 
 async function withWriteLock<T>(root: string, options: LspCacheOptions, operation: () => Promise<T>): Promise<T> {
   let dir: string;
   try { dir = await safeDirectory(root, options); } catch { throw new Error("cache-unavailable"); }
   const lockPath = path.join(dir, "writer.lock");
-  const owner: LockOwner = { pid: process.pid, host: os.hostname(), token: randomUUID() };
-  const lock = await acquireWriterLock(lockPath, owner);
-  let result: T | undefined;
+  if ((await fs.lstat(lockPath).catch(() => undefined))?.isFile()) throw new Error("cache-busy");
+  let started = false;
   let operationError: unknown;
-  try { result = await operation(); } catch (error) { operationError = error; }
-  let cleanupError: unknown;
-  try { await lock.close(); } catch (error) { cleanupError = error; }
-  try { await fs.unlink(lockPath); } catch (error) { cleanupError ??= error; }
+  let result: T | undefined;
+  try {
+    await withCacheLock(lockPath, async () => {
+      started = true;
+      try { result = await operation(); } catch (error) { operationError = error; }
+    }, { lockTimeoutMs: writerLockTimeoutMs });
+  } catch (error) {
+    if (operationError !== undefined) throw operationError;
+    if (!started && error instanceof CacheLockTimeoutError) throw new Error("cache-busy", { cause: error });
+    throw new Error("cache-unavailable", { cause: error });
+  }
   if (operationError !== undefined) throw operationError;
-  if (cleanupError !== undefined) throw new Error("cache-unavailable", { cause: cleanupError });
   return result as T;
 }
 
-export async function configureLspEnrichment(root: string, policy: LspPolicy, options: LspCacheOptions = {}): Promise<void> {
+function approval(policy: LspPolicy): string { return digest(canonical(policy)); }
+
+/** Stores the policy and returns its approval, which a later refresh must present to launch it from the cache. */
+export async function configureLspEnrichment(root: string, policy: LspPolicy, options: LspCacheOptions = {}): Promise<string> {
   root = workspaceIdentity(root);
   const validated = validatePolicy(root, policy);
   await serialized(directory(root, options), () => withWriteLock(root, options, () => store(root, "policy.json", validated, options)));
+  return approval(validated);
 }
 
 async function verifySources(index: OsnovaIndex): Promise<LspDiagnostic[]> {
@@ -297,6 +271,7 @@ async function refresh(index: OsnovaIndex, options: LspRefreshOptions): Promise<
     const policy = previous.policy;
     const diagnostics = previous.diagnostics.filter((d) => ["cache-unreadable", "invalid-policy", "invalid-sidecar"].includes(d.code));
     if (!policy) return { ...previous, status: "unavailable", diagnostics: [...diagnostics, { code: "no-policy" }] };
+    if (options.policy === undefined && options.approve !== approval(policy)) return { ...previous, status: "unavailable", diagnostics: [...diagnostics, { code: "policy-not-approved" }] };
     const sourceDiagnostics = await verifySources(index);
     if (sourceDiagnostics.length) return { ...previous, results: [], status: "unavailable", diagnostics: [...diagnostics, ...sourceDiagnostics] };
     const allQueries = new Map(previous.queries.filter((q) => {

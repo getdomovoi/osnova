@@ -880,7 +880,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           }
         }
         if (raw.kind === "references") candidates = candidates.filter((symbol) => VALUE_REFERENCE_KINDS.has(symbol.kind));
-        if (raw.kind === "extends") candidates = candidates.filter((symbol) => HERITAGE_KINDS.has(symbol.kind));
+        if (raw.kind === "extends" || raw.kind === "implements") candidates = candidates.filter((symbol) => HERITAGE_KINDS.has(symbol.kind));
         if (raw.kind === "routes") candidates = candidates.filter((symbol) => ROUTE_TARGET_KINDS.has(symbol.kind));
         const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
         const resolved = names.length === 1 ? candidates[0] : undefined;

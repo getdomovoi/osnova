@@ -2,9 +2,9 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { previewSetup, unifiedDiff } from "./setup-preview.js";
+import { isOsnovaLauncher, previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
-import { hookSettingsObject } from "../cli/hook.js";
+import { hookSettingsObject, isHookEvent } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
 
 // Applying a setup: every file change is planned first (path, action, diff), then written with a
@@ -12,7 +12,7 @@ import type { HookClient } from "../cli/hook.js";
 export interface PlannedChange {
   readonly kind: "mcp" | "hooks" | "instructions" | "plugin" | "skill";
   readonly path: string;
-  readonly action: "create" | "append" | "unchanged" | "conflict";
+  readonly action: "create" | "append" | "update" | "unchanged" | "conflict";
   readonly diff: string;
   readonly merged: string;
   readonly notice: string;
@@ -33,8 +33,12 @@ export async function planMcp(client: SetupClientId, options: { home?: string | 
 }
 
 // Hook files: Claude Code (~/.claude/settings.json) and Codex (~/.codex/hooks.json) share the event-group shape;
-// Cursor (~/.cursor/hooks.json) lists commands per event under a version key. A group or entry is added only when
-// none already runs that `osnova hook <event>`; every other key survives and the file keeps its indent.
+// Cursor (~/.cursor/hooks.json) lists commands per event under a version key. Existing osnova hook commands
+// (a command naming osnova that runs `hook <name>`) are reconciled with this install: the part before
+// `hook <name>` is repointed at this command, keeping the entry's own flags, timeout and matcher; an osnova
+// hook this build cannot run, a duplicate, or a proposed hook filed under another event is removed; a
+// proposed hook still missing is added. Hooks that are not osnova's are never touched, even inside a
+// group osnova shares, and every other key survives with the file's indent.
 export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined }): Promise<PlannedChange> {
   const client = options.client ?? "claude-code";
   const home = path.resolve(options.home ?? os.homedir());
@@ -57,23 +61,77 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (typeof record.command === "string") return [record.command];
     return Array.isArray(record.hooks) ? record.hooks.flatMap(commandOf) : [];
   };
-  let added = 0;
-  for (const [event, entries] of Object.entries(wantedHooks)) {
-    const current = Array.isArray(hooks[event]) ? [...(hooks[event] as unknown[])] : [];
-    for (const entry of entries) {
-      const name = /hook (\w[\w-]*)/.exec(commandOf(entry)[0] ?? "")?.[1];
-      const present = name !== undefined && current.some((item) => commandOf(item).some((command) => /osnova/.test(command) && new RegExp(`\\bhook ${name}\\b`).test(command)));
-      if (present) continue;
-      current.push(entry);
-      added += 1;
-    }
-    hooks[event] = current;
+  const wantedEvent = new Map<string, string>();
+  for (const [event, entries] of Object.entries(wantedHooks)) for (const entry of entries) {
+    const name = splitHook(commandOf(entry)[0] ?? "")?.name;
+    if (name !== undefined) wantedEvent.set(name, event);
   }
-  if (added === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client}.` };
+  const prefix = splitHook(commandOf(Object.values(wantedHooks)[0]?.[0])[0] ?? "")?.prefix ?? "osnova";
+  const kept = new Set<string>(), unknown = new Set<string>(), duplicates = new Set<string>(), moved = new Set<string>();
+  let repointed = 0;
+  // Returns the entry to keep, rewritten when its prefix changes, or undefined to drop it.
+  const reconcile = (event: string, item: unknown): unknown => {
+    const command = item !== null && typeof item === "object" ? (item as { command?: unknown }).command : undefined;
+    const hook = typeof command === "string" ? splitHook(command) : undefined;
+    if (hook === undefined || !isOsnovaLauncher(hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [])) return item;
+    // A shell-wrapped command cannot be rewritten safely: it still counts as present, but is never changed.
+    if (!plainCommand(hook)) { if (isHookEvent(hook.name)) kept.add(hook.name); return item; }
+    if (!isHookEvent(hook.name)) { unknown.add(hook.name); return undefined; }
+    const proposed = wantedEvent.get(hook.name);
+    if (proposed !== undefined && proposed !== event) { moved.add(hook.name); return undefined; }
+    if (kept.has(hook.name)) { duplicates.add(hook.name); return undefined; }
+    kept.add(hook.name);
+    const next = `${prefix} hook ${hook.name}${hook.tail}`;
+    if (next === command) return item;
+    repointed += 1;
+    return { ...(item as Record<string, unknown>), command: next };
+  };
+  for (const [event, value] of Object.entries(hooks)) {
+    if (!Array.isArray(value)) continue;
+    const groups: unknown[] = [];
+    for (const group of value) {
+      const inner = group !== null && typeof group === "object" ? (group as { hooks?: unknown }).hooks : undefined;
+      if (!Array.isArray(inner)) { const item = reconcile(event, group); if (item !== undefined) groups.push(item); continue; }
+      const items = inner.map((item) => reconcile(event, item)).filter((item) => item !== undefined);
+      if (items.length === 0 && inner.length > 0) continue;
+      groups.push(items.length === inner.length && items.every((item, index) => item === inner[index]) ? group : { ...(group as Record<string, unknown>), hooks: items });
+    }
+    if (groups.length === 0 && value.length > 0) delete hooks[event];
+    else hooks[event] = groups;
+  }
+  let added = 0;
+  for (const [event, entries] of Object.entries(wantedHooks)) for (const entry of entries) {
+    const name = splitHook(commandOf(entry)[0] ?? "")?.name;
+    if (name !== undefined && kept.has(name)) continue;
+    hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] as unknown[] : []), entry];
+    added += 1;
+  }
+  const removed = unknown.size + duplicates.size + moved.size;
+  if (added === 0 && repointed === 0 && removed === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client} from ${prefix}.` };
   const indent = existing === null ? "  " : (/^( +|\t+)"/m.exec(existing)?.[1] ?? "  ");
   const merged = `${JSON.stringify({ ...(client === "cursor" && root.version === undefined ? { version: 1 } : {}), ...root, hooks }, null, indent)}\n`;
-  const action = existing === null ? "create" : "append";
-  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${added} osnova hook entr${added === 1 ? "y" : "ies"} for ${client} in ${target}; other keys are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}` };
+  const action = existing === null ? "create" : repointed === 0 && removed === 0 ? "append" : "update";
+  const names = (set: ReadonlySet<string>): string => [...set].sort().join(", ");
+  const parts = [
+    added > 0 ? `${added} osnova hook entr${added === 1 ? "y" : "ies"} added` : "",
+    repointed > 0 ? `${repointed} repointed at ${prefix}` : "",
+    unknown.size > 0 ? `removed hooks this osnova cannot run: ${names(unknown)}` : "",
+    duplicates.size > 0 ? `removed duplicates: ${names(duplicates)}` : "",
+    moved.size > 0 ? `moved to their proposed event: ${names(moved)}` : "",
+  ].filter((part) => part.length > 0);
+  return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${parts.join("; ")} for ${client} in ${target}; hooks that are not osnova's are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new or changed hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}` };
+}
+
+// `<prefix> hook <name><tail>`: the executable part, the hook name and whatever flags follow it.
+function splitHook(command: string): { prefix: string; name: string; tail: string } | undefined {
+  const match = /^(\S.*?)\s+hook\s+([\w-]+)(?![\w-])(.*)$/s.exec(command);
+  return match === null ? undefined : { prefix: match[1]!, name: match[2]!, tail: match[3]! };
+}
+
+// No shell operators, and each side of `hook <name>` closes its own quotes, so the prefix is a whole command.
+function plainCommand(hook: { prefix: string; tail: string }): boolean {
+  const balanced = (text: string): boolean => (text.match(/"/g)?.length ?? 0) % 2 === 0 && (text.match(/'/g)?.length ?? 0) % 2 === 0;
+  return !/[;&|`$<>()]/.test(hook.prefix + hook.tail) && balanced(hook.prefix) && balanced(hook.tail);
 }
 
 // The shipped integration file for a client that runs plugins instead of hooks, copied into its plugin directory.
@@ -147,7 +205,7 @@ export async function applyChanges(changes: readonly PlannedChange[]): Promise<A
   for (const change of changes) {
     if (change.action === "unchanged") { applied.push({ ...change, written: false }); continue; }
     let backup: string | undefined;
-    if (change.action === "append") { backup = `${change.path}.bak-osnova-${stamp}`; await fs.copyFile(change.path, backup); }
+    if (change.action === "append" || change.action === "update") { backup = `${change.path}.bak-osnova-${stamp}`; await fs.copyFile(change.path, backup); }
     await fs.mkdir(path.dirname(change.path), { recursive: true });
     await fs.writeFile(change.path, change.merged);
     applied.push({ ...change, written: true, backup });

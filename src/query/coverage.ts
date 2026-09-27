@@ -1,3 +1,4 @@
+import { maximumIndexedFileSizeBytes } from "../types.js";
 import type { OsnovaIndex } from "../types.js";
 import { indexGeneration } from "../api.js";
 import { compareText } from "./impact.js";
@@ -16,6 +17,8 @@ export interface LanguageCoverage {
   readonly referencesResolved: number;
   readonly extends: number;
   readonly extendsResolved: number;
+  readonly implements: number;
+  readonly implementsResolved: number;
   readonly routes: number;
   readonly routesResolved: number;
   readonly byMethod: Readonly<Record<string, number>>;
@@ -29,20 +32,28 @@ export interface LanguageCoverage {
   readonly byExternal: Readonly<Record<string, number>>;
 }
 
+export interface OversizedFileCoverage {
+  readonly path: string;
+  readonly size: number;
+  readonly limitBytes: number;
+}
+
 export interface CoverageReport {
   readonly generation: string;
   readonly languages: readonly LanguageCoverage[];
   readonly total: LanguageCoverage;
+  readonly diagnostics: Readonly<Record<string, number>>;
+  readonly oversizedFiles: readonly OversizedFileCoverage[];
   readonly limitations: readonly string[];
 }
 
 interface Tally {
   files: number; symbols: number; calls: number; resolved: number; ambiguous: number; unresolved: number; imports: number; importsResolved: number;
-  references: number; referencesResolved: number; extends: number; extendsResolved: number; routes: number; routesResolved: number;
+  references: number; referencesResolved: number; extends: number; extendsResolved: number; implements: number; implementsResolved: number; routes: number; routesResolved: number;
   byMethod: Map<string, number>; byReason: Map<string, number>; byExternal: Map<string, number>;
 }
 
-const tally = (): Tally => ({ files: 0, symbols: 0, calls: 0, resolved: 0, ambiguous: 0, unresolved: 0, imports: 0, importsResolved: 0, references: 0, referencesResolved: 0, extends: 0, extendsResolved: 0, routes: 0, routesResolved: 0, byMethod: new Map(), byReason: new Map(), byExternal: new Map() });
+const tally = (): Tally => ({ files: 0, symbols: 0, calls: 0, resolved: 0, ambiguous: 0, unresolved: 0, imports: 0, importsResolved: 0, references: 0, referencesResolved: 0, extends: 0, extendsResolved: 0, implements: 0, implementsResolved: 0, routes: 0, routesResolved: 0, byMethod: new Map(), byReason: new Map(), byExternal: new Map() });
 const bump = (map: Map<string, number>, key: string): void => { map.set(key, (map.get(key) ?? 0) + 1); };
 const sortedRecord = (map: Map<string, number>): Record<string, number> =>
   Object.fromEntries([...map].sort(([a], [b]) => compareText(a, b)));
@@ -52,7 +63,7 @@ const finish = (language: string, t: Tally): LanguageCoverage => {
   const unboundGlobalCalls = t.byReason.get("unbound-global") ?? 0;
   return {
     language, files: t.files, symbols: t.symbols, calls: t.calls, resolved: t.resolved, ambiguous: t.ambiguous, unresolved: t.unresolved,
-    imports: t.imports, importsResolved: t.importsResolved, references: t.references, referencesResolved: t.referencesResolved, extends: t.extends, extendsResolved: t.extendsResolved, routes: t.routes, routesResolved: t.routesResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
+    imports: t.imports, importsResolved: t.importsResolved, references: t.references, referencesResolved: t.referencesResolved, extends: t.extends, extendsResolved: t.extendsResolved, implements: t.implements, implementsResolved: t.implementsResolved, routes: t.routes, routesResolved: t.routesResolved, byMethod: sortedRecord(t.byMethod), byReason: sortedRecord(t.byReason), resolvedShare: share(t.resolved, t.calls),
     unresolvedImportCalls, unboundGlobalCalls, resolvedShareExcludingUnresolvedImports: share(t.resolved, t.calls - unresolvedImportCalls),
     resolvedShareExcludingExternal: share(t.resolved, t.calls - unresolvedImportCalls - unboundGlobalCalls),
     externalImportCalls: [...t.byExternal.values()].reduce((sum, count) => sum + count, 0), byExternal: sortedRecord(t.byExternal),
@@ -84,6 +95,10 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
       for (const row of rows) { row.extends++; if (resolution?.status === "resolved") row.extendsResolved++; }
       continue;
     }
+    if (edge.kind === "implements") {
+      for (const row of rows) { row.implements++; if (resolution?.status === "resolved") row.implementsResolved++; }
+      continue;
+    }
     if (edge.kind === "routes") {
       for (const row of rows) { row.routes++; if (resolution?.status === "resolved") row.routesResolved++; }
       continue;
@@ -98,8 +113,14 @@ export function resolutionCoverage(index: OsnovaIndex): CoverageReport {
     }
   }
   const languages = [...perLanguage].sort(([a], [b]) => compareText(a, b)).map(([language, row]) => finish(language, row));
+  const diagnostics = new Map<string, number>();
+  for (const diagnostic of index.diagnostics ?? [{ phase: "cache", code: "health-unverified" }]) bump(diagnostics, `${diagnostic.phase}/${diagnostic.code}`);
+  const oversizedFiles = [...index.files.values()]
+    .filter((card) => card.diagnostics?.some((diagnostic) => diagnostic.phase === "scan" && diagnostic.code === "file-too-large"))
+    .map((card) => ({ path: card.path, size: card.size, limitBytes: maximumIndexedFileSizeBytes }))
+    .sort((a, b) => compareText(a.path, b.path));
   return {
-    generation: indexGeneration(index), languages, total: finish("all", total),
+    generation: indexGeneration(index), languages, total: finish("all", total), diagnostics: sortedRecord(diagnostics), oversizedFiles,
     limitations: ["indexed-call-sites-only", "resolution-is-heuristic-not-type-inference", "unindexed-files-not-counted", "unresolved-import-calls-are-import-target-unresolved-edges", "unbound-global-calls-are-names-with-no-binding-in-the-file"],
   };
 }

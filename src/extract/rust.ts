@@ -139,7 +139,7 @@ export const rustAdapter: LanguageAdapter = {
               const source = arg.text.replace(/::\*$/, "");
               if (source.length > 0) reExports.push({ kind: "star", source, line });
             } else {
-              for (const item of rustSpec.imports(node)) {
+              for (const item of rustSpec.imports(node, "use_declaration")) {
                 if (item.local === "self") continue;
                 reExports.push({ kind: "named", exportedName: item.local, source: item.source, importedName: item.name, line });
               }

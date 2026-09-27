@@ -95,6 +95,8 @@ export interface LspCacheOptions {
 export interface LspRefreshOptions extends LspCacheOptions {
   readonly enabled?: boolean | undefined;
   readonly policy?: LspPolicy | undefined;
+  /** The approval `configureLspEnrichment` returned; required to launch a stored policy instead of `policy`. */
+  readonly approve?: string | undefined;
   readonly queries?: readonly LspQuery[] | undefined;
   readonly signal?: AbortSignal | undefined;
 }

@@ -15,8 +15,10 @@ import type {
   EdgeKind,
   UnresolvedCallerEdge,
 } from "../types.js";
+import { maximumIndexedFileSizeBytes } from "../types.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
+import type { DiagnosticCheck, DoctorReport, LanguageCapability } from "../diagnostics/doctor.js";
 import type { PlumbResult } from "./plumb.js";
 import type { TaskContextResult } from "./task-context.js";
 import { formatReach } from "./reach.js";
@@ -35,6 +37,9 @@ export function formatIndexDiagnostics(index: OsnovaIndex): string {
   return lines.join("\n");
 }
 
+const notIndexedCategory = "scan/file-too-large";
+const sizeCapText = `${maximumIndexedFileSizeBytes / 1_000_000} MB`;
+
 export function formatIndexHealthSummary(index: OsnovaIndex): string {
   if (index.diagnostics === undefined) return "osnova foundation: unverified";
   if (index.diagnostics.length === 0) return "";
@@ -44,10 +49,30 @@ export function formatIndexHealthSummary(index: OsnovaIndex): string {
     const category = `${diagnostic.phase}/${code}`;
     counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  const categories = [...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  // A file above the size cap is absent from the index, so every count that could have included it
+  // is short. That is the one category a reader must never find folded into "+N categories".
+  const rank = (category: string): number => category === notIndexedCategory ? 0 : 1;
+  const categories = [...counts].sort(([a], [b]) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
   const shown = categories.slice(0, 4).map(([category, count]) => `${category}=${count}`);
   if (categories.length > 4) shown.push(`+${categories.length - 4} categories`);
-  return `osnova foundation: partial (${shown.join(", ")}); some files did not parse fully`;
+  const tooLarge = counts.get(notIndexedCategory) ?? 0;
+  const reasons: string[] = [];
+  if (tooLarge > 0) {
+    reasons.push(`${tooLarge} ${tooLarge === 1 ? "file" : "files"} above the ${sizeCapText} size cap ${tooLarge === 1 ? "is" : "are"} not indexed`);
+  }
+  if (index.diagnostics.some((diagnostic) => diagnostic.phase === "parse")) reasons.push("some files did not parse fully");
+  if (reasons.length === 0) reasons.push("results may be incomplete");
+  return `osnova foundation: partial (${shown.join(", ")}); ${reasons.join("; ")}`;
+}
+
+// The summary above never names files, because it heads every MCP answer. A query about one file is
+// the exception: the agent already named that file, and cannot otherwise join the aggregate to it.
+export function formatFileDiagnostics(index: OsnovaIndex, file: string): string {
+  const entries = index.files.get(file)?.diagnostics ?? [];
+  return entries.map((diagnostic) => {
+    const effect = diagnostic.code === "file-too-large" ? "this file is not indexed" : "results for this file are incomplete";
+    return `osnova: ${file} ${diagnostic.phase}/${diagnostic.code}; ${effect}`;
+  }).join("\n");
 }
 
 function foldNestedHits(hits: readonly AskHit[]): Map<AskHit, string[]> {
@@ -184,16 +209,25 @@ export function formatFindText(groups: readonly FindTextGroup[]): string {
   return blocks.join("\n");
 }
 
-export function formatFindTextResult(result: FindTextResult): string {
+// The per-group match cap of `thread` on the CLI and MCP (a group is one enclosing definition in one file); neither exposes an argument that raises it.
+export const threadMatchesPerGroup = 10;
+
+// `matchesPerGroup` is the per-group cap the caller searched with; CLI and MCP expose no argument that raises it.
+export function formatFindTextResult(result: FindTextResult, matchesPerGroup?: number): string {
   const shown = result.totalMatches - result.omittedMatches;
   const summary = `indexed-text search: ${shown}/${result.totalMatches} matches, ${result.groups.length}/${result.totalGroups} groups`;
   const lines = [summary];
   if (result.truncated) {
     lines.push(`truncated: ${result.omittedMatches} matches omitted; ${result.omittedGroups} groups omitted`);
-    lines.push("Use findTextDetailed without limits to retrieve all matches in indexed text.");
+    if (result.omittedGroups > 0) lines.push("Raise limit to list more groups; a group is one enclosing definition in one file, and limit counts groups, not matches.");
+    if (matchesPerGroup !== undefined) lines.push(`Each group lists at most ${matchesPerGroup} matches and no argument raises that; for every line in one file, run a plain text search on that file.`);
   }
   if (result.totalMatches === 0) lines.push("no matches in indexed text");
   else if (result.groups.length > 0) lines.push(formatFindText(result.groups));
+  const unsearched = result.unsearchedFiles.length;
+  if (unsearched > 0) {
+    lines.push(`${unsearched} ${unsearched === 1 ? "file in this scope is" : "files in this scope are"} above the ${maximumIndexedFileSizeBytes / 1_000_000} MB size cap and ${unsearched === 1 ? "was" : "were"} not searched: ${result.unsearchedFiles.slice(0, 3).join(", ")}${unsearched > 3 ? `, and ${unsearched - 3} more` : ""}`);
+  }
   return lines.join("\n");
 }
 
@@ -213,29 +247,32 @@ export function formatSkeletonBounded(index: OsnovaIndex, result: SkeletonResult
   const complete = formatSkeleton(result);
   if (complete.length <= maxCodeUnits) return complete;
   const metadata = ` (${result.language}, ${result.lineCount} lines, ${result.entries.length} symbols)`;
-  const emptyFooter = `omitted: ${result.entries.length} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
-  const availablePath = Math.max(8, maxCodeUnits - metadata.length - emptyFooter.length - 2);
+  const total = result.entries.length;
+  const footerFor = (omitted: number): string =>
+    `omitted: ${omitted} of ${total} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
+  const availablePath = Math.max(8, maxCodeUnits - metadata.length - footerFor(total).length - 2);
   const header = `${compactField(result.file, availablePath)}${metadata}`;
-  const line = (entry: SkeletonResult["entries"][number]): string =>
+  type Entry = SkeletonResult["entries"][number];
+  const line = (entry: Entry): string =>
     `${entry.symbol.kind} ${entry.symbol.name} (L${entry.symbol.span.startLine}-L${entry.symbol.span.endLine}): ${entry.signature}`;
-  const ranked = [...result.entries].sort((a, b) => {
-    const aDegree = index.incoming(a.symbol.qualifiedName).length + index.outgoing(a.symbol.qualifiedName).length;
-    const bDegree = index.incoming(b.symbol.qualifiedName).length + index.outgoing(b.symbol.qualifiedName).length;
-    return bDegree - aDegree || a.symbol.span.startLine - b.symbol.span.startLine ||
-      a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1);
-  });
-  const selected: SkeletonResult["entries"][number][] = [];
+  const bySource = (a: Entry, b: Entry): number => a.symbol.span.startLine - b.symbol.span.startLine ||
+    a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1);
+  const degreeOf = new Map(result.entries.map((entry) => {
+    const degree = index.degree(entry.symbol.qualifiedName);
+    return [entry, degree.incoming + degree.outgoing] as const;
+  }));
+  const ranked = [...result.entries].sort((a, b) => degreeOf.get(b)! - degreeOf.get(a)! || bySource(a, b));
+  const selected: Entry[] = [];
+  let used = header.length;
   for (const entry of ranked) {
-    const candidate = [...selected, entry].sort((a, b) => a.symbol.span.startLine - b.symbol.span.startLine ||
-      a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1));
-    const omitted = result.entries.length - candidate.length;
-    const footer = `omitted: ${omitted} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`;
-    if ([header, ...candidate.map(line), footer].join("\n").length <= maxCodeUnits) selected.push(entry);
+    const next = used + 1 + line(entry).length;
+    if (next + 1 + footerFor(total - selected.length - 1).length <= maxCodeUnits) {
+      selected.push(entry);
+      used = next;
+    }
   }
-  selected.sort((a, b) => a.symbol.span.startLine - b.symbol.span.startLine ||
-    a.symbol.span.startCol - b.symbol.span.startCol || (a.symbol.qualifiedName < b.symbol.qualifiedName ? -1 : 1));
-  const omitted = result.entries.length - selected.length;
-  return [header, ...selected.map(line), `omitted: ${omitted} of ${result.entries.length} signatures; selected by indexed edge degree, then source order. Use skeleton API for the complete file.`].join("\n");
+  selected.sort(bySource);
+  return [header, ...selected.map(line), footerFor(total - selected.length)].join("\n");
 }
 
 function compactField(value: string, maxCodeUnits: number): string {
@@ -696,7 +733,12 @@ export function formatImpactFiles(result: ImpactResult): string[] {
 export function formatImpactUncertainty(uncertainty: ImpactResult["uncertainty"]): string {
   const phrases = uncertainty.notes.map((note) => {
     const short = note.match(/^diff-short-by-(\d+)-context-lines-treated-as-unchanged$/);
-    return short === null ? impactNoteText[note] ?? note : `diff ${short[1]} context lines short, treated unchanged`;
+    if (short !== null) return `diff ${short[1]} context lines short, treated unchanged`;
+    const ambiguous = note.match(/^diff-paths-ambiguous-(\d+):(.*)$/s);
+    if (ambiguous !== null) return `${ambiguous[1]} diff path${ambiguous[1] === "1" ? " names" : "s name"} both a workspace file and a repository-root file, first ${ambiguous[2]}; left out: pass a diff made inside the workspace, or call osnova_settle with no arguments`;
+    const unindexed = note.match(/^diff-files-not-in-index-(\d+):(.*)$/s);
+    if (unindexed !== null) return `${unindexed[1]} diff file${unindexed[1] === "1" ? "" : "s"} not in the index, first ${unindexed[2]}; diff paths are read relative to the workspace, or from the repository root when the diff names the workspace folder`;
+    return impactNoteText[note] ?? note;
   }).filter((text) => text !== "");
   return [`uncertainty: ${uncertainty.unresolvedEdges} unresolved edges not listed; a missing dependent is not proof of absence`, ...phrases].join("; ");
 }
@@ -715,18 +757,61 @@ const percent = (share: number): string => `${(share * 100).toFixed(1)}%`;
 
 export function formatCoverage(report: CoverageReport): string {
   const row = (item: LanguageCoverage): string =>
-    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingExternal)} of the ${item.calls - item.unresolvedImportCalls - item.unboundGlobalCalls} not going through an unresolved import or an unbound global), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}, references ${item.references} (${item.referencesResolved} resolved), extends ${item.extends} (${item.extendsResolved} resolved), routes ${item.routes} (${item.routesResolved} resolved)`;
+    `${item.language}: files ${item.files}, symbols ${item.symbols}, calls ${item.calls}, resolved ${item.resolved} (${percent(item.resolvedShare)}; ${percent(item.resolvedShareExcludingExternal)} of the ${item.calls - item.unresolvedImportCalls - item.unboundGlobalCalls} not going through an unresolved import or an unbound global), ambiguous ${item.ambiguous}, unresolved ${item.unresolved}, references ${item.references} (${item.referencesResolved} resolved), extends ${item.extends} (${item.extendsResolved} resolved), implements ${item.implements} (${item.implementsResolved} resolved), routes ${item.routes} (${item.routesResolved} resolved)`;
   const reasons = Object.entries(report.total.byReason).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1));
   const lines = [
     `osnova coverage: ${report.total.resolved}/${report.total.calls} call sites resolved (${percent(report.total.resolvedShare)}); ${report.total.unresolvedImportCalls} call sites go through an import the index cannot resolve, ${report.total.unboundGlobalCalls} call a name with no binding in the file`,
     ...report.languages.map(row),
   ];
+  // Stated on stdout, beside the percentages it qualifies: the same notice on stderr is lost the moment
+  // the report is redirected to a file.
+  const skipped = report.oversizedFiles;
+  if (skipped.length > 0) {
+    lines.push(
+      `not indexed: ${skipped.length} ${skipped.length === 1 ? "file" : "files"} above the ${sizeCapText} size cap; ${skipped.length === 1 ? "its" : "their"} call sites are not counted above`,
+      ...skipped.slice(0, 10).map((file) => `- ${file.path}: ${file.size} bytes`),
+      ...(skipped.length > 10 ? [`- ${skipped.length - 10} more; coverage --json lists every one`] : []),
+    );
+  }
   const external = report.total.externalImportCalls;
   const detail = (reason: string, count: number): string => reason === "import-target-unresolved" && external > 0 ? ` (external ${external}, in-repo ${count - external})` : "";
   if (reasons.length > 0) lines.push("unresolved by reason:", ...reasons.map(([reason, count]) => `- ${reason}: ${count}${detail(reason, count)}`));
   const packages = Object.entries(report.total.byExternal).sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1)).slice(0, 10);
   if (packages.length > 0) lines.push("external packages (top 10):", ...packages.map(([name, count]) => `- ${name}: ${count}`));
   lines.push(`limitations: ${report.limitations.join(", ")}`);
+  return lines.join("\n");
+}
+
+const doctorTiers: ReadonlyArray<{ readonly extraction: LanguageCapability["extraction"]; readonly resolution: LanguageCapability["resolution"]; readonly label: string }> = [
+  { extraction: "syntax", resolution: "binding-and-receiver-hints", label: "syntax, binding and receiver hints" },
+  { extraction: "syntax", resolution: "name-heuristics", label: "syntax, name heuristics" },
+  { extraction: "tags", resolution: "binding-and-receiver-hints", label: "tags query, binding and receiver hints" },
+  { extraction: "tags", resolution: "name-heuristics", label: "tags query, name heuristics" },
+];
+
+// doctor is what a new user runs when nothing works, so its default form is read by a person. The
+// JSON form keeps every field, including the per-language limitation text this summary leaves out.
+export function formatDoctor(report: DoctorReport): string {
+  const statusCount = (status: DiagnosticCheck["status"]): number => report.checks.filter((check) => check.status === status).length;
+  const counts = (["ok", "warning", "error"] as const).map((status) => [status, statusCount(status)] as const).filter(([, count]) => count > 0);
+  const lines = [
+    `osnova doctor: ${report.ok ? "ok" : "failed"}, read-only`,
+    `checks: ${counts.length === 0 ? "none" : counts.map(([status, count]) => `${count} ${status}`).join(", ")}`,
+    ...report.checks.filter((check) => check.status !== "ok").map((check) => `  ${check.status} ${check.id}: ${check.message}`),
+    `language support, ${report.capabilities.length} languages:`,
+  ];
+  for (const tier of doctorTiers) {
+    const members = report.capabilities.filter((item) => item.extraction === tier.extraction && item.resolution === tier.resolution);
+    if (members.length === 0) continue;
+    const names = members.map((item) => item.status === "ok" ? item.language : `${item.language} (grammar failed to load)`);
+    lines.push(`  ${tier.label} (${members.length}): ${names.join(", ")}`);
+  }
+  lines.push(
+    "  no language has type inference: relationships are structural, not a type checker's",
+    ...(report.fallback.length > 0 ? [`other files: ${report.fallback}`] : []),
+    "grammar checks parse a short synthetic snippet: they show each packaged grammar loads, not that every real file parses",
+    "per-language limitations: osnova doctor --json",
+  );
   return lines.join("\n");
 }
 
@@ -807,7 +892,7 @@ export function formatUnreferenced(result: UnreferencedResult): string {
   lines.push(`${result.withoutLeads} of ${listed} listed candidates have no lead at all (no unresolved same-name site, no test site, no text mention); a lead is a place to check by hand, not a caller.`);
   const entries = result.entryPoints;
   lines.push(
-    `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}`,
+    `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}, python dunder ${entries["python-dunder"]}`,
     entryPointRuleText,
     result.exportedNotListed > 0 ? "exported symbols are entry points for external consumers and are listed only with includeExported." : "",
     result.shadowedNotListed > 0 ? "shadowed symbols (a name the file declares in more than one scope) are never listed: the index records no edge to them, so their absence from the graph is not evidence." : "",

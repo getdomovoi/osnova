@@ -15,7 +15,7 @@ The `osnova_*` tools are a deterministic call graph with exact `file:line` and n
 4. `osnova_plumb` on every list of call sites before acting on it, at the `depth` the claim was made.
 5. `osnova_tests` with `symbols` before editing to find the tests to run, or with `file` to see what one test reaches; a listed test is not coverage.
 6. `osnova_unreferenced` (narrow with `scope`) when asked what may be unused; every row is a candidate to check by hand through its same-name leads, mentions and tests, never a deletion verdict.
-7. `osnova_settle` with `git diff HEAD` before finishing; read or test each dependent.
+7. `osnova_settle` with no arguments before finishing (it compares HEAD with the working tree, untracked files included); read or test each dependent.
 
 ## Rules
 

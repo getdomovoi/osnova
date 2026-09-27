@@ -4,7 +4,7 @@ import { compareText, indexReceipt, sourceReceipt } from "./impact.js";
 import type { IndexReceipt, SourceReceipt } from "./impact.js";
 import { isTestFile } from "./tests.js";
 
-export type EntryPointRule = "main" | "default-export" | "index-file" | "package-bin" | "test-file" | "constructor";
+export type EntryPointRule = "main" | "default-export" | "index-file" | "package-bin" | "test-file" | "constructor" | "python-dunder";
 
 export interface UnreferencedCandidate {
   readonly symbol: OsnovaSymbol;
@@ -54,7 +54,7 @@ export const unreferencedLimitations = [
 
 export const unreferencedNotice = "Candidates only: no indexed caller is not proof of no caller. Dynamic calls, reflection, string references and external consumers are not indexed.";
 
-export const entryPointRuleText = "entry points never listed: symbols named main, default exports, files named index.*, files named by package.json bin, test files, and constructors (instantiation edges target the class); the index records no decorator or framework-hook metadata, so decorated definitions are not excluded.";
+export const entryPointRuleText = "entry points never listed: symbols named main, default exports, files named index.*, files named by package.json bin, test files, constructors (instantiation edges target the class) and Python dunders such as __getattr__ or __repr__ (the runtime calls them without a call site); the index records no decorator or framework-hook metadata, so decorated definitions are not excluded.";
 
 function normalizeScope(scope: string | undefined): string {
   let text = (scope ?? "").replace(/\\/g, "/").trim();
@@ -97,13 +97,14 @@ function isNested(fromSymbol: string, target: string): boolean {
   return fromSymbol === target || fromSymbol.startsWith(`${target}.`);
 }
 
-function entryPointRule(symbol: OsnovaSymbol, binFiles: ReadonlySet<string>): EntryPointRule | null {
+function entryPointRule(index: OsnovaIndex, symbol: OsnovaSymbol, binFiles: ReadonlySet<string>): EntryPointRule | null {
   if (isTestFile(symbol.file)) return "test-file";
   if (binFiles.has(symbol.file)) return "package-bin";
   if (/(?:^|\/)index\.[^/]+$/.test(symbol.file)) return "index-file";
   if (symbol.exportedNames?.includes("default")) return "default-export";
   if (symbol.name === "main") return "main";
   if (symbol.kind === "method" && (symbol.name === "constructor" || symbol.name === "__init__")) return "constructor";
+  if (/^__\w+__$/.test(symbol.name) && index.files.get(symbol.file)?.language === "python") return "python-dunder";
   return null;
 }
 
@@ -168,7 +169,7 @@ export function unreferenced(index: OsnovaIndex, options: UnreferencedOptions = 
     if (isTestFile(edge.fromFile)) testReferences.set(edge.toSymbol, (testReferences.get(edge.toSymbol) ?? 0) + 1);
     else referenced.add(edge.toSymbol);
   }
-  const entryPoints: Record<EntryPointRule, number> = { main: 0, "default-export": 0, "index-file": 0, "package-bin": 0, "test-file": 0, constructor: 0 };
+  const entryPoints: Record<EntryPointRule, number> = { main: 0, "default-export": 0, "index-file": 0, "package-bin": 0, "test-file": 0, constructor: 0, "python-dunder": 0 };
   let examined = 0;
   let exportedNotListed = 0;
   let shadowedNotListed = 0;
@@ -180,7 +181,7 @@ export function unreferenced(index: OsnovaIndex, options: UnreferencedOptions = 
     // A name the file declares in more than one scope can receive no edge at all, so its absence from
     // the graph says nothing about its use.
     if (symbol.shadowed === true) { shadowedNotListed++; continue; }
-    const rule = entryPointRule(symbol, binFiles);
+    const rule = entryPointRule(index, symbol, binFiles);
     if (rule !== null) { entryPoints[rule]++; continue; }
     const exported = isExported(index, symbol);
     if (exported && options.includeExported !== true) { exportedNotListed++; continue; }

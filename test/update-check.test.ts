@@ -58,3 +58,26 @@ describe("updateCheck", () => {
     await expect(updateCheck({ current: "0.6.3", fetch: registry("0.6.3", { status: 503 }) })).rejects.toThrow(/answered 503/);
   });
 });
+
+describe("updateCheck bounds the registry answer", () => {
+  it("gives up on a body that stalls after the headers arrive", async () => {
+    const stalled = (async () => new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 })) as unknown as typeof globalThis.fetch;
+    const started = performance.now();
+    const outcome = await Promise.race([
+      updateCheck({ current: "0.6.3", fetch: stalled, timeoutMs: 200 }).then(() => "resolved", (error: unknown) => (error as Error).message),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still hanging"), 3_000)),
+    ]);
+    expect(outcome).toMatch(/could not read the npm registry answer/);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it("refuses an answer larger than one mebibyte", async () => {
+    const chunk = new TextEncoder().encode(" ".repeat(65_536));
+    let sent = 0;
+    const endless = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { sent += chunk.byteLength; controller.enqueue(chunk); },
+    }), { status: 200 })) as unknown as typeof globalThis.fetch;
+    await expect(updateCheck({ current: "0.6.3", fetch: endless, timeoutMs: 5_000 })).rejects.toThrow(/larger than 1048576 bytes/);
+    expect(sent).toBeLessThanOrEqual(2 * 1_048_576);
+  });
+});

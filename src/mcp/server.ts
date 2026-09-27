@@ -8,7 +8,7 @@ import {
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspace, indexGeneration } from "../api.js";
-import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
+import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -21,7 +21,7 @@ import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
 import { unreferenced } from "../query/unreferenced.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFileDiagnostics, formatFindTextResult, threadMatchesPerGroup, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -38,7 +38,7 @@ const maximumMcpSkeletonCodeUnits = 4_096;
 // harness with an MCP client gets the tool contract without a hook.
 export const mcpInstructions = [
   "Osnova is a deterministic call graph of this repository with exact file:line, no type inference, no LLM. Use its tools before grep and file reads.",
-  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search, including HTTP routes by verb and path (GET /users). osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
+  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search, including HTTP routes by verb and path (GET /users). osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of your uncommitted changes (no arguments) before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
 const maximumMcpCallersCodeUnits = 2_048;
@@ -55,6 +55,7 @@ const mcpGenerationDigits = 16;
 const toolDefinitions = [
   {
     name: "osnova_ground",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Search: find definitions by keyword or identifier. Each hit gives exact file:line and inlines the whole definition when it is 40 lines or shorter, so you do not need to read that file again; longer definitions show an 8-line excerpt (full=true inlines them). Use lean=true when you only need where things are: it keeps file:line, kind, definition span and signature and drops the source lines. Start here when you do not know where code lives. A verb and path (GET /users) finds the route registration and its handler for Express, NestJS, Flask and FastAPI.",
     inputSchema: {
@@ -71,6 +72,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_thread",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Text search: regex or literal matches over indexed text, grouped by the enclosing definition and ranked by how much else depends on it. Shows up to 10 matches per group and 50 groups by default (limit raises the group cap); totals and omission counts are exact, so you know what was left out.",
     inputSchema: {
@@ -87,6 +89,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_outline",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: "Outline: the definitions of one file with signature and line span, selected by connectivity to fit 4096 code units, with an exact count of any omitted. Use instead of reading a whole file to learn its shape; read only the span you need afterwards.",
     inputSchema: {
       type: "object" as const,
@@ -98,6 +101,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_warp",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Call graph: who calls a symbol (direction=in, default) or what it calls (direction=out), with exact call-site file:line. Accepts file#Class.method, Class.method or a bare name. Use before changing a signature or deleting code. An empty list means no indexed caller, not proof that none exists.",
     inputSchema: {
@@ -105,7 +109,7 @@ const toolDefinitions = [
       properties: {
         symbol: { type: "string", description: "Symbol name or qualified name (file#Class.method)" },
         direction: { type: "string", enum: ["in", "out"], description: "in = callers (default), out = callees" },
-        depth: { type: "number", description: "Depth the claimed list was made at (default 1); pass 2 when the claim covers callers of callers" },
+        depth: { type: "number", description: "Hops to walk from the symbol (default 1); 2 also lists callers of callers, or callees of callees with direction=out" },
         full: { type: "boolean", description: "Print every call site with no per-symbol cap or summary (default false); output is still clipped at 16,384 code units" },
       },
       required: ["symbol"],
@@ -113,6 +117,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_groundwork",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Repository map: directory clusters, hubs and hotspots in under 2048 code units. Use once when the repository is unfamiliar; do not follow it with an outline of every directory.",
     inputSchema: {
@@ -124,6 +129,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_footing",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Task context: for one task, the seed definitions (inlined when 40 lines or shorter), the callers and callees that connect them, and the test files that touch them, under 4096 code units with exact omission counts. Use once at the start of a change or review that spans more than one file; for a single known symbol use ground or warp instead.",
     inputSchema: {
@@ -141,12 +147,13 @@ const toolDefinitions = [
   },
   {
     name: "osnova_settle",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Without baseRef it compares against the current index only, so deleted symbols are not visible; with baseRef (a git commit or ref) it indexes that commit's tree under the cache and compares it with the current index, computing the diff with git when none is given.",
+      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover; with no arguments it checks every uncommitted change against HEAD. A diff alone compares against the current index only, so deleted symbols are not visible; with baseRef (a git commit or ref) it indexes that commit's tree under the cache and compares it with the current index, computing the diff with git when none is given.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths (required unless baseRef is given)" },
+        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths (omit both diff and baseRef to settle uncommitted changes against HEAD)" },
         baseRef: { type: "string", description: "Git commit or ref to compare against; its tree is indexed under the cache without a checkout" },
         depth: { type: "number", description: "Dependent walk depth (default 1)" },
       },
@@ -154,6 +161,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_plumb",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Check claims: given a symbol and a list of path:line call sites an agent believes depend on it, says which are confirmed by the index, which are name matches only, which have no call, and which indexed dependents were left out. Use before declaring a caller list complete. Confirmed means an indexed resolved edge, not runtime proof.",
     inputSchema: {
@@ -169,6 +177,7 @@ const toolDefinitions = [
   },
   {
     name: "osnova_tests",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
       "Tests: given symbols, the indexed test files for each one in two separate tiers with separate counts: files with a resolved call or reference edge to the symbol (exact file:line and resolution basis), then files that only import the symbol's file and contain no indexed call or reference to it. An empty resolved tier is stated on its own line; import-only files are leads, not tests of the symbol. Given one test file, the non-test symbols it calls and the files it imports. Exactly one of symbols or file. Use before editing to find the tests to run. No indexed test is not proof of no test, and a listed test is not coverage.",
     inputSchema: {
@@ -183,8 +192,9 @@ const toolDefinitions = [
   },
   {
     name: "osnova_unreferenced",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
+      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors, Python dunders) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -196,6 +206,28 @@ const toolDefinitions = [
     },
   },
 ] as const;
+
+const argumentNames: ReadonlyMap<string, readonly string[]> = new Map(
+  toolDefinitions.map((tool) => [tool.name, Object.keys(tool.inputSchema.properties)]),
+);
+
+// The low-level Server validates the JSON-RPC envelope, never a tool's own inputSchema. An agent that
+// misspells an argument would otherwise get a confident answer to a question it did not ask.
+function checkArguments(name: string, args: unknown): Record<string, unknown> {
+  if (args === undefined) return {};
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    throw new Error(`arguments for ${name} must be an object`);
+  }
+  const record = args as Record<string, unknown>;
+  const known = argumentNames.get(name);
+  if (known === undefined) return record;
+  const unknown = Object.keys(record).filter((key) => !known.includes(key));
+  if (unknown.length > 0) {
+    const listed = unknown.map((key) => JSON.stringify(key)).join(", ");
+    throw new Error(`unknown argument${unknown.length > 1 ? "s" : ""} ${listed} for ${name}; expected one of ${known.join(", ")}`);
+  }
+  return record;
+}
 
 export interface OsnovaMcpWatchOptions {
   readonly debounceMs?: number;
@@ -225,14 +257,15 @@ export function createOsnovaMcpServer(
   let latest: OsnovaIndex | undefined;
   let inFlight: Promise<OsnovaIndex> | undefined;
   let dirty = true;
+  let changes = 0;
   let verifiedAt = 0;
   let refreshes = 0;
   // One refresh at a time; a change that arrives during a refresh marks the result stale again.
   function refresh(): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
-    dirty = false;
+    const seen = changes;
     inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true }).then((index) => {
-      latest = index; verifiedAt = Date.now(); refreshes += 1; return index;
+      latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false; return index;
     }).finally(() => { inFlight = undefined; });
     return inFlight;
   }
@@ -256,6 +289,7 @@ export function createOsnovaMcpServer(
       watcher = fsWatch(absRoot, { recursive: true, persistent: false }, (_event, file) => {
         if (ignoredChange(file)) return;
         dirty = true;
+        changes += 1;
         if (timer !== undefined) clearTimeout(timer);
         timer = setTimeout(() => { timer = undefined; refresh().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
         timer.unref();
@@ -278,8 +312,8 @@ export function createOsnovaMcpServer(
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
-    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     try {
+      const args = checkArguments(name, request.params.arguments);
       const index = await current();
       const generation = `osnova generation ${indexGeneration(index).slice(0, mcpGenerationDigits)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
@@ -296,22 +330,21 @@ export function createOsnovaMcpServer(
         }
         case "osnova_thread": {
           const pattern = requireString(args, "pattern");
-          if (args.limit !== undefined && typeof args.limit !== "number") {
-            throw new RangeError("osnova: search limits must be nonnegative safe integers");
-          }
           const result = findTextDetailed(index, pattern, {
             fixed: optionalBoolean(args, "fixed"),
             ignoreCase: optionalBoolean(args, "ignoreCase"),
             in: optionalString(args, "in"),
-            limit: args.limit ?? 50,
-            matchesPerGroup: 10,
+            limit: optionalNumber(args, "limit") ?? 50,
+            matchesPerGroup: threadMatchesPerGroup,
           });
-          return textResult(`${prefix}\n${formatFindTextResult(result)}`);
+          return textResult(`${prefix}\n${formatFindTextResult(result, threadMatchesPerGroup)}`);
         }
         case "osnova_outline": {
-          const file = requireString(args, "file");
-          const available = maximumMcpSkeletonCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${formatSkeletonBounded(index, skeleton(index, file), available)}`);
+          const file = workspaceRelative(index.root, absRoot, requireString(args, "file"));
+          const result = skeleton(index, file);
+          const head = [prefix, formatFileDiagnostics(index, result.file)].filter(Boolean).join("\n");
+          const available = maximumMcpSkeletonCodeUnits - head.length - 1;
+          return textResult(`${head}\n${formatSkeletonBounded(index, result, available)}`);
         }
         case "osnova_warp": {
           const symbol = requireString(args, "symbol");
@@ -319,10 +352,7 @@ export function createOsnovaMcpServer(
           if (direction !== undefined && direction !== "in" && direction !== "out") {
             throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
           }
-          if (args.depth !== undefined && typeof args.depth !== "number") {
-            throw new RangeError("osnova: caller depth must be a positive safe integer");
-          }
-          const depthValue = args.depth;
+          const depthValue = optionalNumber(args, "depth");
           const full = optionalBoolean(args, "full") ?? false;
           const result = callersDetailed(index, symbol, {
             ...(direction !== undefined ? { direction } : {}),
@@ -334,7 +364,7 @@ export function createOsnovaMcpServer(
         }
         case "osnova_groundwork": {
           const card = await renderMapCard(index, {
-            maxDirs: optionalNumber(args, "maxDirs") ?? 8,
+            maxDirs: optionalNumber(args, "maxDirs"),
             staleCount: 0,
             maxCodeUnits: Math.min(maximumOsnovaMapCardCodeUnits, maximumMcpMapCodeUnits) - generation.length - 1,
           });
@@ -348,9 +378,6 @@ export function createOsnovaMcpServer(
           const symbols = optionalStringArray(args, "symbols");
           const question = optionalString(args, "question");
           if (symbols === undefined && question === undefined) throw new Error("osnova_footing needs a question or a non-empty symbols array");
-          for (const key of ["limit", "depth"]) {
-            if (args[key] !== undefined && typeof args[key] !== "number") throw new RangeError(`osnova: footing ${key} must be a nonnegative safe integer`);
-          }
           const kinds = optionalStringArray(args, "kinds");
           for (const kind of kinds ?? []) {
             if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
@@ -364,19 +391,31 @@ export function createOsnovaMcpServer(
           return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);
         }
         case "osnova_settle": {
-          const baseRef = optionalString(args, "baseRef");
           const diff = optionalString(args, "diff");
-          if (baseRef === undefined && diff === undefined) throw new Error("osnova_settle needs diff or baseRef");
-          if (args.depth !== undefined && typeof args.depth !== "number") {
-            throw new RangeError("osnova: settle depth must be a nonnegative safe integer");
-          }
+          const explicitRef = optionalString(args, "baseRef");
+          // With neither argument the caller means "what did I change": agents made that call on a large share of
+          // settle requests and paid a retry each time, so it compares HEAD with the working tree.
+          const baseRef = explicitRef ?? (diff === undefined ? "HEAD" : undefined);
+          const useBaseRef = "call osnova_settle with no arguments and osnova computes the diff of your uncommitted edits itself";
           const maxDepth = optionalNumber(args, "depth") ?? 1;
+          const diffPathPrefix = diff === undefined ? undefined : await workspaceGitPrefix(absRoot);
+          const measured = (run: () => ReturnType<typeof impact>): ReturnType<typeof impact> => {
+            try {
+              return run();
+            } catch (error) {
+              if (error instanceof Error && error.message.includes("pass the exact diff output")) throw new Error(`${error.message}, or ${useBaseRef}`);
+              throw error;
+            }
+          };
           let result;
-          if (baseRef === undefined) result = impact(index, index, { diff, maxDepth });
+          if (baseRef === undefined) result = measured(() => impact(index, index, { diff, maxDepth, diffPathPrefix }));
           else {
-            const base = await materializeBaseRef(absRoot, baseRef, { cacheDir });
+            const base = await materializeBaseRef(absRoot, baseRef, { cacheDir }).catch((error: unknown) => {
+              if (explicitRef !== undefined) throw error;
+              throw new Error(`osnova_settle with no arguments compares against HEAD, which failed here (${error instanceof Error ? error.message : String(error)}); pass diff with a unified diff instead`);
+            });
             const computed = diff ?? await baseDiff(absRoot, base.sha);
-            result = impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth });
+            result = measured(() => impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth, diffPathPrefix }));
           }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
@@ -387,7 +426,6 @@ export function createOsnovaMcpServer(
           if (sites === undefined) throw new Error("osnova_plumb needs a non-empty sites array of path:line");
           const direction = optionalString(args, "direction");
           if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
-          if (args.depth !== undefined && typeof args.depth !== "number") throw new RangeError("osnova: plumb depth must be a positive safe integer");
           const result = plumb(index, symbol, parseClaims(sites), { direction, depth: optionalNumber(args, "depth") });
           const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
@@ -396,8 +434,6 @@ export function createOsnovaMcpServer(
           const symbols = optionalStringArray(args, "symbols");
           const file = optionalString(args, "file");
           if ((symbols === undefined) === (file === undefined)) throw new Error("osnova_tests needs exactly one of a non-empty symbols array or a file");
-          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: tests limit must be a nonnegative safe integer");
-          if (args.includeImportOnly !== undefined && typeof args.includeImportOnly !== "boolean") throw new Error("osnova_tests includeImportOnly must be a boolean");
           const limit = optionalNumber(args, "limit");
           const includeImportOnly = optionalBoolean(args, "includeImportOnly");
           const available = maximumMcpTestsCodeUnits - prefix.length - 1;
@@ -409,9 +445,6 @@ export function createOsnovaMcpServer(
           for (const kind of kinds ?? []) {
             if (!isSymbolKind(kind)) throw new Error(`kinds must be symbol kinds (${symbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
           }
-          if (args.limit !== undefined && typeof args.limit !== "number") throw new RangeError("osnova: unreferenced limit must be a nonnegative safe integer");
-          if (args.scope !== undefined && typeof args.scope !== "string") throw new Error("osnova_unreferenced scope must be a string path prefix");
-          if (args.includeExported !== undefined && typeof args.includeExported !== "boolean") throw new Error("osnova_unreferenced includeExported must be a boolean");
           const result = unreferenced(index, {
             scope: optionalString(args, "scope"), kinds: kinds?.filter(isSymbolKind), limit: optionalNumber(args, "limit"), includeExported: optionalBoolean(args, "includeExported"),
           });
@@ -422,11 +455,30 @@ export function createOsnovaMcpServer(
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
     } catch (error) {
-      return errorResult(error instanceof Error ? error.message : String(error), toolErrorBudget(name));
+      const message = error instanceof Error ? error.message : String(error);
+      // Agents working in another worktree or clone retried the same lookup; say which checkout this server reads.
+      const where = latest?.root ?? absRoot;
+      const hint = error instanceof OutsideWorkspaceError
+        ? `; this server indexes ${where} and the path is outside it, so query a path under this root or start osnova in that checkout`
+        : /is not indexed; search|no indexed symbol named/.test(message) ? `; this server indexes ${where}, and a file in another checkout or worktree is not in it` : "";
+      return errorResult(`${message}${hint}`, toolErrorBudget(name));
     }
   });
 
   return { server, refresh, status, close };
+}
+
+class OutsideWorkspaceError extends Error {}
+
+// An absolute file argument inside the workspace, under its canonical or its given root, is read as the
+// repository-relative path it names. An absolute path outside both is refused by name, never guessed.
+function workspaceRelative(root: string, givenRoot: string, file: string): string {
+  if (!path.isAbsolute(file)) return file;
+  for (const base of [root, givenRoot]) {
+    const relative = path.relative(base, file);
+    if (relative.length > 0 && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return relative.split(path.sep).join("/");
+  }
+  throw new OutsideWorkspaceError(`osnova: file ${JSON.stringify(file)} is not indexed`);
 }
 
 function textResult(text: string, maxCodeUnits?: number): { content: Array<{ type: "text"; text: string }> } {
@@ -454,17 +506,23 @@ function errorResult(message: string, maxCodeUnits?: number): {
   return { ...textResult(`osnova error: ${message}`, maxCodeUnits), isError: true };
 }
 
+// Readers enforce the declared type and nothing else. Ranges stay with the engine, so the CLI and MCP
+// share one message for a value of the right type that is out of range.
+const typeName = (value: unknown): string => (value === null ? "null" : Array.isArray(value) ? "array" : typeof value);
+
 function requireString(args: Record<string, unknown>, key: string): string {
   const value = args[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`missing required string argument "${key}"`);
-  }
+  if (value === undefined) throw new Error(`missing required string argument "${key}"`);
+  if (typeof value !== "string") throw new Error(`argument "${key}" must be a string, got ${typeName(value)}`);
+  if (value.length === 0) throw new Error(`argument "${key}" must not be empty`);
   return value;
 }
 
 function optionalString(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error(`argument "${key}" must be a string, got ${typeName(value)}`);
+  return value.length > 0 ? value : undefined;
 }
 
 function optionalStringArray(args: Record<string, unknown>, key: string): readonly string[] | undefined {
@@ -478,12 +536,16 @@ function optionalStringArray(args: Record<string, unknown>, key: string): readon
 
 function optionalNumber(args: Record<string, unknown>, key: string): number | undefined {
   const value = args[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") throw new Error(`argument "${key}" must be a number, got ${typeName(value)}`);
+  return value;
 }
 
 function optionalBoolean(args: Record<string, unknown>, key: string): boolean | undefined {
   const value = args[key];
-  return typeof value === "boolean" ? value : undefined;
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`argument "${key}" must be a boolean, got ${typeName(value)}`);
+  return value;
 }
 
 export async function runMcpStdio(

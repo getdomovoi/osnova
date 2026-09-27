@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,10 +7,15 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-ws-"));
-const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-cache-"));
+let workspace: string;
+let cacheDir: string;
 
-afterAll(() => {
+beforeEach(() => {
+  workspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-ws-"));
+  cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-mcp-cache-"));
+});
+
+afterEach(() => {
   fs.rmSync(workspace, { recursive: true, force: true });
   fs.rmSync(cacheDir, { recursive: true, force: true });
 });
@@ -63,6 +68,29 @@ describe("mcp stdio server", () => {
       ] as const) {
         expect(byName.get(name)?.description?.startsWith(verb) ?? false, name).toBe(true);
       }
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("repeats an argument description across tools only where the argument means the same thing", async () => {
+    // An argument description is the only documentation an MCP client ever sees. warp's depth once
+    // shipped plumb's wording, telling agents a walk depth was the depth a claimed list was made at.
+    const sameMeaning = new Set(["in", "symbol"]);
+    const client = await connect();
+    try {
+      const { tools } = await client.listTools();
+      const owners = new Map<string, string[]>();
+      for (const tool of tools) {
+        const properties = (tool.inputSchema.properties ?? {}) as Record<string, { description?: string }>;
+        for (const [argument, schema] of Object.entries(properties)) {
+          if (schema.description === undefined || sameMeaning.has(argument)) continue;
+          const key = schema.description;
+          owners.set(key, [...(owners.get(key) ?? []), `${tool.name}.${argument}`]);
+        }
+      }
+      const repeated = [...owners.values()].filter((sites) => sites.length > 1);
+      expect(repeated).toEqual([]);
     } finally {
       await client.close();
     }
@@ -273,7 +301,6 @@ describe("mcp stdio server", () => {
       }
     } finally {
       await client.close();
-      fs.rmSync(path.join(workspace, "test"), { recursive: true, force: true });
     }
   }, 60_000);
 
@@ -298,8 +325,6 @@ describe("mcp stdio server", () => {
       }
     } finally {
       await client.close();
-      fs.rmSync(path.join(workspace, "src/lonely.ts"), { force: true });
-      fs.rmSync(path.join(workspace, "src/caller.ts"), { force: true });
     }
   }, 60_000);
 
@@ -362,6 +387,12 @@ describe("mcp stdio server", () => {
   }, 60_000);
 
   it("bounds map output while preserving dropped-detail counts", async () => {
+    for (let dir = 0; dir < 12; dir += 1) {
+      for (let file = 0; file < 6; file += 1) {
+        const next = (file + 1) % 6;
+        write(`pkg${dir}/mod${file}.ts`, `import { run${dir}_${next} } from "./mod${next}.js";\nexport function run${dir}_${file}(): number { return run${dir}_${next}(); }\n`);
+      }
+    }
     const client = await connect();
     try {
       const text = await callTool(client, "osnova_groundwork", {});
@@ -401,4 +432,22 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
+});
+
+describe("the frozen contract document", () => {
+  it("names exactly the tools the server registers", async () => {
+    // AGENTS.md is the one line that says what may not break without a major version. It froze seven
+    // tools while ten shipped, so three load-bearing tools carried no stated protection.
+    const agents = fs.readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
+    const line = agents.split("\n").find((text) => text.includes("The MCP tool names and argument shapes"));
+    expect(line).toBeDefined();
+    const frozen = [...(line ?? "").matchAll(/`(osnova_[a-z]+)`/g)].map((match) => match[1]).sort();
+    const client = await connect();
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name).sort()).toEqual(frozen);
+    } finally {
+      await client.close();
+    }
+  });
 });

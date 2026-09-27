@@ -2,7 +2,7 @@ import path from "node:path";
 import { promises as fs, statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { buildIndex } from "../index/build.js";
-import { hookClients, runHook, workspaceRootFor } from "./hook.js";
+import { hookClients, hookEvents, isHookEvent, runHook, workspaceRootFor } from "./hook.js";
 import type { HookClient } from "./hook.js";
 import type { PluginClient } from "../diagnostics/setup-apply.js";
 import { refreshWorkspace } from "../api.js";
@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, leanAskBody, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, leanAskBody, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatDoctor, formatFindTextResult, threadMatchesPerGroup, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
@@ -48,14 +48,14 @@ usage:
   osnova outline <file> [--workspace <path>] [--cache-dir <path>]
   osnova warp <symbol> [--direction in|out] [--depth <n>] [--full] [--workspace <path>] [--cache-dir <path>]
   osnova groundwork [--max-dirs <n>] [--workspace <path>] [--cache-dir <path>]
-  osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [--workspace <path>] [--cache-dir <path>]
+  osnova footing "<question>" [--task understand|change|review] [--symbol <qualified>] [--in <path>] [-n <n>] [--depth <n>] [--max-code-units <n>] [--workspace <path>] [--cache-dir <path>]
   osnova settle <--base-ref <ref> | --base-cache <path>> [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova coverage [--json] [--workspace <path>] [--cache-dir <path>]
   osnova plumb <symbol> --site <path:line> [--site ...] [--sites-file <path>] [--direction in|out] [--depth <n>] [--workspace <path>] [--cache-dir <path>]
   osnova tests <symbol...> [--no-import-only] [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
-  osnova doctor [--workspace <path>] [--cache-dir <path>]
+  osnova doctor [--json] [--workspace <path>] [--cache-dir <path>]
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
@@ -265,9 +265,9 @@ export async function runCli(
         ignoreCase: parsed.values["ignore-case"],
         in: parsed.values.in,
         limit: limitValue ?? 50,
-        matchesPerGroup: 10,
+        matchesPerGroup: threadMatchesPerGroup,
       });
-      io.stdout(formatFindTextResult(result));
+      io.stdout(formatFindTextResult(result, threadMatchesPerGroup));
       return EXIT_OK;
     }
     case "outline": {
@@ -451,9 +451,9 @@ export async function runCli(
       return result.outdated ? EXIT_STALE : EXIT_OK;
     }
     case "doctor": {
-      const parsed = parseArgs({ args: rest, options: { workspace: { type: "string" }, "cache-dir": { type: "string" } } });
+      const parsed = parseArgs({ args: rest, options: { json: { type: "boolean" }, workspace: { type: "string" }, "cache-dir": { type: "string" } } });
       const report = await doctor(parsed.values.workspace ?? process.cwd(), { cacheDir: parsed.values["cache-dir"] });
-      io.stdout(jsonOutput(report, "doctor"));
+      io.stdout(parsed.values.json === true ? jsonOutput(report, "doctor") : formatDoctor(report));
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {
@@ -489,7 +489,7 @@ export async function runCli(
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
       if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
-      if (event !== "prompt" && event !== "session" && event !== "stop" && event !== "tool" && event !== "install-preview") throw new Error("osnova hook needs one of: prompt, session, stop, tool, install-preview");
+      if (!isHookEvent(event)) throw new Error(`osnova hook needs one of: ${hookEvents.join(", ")}`);
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
       await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;

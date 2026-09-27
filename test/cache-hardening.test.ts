@@ -98,8 +98,11 @@ it("evicts by reads rather than publication age and enforces artifact bytes", as
   expect(await loadArtifact(root, cacheDir)).toBeDefined();
   expect(await loadArtifact(roots[1]!, cacheDir)).toBeUndefined();
   await evictLru(cacheDir, { maxWorkspaces: 8, maxBytes: 1 });
-  expect(await loadArtifact(root, cacheDir)).toBeUndefined();
+  expect(await loadArtifact(root, cacheDir), "this process holds a reader lease on root").toBeDefined();
   expect(await loadArtifact(roots[2]!, cacheDir)).toBeUndefined();
+  await fs.rm(path.join(workspaceDirFor(cacheDir, root), "readers"), { recursive: true, force: true });
+  await evictLru(cacheDir, { maxWorkspaces: 8, maxBytes: 1 });
+  expect(await loadArtifact(root, cacheDir)).toBeUndefined();
 });
 
 it.each(["files", "edgesIdentity", "symbols", "span", "hash", "duplicate", "edgeTarget"])("rejects malformed %s without returning empty data", async (field) => {
@@ -129,14 +132,16 @@ it.each(["files", "edgesIdentity", "symbols", "span", "hash", "duplicate", "edge
   expect(() => deserializeArtifact(JSON.stringify(data), undefined, sections.text.bytes, edgeBytes)).toThrow(/corrupt/);
 });
 
-it("rejects corrupt compressed artifacts and preserves a valid cache when a smaller cap is requested", async () => {
+it("rejects corrupt compressed artifacts, rebuilds them on refresh and preserves a valid cache when a smaller cap is requested", async () => {
   const { root, cacheDir } = await fixture();
   const index = await refreshWorkspace(root, { cacheDir });
   await expect(refreshWorkspace(root, { cacheDir, maxBytes: 1 })).rejects.toThrow(/cache-limit-exceeded/);
   expect((await loadArtifact(root, cacheDir))?.files.size).toBe(1);
   const target = path.join(workspaceDirFor(cacheDir, root), "index.json");
   await fs.writeFile(target, gzipSync(serializeArtifact(index)).subarray(0, 20));
-  await expect(refreshWorkspace(root, { cacheDir })).rejects.toThrow(/cache-read-failed/);
+  await expect(loadArtifact(root, cacheDir)).rejects.toThrow(/cache-read-failed/);
+  expect((await refreshWorkspace(root, { cacheDir })).files.size).toBe(1);
+  expect((await loadArtifact(root, cacheDir))?.files.size).toBe(1);
 });
 
 it("publishes compressed and plain generations through one atomic artifact path", async () => {
@@ -152,7 +157,7 @@ it("publishes compressed and plain generations through one atomic artifact path"
   for (let i = 0; i < 6; i += 1) await fs.unlink(path.join(root, `${i}.ts`));
   const small = await refreshWorkspace(root, { cacheDir });
   expect((await fs.readFile(target)).toString()).toBe(serializeArtifact(small).toString());
-  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "edges.json", "family.json", "index.json", "index.sha", "text.bin", "verification.json"]);
+  expect((await fs.readdir(path.dirname(target))).sort()).toEqual(["access", "edges.json", "family.json", "index.json", "index.sha", "readers", "text.bin", "verification.json"]);
 });
 
 it("reports an unwritable cache target explicitly", async () => {

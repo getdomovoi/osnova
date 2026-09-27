@@ -20,7 +20,7 @@ Optional LSP enrichment, when you enable it, runs a language server executable t
 
 ## What third parties get
 
-No one. There is no account, no sign-in, no key, and no service behind the tool. Your code and your queries stay on your machine.
+No one. The installed tool has no account, no sign-in, no key and no service behind it; your code and your queries stay on your machine. Two maintainer scripts in the repository, `scripts/resolution-diff.mjs` and `scripts/resolution-levers.mjs`, can send changed-edge samples with their source lines to a review model when `TYPESAFE_API_KEY` is set; they are not in the published package, they stop before sending anything when the key is absent, and the reference describes them.
 
 ## Contact
 

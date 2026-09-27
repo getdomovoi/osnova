@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,20 +15,28 @@ function capture(): { lines: string[]; io: { stdout: (t: string) => void; stderr
   };
 }
 
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-ws-"));
-const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-cache-"));
-const cacheArgs = ["--cache-dir", cacheDir];
-
-afterAll(() => {
-  fs.rmSync(workspace, { recursive: true, force: true });
-  fs.rmSync(cacheDir, { recursive: true, force: true });
-});
+let workspace: string;
+let cacheDir: string;
+let cacheArgs: string[];
 
 function write(rel: string, content: string): void {
   const abs = path.join(workspace, rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content);
 }
+
+beforeEach(() => {
+  workspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-ws-"));
+  cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-cache-"));
+  cacheArgs = ["--cache-dir", cacheDir];
+  write("src/one.ts", "export function one(): number { return 1; }\n");
+  write("src/two.ts", 'import { one } from "./one.js";\nexport function two(): number { return one() + 1; }\n');
+});
+
+afterEach(() => {
+  fs.rmSync(workspace, { recursive: true, force: true });
+  fs.rmSync(cacheDir, { recursive: true, force: true });
+});
 
 describe("cli", () => {
   it("prints usage and exits 2 without a command", async () => {
@@ -39,8 +47,6 @@ describe("cli", () => {
   });
 
   it("builds an index and reports counts", async () => {
-    write("src/one.ts", "export function one(): number { return 1; }\n");
-    write("src/two.ts", 'import { one } from "./one.js";\nexport function two(): number { return one() + 1; }\n');
     const { lines, io } = capture();
     const code = await runCli(["build", workspace, ...cacheArgs], io);
     expect(code).toBe(0);
@@ -74,6 +80,7 @@ describe("cli", () => {
   });
 
   it("check exits 0 when fresh, 1 after an edit, 0 after refresh via ground", async () => {
+    expect(await runCli(["build", workspace, ...cacheArgs], capture().io)).toBe(0);
     const fresh = capture();
     expect(await runCli(["check", workspace, ...cacheArgs], fresh.io)).toBe(0);
     expect(fresh.lines.join("\n")).toContain("fresh");
@@ -90,6 +97,63 @@ describe("cli", () => {
 
     const freshAgain = capture();
     expect(await runCli(["check", workspace, ...cacheArgs], freshAgain.io)).toBe(0);
+  }, 60_000);
+
+  it("publishes the same artifact bytes after a refresh as a full rebuild", async () => {
+    expect(await runCli(["build", workspace, ...cacheArgs], capture().io)).toBe(0);
+    write("src/three.ts", 'import { two } from "./two.js";\nexport function three(): number { return two() + 1; }\n');
+    write("src/two.ts", 'import { one } from "./one.js";\nexport function two(): number { return one() + 2; }\nexport function twin(): number { return one(); }\n');
+    expect(await runCli(["ground", "three", "--workspace", workspace, ...cacheArgs], capture().io)).toBe(0);
+    const rebuiltCache = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-rebuilt-"));
+    try {
+      expect(await runCli(["build", workspace, "--cache-dir", rebuiltCache], capture().io)).toBe(0);
+      const published = (dir: string): string => {
+        const keys = fs.readdirSync(dir).filter((name) => /^[0-9a-f]{16}$/.test(name));
+        expect(keys).toHaveLength(1);
+        return path.join(dir, keys[0]!);
+      };
+      for (const artifact of ["index.json", "edges.json", "text.bin", "index.sha"]) {
+        const refreshed = fs.readFileSync(path.join(published(cacheDir), artifact));
+        expect(refreshed.equals(fs.readFileSync(path.join(published(rebuiltCache), artifact))), artifact).toBe(true);
+      }
+    } finally {
+      fs.rmSync(rebuiltCache, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("coverage --json pins the resolution basis of every call site across languages", async () => {
+    const files: Record<string, string> = {
+      "c/main.c": '#include "util.h"\nstatic int local(void) { return 1; }\nint run(void) { return util_add(1) + local() + other(); }\n',
+      "c/util.h": "int util_add(int x);\n",
+      "c/util.c": '#include "util.h"\nint util_add(int x) { return x + 1; }\n',
+      "c/other.c": "int other(void) { return 3; }\n",
+      "go/pkg/a.go": "package pkg\n\nfunc Run() int {\n\treturn helper() + local()\n}\n\nfunc local() int { return 1 }\n",
+      "go/pkg/b.go": "package pkg\n\nfunc helper() int { return 2 }\n",
+      "java/src/a/b/Util.java": "package a.b;\n\npublic class Util {\n    public static int helper() { return 1; }\n}\n",
+      "java/src/a/b/App.java": "package a.b;\n\nimport static a.b.Util.helper;\nimport a.b.Util;\n\npublic class App {\n    int local() { return 1; }\n    int run() { return helper() + local() + Util.helper(); }\n}\n",
+      "py/util.py": "def helper():\n    return 1\n",
+      "py/app.py": "from .util import helper\n\nclass Box:\n    def size(self):\n        return 1\n\n    def total(self):\n        return self.size() + helper()\n\ndef local():\n    return 1\n\ndef run():\n    return helper() + local()\n",
+      "rb/a.rb": "def run\n  helper() + local()\nend\n\ndef local\n  1\nend\n",
+      "rb/b.rb": "def helper\n  2\nend\n",
+      "rs/src/main.rs": "mod util;\nuse crate::util::helper;\nuse util::*;\n\nfn local() -> i32 { 1 }\n\nfn main() {\n    let _ = helper() + local() + starred();\n}\n",
+      "rs/src/util.rs": "pub fn helper() -> i32 { 1 }\npub fn starred() -> i32 { 2 }\n",
+      "ts/lib.ts": "export function shared(): number { return 1; }\n",
+      "ts/app.ts": 'import { shared } from "./lib.js";\nfunction local(): number { return 1; }\nclass Counter {\n  step(): number { return 1; }\n  twice(): number { return this.step() + this.step(); }\n}\nexport function run(): number { return shared() + local() + new Counter().twice(); }\n',
+    };
+    fs.rmSync(path.join(workspace, "src"), { recursive: true, force: true });
+    for (const [rel, content] of Object.entries(files)) write(rel, content);
+    const out = capture();
+    expect(await runCli(["coverage", "--json", "--workspace", workspace, ...cacheArgs], out.io)).toBe(0);
+    const report = JSON.parse(out.lines.join("\n")) as { languages: { language: string; byMethod: Record<string, number> }[] };
+    expect(Object.fromEntries(report.languages.map((row) => [row.language, row.byMethod]))).toEqual({
+      c: { "same-file-name": 1, "unique-name": 2 },
+      go: { "same-file-name": 1, "unique-name": 1 },
+      java: { "imported-file-name": 1, "receiver-hint": 1, "same-file-name": 1 },
+      python: { "import-binding": 2, "lexical-definition": 1, "receiver-hint": 1 },
+      ruby: { "same-file-name": 1, "unique-name": 1 },
+      rust: { "imported-file-name": 2, "same-file-name": 1 },
+      typescript: { "import-binding": 1, "lexical-definition": 2, "receiver-hint": 2 },
+    });
   }, 60_000);
 
   it("outline, thread, warp, groundwork round-trip", async () => {
@@ -111,7 +175,7 @@ describe("cli", () => {
 
     const mapOut = capture();
     expect(await runCli(["groundwork", "--workspace", workspace, ...cacheArgs], mapOut.io)).toBe(0);
-    expect(mapOut.lines.join("\n")).toContain("files 3");
+    expect(mapOut.lines.join("\n")).toContain("files 2 |");
   }, 60_000);
 
   it("unreferenced lists candidates, honours scope, kinds, exported and limit", async () => {
@@ -130,7 +194,6 @@ describe("cli", () => {
     expect(twice.lines).toEqual(out.lines);
     await expect(runCli(["unreferenced", "--kinds", "nope", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("symbol kinds");
     await expect(runCli(["unreferenced", "--limit=-1", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow(RangeError);
-    fs.rmSync(path.join(workspace, "src/alone.ts"), { force: true });
   }, 60_000);
 
   it("tests maps symbols to test files and back", async () => {
@@ -149,7 +212,6 @@ describe("cli", () => {
     expect(twice.lines).toEqual(bySymbol.lines);
     await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("either <symbol...> or --file");
     await expect(runCli(["tests", "two", "--file", "test/two.test.ts", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("not both");
-    fs.rmSync(path.join(workspace, "test"), { recursive: true, force: true });
   }, 60_000);
 
   it("rejects a stray directory positional and points at --workspace", async () => {
@@ -198,7 +260,6 @@ describe("cli", () => {
       expect(trap.lines.join("\n")).toContain(`osnova ground: ${JSON.stringify(workspace)} looks like a directory; pass the workspace with --workspace <path>`);
     } finally {
       process.chdir(previousCwd);
-      fs.rmSync(path.join(workspace, "src/util"), { recursive: true, force: true });
     }
   }, 60_000);
 
@@ -210,28 +271,24 @@ describe("cli", () => {
       "  return `${header}\\n\\n${body}`;",
       "}",
     ].join("\n") + "\n");
-    try {
-      const lean = capture();
-      expect(await runCli(["ground", "assembleReport rows title", "--lean", "--workspace", workspace, ...cacheArgs], lean.io)).toBe(0);
-      const leanText = lean.lines.join("\n");
-      expect(leanText).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
-      expect(leanText).not.toContain("const header =");
+    const lean = capture();
+    expect(await runCli(["ground", "assembleReport rows title", "--lean", "--workspace", workspace, ...cacheArgs], lean.io)).toBe(0);
+    const leanText = lean.lines.join("\n");
+    expect(leanText).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
+    expect(leanText).not.toContain("const header =");
 
-      const inlined = capture();
-      expect(await runCli(["ground", "assembleReport rows title", "--workspace", workspace, ...cacheArgs], inlined.io)).toBe(0);
-      const inlinedText = inlined.lines.join("\n");
-      expect(inlinedText).toContain("const header =");
-      expect(leanText.length).toBeLessThan(inlinedText.length);
+    const inlined = capture();
+    expect(await runCli(["ground", "assembleReport rows title", "--workspace", workspace, ...cacheArgs], inlined.io)).toBe(0);
+    const inlinedText = inlined.lines.join("\n");
+    expect(inlinedText).toContain("const header =");
+    expect(leanText.length).toBeLessThan(inlinedText.length);
 
-      const scoped = capture();
-      expect(await runCli(["ground", "assembleReport rows title", "--lean", "--scoped", "--workspace", workspace, ...cacheArgs], scoped.io)).toBe(0);
-      const scopedText = scoped.lines.join("\n");
-      expect(scopedText).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
-      expect(scopedText).toContain("function assembleReport(rows: readonly string[], title: string): string");
-      expect(scopedText).not.toContain("const header =");
-    } finally {
-      fs.rmSync(path.join(workspace, "src/lean-target.ts"), { force: true });
-    }
+    const scoped = capture();
+    expect(await runCli(["ground", "assembleReport rows title", "--lean", "--scoped", "--workspace", workspace, ...cacheArgs], scoped.io)).toBe(0);
+    const scopedText = scoped.lines.join("\n");
+    expect(scopedText).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
+    expect(scopedText).toContain("function assembleReport(rows: readonly string[], title: string): string");
+    expect(scopedText).not.toContain("const header =");
   }, 60_000);
 
   it("rejects unknown commands with exit 2", async () => {

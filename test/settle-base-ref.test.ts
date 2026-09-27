@@ -101,6 +101,37 @@ describe.skipIf(process.platform === "win32")("settle --base-ref", () => {
     expect(await baseTrees()).toEqual([shas[1]!, shas[2]!].sort());
   });
 
+  it("settles uncommitted changes against HEAD when called over MCP with neither diff nor baseRef", async () => {
+    await fs.writeFile(path.join(repo, "api.ts"), "export function work() { return 3; }\n");
+    await fs.writeFile(path.join(repo, "extra.ts"), "import { work } from './api.js';\nexport function more() { return work(); }\n");
+    const plain = path.join(temporary, "plain");
+    await fs.mkdir(plain);
+    await fs.writeFile(path.join(plain, "a.ts"), "export const a = 1;\n");
+    for (const [workspace, check] of [[repo, "git"], [plain, "plain"]] as const) {
+      const { server } = createOsnovaMcpServer(workspace, { cacheDir: cache });
+      const client = new Client({ name: "osnova-test", version: "0.0.0" });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const result = await client.callTool({ name: "osnova_settle", arguments: { depth: 1 } });
+        const text = ((result as { content?: readonly ContentBlock[] }).content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
+        if (check === "git") {
+          expect(result.isError, text).toBeFalsy();
+          expect(text).toContain("changed: api.ts#work -> api.ts#work");
+          expect(text).toContain("added: <new> -> extra.ts#more");
+          expect(text).toContain("entry.ts#start");
+          expect(text).not.toContain("base = current index");
+        } else {
+          expect(result.isError).toBe(true);
+          expect(text).toContain("compares against HEAD");
+          expect(text).toContain("pass diff");
+        }
+      } finally {
+        await client.close();
+      }
+    }
+  });
+
   it("round-trips baseRef over MCP", async () => {
     const { server } = createOsnovaMcpServer(repo, { cacheDir: cache });
     const client = new Client({ name: "osnova-test", version: "0.0.0" });
@@ -114,9 +145,6 @@ describe.skipIf(process.platform === "win32")("settle --base-ref", () => {
       expect(text).toContain("changed: api.ts#work -> api.ts#work");
       expect(text).toContain("entry.ts#start");
       expect(text).not.toContain("base = current index");
-      const missing = await client.callTool({ name: "osnova_settle", arguments: {} });
-      expect(missing.isError).toBe(true);
-      expect(JSON.stringify(missing.content)).toContain("diff or baseRef");
       const unknown = await client.callTool({ name: "osnova_settle", arguments: { baseRef: "no-such-ref" } });
       expect(unknown.isError).toBe(true);
       expect(JSON.stringify(unknown.content)).toContain("unknown git ref: no-such-ref");
