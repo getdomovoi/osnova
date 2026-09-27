@@ -37,6 +37,7 @@ The extraction version moves to `structural-9.30` and the artifact format to 13,
 
 ### Changed
 
+- The declared range of `@modelcontextprotocol/sdk` is `^1.30.0`. Installs already resolved 1.30.0; the old floor of 1.12.0 was what dependency scanners read, and it carries advisories that never shipped.
 - `osnova setup --hooks` reconciles instead of only adding. An osnova hook that runs from another install is repointed at this one, keeping its flags, timeout and matcher; an osnova hook this version cannot run, a duplicate, or one under the wrong event is removed; missing hooks are added as before. Moving between installs, or back from a build with extra hooks, used to leave the old commands in place, and a hook the running version lacks failed on every event. A change that repoints or removes is reported as `update` and backed up like an append. Shell-wrapped osnova commands and hooks that are not osnova's are never rewritten.
 - `osnova setup` repoints an existing `osnova` MCP entry that launches another osnova install instead of refusing it as a conflict, keeping the flags after `mcp`, other keys such as `env`, and Codex's tool approval tables. Only an `osnova` entry that does not launch osnova still stops the apply. A hook or MCP entry counts as osnova's when the program it runs before `hook` or `mcp` is the `osnova` executable, the `@getdomovoi/osnova` package, or a `dist/bin.js` inside a folder whose name contains `osnova`; a user's own script that only lives under such a folder is never changed. The entry is found by walking from the top-level object, so a per-project `mcpServers` block earlier in `~/.claude.json` is no longer mistaken for the top-level one; appending used to insert into the first `mcpServers` object in the file.
 - `osnova_settle` with neither `diff` nor `baseRef` settles the uncommitted changes against `HEAD`, untracked indexed files included, instead of failing with "needs diff or baseRef". In a paid agent trial, 47 of 60 settle errors were exactly that call, and each cost a retry request carrying the whole context; most of the rest were hand-written diffs with wrong hunk counts. The tool description, the MCP instructions, the session hook's tool list and the shipped skill now point at the no-argument call. Outside a git repository, the no-argument call fails with a message that says to pass `diff`.
@@ -48,6 +49,9 @@ The extraction version moves to `structural-9.30` and the artifact format to 13,
 - The GitHub Action runs the osnova version of the action ref you use, so `getdomovoi/osnova@v0.8.1` runs osnova 0.8.1 on every run instead of whatever npm published last. `version: latest` floats on purpose. `scripts/settle-ci.sh` resolves the version and prints it under `OSNOVA_PRINT_COMMAND=1`.
 - A `NOTICE` file ships in the package. It records that the tree-sitter grammar binaries npm installs from `tree-sitter-wasms` are compiled from MIT-licensed grammar projects under a package that declares Unlicense, and that osnova does not redistribute them.
 - The README's type-checker oracle figures now say the version they were measured at, 0.8.0, as `docs/reference.md` already did.
+- Every MCP tool declares its annotation hints: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`. All ten read the index and write nothing, and clients and directories read these hints to decide what a tool may do. A test lists the tools over an in-memory transport and holds every one to those four values.
+
+
 
 ### Added
 
