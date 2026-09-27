@@ -219,6 +219,10 @@ export function formatFindTextResult(result: FindTextResult): string {
   }
   if (result.totalMatches === 0) lines.push("no matches in indexed text");
   else if (result.groups.length > 0) lines.push(formatFindText(result.groups));
+  const unsearched = result.unsearchedFiles.length;
+  if (unsearched > 0) {
+    lines.push(`${unsearched} ${unsearched === 1 ? "file in this scope is" : "files in this scope are"} above the ${maximumIndexedFileSizeBytes / 1_000_000} MB size cap and ${unsearched === 1 ? "was" : "were"} not searched: ${result.unsearchedFiles.slice(0, 3).join(", ")}${unsearched > 3 ? `, and ${unsearched - 3} more` : ""}`);
+  }
   return lines.join("\n");
 }
 
@@ -724,7 +728,12 @@ export function formatImpactFiles(result: ImpactResult): string[] {
 export function formatImpactUncertainty(uncertainty: ImpactResult["uncertainty"]): string {
   const phrases = uncertainty.notes.map((note) => {
     const short = note.match(/^diff-short-by-(\d+)-context-lines-treated-as-unchanged$/);
-    return short === null ? impactNoteText[note] ?? note : `diff ${short[1]} context lines short, treated unchanged`;
+    if (short !== null) return `diff ${short[1]} context lines short, treated unchanged`;
+    const ambiguous = note.match(/^diff-paths-ambiguous-(\d+):(.*)$/s);
+    if (ambiguous !== null) return `${ambiguous[1]} diff path${ambiguous[1] === "1" ? " names" : "s name"} both a workspace file and a repository-root file, first ${ambiguous[2]}; left out: pass a diff made inside the workspace, or call osnova_settle with no arguments`;
+    const unindexed = note.match(/^diff-files-not-in-index-(\d+):(.*)$/s);
+    if (unindexed !== null) return `${unindexed[1]} diff file${unindexed[1] === "1" ? "" : "s"} not in the index, first ${unindexed[2]}; diff paths are read relative to the workspace, or from the repository root when the diff names the workspace folder`;
+    return impactNoteText[note] ?? note;
   }).filter((text) => text !== "");
   return [`uncertainty: ${uncertainty.unresolvedEdges} unresolved edges not listed; a missing dependent is not proof of absence`, ...phrases].join("; ");
 }
@@ -878,7 +887,7 @@ export function formatUnreferenced(result: UnreferencedResult): string {
   lines.push(`${result.withoutLeads} of ${listed} listed candidates have no lead at all (no unresolved same-name site, no test site, no text mention); a lead is a place to check by hand, not a caller.`);
   const entries = result.entryPoints;
   lines.push(
-    `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}`,
+    `entry points excluded: main ${entries.main}, default export ${entries["default-export"]}, index file ${entries["index-file"]}, package.json bin ${entries["package-bin"]}, test file ${entries["test-file"]}, constructor ${entries.constructor}, python dunder ${entries["python-dunder"]}`,
     entryPointRuleText,
     result.exportedNotListed > 0 ? "exported symbols are entry points for external consumers and are listed only with includeExported." : "",
     result.shadowedNotListed > 0 ? "shadowed symbols (a name the file declares in more than one scope) are never listed: the index records no edge to them, so their absence from the graph is not evidence." : "",

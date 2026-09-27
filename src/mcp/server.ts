@@ -8,7 +8,7 @@ import {
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspace, indexGeneration } from "../api.js";
-import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
+import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -38,7 +38,7 @@ const maximumMcpSkeletonCodeUnits = 4_096;
 // harness with an MCP client gets the tool contract without a hook.
 export const mcpInstructions = [
   "Osnova is a deterministic call graph of this repository with exact file:line, no type inference, no LLM. Use its tools before grep and file reads.",
-  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search, including HTTP routes by verb and path (GET /users). osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of a unified diff before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
+  "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search, including HTTP routes by verb and path (GET /users). osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of your uncommitted changes (no arguments) before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
 const maximumMcpCallersCodeUnits = 2_048;
@@ -149,11 +149,11 @@ const toolDefinitions = [
     name: "osnova_settle",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover. Without baseRef it compares against the current index only, so deleted symbols are not visible; with baseRef (a git commit or ref) it indexes that commit's tree under the cache and compares it with the current index, computing the diff with git when none is given.",
+      "Change impact: given the output of git diff, the symbols the diff touches and their indexed dependents to the requested depth (default 1), under 4096 code units with exact omission counts. Use once after editing, before declaring done, to find callers the tests do not cover; with no arguments it checks every uncommitted change against HEAD. A diff alone compares against the current index only, so deleted symbols are not visible; with baseRef (a git commit or ref) it indexes that commit's tree under the cache and compares it with the current index, computing the diff with git when none is given.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths (required unless baseRef is given)" },
+        diff: { type: "string", description: "Unified diff text with a/ b/ or plain repo-relative paths (omit both diff and baseRef to settle uncommitted changes against HEAD)" },
         baseRef: { type: "string", description: "Git commit or ref to compare against; its tree is indexed under the cache without a checkout" },
         depth: { type: "number", description: "Dependent walk depth (default 1)" },
       },
@@ -194,7 +194,7 @@ const toolDefinitions = [
     name: "osnova_unreferenced",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
+      "Unreferenced candidates: definitions with no resolved call or reference edge from outside their own body in a non-test file, sorted by file and line, each with the count of unresolved same-name call sites (leads that may reach it), test-file sites and identifier mentions in non-test files. Entry points (main, default exports, index.* files, package.json bin files, test files, constructors, Python dunders) are never listed; exported definitions are listed only with includeExported. Candidates only: no indexed caller is not proof of no caller.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -391,16 +391,31 @@ export function createOsnovaMcpServer(
           return textResult(`${prefix}\n${boundText(formatTaskContext(result), available)}`);
         }
         case "osnova_settle": {
-          const baseRef = optionalString(args, "baseRef");
           const diff = optionalString(args, "diff");
-          if (baseRef === undefined && diff === undefined) throw new Error("osnova_settle needs diff or baseRef");
+          const explicitRef = optionalString(args, "baseRef");
+          // With neither argument the caller means "what did I change": agents made that call on a large share of
+          // settle requests and paid a retry each time, so it compares HEAD with the working tree.
+          const baseRef = explicitRef ?? (diff === undefined ? "HEAD" : undefined);
+          const useBaseRef = "call osnova_settle with no arguments and osnova computes the diff of your uncommitted edits itself";
           const maxDepth = optionalNumber(args, "depth") ?? 1;
+          const diffPathPrefix = diff === undefined ? undefined : await workspaceGitPrefix(absRoot);
+          const measured = (run: () => ReturnType<typeof impact>): ReturnType<typeof impact> => {
+            try {
+              return run();
+            } catch (error) {
+              if (error instanceof Error && error.message.includes("pass the exact diff output")) throw new Error(`${error.message}, or ${useBaseRef}`);
+              throw error;
+            }
+          };
           let result;
-          if (baseRef === undefined) result = impact(index, index, { diff, maxDepth });
+          if (baseRef === undefined) result = measured(() => impact(index, index, { diff, maxDepth, diffPathPrefix }));
           else {
-            const base = await materializeBaseRef(absRoot, baseRef, { cacheDir });
+            const base = await materializeBaseRef(absRoot, baseRef, { cacheDir }).catch((error: unknown) => {
+              if (explicitRef !== undefined) throw error;
+              throw new Error(`osnova_settle with no arguments compares against HEAD, which failed here (${error instanceof Error ? error.message : String(error)}); pass diff with a unified diff instead`);
+            });
             const computed = diff ?? await baseDiff(absRoot, base.sha);
-            result = impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth });
+            result = measured(() => impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth, diffPathPrefix }));
           }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);

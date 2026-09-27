@@ -1,6 +1,7 @@
 import type { AskDetailedResult, AskHit, AskOptions, AskResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import { idf, matchInPath, queryContext, scopedQueryContext, tokenize } from "./context.js";
 import type { QueryContext, SearchDocument } from "./context.js";
+import { isTestFile } from "./tests.js";
 
 const DEFAULT_LIMIT = 8;
 const ROLE_WORDS = new Set([
@@ -8,6 +9,7 @@ const ROLE_WORDS = new Set([
   "class", "classes", "caller", "callers", "usage", "usages",
 ]);
 const EXCERPT_LINES = 8;
+const testTextWeight = 0.5;
 const FULL_EXCERPT_MAX_LINES = 400;
 
 function excerptFor(
@@ -72,6 +74,7 @@ export function askDetailed(index: OsnovaIndex, question: string, options?: AskO
   }
   const ctx = filter.length > 0 ? scopedQueryContext(index, filter, queryTokens) : queryContext(index);
   const full = options?.full ?? false;
+  const asksForTests = allTokens.some((token) => /^(?:tests?|spec|specs|testing|pytest|unittest|fixtures?)$/.test(token));
   const scored: Array<{ document: SearchDocument; score: number; exact: boolean }> = [];
   for (const document of ctx.documents) {
     if (!matchInPath([document.file], filter)) continue;
@@ -90,7 +93,10 @@ export function askDetailed(index: OsnovaIndex, question: string, options?: AskO
       );
     }
     if (priority > 0 || lexical > 0) {
-      scored.push({ document, score: priority + lexical / (1 + lexical), exact: priority > 0 });
+      // Test code repeats the words of the code it tests; unless the question asks about tests, its
+      // text match counts for less, so the definition under test ranks first. Exact names keep priority.
+      const weight = !asksForTests && isTestFile(document.file) ? testTextWeight : 1;
+      scored.push({ document, score: priority + weight * lexical / (1 + lexical), exact: priority > 0 });
     }
   }
   const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;

@@ -59,8 +59,10 @@ export function findTextDetailed(
 
   const paths: string[] = [];
   const texts: string[] = [];
+  const unsearchedFiles: string[] = [];
   for (const path of [...index.files.keys()].sort()) {
     if (!matchInPath([path], filter)) continue;
+    if (index.files.get(path)?.diagnostics?.some((diagnostic) => diagnostic.code === "file-too-large") === true) unsearchedFiles.push(path);
     const text = index.files.get(path)?.text ?? "";
     if (text.length === 0) continue;
     paths.push(path);
@@ -141,6 +143,7 @@ export function findTextDetailed(
     omittedGroups: groups.length - selected.length,
     omittedMatches,
     truncated: omittedMatches > 0,
+    unsearchedFiles,
   };
 }
 

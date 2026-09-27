@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { doctor } from "../src/diagnostics/doctor.js";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-repo");
-const cacheDir = ".tmp-coverage-cache";
+const cacheDir = path.join(process.env.OSNOVA_CACHE_DIR ?? ".tmp-coverage-cache", "coverage");
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
