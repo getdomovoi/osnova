@@ -85,7 +85,7 @@ jobs:
         run: |
           tarballs=(release/*.tgz)
           test "${#tarballs[@]}" -eq 1 || { echo "expected one tarball, found ${#tarballs[@]}"; exit 1; }
-          npm publish "${tarballs[0]}" --access public --provenance --ignore-scripts
+          npm publish "./${tarballs[0]}" --access public --provenance --ignore-scripts
       - name: Create the GitHub release from the changelog section
         env:
           GH_TOKEN: ${{ github.token }}
