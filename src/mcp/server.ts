@@ -21,7 +21,7 @@ import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
 import { unreferenced } from "../query/unreferenced.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFileDiagnostics, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFileDiagnostics, formatFindTextResult, threadMatchesPerGroup, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -335,12 +335,12 @@ export function createOsnovaMcpServer(
             ignoreCase: optionalBoolean(args, "ignoreCase"),
             in: optionalString(args, "in"),
             limit: optionalNumber(args, "limit") ?? 50,
-            matchesPerGroup: 10,
+            matchesPerGroup: threadMatchesPerGroup,
           });
-          return textResult(`${prefix}\n${formatFindTextResult(result)}`);
+          return textResult(`${prefix}\n${formatFindTextResult(result, threadMatchesPerGroup)}`);
         }
         case "osnova_outline": {
-          const file = requireString(args, "file");
+          const file = workspaceRelative(index.root, absRoot, requireString(args, "file"));
           const result = skeleton(index, file);
           const head = [prefix, formatFileDiagnostics(index, result.file)].filter(Boolean).join("\n");
           const available = maximumMcpSkeletonCodeUnits - head.length - 1;
@@ -455,11 +455,30 @@ export function createOsnovaMcpServer(
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
     } catch (error) {
-      return errorResult(error instanceof Error ? error.message : String(error), toolErrorBudget(name));
+      const message = error instanceof Error ? error.message : String(error);
+      // Agents working in another worktree or clone retried the same lookup; say which checkout this server reads.
+      const where = latest?.root ?? absRoot;
+      const hint = error instanceof OutsideWorkspaceError
+        ? `; this server indexes ${where} and the path is outside it, so query a path under this root or start osnova in that checkout`
+        : /is not indexed; search|no indexed symbol named/.test(message) ? `; this server indexes ${where}, and a file in another checkout or worktree is not in it` : "";
+      return errorResult(`${message}${hint}`, toolErrorBudget(name));
     }
   });
 
   return { server, refresh, status, close };
+}
+
+class OutsideWorkspaceError extends Error {}
+
+// An absolute file argument inside the workspace, under its canonical or its given root, is read as the
+// repository-relative path it names. An absolute path outside both is refused by name, never guessed.
+function workspaceRelative(root: string, givenRoot: string, file: string): string {
+  if (!path.isAbsolute(file)) return file;
+  for (const base of [root, givenRoot]) {
+    const relative = path.relative(base, file);
+    if (relative.length > 0 && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return relative.split(path.sep).join("/");
+  }
+  throw new OutsideWorkspaceError(`osnova: file ${JSON.stringify(file)} is not indexed`);
 }
 
 function textResult(text: string, maxCodeUnits?: number): { content: Array<{ type: "text"; text: string }> } {

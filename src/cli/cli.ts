@@ -14,7 +14,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
-import { formatAsk, leanAskBody, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatDoctor, formatFindTextResult, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, leanAskBody, formatCallersDetailed, formatCallersDetailedBounded, formatCoverage, formatDoctor, formatFindTextResult, threadMatchesPerGroup, formatImpactDependent, formatImpactFiles, formatImpactUncertainty, formatPlumb, formatIndexDiagnostics, formatMap, formatSkeleton, formatSymbolsUnderTest, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
@@ -265,9 +265,9 @@ export async function runCli(
         ignoreCase: parsed.values["ignore-case"],
         in: parsed.values.in,
         limit: limitValue ?? 50,
-        matchesPerGroup: 10,
+        matchesPerGroup: threadMatchesPerGroup,
       });
-      io.stdout(formatFindTextResult(result));
+      io.stdout(formatFindTextResult(result, threadMatchesPerGroup));
       return EXIT_OK;
     }
     case "outline": {

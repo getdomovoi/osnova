@@ -55,6 +55,9 @@ describe("CLI search completeness", () => {
     const text = await grep("needle");
     expect(text).toContain("indexed-text search: 500/561 matches, 50/51 groups");
     expect(text).toContain("truncated: 61 matches omitted; 1 groups omitted");
+    expect(text).toContain("Raise limit to list more groups; a group is one enclosing definition in one file, and limit counts groups, not matches.");
+    expect(text).toContain("Each group lists at most 10 matches and no argument raises that; for every line in one file, run a plain text search on that file.");
+    expect(text).not.toContain("findTextDetailed");
   });
 
   it("does not mistake a zero display limit for no matches", async () => {
@@ -87,6 +90,8 @@ describe("MCP search completeness", () => {
     expect(result.isError).toBeFalsy();
     expect(result.text).toContain("10/11 matches, 1/1 groups");
     expect(result.text).toContain("truncated: 1 matches omitted; 0 groups omitted");
+    expect(result.text).not.toContain("Raise limit");
+    expect(result.text).toContain("Each group lists at most 10 matches");
   });
 
   it("reports invalid numeric limits as tool errors", async () => {

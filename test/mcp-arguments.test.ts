@@ -104,6 +104,24 @@ describe("MCP arguments are held to the advertised schema", () => {
     }
   });
 
+  it("names the indexed workspace when a file or symbol is not found, and reads an absolute path inside it", async () => {
+    // The index root is resolved natively, which on Windows expands 8.3 short names such as RUNNER~1.
+    const root = fs.realpathSync.native(workspace);
+    const inside = await call("osnova_outline", { file: path.join(root, "top.ts") });
+    expect(inside.isError, inside.text).toBe(false);
+    expect(inside.text).toContain("top.ts (typescript");
+    const other = path.join(os.tmpdir(), "another-checkout", "top.ts");
+    const outside = await call("osnova_outline", { file: other });
+    expect(outside.isError).toBe(true);
+    expect(outside.text).toContain(`this server indexes ${root}`);
+    expect(outside.text).toContain("outside it");
+    const missing = await call("osnova_outline", { file: "src/f_four.ts" });
+    expect(missing.text).toContain(`this server indexes ${root}`);
+    const symbol = await call("osnova_warp", { symbol: "f_four" });
+    expect(symbol.isError).toBe(true);
+    expect(symbol.text).toContain(`this server indexes ${root}`);
+  });
+
   it("still leaves range checks to the engine", async () => {
     const negative = await call("osnova_thread", { pattern: "f_", limit: -1 });
     expect(negative.isError).toBe(true);
