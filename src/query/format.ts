@@ -209,18 +209,18 @@ export function formatFindText(groups: readonly FindTextGroup[]): string {
   return blocks.join("\n");
 }
 
-// The per-file match cap of `thread` on the CLI and MCP; neither exposes an argument that raises it.
-export const threadMatchesPerFile = 10;
+// The per-group match cap of `thread` on the CLI and MCP (a group is one enclosing definition in one file); neither exposes an argument that raises it.
+export const threadMatchesPerGroup = 10;
 
-// `matchesPerFile` is the per-file cap the caller searched with; CLI and MCP expose no argument that raises it.
-export function formatFindTextResult(result: FindTextResult, matchesPerFile?: number): string {
+// `matchesPerGroup` is the per-group cap the caller searched with; CLI and MCP expose no argument that raises it.
+export function formatFindTextResult(result: FindTextResult, matchesPerGroup?: number): string {
   const shown = result.totalMatches - result.omittedMatches;
   const summary = `indexed-text search: ${shown}/${result.totalMatches} matches, ${result.groups.length}/${result.totalGroups} groups`;
   const lines = [summary];
   if (result.truncated) {
     lines.push(`truncated: ${result.omittedMatches} matches omitted; ${result.omittedGroups} groups omitted`);
-    if (result.omittedGroups > 0) lines.push("Raise limit to list more files; it counts files, not matches.");
-    if (matchesPerFile !== undefined) lines.push(`Each file lists at most ${matchesPerFile} matches and no argument raises that; for every line in one file, run a plain text search on that file.`);
+    if (result.omittedGroups > 0) lines.push("Raise limit to list more groups; a group is one enclosing definition in one file, and limit counts groups, not matches.");
+    if (matchesPerGroup !== undefined) lines.push(`Each group lists at most ${matchesPerGroup} matches and no argument raises that; for every line in one file, run a plain text search on that file.`);
   }
   if (result.totalMatches === 0) lines.push("no matches in indexed text");
   else if (result.groups.length > 0) lines.push(formatFindText(result.groups));
