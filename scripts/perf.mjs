@@ -9,9 +9,12 @@ const PACKAGES = 16;
 const MODULES = 12;
 const FUNCTIONS = 6;
 const BUILD_WORKERS = "2";
+// Set from the CI runners, not a laptop. Linux runners are steady (about 10% spread over 29 runs in September 2026),
+// so their budgets are 1.6 times the slowest observed run and a 1.6x regression fails. macOS and Windows runners
+// vary about 30% between runs, so their budgets keep wider margins; macOS coreLoad reached 367 ms on one slow runner.
 const BUDGETS = {
-  linux: { build: 25_000, incremental: 4_500, coreLoad: 350, scan: 100, coldGround: 900, edgesLoad: 300, noChangeRefresh: 90, changedRefresh: 2_100, scopedAsk: 260, peakRssMiB: 1_200 },
-  darwin: { build: 16_000, incremental: 2_500, coreLoad: 220, scan: 75, coldGround: 860, edgesLoad: 230, noChangeRefresh: 90, changedRefresh: 2_100, scopedAsk: 160, peakRssMiB: 1_950 },
+  linux: { build: 15_700, incremental: 3_100, coreLoad: 250, scan: 30, coldGround: 690, edgesLoad: 200, noChangeRefresh: 72, changedRefresh: 1_450, scopedAsk: 135, peakRssMiB: 1_200 },
+  darwin: { build: 16_000, incremental: 2_500, coreLoad: 400, scan: 75, coldGround: 860, edgesLoad: 230, noChangeRefresh: 90, changedRefresh: 2_100, scopedAsk: 160, peakRssMiB: 1_950 },
   win32: { build: 35_000, incremental: 6_700, coreLoad: 270, scan: 190, coldGround: 970, edgesLoad: 280, noChangeRefresh: 180, changedRefresh: 3_300, scopedAsk: 190, peakRssMiB: 900 },
 };
 const POLYGLOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "test", "fixtures", "sample-repo");
