@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- `osnova_footing` for a `change` or `review` task alternates relationships and candidate tests when filling its budget. Before, test files filled the budget first, so a function with many tests showed none of its callers: on this repository `buildIndex` showed 36 test files and 0 of its 244 callers, and now shows 13 test files and 11 relationships. `understand` tasks keep relationships first.
+
 ## 0.9.0 (2026-09-26)
 
 The extraction version moves to `structural-9.30` and the artifact format to 13, so the first run after upgrading rebuilds the cache once. This release lands the remediation of the 2026-09-22 repository audit, 97 findings across ten categories worked in three waves; the audit itself is a private record, and each entry below states what changed and what was measured.

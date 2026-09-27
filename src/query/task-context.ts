@@ -168,9 +168,18 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const seedDefinitions = [...definitions.values()].filter((definition) => seedNames.has(definition.symbol.qualifiedName));
   const relatedDefinitions = [...definitions.values()].filter((definition) => !seedNames.has(definition.symbol.qualifiedName));
   append(seedDefinitions, result.definitions, "definitions");
-  if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
-  append(relationships.values(), result.relationships, "relationships");
-  if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
+  if (options.task === "understand") {
+    append(relationships.values(), result.relationships, "relationships");
+    append(candidateTests.values(), result.candidateTests, "candidateTests");
+  } else {
+    // Change and review alternate callers and tests, so a symbol with many tests still shows the call sites an edit breaks.
+    const related = [...relationships.values()];
+    const tests = [...candidateTests.values()];
+    for (let i = 0; i < Math.max(related.length, tests.length); i++) {
+      if (i < related.length) append([related[i]!], result.relationships, "relationships");
+      if (i < tests.length) append([tests[i]!], result.candidateTests, "candidateTests");
+    }
+  }
   append(relatedDefinitions, result.definitions, "definitions");
   return result;
 }
