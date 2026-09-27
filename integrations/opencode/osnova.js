@@ -1,5 +1,5 @@
-// Osnova plugin for OpenCode and Kilo: the tool contract in the system prompt, starting points on
-// every user message. All logic lives in `osnova hook`; this file only shells out to it. Install by
+// Osnova plugin for OpenCode and Kilo: starting points on every user message (the tool contract comes from
+// the MCP server's instructions). All logic lives in `osnova hook`; this file only shells out to it. Install by
 // copying it into ~/.config/opencode/plugins/ (or ~/.config/kilo/plugins/), or run
 // `osnova setup --apply --client opencode --plugin`. Set OSNOVA_BIN to run another osnova executable.
 import { spawn } from "node:child_process";
@@ -36,12 +36,8 @@ function hook(event, payload, cwd, ...flags) {
 
 export const OsnovaPlugin = async ({ directory, worktree }) => {
   const cwd = worktree || directory || process.cwd();
-  let contract;
+  // OpenCode and Kilo already put the MCP server's instructions (the tool contract) into the system prompt.
   return {
-    "experimental.chat.system.transform": async (_input, output) => {
-      contract ??= await hook("session", { cwd }, cwd, "--full-contract");
-      if (contract.length > 0) output.system.push(contract);
-    },
     "chat.message": async (_input, output) => {
       const text = output.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
       if (text.trim().length === 0) return;

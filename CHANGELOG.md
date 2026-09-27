@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- The OpenCode and Kilo plugin no longer adds the full tool contract to the system prompt; it only appends starting points to each user message. OpenCode 1.18 and Kilo 7.8 already put the MCP server's instructions into the system prompt, so the plugin's copy repeated them on every request. The Pi extension is unchanged.
+
 ## 0.9.0 (2026-09-26)
 
 The extraction version moves to `structural-9.30` and the artifact format to 13, so the first run after upgrading rebuilds the cache once. This release lands the remediation of the 2026-09-22 repository audit, 97 findings across ten categories worked in three waves; the audit itself is a private record, and each entry below states what changed and what was measured.

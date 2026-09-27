@@ -225,7 +225,8 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
     expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
     const target = path.join(home, ".config", "opencode", "plugins", "osnova.js");
     const text = await fs.readFile(target, "utf8");
-    expect(text).toContain("experimental.chat.system.transform");
+    expect(text).toContain("chat.message");
+    expect(text).not.toContain("experimental.chat.system.transform");
     expect(c.out.join("\n")).toMatch(/plugin, create, .*plugins[\\/]osnova\.js/);
     c = capture();
     expect(await runCli(["setup", "--apply", "--client", "opencode", "--plugin", "--home", home], c.io)).toBe(0);
@@ -242,7 +243,8 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
     expect(await fs.readFile(path.join(home, ".config", "kilo", "plugins", "osnova.js"), "utf8")).toContain("chat.message");
   });
 
-  it("the OpenCode plugin appends starting points to the user message and the contract to the system prompt", async () => {
+  // OpenCode and Kilo put the MCP server's own instructions into the system prompt, so the plugin adds only per-prompt starting points.
+  it("the OpenCode plugin appends starting points to the user message and leaves the system prompt to MCP", async () => {
     const fake = path.join(home, "fake-osnova.mjs");
     await fs.writeFile(fake, "let raw=''; process.stdin.on('data',(d)=>raw+=d); process.stdin.on('end',()=>{ const e=process.argv[3]; const p=JSON.parse(raw||'{}'); process.stdout.write(e==='session'?'CONTRACT':e==='prompt'?`POINTS for ${p.prompt}`:''); });\n");
     // On Windows the osnova command is an npm .cmd shim, so the stand-in is one too.
@@ -254,9 +256,7 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
     try {
       const { OsnovaPlugin } = await import("../integrations/opencode/osnova.js");
       const hooks = await OsnovaPlugin({ directory: home, worktree: home });
-      const system: string[] = [];
-      await hooks["experimental.chat.system.transform"]({}, { system });
-      expect(system).toEqual(["CONTRACT"]);
+      expect(Object.keys(hooks)).toEqual(["chat.message"]);
       const parts = [{ type: "text", text: "why is total wrong" }];
       await hooks["chat.message"]({}, { message: {}, parts });
       expect(parts[0]!.text).toBe("why is total wrong\n\nPOINTS for why is total wrong");
