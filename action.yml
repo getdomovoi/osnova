@@ -14,7 +14,7 @@ inputs:
     description: Repository root to index.
     default: "."
   version:
-    description: Osnova version to run through npx. Defaults to the version of the action ref you use, so getdomovoi/osnova@v0.8.1 runs osnova 0.8.1; set "latest" to float on purpose. Ignored when command is set.
+    description: Osnova version to run through npx. Defaults to the version of the action ref you use, so getdomovoi/osnova@v0.9.0 runs osnova 0.9.0; set "latest" to float on purpose. Ignored when command is set.
     default: ""
   command:
     description: Command that runs osnova. Overrides version, for example "node dist/bin.js" when testing this repository.
