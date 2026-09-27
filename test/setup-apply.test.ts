@@ -246,13 +246,15 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
   // OpenCode and Kilo put the MCP server's own instructions into the system prompt, so the plugin adds only per-prompt starting points.
   it("the OpenCode plugin appends starting points to the user message and leaves the system prompt to MCP", async () => {
     const fake = path.join(home, "fake-osnova.mjs");
-    await fs.writeFile(fake, "let raw=''; process.stdin.on('data',(d)=>raw+=d); process.stdin.on('end',()=>{ const e=process.argv[3]; const p=JSON.parse(raw||'{}'); process.stdout.write(e==='session'?'CONTRACT':e==='prompt'?`POINTS for ${p.prompt}`:''); });\n");
+    await fs.writeFile(fake, "let raw=''; process.stdin.on('data',(d)=>raw+=d); process.stdin.on('end',()=>{ const e=process.argv[3]; const p=JSON.parse(raw||'{}'); import('node:fs').then((f)=>{ f.appendFileSync(process.env.OSNOVA_CALLS, e + '\\n'); process.stdout.write(e==='session'?'CONTRACT':e==='prompt'?`POINTS for ${p.prompt}`:''); }); });\n");
     // On Windows the osnova command is an npm .cmd shim, so the stand-in is one too.
     const wrapper = path.join(home, process.platform === "win32" ? "osnova-bin.cmd" : "osnova-bin.sh");
     await fs.writeFile(wrapper, process.platform === "win32"
       ? `@"${process.execPath}" "${fake}" %*\r\n`
       : `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"\n`, { mode: 0o755 });
     process.env.OSNOVA_BIN = wrapper;
+    const calls = path.join(home, "calls.txt");
+    process.env.OSNOVA_CALLS = calls;
     try {
       const { OsnovaPlugin } = await import("../integrations/opencode/osnova.js");
       const hooks = await OsnovaPlugin({ directory: home, worktree: home });
@@ -260,6 +262,9 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
       const parts = [{ type: "text", text: "why is total wrong" }];
       await hooks["chat.message"]({}, { message: {}, parts });
       expect(parts[0]!.text).toBe("why is total wrong\n\nPOINTS for why is total wrong");
-    } finally { delete process.env.OSNOVA_BIN; }
+      await hooks["chat.message"]({}, { message: {}, parts: [{ type: "text", text: "and the next one" }] });
+      // The session hook still runs once, first, so a cold cache starts building; its contract text is dropped.
+      expect((await fs.readFile(calls, "utf8")).trim().split("\n")).toEqual(["session", "prompt", "prompt"]);
+    } finally { delete process.env.OSNOVA_BIN; delete process.env.OSNOVA_CALLS; }
   });
 });

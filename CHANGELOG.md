@@ -6,7 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
-- The OpenCode and Kilo plugin no longer adds the full tool contract to the system prompt; it only appends starting points to each user message. OpenCode 1.18 and Kilo 7.8 already put the MCP server's instructions into the system prompt, so the plugin's copy repeated them on every request. The Pi extension is unchanged.
+- The OpenCode and Kilo plugin no longer adds the hook's tool contract to the system prompt; it only appends starting points to each user message. OpenCode 1.18 and Kilo 7.8 already put the MCP server's instructions into the system prompt, which cover the same tools, so the plugin's text restated them on every request. The plugin still runs the session hook once before the first prompt, discarding its text, so a cold cache starts building as before. The Pi extension is unchanged, because it was not verified that Pi forwards MCP instructions.
 
 ## 0.9.0 (2026-09-26)
 

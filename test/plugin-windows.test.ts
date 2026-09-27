@@ -45,7 +45,9 @@ afterEach(() => {
 describe("starting osnova from the plugin on Windows", () => {
   it("runs the .cmd shim through the shell with the path quoted", async () => {
     expect(await promptHookOn("win32", "C:\\Program Files\\osnova\\osnova.cmd")).toBe("why\n\nCONTRACT");
-    expect(calls[0]).toMatchObject({ command: "\"C:\\Program Files\\osnova\\osnova.cmd\"", args: ["hook", "prompt"], options: { shell: true } });
+    const quoted = "\"C:\\Program Files\\osnova\\osnova.cmd\"";
+    expect(calls.map((call) => ({ command: call.command, args: call.args, shell: call.options.shell }))).toEqual([
+      { command: quoted, args: ["hook", "session"], shell: true }, { command: quoted, args: ["hook", "prompt"], shell: true }]);
   });
 
   it("never hands cmd.exe a path that could leave its quotes or expand", async () => {
@@ -59,7 +61,7 @@ describe("starting osnova from the plugin on Windows", () => {
     for (const bin of ["C:\\Tools & More\\osnova.cmd", "C:\\a|b\\osnova.cmd", "C:\\a^b\\osnova.cmd", "C:\\a<b>\\osnova.cmd"]) {
       expect(await promptHookOn("win32", bin)).toBe("why\n\nCONTRACT");
     }
-    expect(calls.map((call) => call.command)).toEqual(["\"C:\\Tools & More\\osnova.cmd\"", "\"C:\\a|b\\osnova.cmd\"", "\"C:\\a^b\\osnova.cmd\"", "\"C:\\a<b>\\osnova.cmd\""]);
+    expect(calls.filter((call) => call.args[1] === "prompt").map((call) => call.command)).toEqual(["\"C:\\Tools & More\\osnova.cmd\"", "\"C:\\a|b\\osnova.cmd\"", "\"C:\\a^b\\osnova.cmd\"", "\"C:\\a<b>\\osnova.cmd\""]);
   });
 
   it("keeps a direct start everywhere else", async () => {
@@ -72,9 +74,10 @@ describe("starting osnova from the plugin on Windows", () => {
     vi.useFakeTimers();
     closeChildren = false;
     const pending = session("why");
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(await pending).toBe("why");
-    expect(calls.map((call) => [call.command, ...call.args])).toEqual([["\"osnova\"", "hook", "prompt"], ["taskkill", "/pid", "4242", "/t", "/f"]]);
+    const taskkill = ["taskkill", "/pid", "4242", "/t", "/f"];
+    expect(calls.map((call) => [call.command, ...call.args])).toEqual([["\"osnova\"", "hook", "session"], taskkill, ["\"osnova\"", "hook", "prompt"], taskkill]);
   });
 
   it("kills the shell itself when taskkill cannot run", async () => {
@@ -83,10 +86,11 @@ describe("starting osnova from the plugin on Windows", () => {
     closeChildren = false;
     taskkillFails = true;
     const pending = session("why");
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(await pending).toBe("why");
     await vi.runAllTimersAsync();
-    expect(calls.map((call) => call.command)).toEqual(["\"osnova\"", "taskkill", "kill()"]);
+    // Each hook's fallback kill runs after its taskkill fails, which can land after the next hook has started.
+    expect(calls.map((call) => call.command).sort()).toEqual(["\"osnova\"", "\"osnova\"", "kill()", "kill()", "taskkill", "taskkill"]);
   });
 });
 

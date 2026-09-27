@@ -36,9 +36,13 @@ function hook(event, payload, cwd, ...flags) {
 
 export const OsnovaPlugin = async ({ directory, worktree }) => {
   const cwd = worktree || directory || process.cwd();
-  // OpenCode and Kilo already put the MCP server's instructions (the tool contract) into the system prompt.
+  // OpenCode and Kilo already put the MCP server's instructions (the tool contract) into the system prompt, so the
+  // session hook's text is dropped; it still runs once, first, because on a cold cache it starts the index build.
+  let warm;
   return {
     "chat.message": async (_input, output) => {
+      warm ??= hook("session", { cwd }, cwd);
+      await warm;
       const text = output.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
       if (text.trim().length === 0) return;
       const points = await hook("prompt", { prompt: text, cwd }, cwd);
