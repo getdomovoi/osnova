@@ -21,7 +21,7 @@ import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
 import { unreferenced } from "../query/unreferenced.js";
-import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFileDiagnostics, formatFindTextResult, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
+import { formatAsk, formatCallersDetailed, formatCallersDetailedBounded, formatFileDiagnostics, formatFindTextResult, threadMatchesPerFile, formatImpact, formatIndexHealthSummary, formatPlumb, formatSkeletonBounded, formatSymbolsUnderTest, formatTaskContext, formatTestsFor, formatUnreferenced } from "../query/format.js";
 import { maximumOsnovaMapCardCodeUnits, maximumTextResponseCodeUnits, type OsnovaIndex, type SymbolKind } from "../types.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { OSNOVA_VERSION } from "../version.js";
@@ -335,9 +335,9 @@ export function createOsnovaMcpServer(
             ignoreCase: optionalBoolean(args, "ignoreCase"),
             in: optionalString(args, "in"),
             limit: optionalNumber(args, "limit") ?? 50,
-            matchesPerGroup: 10,
+            matchesPerGroup: threadMatchesPerFile,
           });
-          return textResult(`${prefix}\n${formatFindTextResult(result)}`);
+          return textResult(`${prefix}\n${formatFindTextResult(result, threadMatchesPerFile)}`);
         }
         case "osnova_outline": {
           const file = workspaceRelative(index.root, absRoot, requireString(args, "file"));

@@ -209,13 +209,18 @@ export function formatFindText(groups: readonly FindTextGroup[]): string {
   return blocks.join("\n");
 }
 
-export function formatFindTextResult(result: FindTextResult): string {
+// The per-file match cap of `thread` on the CLI and MCP; neither exposes an argument that raises it.
+export const threadMatchesPerFile = 10;
+
+// `matchesPerFile` is the per-file cap the caller searched with; CLI and MCP expose no argument that raises it.
+export function formatFindTextResult(result: FindTextResult, matchesPerFile?: number): string {
   const shown = result.totalMatches - result.omittedMatches;
   const summary = `indexed-text search: ${shown}/${result.totalMatches} matches, ${result.groups.length}/${result.totalGroups} groups`;
   const lines = [summary];
   if (result.truncated) {
     lines.push(`truncated: ${result.omittedMatches} matches omitted; ${result.omittedGroups} groups omitted`);
-    lines.push("Use findTextDetailed without limits to retrieve all matches in indexed text.");
+    if (result.omittedGroups > 0) lines.push("Raise limit to list more files; it counts files, not matches.");
+    if (matchesPerFile !== undefined) lines.push(`Each file lists at most ${matchesPerFile} matches and no argument raises that; for every line in one file, run a plain text search on that file.`);
   }
   if (result.totalMatches === 0) lines.push("no matches in indexed text");
   else if (result.groups.length > 0) lines.push(formatFindText(result.groups));
