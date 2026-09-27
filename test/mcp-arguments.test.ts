@@ -105,7 +105,8 @@ describe("MCP arguments are held to the advertised schema", () => {
   });
 
   it("names the indexed workspace when a file or symbol is not found, and reads an absolute path inside it", async () => {
-    const root = fs.realpathSync(workspace);
+    // The index root is resolved natively, which on Windows expands 8.3 short names such as RUNNER~1.
+    const root = fs.realpathSync.native(workspace);
     const inside = await call("osnova_outline", { file: path.join(root, "top.ts") });
     expect(inside.isError, inside.text).toBe(false);
     expect(inside.text).toContain("top.ts (typescript");
