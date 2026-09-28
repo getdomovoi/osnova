@@ -245,7 +245,7 @@ export interface OsnovaMcpStatus {
   readonly watching: boolean;
   readonly refreshes: number;
   readonly pendingChanges: boolean;
-  readonly warm: "off" | "idle" | "warming" | "warm";
+  readonly warm: "off" | "idle" | "warming" | "warm" | "closed";
 }
 
 export function createOsnovaMcpServer(
@@ -265,15 +265,19 @@ export function createOsnovaMcpServer(
   let refreshes = 0;
   let warm: OsnovaMcpStatus["warm"] = options?.prewarm === true ? "idle" : "off";
   // After each refresh, build the ranking corpus and footing's edge maps between requests, so the first
-  // ground or footing call on a large repository does not pay for them. A newer index stops the old warm-up.
+  // ground or footing call on a large repository does not pay for them. A newer index or close stops the old warm-up,
+  // and nothing starts after close.
+  let closed = false;
   function prewarm(index: OsnovaIndex): void {
-    if (options?.prewarm !== true) return;
+    if (options?.prewarm !== true || closed) return;
     warm = "warming";
-    void warmQueryContext(index, { cancelled: () => latest !== index }).then((context) => {
-      if (context === undefined || latest !== index) return;
+    const stale = (): boolean => closed || latest !== index;
+    void warmQueryContext(index, { cancelled: stale }).then((context) => {
+      if (context === undefined || stale()) return;
       warmTaskContext(index);
-      if (latest === index) warm = "warm";
+      if (!stale()) warm = "warm";
     }).catch((error: unknown) => {
+      if (closed) return;
       warm = "idle";
       process.stderr.write(`osnova: prewarm failed: ${error instanceof Error ? error.message : String(error)}\n`);
     });
@@ -321,7 +325,12 @@ export function createOsnovaMcpServer(
       watcher = undefined;
     }
   }
-  const close = (): void => { if (timer !== undefined) clearTimeout(timer); watcher?.close(); watcher = undefined; };
+  const close = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    watcher?.close(); watcher = undefined;
+    closed = true;
+    if (warm !== "off") warm = "closed";
+  };
   const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty, warm });
 
   const server = new Server(

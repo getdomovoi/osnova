@@ -50,4 +50,21 @@ describe("MCP prewarm", () => {
       expect(strip(await warm.call(name, args))).toBe(strip(await cold.call(name, args)));
     }
   });
+
+  it("starts no warm-up after close, even when a refresh begun before close finishes later", async () => {
+    const server = await serve(true);
+    const pending = server.refresh();
+    server.close();
+    await pending;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(server.status().warm).toBe("closed");
+  });
+
+  it("stops a running warm-up at close", async () => {
+    const server = await serve(true);
+    await server.refresh();
+    server.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(server.status().warm).toBe("closed");
+  });
 });
