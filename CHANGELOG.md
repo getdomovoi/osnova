@@ -11,6 +11,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 - `osnova_footing` builds relationship evidence once per index and derives each scope's edge maps from it, keeping at most eight scopes, instead of rebuilding them on every call; repeated calls on that repository fell from about 1.3 s to 0.5 s.
 - `osnova_footing` with `symbols` reports each requested name as `returned`, `omitted`, `unknown` or `out-of-scope`: a `requested:` line gives the counts and names the names that need action first, capped at 512 code units so a long batch stays inside the budget, and `taskContext` returns every status as `requested`. Before, every miss was one `unknown symbols` count, so a batch with one wrong name gave no hint which one to fix. The count stays in the omitted line.
 - The MCP `instructions` sent on initialize end with one line naming the checkout the server indexes. Agents working in a second worktree had queried a server indexing another checkout and repeated failing lookups; 51 such lookup errors were counted in earlier recorded sessions. The tool contract itself is unchanged.
+- `osnova_footing` for a `change` or `review` task alternates relationships and candidate tests when filling its budget. Before, test files filled the budget first, so a function with many tests showed none of its callers: on this repository `buildIndex` showed 36 test files and 0 of its 244 callers, and now shows 12 test files and 10 relationships. `understand` tasks keep relationships first.
 
 ## 0.9.0 (2026-09-26)
 
