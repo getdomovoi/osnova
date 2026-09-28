@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- The MCP `instructions` sent on initialize end with one line naming the checkout the server indexes. Agents working in a second worktree had queried a server indexing another checkout and repeated failing lookups; 51 such lookup errors were counted in earlier recorded sessions. The tool contract itself is unchanged.
+
 ## 0.9.0 (2026-09-26)
 
 The extraction version moves to `structural-9.30` and the artifact format to 13, so the first run after upgrading rebuilds the cache once. This release lands the remediation of the 2026-09-22 repository audit, 97 findings across ten categories worked in three waves; the audit itself is a private record, and each entry below states what changed and what was measured.
