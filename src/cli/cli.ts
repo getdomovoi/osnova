@@ -58,7 +58,7 @@ usage:
   osnova doctor [--json] [--workspace <path>] [--cache-dir <path>]
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
-  osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch]   (default workspace: current directory)
+  osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm]   (default workspace: current directory)
   osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
 queries refresh the index first so answers describe current disk state.
@@ -498,13 +498,14 @@ export async function runCli(
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" } },
+        options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" }, "no-prewarm": { type: "boolean" } },
       });
       const workspace = parsed.values.workspace ?? workspaceRootFor(process.cwd());
       const { runMcpStdio } = await import("../mcp/server.js");
       await runMcpStdio(path.resolve(workspace), {
         ...(parsed.values["cache-dir"] !== undefined ? { cacheDir: parsed.values["cache-dir"] } : {}),
         ...(parsed.values.watch === true ? { watch: true } : {}),
+        ...(parsed.values["no-prewarm"] === true ? { prewarm: false } : {}),
       });
       return EXIT_OK;
     }
