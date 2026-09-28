@@ -53,6 +53,20 @@ describe("footing status per requested symbol", () => {
     expect(text.length).toBeLessThanOrEqual(4096);
   });
 
+  it("stays inside every budget when an omitted long name moves ahead of a returned one", () => {
+    const longPath = `src/${"d/".repeat(240)}long.ts`;
+    const mixed = new OsnovaIndexImpl("/fixture", new Map([["a.ts", card("a.ts", ["x"])], [longPath, card(longPath, ["big"], 80)]]), []);
+    const measure = (value: Parameters<typeof formatTaskContext>[0]): number => formatTaskContext(value).length;
+    let checked = 0;
+    for (let maxCodeUnits = 900; maxCodeUnits <= 6000; maxCodeUnits += 7) {
+      let result;
+      try { result = taskContext(mixed, { task: "understand", question: "", symbols: ["a.ts#x", `${longPath}#big`], maxCodeUnits, measure }); } catch { continue; }
+      checked += 1;
+      expect(formatTaskContext(result).length, `budget ${maxCodeUnits}`).toBeLessThanOrEqual(maxCodeUnits);
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
   it("adds no status list to a question without named symbols", () => {
     const result = taskContext(index, { task: "understand", question: "one" });
     expect(result.requested).toBeUndefined();

@@ -184,11 +184,27 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const seedDefinitions = [...definitions.values()].filter((definition) => seedNames.has(definition.symbol.qualifiedName));
   const relatedDefinitions = [...definitions.values()].filter((definition) => !seedNames.has(definition.symbol.qualifiedName));
   append(seedDefinitions, result.definitions, "definitions");
+  const seedCount = result.definitions.length;
   if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relatedDefinitions, result.definitions, "definitions");
-  const shown = new Set(result.definitions.map((definition) => definition.symbol.qualifiedName));
-  for (const entry of requested) if (entry.status === "returned" && !shown.has(entry.name)) entry.status = "omitted";
+  const settleStatuses = (): void => {
+    const shown = new Set(result.definitions.map((definition) => definition.symbol.qualifiedName));
+    for (const entry of requested) {
+      if (entry.status === "returned" || entry.status === "omitted") entry.status = shown.has(entry.name) ? "returned" : "omitted";
+    }
+  };
+  // Settling can move an omitted name ahead in the capped requested line, so the text can grow after it was
+  // measured; drop the latest-added items until it fits again, related definitions first and seeds last.
+  settleStatuses();
+  while (size() > maxCodeUnits) {
+    if (result.definitions.length > seedCount) { result.definitions.pop(); result.omitted.definitions++; }
+    else if (result.candidateTests.length > 0) { result.candidateTests.pop(); result.omitted.candidateTests++; }
+    else if (result.relationships.length > 0) { result.relationships.pop(); result.omitted.relationships++; }
+    else if (result.definitions.length > 0) { result.definitions.pop(); result.omitted.definitions++; }
+    else throw new RangeError(`osnova: task context budget cannot retain receipts and omissions; minimum ${size()} UTF-16 code units`);
+    settleStatuses();
+  }
   return result;
 }
