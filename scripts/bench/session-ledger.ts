@@ -20,7 +20,12 @@ export interface LedgerUsage {
   readonly reasoning: number | null;
   readonly costUsd: number | null;
 }
-export interface LedgerRequest { readonly key: string; readonly startMs: number | null; readonly endMs: number | null; readonly usage: LedgerUsage; readonly calls: readonly string[] }
+export interface LedgerRequest {
+  readonly key: string; readonly startMs: number | null; readonly endMs: number | null; readonly usage: LedgerUsage; readonly calls: readonly string[];
+  /** The conversation the request belongs to (a Claude subagent's agentId, else one shared history); prompt growth is
+   * measured within it. Null when a subagent record names no agent, which makes new input unknown for the session. */
+  readonly history?: string | null | undefined;
+}
 export interface LedgerCall {
   readonly key: string;
   /** Tool arguments, kept in memory for diagnosis; never reported. */
@@ -132,7 +137,7 @@ function settle(call: LedgerCall | undefined, output: string, error: boolean): v
 // Claude Code writes one record per content block, each repeating the message's usage; a subagent's
 // records carry the parent session id. Usage fields are taken as the maximum seen per message id.
 export function parseClaudeSession(lines: Iterable<string>): LedgerSession {
-  const requests = new Map<string, { startMs: number | null; endMs: number | null; usage: LedgerUsage; calls: string[] }>();
+  const requests = new Map<string, { startMs: number | null; endMs: number | null; usage: LedgerUsage; calls: string[]; history: string | null }>();
   const calls = new Map<string, LedgerCall>();
   let malformedRecords = 0, settleContinuations = 0;
   for (const line of lines) {
@@ -156,7 +161,7 @@ export function parseClaudeSession(lines: Iterable<string>): LedgerSession {
         uncachedInput: larger(current.usage.uncachedInput, next.uncachedInput), cacheRead: larger(current.usage.cacheRead, next.cacheRead), cacheWrite: larger(current.usage.cacheWrite, next.cacheWrite),
         output: larger(current.usage.output, next.output), reasoning: larger(current.usage.reasoning, next.reasoning), costUsd: null,
       };
-      const entry = current ?? { startMs: at, endMs: at, usage: merged, calls: [] };
+      const entry = current ?? { startMs: at, endMs: at, usage: merged, calls: [], history: typeof record.agentId === "string" ? record.agentId : record.isSidechain === true ? null : "main" };
       entry.usage = merged;
       entry.endMs = larger(entry.endMs, at);
       for (const block of message.content as Record<string, unknown>[]) {
@@ -300,6 +305,11 @@ export interface SessionSummary {
   readonly usage: UsageSums;
   /** Everything the first request read: uncached input plus reported cache reads and writes. */
   readonly firstRequestInput: number | null;
+  /** Input a perfect cache would still bill: the first prompt, then each request's growth over the one before; a prompt
+   * smaller than the one before (compaction) counts in full. Null when the host does not report input. */
+  readonly newInput: number | null;
+  /** Input not served from cache (uncached plus cache writes) beyond newInput: context billed again after a cache miss. */
+  readonly missedCacheInput: number | null;
   readonly calls: Readonly<Record<CallKind, number>>;
   readonly parallelRequests: number;
   readonly searchOnlyRequests: number;
@@ -345,6 +355,25 @@ function sum(values: readonly (number | null)[]): Sum {
   return { total: present.length === 0 ? null : present.reduce((a, b) => a + b, 0), missing: values.length - present.length };
 }
 
+// Splits uncached input into new text and cache misses. Provider cache misses are random and can swamp a real
+// difference in cost, so comparisons also report new input, which does not depend on the cache.
+function cacheSplit(requests: readonly LedgerRequest[]): { newInput: number | null; missedCacheInput: number | null } {
+  let newInput = 0, missed = 0;
+  const previousBy = new Map<string, number>();
+  for (const request of requests) {
+    const input = inputOf(request.usage);
+    if (input === null || request.usage.uncachedInput === null || request.history === null) return { newInput: null, missedCacheInput: null };
+    const history = request.history ?? "";
+    const previous = previousBy.get(history);
+    const fresh = previous === undefined || input < previous ? input : input - previous;
+    newInput += fresh;
+    // Claude bills a miss mostly as a cache write, other hosts as uncached input; both are input not read from cache.
+    missed += Math.max(0, request.usage.uncachedInput + (request.usage.cacheWrite ?? 0) - fresh);
+    previousBy.set(history, input);
+  }
+  return { newInput, missedCacheInput: missed };
+}
+
 export function summarizeSession(session: LedgerSession): SessionSummary {
   const byKey = new Map(session.calls.map((call) => [call.key, call]));
   const usage = Object.fromEntries((["uncachedInput", "cacheRead", "cacheWrite", "output", "reasoning", "costUsd"] as const)
@@ -371,6 +400,7 @@ export function summarizeSession(session: LedgerSession): SessionSummary {
     elapsedMs: starts.length === 0 || ends.length === 0 ? null : Math.max(...ends) - Math.min(...starts),
     usage,
     firstRequestInput: session.requests[0] === undefined ? null : inputOf(session.requests[0].usage),
+    ...cacheSplit(session.requests),
     calls,
     parallelRequests: session.requests.filter((request) => request.calls.length > 1).length,
     searchOnlyRequests: searchOnly.filter(Boolean).length,
@@ -393,6 +423,9 @@ const median = (values: readonly number[]): number | null => {
   const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 };
+// Complete only when every request reported both input and output; a partial sum would read as a smaller session.
+const newTokens = (summary: SessionSummary): number | null =>
+  summary.newInput === null || summary.usage.output.total === null || summary.usage.output.missing > 0 ? null : summary.newInput + summary.usage.output.total;
 const totalTokens = (summary: SessionSummary): number | null => {
   const { uncachedInput, cacheRead, cacheWrite, output } = summary.usage;
   return uncachedInput.total === null || output.total === null ? null : uncachedInput.total + (cacheRead.total ?? 0) + (cacheWrite.total ?? 0) + output.total;
@@ -410,6 +443,11 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
       costPerCorrect: perCorrect(all.map((row) => row.summary.usage.costUsd.total)),
       elapsedMsPerCorrect: perCorrect(all.map((row) => row.summary.elapsedMs)),
       tokensPerCorrect: perCorrect(all.map((row) => totalTokens(row.summary))),
+      newTokensPerCorrect: perCorrect(all.map((row) => newTokens(row.summary))),
+      // Numerator and denominator come from the same sessions: any session without complete input makes the share unknown.
+      missedCacheShare: all.some((row) => row.summary.missedCacheInput === null) ? null : ((missed, notCached) => (notCached === 0 ? null : missed / notCached))(
+        all.reduce((total, row) => total + row.summary.missedCacheInput!, 0),
+        all.reduce((total, row) => total + (row.summary.usage.uncachedInput.total ?? 0) + (row.summary.usage.cacheWrite.total ?? 0), 0)),
       totalCost: sum(all.map((row) => row.summary.usage.costUsd.total)),
       explanatory: Object.fromEntries((["requests", "searchOnlyRequests", "repeatedSearchRequests", "identifierSearches", "grepAfterOsnova", "denials", "toolErrors", "settleContinuations", "parallelRequests"] as const)
         .map((key) => [key, all.reduce((total, row) => total + row.summary[key], 0)])),
@@ -428,7 +466,7 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
   }
   const find = (task: string, name: string) => rows.find((row) => row.task === task && row.arm === name);
   let bothCorrect = 0, excluded = 0, candidateOnly = 0, baselineOnly = 0, candidateCheaper = 0;
-  const costDeltas: number[] = [], elapsedDeltas: number[] = [], tokenDeltas: number[] = [];
+  const costDeltas: number[] = [], elapsedDeltas: number[] = [], tokenDeltas: number[] = [], newTokenDeltas: number[] = [];
   for (const task of tasks) {
     const a = find(task, candidate), b = find(task, baseline);
     if (a === undefined || b === undefined) { excluded += 1; continue; }
@@ -441,13 +479,15 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
     if (costA !== null && costB !== null) { costDeltas.push(costA - costB); if (costA < costB) candidateCheaper += 1; }
     if (timeA !== null && timeB !== null) elapsedDeltas.push(timeA - timeB);
     if (tokensA !== null && tokensB !== null) tokenDeltas.push(tokensA - tokensB);
+    const freshA = newTokens(a.summary), freshB = newTokens(b.summary);
+    if (freshA !== null && freshB !== null) newTokenDeltas.push(freshA - freshB);
   }
   const spread = (values: readonly number[]) => ({ samples: values.length, median: median(values), total: values.reduce((a, b) => a + b, 0) });
   return {
     candidate, baseline,
     arms: { [candidate]: arm(candidate), [baseline]: arm(baseline) },
-    pairs: { tasks: tasks.length, bothCorrect, excluded, candidateOnly, baselineOnly, candidateCheaper, costDelta: spread(costDeltas), elapsedDeltaMs: spread(elapsedDeltas), tokenDelta: spread(tokenDeltas) },
-    interpretation: "cost and time per correct session are primary; paired deltas cover tasks both arms solved; call and request counts explain, they are not savings; null means the host did not report the field",
+    pairs: { tasks: tasks.length, bothCorrect, excluded, candidateOnly, baselineOnly, candidateCheaper, costDelta: spread(costDeltas), elapsedDeltaMs: spread(elapsedDeltas), tokenDelta: spread(tokenDeltas), newTokenDelta: spread(newTokenDeltas) },
+    interpretation: "cost and time per correct session are primary; paired deltas cover tasks both arms solved; new tokens (new input plus output) do not depend on provider cache hits, so they separate a real change from cache noise; call and request counts explain, they are not savings; null means the host did not report the field",
   };
 }
 
