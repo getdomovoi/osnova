@@ -33,6 +33,13 @@ export interface CandidateTest {
   readonly basis: "test-path-and-graph-relationship";
 }
 
+export interface RequestedSymbol {
+  readonly name: string;
+  /** returned: its definition is in the answer; omitted: found but cut by the budget; unknown: no indexed symbol has
+   * this qualified name; out-of-scope: indexed outside the requested `in` scope. */
+  readonly status: "returned" | "omitted" | "unknown" | "out-of-scope";
+}
+
 export interface TaskContextResult {
   readonly task: TaskContextOptions["task"];
   readonly scope: string;
@@ -52,6 +59,8 @@ export interface TaskContextResult {
     readonly unknownSymbols: number;
   };
   readonly limitations: readonly string[];
+  /** Present only when the call named `symbols`: one entry per distinct requested name, sorted. */
+  readonly requested?: readonly RequestedSymbol[] | undefined;
 }
 
 const seedOverfetch = 4;
@@ -73,11 +82,17 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const receipt = indexReceipt(index);
   const seeds: OsnovaSymbol[] = [];
   let retrievalHits = 0, unknownSymbols = 0;
+  const requested: { name: string; status: RequestedSymbol["status"] }[] = [];
   if (options.symbols !== undefined) {
     for (const name of [...new Set(options.symbols)].sort(compareText)) {
       const symbol = index.symbols.get(name);
-      if (symbol === undefined || !inScope(symbol.file, scope)) unknownSymbols++;
-      else seeds.push(symbol);
+      if (symbol === undefined || !inScope(symbol.file, scope)) {
+        unknownSymbols++;
+        requested.push({ name, status: symbol === undefined ? "unknown" : "out-of-scope" });
+      } else {
+        seeds.push(symbol);
+        requested.push({ name, status: "returned" });
+      }
     }
   } else {
     const limit = options.limit ?? 8;
@@ -154,6 +169,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
       retrievalHits, uncertainEdges: uncertain, outOfScopeEdges: outside, depthFrontier: frontier.size, unknownSymbols },
     limitations: ["indexed-structural-evidence-only", "test-candidates-not-coverage", "receipts-not-disk-freshness", "uncertainty-counts-cover-entire-index",
       ...(receipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])],
+    ...(options.symbols !== undefined ? { requested } : {}),
   };
   const measure = options.measure ?? ((value: TaskContextResult): number => JSON.stringify(value).length);
   const size = (): number => measure(result);
@@ -172,5 +188,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relatedDefinitions, result.definitions, "definitions");
+  const shown = new Set(result.definitions.map((definition) => definition.symbol.qualifiedName));
+  for (const entry of requested) if (entry.status === "returned" && !shown.has(entry.name)) entry.status = "omitted";
   return result;
 }

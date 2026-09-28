@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- `osnova_footing` with `symbols` reports each requested name as `returned`, `omitted`, `unknown` or `out-of-scope` on a `requested:` line, and `taskContext` returns the same as `requested`. Before, every miss was one `unknown symbols` count, so a batch with one wrong name gave no hint which one to fix. The count stays in the omitted line.
+
 ## 0.9.0 (2026-09-26)
 
 The extraction version moves to `structural-9.30` and the artifact format to 13, so the first run after upgrading rebuilds the cache once. This release lands the remediation of the 2026-09-22 repository audit, 97 findings across ten categories worked in three waves; the audit itself is a private record, and each entry below states what changed and what was measured.

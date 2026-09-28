@@ -687,6 +687,9 @@ export function formatTaskContext(result: TaskContextResult): string {
   const lines = [
     `osnova footing: ${result.task}, scope ${result.scope === "" ? "." : result.scope}, ${result.definitions.length} definitions, ${result.relationships.length} relationships, ${result.candidateTests.length} candidate tests`,
   ];
+  if (result.requested !== undefined && result.requested.length > 0) {
+    lines.push(`requested: ${result.requested.map((entry) => `${entry.name} ${entry.status}`).join("; ")}`);
+  }
   if (result.definitions.length > 0) lines.push("definitions:");
   for (const definition of result.definitions) {
     const { symbol } = definition;

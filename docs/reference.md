@@ -36,7 +36,7 @@ The structured APIs return complete results with omission counts. The text budge
 
 ### A typical agent turn
 
-1. `osnova_footing` with `task: "change"` and the question. The agent gets the seed definitions, who calls them, and which tests touch them.
+1. `osnova_footing` with `task: "change"` and the question. The agent gets the seed definitions, who calls them, and which tests touch them. When the call names `symbols`, a `requested:` line gives each distinct name one status: `returned`, `omitted` (found but cut by the budget), `unknown` (no indexed symbol has that qualified name) or `out-of-scope` (outside `in`), so a batch with one bad name does not have to be retried whole.
 2. Edit.
 3. `osnova_settle` with no arguments, which compares HEAD with the working tree. The agent gets the indexed dependents of the changed spans to the requested depth (one hop by default, with the frontier beyond it counted) and checks them before it finishes.
 
