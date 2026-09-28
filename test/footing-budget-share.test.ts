@@ -44,4 +44,27 @@ describe("footing budget between seeds and relationships", () => {
     expect(withoutEdges.relationships).toEqual([]);
     expect(formatTaskContext(withoutEdges).length).toBeGreaterThan(0.8 * mcpShape.maxCodeUnits);
   });
+
+  it("gives the full budget to the first seed that fits when an earlier one cannot fit at all", () => {
+    const sized = (path: string, name: string, lines: number): FileCard => {
+      const body = Array.from({ length: lines }, (_, line) => `  const step${line} = prepare${line}(options, context);`).join("\n");
+      const text = `export function ${name}(options) {\n${body}\n  return helper(options);\n}\nexport function helper(options) { return options; }\n`;
+      const symbols: OsnovaSymbol[] = [
+        { name, qualifiedName: `${path}#${name}`, file: path, kind: "function", signature: `export function ${name}(options)`,
+          lineCount: lines + 3, span: { startLine: 1, endLine: lines + 3, startCol: 0, endCol: 1 } },
+        { name: "helper", qualifiedName: `${path}#helper`, file: path, kind: "function", signature: "export function helper(options)",
+          lineCount: 1, span: { startLine: lines + 4, endLine: lines + 4, startCol: 0, endCol: 50 } },
+      ];
+      return { path, symbols, text, hash: createHash("sha256").update(text).digest("hex"), language: "typescript", size: text.length, lineCount: lines + 5 };
+    };
+    const call = (path: string, name: string, line: number): OsnovaEdge => ({ kind: "calls", fromFile: path, fromSymbol: `${path}#${name}`, toName: "helper",
+      toSymbol: `${path}#helper`, toFile: path, line, evidence: { source: "syntax", resolution: { status: "resolved", method: "import-binding" } } });
+    const huge = sized("a.ts", "aHuge", 200), medium = sized("b.ts", "bMedium", 60);
+    // Forty calls from the seed that cannot fit, so its relationships take the room the medium seed was deferred for.
+    const edges = [...Array.from({ length: 40 }, (_, i) => call("a.ts", "aHuge", 2 + i)), call("b.ts", "bMedium", 62)];
+    const pair = new OsnovaIndexImpl("/fixture", new Map([["a.ts", huge], ["b.ts", medium]]), edges);
+    const measure = (value: Parameters<typeof formatTaskContext>[0]): number => formatTaskContext(value).length;
+    const result = taskContext(pair, { task: "understand", question: "", symbols: ["a.ts#aHuge", "b.ts#bMedium"], maxCodeUnits: 4096, measure });
+    expect(result.definitions.map((definition) => definition.symbol.name)).toContain("bMedium");
+  });
 });

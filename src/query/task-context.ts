@@ -193,11 +193,14 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const seedDefinitions = [...definitions.values()].filter((definition) => seedNames.has(definition.symbol.qualifiedName));
   const relatedDefinitions = [...definitions.values()].filter((definition) => !seedNames.has(definition.symbol.qualifiedName));
   // Long seed excerpts could fill the whole budget and leave no relationships, which are what footing adds over
-  // ground. With relationships to show, seeds after the first take at most this share; any room left returns to
-  // them last. The first seed always has the whole budget, so footing never answers without a definition it could fit.
+  // ground. With relationships to show, seeds after the first one placed take at most this share; any room left
+  // returns to them last. Until one seed is placed each gets the whole budget, so a first seed too large to fit does
+  // not push a later one that fits behind the relationships.
   const seedShare = relationships.size > 0 ? Math.floor(maxCodeUnits * 0.6) : maxCodeUnits;
-  const deferredSeeds = [...append(seedDefinitions.slice(0, 1), result.definitions, "definitions"),
-    ...append(seedDefinitions.slice(1), result.definitions, "definitions", seedShare)];
+  const deferredSeeds: ContextDefinition[] = [];
+  for (const seed of seedDefinitions) {
+    deferredSeeds.push(...append([seed], result.definitions, "definitions", result.definitions.length === 0 ? maxCodeUnits : seedShare));
+  }
   if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
