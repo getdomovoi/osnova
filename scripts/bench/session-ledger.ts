@@ -22,8 +22,9 @@ export interface LedgerUsage {
 }
 export interface LedgerRequest {
   readonly key: string; readonly startMs: number | null; readonly endMs: number | null; readonly usage: LedgerUsage; readonly calls: readonly string[];
-  /** The conversation the request belongs to (a Claude subagent's agentId, else one shared history); prompt growth is measured within it. */
-  readonly history?: string | undefined;
+  /** The conversation the request belongs to (a Claude subagent's agentId, else one shared history); prompt growth is
+   * measured within it. Null when a subagent record names no agent, which makes new input unknown for the session. */
+  readonly history?: string | null | undefined;
 }
 export interface LedgerCall {
   readonly key: string;
@@ -136,7 +137,7 @@ function settle(call: LedgerCall | undefined, output: string, error: boolean): v
 // Claude Code writes one record per content block, each repeating the message's usage; a subagent's
 // records carry the parent session id. Usage fields are taken as the maximum seen per message id.
 export function parseClaudeSession(lines: Iterable<string>): LedgerSession {
-  const requests = new Map<string, { startMs: number | null; endMs: number | null; usage: LedgerUsage; calls: string[]; history: string }>();
+  const requests = new Map<string, { startMs: number | null; endMs: number | null; usage: LedgerUsage; calls: string[]; history: string | null }>();
   const calls = new Map<string, LedgerCall>();
   let malformedRecords = 0, settleContinuations = 0;
   for (const line of lines) {
@@ -160,7 +161,7 @@ export function parseClaudeSession(lines: Iterable<string>): LedgerSession {
         uncachedInput: larger(current.usage.uncachedInput, next.uncachedInput), cacheRead: larger(current.usage.cacheRead, next.cacheRead), cacheWrite: larger(current.usage.cacheWrite, next.cacheWrite),
         output: larger(current.usage.output, next.output), reasoning: larger(current.usage.reasoning, next.reasoning), costUsd: null,
       };
-      const entry = current ?? { startMs: at, endMs: at, usage: merged, calls: [], history: typeof record.agentId === "string" ? record.agentId : "main" };
+      const entry = current ?? { startMs: at, endMs: at, usage: merged, calls: [], history: typeof record.agentId === "string" ? record.agentId : record.isSidechain === true ? null : "main" };
       entry.usage = merged;
       entry.endMs = larger(entry.endMs, at);
       for (const block of message.content as Record<string, unknown>[]) {
@@ -361,7 +362,7 @@ function cacheSplit(requests: readonly LedgerRequest[]): { newInput: number | nu
   const previousBy = new Map<string, number>();
   for (const request of requests) {
     const input = inputOf(request.usage);
-    if (input === null || request.usage.uncachedInput === null) return { newInput: null, missedCacheInput: null };
+    if (input === null || request.usage.uncachedInput === null || request.history === null) return { newInput: null, missedCacheInput: null };
     const history = request.history ?? "";
     const previous = previousBy.get(history);
     const fresh = previous === undefined || input < previous ? input : input - previous;

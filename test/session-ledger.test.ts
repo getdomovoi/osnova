@@ -228,3 +228,13 @@ it("reports no new-token or cache-share figure when any session lacks the fields
   expect(report.arms.base?.missedCacheShare).toBeNull();
   expect(report.pairs.newTokenDelta.samples).toBe(0);
 });
+
+it("reports new tokens as unknown when a subagent record names no agent", () => {
+  const record = (id: string, at: string, input: number, sidechain: boolean) => ({ type: "assistant", timestamp: at, ...(sidechain ? { isSidechain: true } : {}),
+    message: { id, content: [{ type: "text", text: "x" }], usage: { input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10 } } });
+  const summary = summarizeSession(parseClaudeSession(jsonl([
+    record("m1", "2026-09-27T00:00:00Z", 1000, false), record("s1", "2026-09-27T00:00:01Z", 1000, true), record("m2", "2026-09-27T00:00:02Z", 1100, false),
+  ])));
+  expect(summary.newInput).toBeNull();
+  expect(summary.missedCacheInput).toBeNull();
+});
