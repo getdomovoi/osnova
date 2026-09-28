@@ -177,7 +177,7 @@ it("counts a search that exits 1 with no match as a finished search, and every o
 
 it("separates new input from input a cache miss billed again", () => {
   const request = (key: string, uncachedInput: number, cacheRead: number) => ({ key, startMs: null, endMs: null, calls: [],
-    usage: { uncachedInput, cacheRead, cacheWrite: null, output: 10, reasoning: null, costUsd: null } });
+    usage: { uncachedInput, cacheRead, cacheWrite: 0, output: 10, reasoning: null, costUsd: null } });
   // 1000 new; +100 served from cache; +200 but the whole prompt missed; then a compacted, smaller prompt.
   const summary = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0,
     requests: [request("r0", 1000, 0), request("r1", 100, 1000), request("r2", 1300, 0), request("r3", 500, 0)] });
@@ -237,4 +237,14 @@ it("reports new tokens as unknown when a subagent record names no agent", () => 
   ])));
   expect(summary.newInput).toBeNull();
   expect(summary.missedCacheInput).toBeNull();
+});
+
+it("reports new input as unknown when a host that splits input omits a cache field, but not for Codex's total", () => {
+  const claude = parseClaudeSession(jsonl([{ type: "assistant", timestamp: "2026-09-27T00:00:00Z",
+    message: { id: "m1", content: [{ type: "text", text: "x" }], usage: { input_tokens: 100, output_tokens: 10 } } }]));
+  expect(summarizeSession(claude).newInput).toBeNull();
+  expect(summarizeSession(claude).missedCacheInput).toBeNull();
+  const codex = { host: "codex" as const, calls: [], settleContinuations: 0, malformedRecords: 0,
+    requests: [{ key: "r0", startMs: null, endMs: null, calls: [], usage: { uncachedInput: 60, cacheRead: 40, cacheWrite: null, output: 10, reasoning: null, costUsd: null } }] };
+  expect(summarizeSession(codex).newInput).toBe(100);
 });

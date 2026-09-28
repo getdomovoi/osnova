@@ -305,8 +305,10 @@ export interface SessionSummary {
   readonly usage: UsageSums;
   /** Everything the first request read: uncached input plus reported cache reads and writes. */
   readonly firstRequestInput: number | null;
-  /** Input a perfect cache would still bill: the first prompt, then each request's growth over the one before; a prompt
-   * smaller than the one before (compaction) counts in full. Null when the host does not report input. */
+  /** Prompt growth: the first prompt, then each request's growth over the one before in the same conversation; a prompt
+   * smaller than the one before (compaction) counts in full. It approximates the input a perfect cache would still bill
+   * only while the history grows by appending; a same-length replacement or an edited prefix reads as no growth. Null
+   * when any request's total input or conversation is unknown. */
   readonly newInput: number | null;
   /** Input not served from cache (uncached plus cache writes) beyond newInput: context billed again after a cache miss. */
   readonly missedCacheInput: number | null;
@@ -357,12 +359,17 @@ function sum(values: readonly (number | null)[]): Sum {
 
 // Splits uncached input into new text and cache misses. Provider cache misses are random and can swamp a real
 // difference in cost, so comparisons also report new input, which does not depend on the cache.
-function cacheSplit(requests: readonly LedgerRequest[]): { newInput: number | null; missedCacheInput: number | null } {
+// Codex reports total input and the cached part, so its total is known without a cache-write count; Claude Code and
+// Kilo report uncached input, cache reads and cache writes separately, so a missing part leaves the total unknown.
+const totalInputKnown = (host: LedgerHost, usage: LedgerUsage): boolean =>
+  usage.uncachedInput !== null && (host === "codex" || (usage.cacheRead !== null && usage.cacheWrite !== null));
+
+function cacheSplit(host: LedgerHost, requests: readonly LedgerRequest[]): { newInput: number | null; missedCacheInput: number | null } {
   let newInput = 0, missed = 0;
   const previousBy = new Map<string, number>();
   for (const request of requests) {
     const input = inputOf(request.usage);
-    if (input === null || request.usage.uncachedInput === null || request.history === null) return { newInput: null, missedCacheInput: null };
+    if (input === null || request.usage.uncachedInput === null || !totalInputKnown(host, request.usage) || request.history === null) return { newInput: null, missedCacheInput: null };
     const history = request.history ?? "";
     const previous = previousBy.get(history);
     const fresh = previous === undefined || input < previous ? input : input - previous;
@@ -400,7 +407,7 @@ export function summarizeSession(session: LedgerSession): SessionSummary {
     elapsedMs: starts.length === 0 || ends.length === 0 ? null : Math.max(...ends) - Math.min(...starts),
     usage,
     firstRequestInput: session.requests[0] === undefined ? null : inputOf(session.requests[0].usage),
-    ...cacheSplit(session.requests),
+    ...cacheSplit(session.host, session.requests),
     calls,
     parallelRequests: session.requests.filter((request) => request.calls.length > 1).length,
     searchOnlyRequests: searchOnly.filter(Boolean).length,
