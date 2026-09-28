@@ -47,8 +47,8 @@ export const mcpInstructions = [
 export const checkoutLine = (root: string): string =>
   `This server indexes ${root}; a file in another checkout or worktree is not in it, so query paths relative to this root.`;
 // A session hook's background build of a large repository holds the build lock for tens of seconds, longer than the
-// default ten-second wait, so the server's first calls failed with cache-lock-timeout. The lock only waits for a live,
-// verified owner and still reclaims a dead one, so waiting longer here cannot hang on a crashed build.
+// default ten-second wait, so the server's first calls failed with cache-lock-timeout. A dead owner is still reclaimed
+// at once; a live but stuck owner, or one the lock cannot verify, holds a call until this deadline.
 const mcpRefreshLockTimeoutMs = 120_000;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
