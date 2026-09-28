@@ -11,6 +11,8 @@ import type { HookClient } from "../cli/hook.js";
 // timestamped backup of whatever was there. A conflict is never resolved by writing.
 export interface PlannedChange {
   readonly kind: "mcp" | "hooks" | "instructions" | "plugin" | "skill";
+  /** A skill or plugin whose file or folder is a link; setup never writes through it. */
+  readonly linked?: boolean | undefined;
   readonly path: string;
   readonly action: "create" | "append" | "update" | "unchanged" | "conflict";
   readonly diff: string;
@@ -154,6 +156,8 @@ export async function planPlugin(client: PluginClient, options: { home?: string 
   const source = await fs.readFile(options.source ?? pluginSource(client), "utf8");
   const existing = await readOptional(target);
   if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova ${client === "pi" ? "extension" : "plugin"}.` };
+  const pluginLink = await linkedPart(target);
+  if (pluginLink !== undefined) return { kind: "plugin", path: target, action: "conflict", linked: true, diff: "", merged: existing ?? "", notice: `${pluginLink} is a link; osnova never writes through a link. Replace it with a plain file or compare by hand.` };
   if (existing !== null) return { kind: "plugin", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a plugin file. Remove it or compare by hand.` };
   return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN).` };
 }
@@ -175,6 +179,8 @@ export async function planSkill(options: { home?: string | undefined; source?: s
   const source = await fs.readFile(options.source ?? skillSource(), "utf8");
   const existing = await readOptional(target);
   if (existing === source) return { kind: "skill", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova skill.` };
+  const skillLink = await linkedPart(target);
+  if (skillLink !== undefined) return { kind: "skill", path: target, action: "conflict", linked: true, diff: "", merged: existing ?? "", notice: `${skillLink} is a link; osnova never writes through a link. Replace it with a plain folder or compare by hand.` };
   if (existing !== null) return { kind: "skill", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a skill file. Remove it or compare by hand.` };
   return { kind: "skill", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${options.shared === true ? "Codex, OpenCode, Kilo and Pi load skills from ~/.agents/skills/" : "Claude Code loads skills from ~/.claude/skills/"} at start; the skill's description decides when it is used.` };
 }
@@ -261,6 +267,16 @@ export async function applyChanges(changes: readonly PlannedChange[]): Promise<A
     applied.push({ ...change, written: true, backup });
   }
   return applied;
+}
+
+// The file or its own folder when either is a symbolic link, including a dangling one: writing there would land
+// wherever the link points, such as a dotfiles checkout.
+async function linkedPart(target: string): Promise<string | undefined> {
+  for (const candidate of [target, path.dirname(target)]) {
+    const stat = await fs.lstat(candidate).catch(() => undefined);
+    if (stat?.isSymbolicLink() === true) return candidate;
+  }
+  return undefined;
 }
 
 async function readOptional(file: string): Promise<string | null> {

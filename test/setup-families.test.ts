@@ -78,3 +78,37 @@ describe("osnova setup agents", () => {
     expect(check?.message).toContain("osnova setup agents --apply");
   });
 });
+
+describe("setup family safety", () => {
+  it("never writes a skill through a linked folder or a linked file, even when the file is missing", async () => {
+    await fs.mkdir(at(".codex"), { recursive: true });
+    const elsewhere = at("vault", "osnova");
+    await fs.mkdir(elsewhere, { recursive: true });
+    await fs.mkdir(at(".agents", "skills"), { recursive: true });
+    await fs.symlink(elsewhere, at(".agents", "skills", "osnova"));
+    const c = capture();
+    expect(await runCli(["setup", "agents", "--apply", "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    expect(existsSync(path.join(elsewhere, "SKILL.md"))).toBe(false);
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: skill, .* is a link/);
+    await fs.rm(at(".agents", "skills", "osnova"));
+    await fs.mkdir(at(".agents", "skills", "osnova"));
+    await fs.symlink(path.join(elsewhere, "SKILL.md"), at(".agents", "skills", "osnova", "SKILL.md"));
+    expect(await runCli(["setup", "agents", "--apply", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    expect(existsSync(path.join(elsewhere, "SKILL.md"))).toBe(false);
+  });
+
+  it("tells the user to repeat the exact command with --apply", async () => {
+    await fs.mkdir(at(".codex"), { recursive: true });
+    const c = capture();
+    expect(await runCli(["setup", "agents", "--only", "codex", "--home", home], c.io)).toBe(0);
+    expect(c.out.join("\n")).toContain("Repeat this command with --apply");
+    expect(c.out.join("\n")).not.toContain("Run osnova setup agents --apply");
+  });
+
+  it("rejects --only outside setup agents and an empty --only", async () => {
+    await expect(runCli(["setup", "--apply", "--client", "codex", "--only", "pi", "--home", home], capture().io)).rejects.toThrow(/--only belongs to osnova setup agents/);
+    await expect(runCli(["setup", "claude", "--only", "codex", "--home", home], capture().io)).rejects.toThrow(/--only/);
+    await expect(runCli(["setup", "agents", "--only", ",", "--home", home], capture().io)).rejects.toThrow(/--only takes/);
+    expect(existsSync(at(".codex", "config.toml"))).toBe(false);
+  });
+});

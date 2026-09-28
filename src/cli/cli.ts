@@ -135,17 +135,19 @@ async function setupFamily(positionals: readonly string[], values: { apply?: boo
   if (values.client !== undefined || values.hooks === true || values.plugin === true || values.skill === true || values.instructions !== undefined || values.config !== undefined) throw new Error(`osnova setup ${family} sets up the whole family; use the --client form for single pieces`);
   if (values.apply === true && values.preview === true) throw new Error("osnova setup takes --apply or --preview, not both");
   const only = values.only?.split(",").map((name) => name.trim()).filter((name) => name.length > 0);
-  if (only !== undefined && (family !== "agents" || only.some((name) => !(agentHarnesses as readonly string[]).includes(name)))) throw new Error(`osnova setup agents --only takes ${agentHarnesses.join(", ")}`);
+  if (only !== undefined && (family !== "agents" || only.length === 0 || only.some((name) => !(agentHarnesses as readonly string[]).includes(name)))) throw new Error(`osnova setup agents --only takes ${agentHarnesses.join(", ")}`);
   const command = values.command !== undefined && values.command.length > 0 ? values.command : undefined;
   const plan = await planFamily(family as (typeof setupFamilies)[number], { home: values.home, command, nudge: values.nudge === true, only: only as (typeof agentHarnesses)[number][] | undefined });
   const label = (change: { kind: string; client?: string | undefined }): string => (change.kind === "mcp" ? change.client ?? "mcp" : change.kind);
   const lines = [
     ...plan.skipped.map((entry) => `osnova setup skipped: ${entry.harness}, ${entry.reason}`),
-    ...plan.kept.map((change) => `osnova setup kept: ${change.kind}, ${change.path} differs from the shipped file; left in place. Remove it and run again to install the shipped one.`),
+    ...plan.kept.map((change) => (change.linked === true
+      ? `osnova setup kept: ${change.kind}, ${change.notice}`
+      : `osnova setup kept: ${change.kind}, ${change.path} differs from the shipped file; left in place. Remove it and run again to install the shipped one.`)),
   ];
   if (plan.changes.length === 0) { io.stdout([...lines, `osnova setup ${family}: nothing to set up.`].join("\n")); return EXIT_OK; }
   if (values.apply !== true) {
-    io.stdout([...plan.changes.map((change) => [`osnova setup preview: ${label(change)}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")), ...lines, `Run osnova setup ${family} --apply to write these changes.`].join("\n\n"));
+    io.stdout([...plan.changes.map((change) => [`osnova setup preview: ${label(change)}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")), ...lines, "Repeat this command with --apply to write these changes."].join("\n\n"));
     return EXIT_OK;
   }
   const applied = await applyChanges(plan.changes);
@@ -486,6 +488,7 @@ export async function runCli(
     case "setup": {
       const parsed = parseArgs({ args: rest, allowPositionals: true, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" }, only: { type: "string" } } });
       if (parsed.positionals.length > 0) return await setupFamily(parsed.positionals, parsed.values, io);
+      if (parsed.values.only !== undefined) throw new Error("osnova setup --only belongs to osnova setup agents");
       const mode = parsed.values.apply === true ? "apply" : parsed.values.preview === true ? "preview" : undefined;
       if (mode === undefined) throw new Error("osnova setup requires --preview or --apply");
       const client = parsed.values.client;
