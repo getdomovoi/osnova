@@ -65,9 +65,17 @@ interface EdgeMaps {
   readonly outside: number;
 }
 
-// Evidence for every edge costs about a second on a large index, so footing keeps the maps per index object and scope.
-// A refresh publishes a new index object, which starts a new entry.
-const edgeMapCache = new WeakMap<OsnovaIndex, Map<string, EdgeMaps>>();
+interface EdgeEntry {
+  readonly reliable: readonly [number, RelationshipEvidence][];
+  readonly uncertain: number;
+  readonly scopes: Map<string, EdgeMaps>;
+}
+
+// Evidence for every edge costs about a second on a large index, so footing builds it once per index object and
+// derives each scope's maps from it, sharing the evidence objects. A refresh publishes a new index object, which
+// starts a new entry; within one index at most maxCachedScopes scopes are kept, the oldest dropped first.
+const edgeMapCache = new WeakMap<OsnovaIndex, EdgeEntry>();
+const maxCachedScopes = 8;
 
 // Builds the unscoped edge maps ahead of the first footing call; the MCP server calls it while idle.
 export function warmTaskContext(index: OsnovaIndex): void {
@@ -75,25 +83,35 @@ export function warmTaskContext(index: OsnovaIndex): void {
 }
 
 function edgeMaps(index: OsnovaIndex, scope: string, receipt: IndexReceipt): EdgeMaps {
-  const byScope = edgeMapCache.get(index) ?? new Map<string, EdgeMaps>();
-  edgeMapCache.set(index, byScope);
-  const cached = byScope.get(scope);
+  let entry = edgeMapCache.get(index);
+  if (entry === undefined) {
+    let uncertain = 0;
+    const reliable: [number, RelationshipEvidence][] = [];
+    index.edges.forEach((edge, key) => {
+      const evidence = relationshipEvidence(index, edge, receipt);
+      if (evidence === null || !isReliableEdge(edge)) { uncertain++; return; }
+      reliable.push([key, evidence]);
+    });
+    entry = { reliable, uncertain, scopes: new Map() };
+    edgeMapCache.set(index, entry);
+  }
+  const cached = entry.scopes.get(scope);
   if (cached !== undefined) return cached;
-  let uncertain = 0, outside = 0;
+  let outside = 0;
   const inbound = new Map<string, [number, RelationshipEvidence][]>(), outbound = new Map<string, [number, RelationshipEvidence][]>();
-  index.edges.forEach((edge, key) => {
-    const evidence = relationshipEvidence(index, edge, receipt);
-    if (evidence === null || !isReliableEdge(edge)) { uncertain++; return; }
+  for (const item of entry.reliable) {
+    const evidence = item[1];
     if (!inScope(evidence.source.file, scope) || !inScope(evidence.target.file, scope) ||
-      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside++; return; }
+      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside++; continue; }
     const from = evidence.edge.fromSymbol || evidence.edge.fromFile;
     const to = evidence.edge.toSymbol ?? evidence.edge.toFile;
-    if (to === undefined) return;
-    const ins = inbound.get(to) ?? []; ins.push([key, evidence]); inbound.set(to, ins);
-    const outs = outbound.get(from) ?? []; outs.push([key, evidence]); outbound.set(from, outs);
-  });
-  const maps = { inbound, outbound, uncertain, outside };
-  byScope.set(scope, maps);
+    if (to === undefined) continue;
+    const ins = inbound.get(to) ?? []; ins.push(item); inbound.set(to, ins);
+    const outs = outbound.get(from) ?? []; outs.push(item); outbound.set(from, outs);
+  }
+  const maps = { inbound, outbound, uncertain: entry.uncertain, outside };
+  if (entry.scopes.size >= maxCachedScopes) entry.scopes.delete(entry.scopes.keys().next().value!);
+  entry.scopes.set(scope, maps);
   return maps;
 }
 

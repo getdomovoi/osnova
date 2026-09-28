@@ -47,4 +47,20 @@ describe("footing across repeated calls and refreshes", () => {
     expect(scoped.omitted.outOfScopeEdges).toBe(2);
     expect(taskContext(after, ask).omitted.outOfScopeEdges).toBe(0);
   });
+
+  it("shares one evidence object per edge across scopes", () => {
+    const inner = new OsnovaIndexImpl("/fixture", new Map([["lib/b.ts", card("lib/b.ts", ["middle"])], ["lib/c.ts", card("lib/c.ts", ["caller"])]]),
+      [edge("lib/c.ts#caller", "lib/b.ts#middle")]);
+    const question = { task: "change" as const, question: "", symbols: ["lib/b.ts#middle"] };
+    const whole = taskContext(inner, question).relationships;
+    const inLib = taskContext(inner, { ...question, in: "lib" }).relationships;
+    expect(whole).toHaveLength(1);
+    expect(inLib[0]).toBe(whole[0]);
+  });
+
+  it("answers correctly after many scopes have been asked", () => {
+    const first = taskContext(after, { ...ask, in: "a.ts" });
+    for (let i = 0; i < 20; i++) taskContext(after, { ...ask, in: `missing${i}` });
+    expect(taskContext(after, { ...ask, in: "a.ts" })).toEqual(first);
+  });
 });
