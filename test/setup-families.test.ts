@@ -97,6 +97,25 @@ describe("setup family safety", () => {
     expect(existsSync(path.join(elsewhere, "SKILL.md"))).toBe(false);
   });
 
+  it("never writes below a linked folder higher up, and keeps a link that points to itself", async () => {
+    await fs.mkdir(at(".codex"), { recursive: true });
+    const elsewhere = at("vault", "skills");
+    await fs.mkdir(elsewhere, { recursive: true });
+    await fs.mkdir(at(".agents"), { recursive: true });
+    await fs.symlink(elsewhere, at(".agents", "skills"));
+    let c = capture();
+    expect(await runCli(["setup", "agents", "--apply", "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    expect(existsSync(path.join(elsewhere, "osnova", "SKILL.md"))).toBe(false);
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: skill, .*skills is a link/);
+    await fs.rm(at(".agents", "skills"));
+    await fs.mkdir(at(".agents", "skills", "osnova"), { recursive: true });
+    await fs.symlink(at(".agents", "skills", "osnova", "SKILL.md"), at(".agents", "skills", "osnova", "SKILL.md"));
+    c = capture();
+    expect(await runCli(["setup", "agents", "--apply", "--home", home, "--command", "osnova"], c.io)).toBe(0);
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: skill, .*SKILL\.md is a link/);
+    expect(existsSync(at(".codex", "hooks.json"))).toBe(true);
+  });
+
   it("tells the user to repeat the exact command with --apply", async () => {
     await fs.mkdir(at(".codex"), { recursive: true });
     const c = capture();
