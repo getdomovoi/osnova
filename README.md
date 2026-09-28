@@ -26,10 +26,11 @@ Node.js 22.13 or newer. Serve a repository to any MCP client:
 npx -y @getdomovoi/osnova mcp --workspace /path/to/repo
 ```
 
-Claude Code, one command after `npm install -g @getdomovoi/osnova`: the MCP entry and the session, prompt and stop hooks, with a backup of each file it changes.
+After `npm install -g @getdomovoi/osnova`, one command per kind of agent: `claude` wires Claude Code (MCP entry, session, prompt and stop hooks, and the skill); `agents` wires every installed harness that reads `AGENTS.md` (Codex, OpenCode, Kilo, Pi, Cursor), each with its hooks, plugin or extension, plus one shared skill in `~/.agents/skills/`. Each previews its changes; `--apply` writes them, backing up every file it changes.
 
 ```sh
-osnova setup --apply --client claude-code --hooks
+osnova setup claude --apply
+osnova setup agents --apply
 ```
 
 Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` when there is no global install.
@@ -124,7 +125,7 @@ Every MCP response opens with its index generation, says when the index is parti
 
 ## Hooks and clients
 
-One global install serves every repository and every client: one entry in each client's global config, nothing per project, nothing written inside your repository. `osnova setup --preview --client <name>` shows the diff and writes nothing. What each hook prints, when it stays quiet, and what the trials measured are in the [reference](docs/reference.md#hooks-and-setup-in-full).
+One global install serves every repository and every client: one entry in each client's global config, nothing per project, nothing written inside your repository. `osnova setup claude` and `osnova setup agents` show the diff and write nothing until `--apply`; `agents` skips a harness whose config folder is missing, `--only codex,pi` narrows it, and a skill or plugin file you edited is kept and reported. The table lists the per-client form, for one piece at a time. What each hook prints, when it stays quiet, and what the trials measured are in the [reference](docs/reference.md#hooks-and-setup-in-full).
 
 | Client | How to wire | What it adds |
 | --- | --- | --- |
@@ -132,7 +133,7 @@ One global install serves every repository and every client: one entry in each c
 | Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace |
 | Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently |
 | Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message |
-| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin: full contract in the system prompt, starting points on each message |
+| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin that appends starting points to each message; the tool guidance comes from the MCP instructions |
 | Kilo | `osnova setup --apply --client kilo --plugin` | MCP entry plus the same plugin |
 | Pi | `osnova setup --apply --client pi --plugin` | MCP entry through `pi-mcp-adapter` plus an extension that does the same |
 

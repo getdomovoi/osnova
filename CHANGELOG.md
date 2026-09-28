@@ -2,6 +2,16 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `osnova setup claude` and `osnova setup agents` set up a whole kind of agent in one command, previewing unless `--apply` is given. `claude` writes the Claude Code MCP entry, hooks and skill. `agents` covers every installed harness that reads `AGENTS.md` (Codex, OpenCode, Kilo, Pi, Cursor; a harness counts as installed when its config folder exists, and `--only` narrows the list): each gets its MCP entry and its hooks, plugin or extension, and all share one skill in `~/.agents/skills/osnova/`, a folder Codex, OpenCode, Kilo and Pi load skills from. A skill or plugin file that differs from the shipped one is kept and reported instead of stopping the run; an MCP or hook conflict still stops it with nothing written. `osnova doctor` checks the shared skill. The `--client` form is unchanged.
+
+### Fixed
+
+- The README no longer says the OpenCode and Kilo plugin puts the tool contract in the system prompt, which 0.10.0 stopped doing.
+
 ## 0.10.0 (2026-09-28)
 
 ### Changed

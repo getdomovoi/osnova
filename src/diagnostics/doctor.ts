@@ -8,7 +8,7 @@ import { familySiblings, workspaceFamily } from "../cache/family.js";
 import { getParser } from "../grammar/loader.js";
 import { extensionLanguage, grammarFile, languageTier } from "../grammar/languages.js";
 import type { LanguageId } from "../types.js";
-import { pluginClients, pluginSource, pluginTarget, skillSource, skillTarget } from "./setup-apply.js";
+import { agentsSkillTarget, pluginClients, pluginSource, pluginTarget, skillSource, skillTarget } from "./setup-apply.js";
 
 export interface DiagnosticCheck {
   readonly id: string;
@@ -137,6 +137,7 @@ export async function integrationFileChecks(home: string): Promise<DiagnosticChe
   const entries = [
     ...pluginClients.map((client) => ({ id: `plugin:${client}`, target: pluginTarget(client, home), source: pluginSource(client), fix: `osnova setup --apply --client ${client} --plugin` })),
     { id: "skill:claude-code", target: skillTarget(home), source: skillSource(), fix: "osnova setup --apply --skill" },
+    { id: "skill:agents", target: agentsSkillTarget(home), source: skillSource(), fix: "osnova setup agents --apply" },
   ];
   const checks: DiagnosticCheck[] = [];
   const normalized = (text: string): string => text.replace(/\r\n/g, "\n");
@@ -149,7 +150,7 @@ export async function integrationFileChecks(home: string): Promise<DiagnosticChe
       ? { id: entry.id, status: "ok", message: `${entry.target} matches the file this osnova ships.` }
       : { id: entry.id, status: "warning", message: `${entry.target} differs from the file this osnova ships; remove it and run ${entry.fix} to refresh it.` });
   }
-  if (checks.length === 0) checks.push({ id: "integrations", status: "ok", message: "No osnova plugin or skill file is installed for OpenCode, Kilo, Pi or Claude Code." });
+  if (checks.length === 0) checks.push({ id: "integrations", status: "ok", message: "No osnova plugin or skill file is installed for OpenCode, Kilo, Pi, Claude Code or ~/.agents/skills." });
   return checks;
 }
 

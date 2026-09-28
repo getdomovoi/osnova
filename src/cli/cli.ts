@@ -56,6 +56,7 @@ usage:
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--json] [--workspace <path>] [--cache-dir <path>]
+  osnova setup <claude|agents> [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--nudge] [--command <exe>] [--home <path>]   (one harness family; previews unless --apply)
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm]   (default workspace: current directory)
@@ -124,6 +125,32 @@ function numericOption(value: string | undefined, name: string, minimum = 0): nu
     throw new RangeError(`osnova: --${name} must be a safe integer >= ${minimum}`);
   }
   return number;
+}
+
+// `osnova setup claude|agents`: plan a whole harness family, print it, and write it only with --apply.
+async function setupFamily(positionals: readonly string[], values: { apply?: boolean | undefined; preview?: boolean | undefined; home?: string | undefined; command?: string[] | undefined; nudge?: boolean | undefined; only?: string | undefined; client?: string | undefined; hooks?: boolean | undefined; plugin?: boolean | undefined; skill?: boolean | undefined; instructions?: string | undefined; config?: string | undefined }, io: CliIo): Promise<number> {
+  const { setupFamilies, agentHarnesses, planFamily, applyChanges } = await import("../diagnostics/setup-apply.js");
+  const family = positionals[0];
+  if (positionals.length !== 1 || !(setupFamilies as readonly string[]).includes(family ?? "")) throw new Error(`osnova setup takes ${setupFamilies.join(" or ")} (or the --client form); got ${positionals.join(" ")}`);
+  if (values.client !== undefined || values.hooks === true || values.plugin === true || values.skill === true || values.instructions !== undefined || values.config !== undefined) throw new Error(`osnova setup ${family} sets up the whole family; use the --client form for single pieces`);
+  if (values.apply === true && values.preview === true) throw new Error("osnova setup takes --apply or --preview, not both");
+  const only = values.only?.split(",").map((name) => name.trim()).filter((name) => name.length > 0);
+  if (only !== undefined && (family !== "agents" || only.some((name) => !(agentHarnesses as readonly string[]).includes(name)))) throw new Error(`osnova setup agents --only takes ${agentHarnesses.join(", ")}`);
+  const command = values.command !== undefined && values.command.length > 0 ? values.command : undefined;
+  const plan = await planFamily(family as (typeof setupFamilies)[number], { home: values.home, command, nudge: values.nudge === true, only: only as (typeof agentHarnesses)[number][] | undefined });
+  const label = (change: { kind: string; client?: string | undefined }): string => (change.kind === "mcp" ? change.client ?? "mcp" : change.kind);
+  const lines = [
+    ...plan.skipped.map((entry) => `osnova setup skipped: ${entry.harness}, ${entry.reason}`),
+    ...plan.kept.map((change) => `osnova setup kept: ${change.kind}, ${change.path} differs from the shipped file; left in place. Remove it and run again to install the shipped one.`),
+  ];
+  if (plan.changes.length === 0) { io.stdout([...lines, `osnova setup ${family}: nothing to set up.`].join("\n")); return EXIT_OK; }
+  if (values.apply !== true) {
+    io.stdout([...plan.changes.map((change) => [`osnova setup preview: ${label(change)}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")), ...lines, `Run osnova setup ${family} --apply to write these changes.`].join("\n\n"));
+    return EXIT_OK;
+  }
+  const applied = await applyChanges(plan.changes);
+  io.stdout([...applied.map((change) => `osnova setup applied: ${label(change)}, ${change.written ? change.action : "unchanged"}, ${change.path}${change.backup === undefined ? "" : ` (backup ${change.backup})`}${change.written && change.notice.length > 0 ? `\n  ${change.notice}` : ""}`), ...lines].join("\n"));
+  return EXIT_OK;
 }
 
 function jsonOutput(value: unknown, label: string): string {
@@ -457,7 +484,8 @@ export async function runCli(
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {
-      const parsed = parseArgs({ args: rest, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" }, only: { type: "string" } } });
+      if (parsed.positionals.length > 0) return await setupFamily(parsed.positionals, parsed.values, io);
       const mode = parsed.values.apply === true ? "apply" : parsed.values.preview === true ? "preview" : undefined;
       if (mode === undefined) throw new Error("osnova setup requires --preview or --apply");
       const client = parsed.values.client;
