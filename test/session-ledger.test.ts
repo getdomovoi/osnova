@@ -191,3 +191,13 @@ it("separates new input from input a cache miss billed again", () => {
   expect(report.arms.base?.missedCacheShare).toBeCloseTo(1100 / 2900);
   expect(report.pairs.newTokenDelta).toEqual({ samples: 1, median: -200, total: -200 });
 });
+
+it("counts context written to the cache again as missed, as Claude bills a miss", () => {
+  const request = (key: string, uncachedInput: number, cacheRead: number, cacheWrite: number) => ({ key, startMs: null, endMs: null, calls: [],
+    usage: { uncachedInput, cacheRead, cacheWrite, output: 10, reasoning: null, costUsd: null } });
+  // 1005 new and written; +100 read from cache; then the cache expired and all 1305 tokens were written again.
+  const summary = summarizeSession({ host: "claude-code", calls: [], settleContinuations: 0, malformedRecords: 0,
+    requests: [request("r0", 5, 0, 1000), request("r1", 3, 1005, 97), request("r2", 5, 0, 1300)] });
+  expect(summary.newInput).toBe(1005 + 100 + 200);
+  expect(summary.missedCacheInput).toBe(1105);
+});

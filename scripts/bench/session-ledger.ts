@@ -303,7 +303,7 @@ export interface SessionSummary {
   /** Input a perfect cache would still bill: the first prompt, then each request's growth over the one before; a prompt
    * smaller than the one before (compaction) counts in full. Null when the host does not report input. */
   readonly newInput: number | null;
-  /** Uncached input beyond newInput: context the provider billed again because its cache missed. */
+  /** Input not served from cache (uncached plus cache writes) beyond newInput: context billed again after a cache miss. */
   readonly missedCacheInput: number | null;
   readonly calls: Readonly<Record<CallKind, number>>;
   readonly parallelRequests: number;
@@ -359,7 +359,8 @@ function cacheSplit(requests: readonly LedgerRequest[]): { newInput: number | nu
     if (input === null || request.usage.uncachedInput === null) return { newInput: null, missedCacheInput: null };
     const fresh = previous === null || input < previous ? input : input - previous;
     newInput += fresh;
-    missed += Math.max(0, request.usage.uncachedInput - fresh);
+    // Claude bills a miss mostly as a cache write, other hosts as uncached input; both are input not read from cache.
+    missed += Math.max(0, request.usage.uncachedInput + (request.usage.cacheWrite ?? 0) - fresh);
     previous = input;
   }
   return { newInput, missedCacheInput: missed };
@@ -435,7 +436,7 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
       tokensPerCorrect: perCorrect(all.map((row) => totalTokens(row.summary))),
       newTokensPerCorrect: perCorrect(all.map((row) => newTokens(row.summary))),
       missedCacheShare: ((missed, uncached) => (missed.total === null || uncached.total === null || uncached.total === 0 ? null : missed.total / uncached.total))(
-        sum(all.map((row) => row.summary.missedCacheInput)), sum(all.map((row) => row.summary.usage.uncachedInput.total))),
+        sum(all.map((row) => row.summary.missedCacheInput)), sum(all.map((row) => ((u, w) => (u === null ? null : u + (w ?? 0)))(row.summary.usage.uncachedInput.total, row.summary.usage.cacheWrite.total)))),
       totalCost: sum(all.map((row) => row.summary.usage.costUsd.total)),
       explanatory: Object.fromEntries((["requests", "searchOnlyRequests", "repeatedSearchRequests", "identifierSearches", "grepAfterOsnova", "denials", "toolErrors", "settleContinuations", "parallelRequests"] as const)
         .map((key) => [key, all.reduce((total, row) => total + row.summary[key], 0)])),
