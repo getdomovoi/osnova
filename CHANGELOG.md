@@ -2,6 +2,14 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- The stdio MCP server (`osnova mcp`) starts its first refresh at launch and, after each refresh that publishes a new index, builds the ranking corpus and footing's edge maps between requests. On an 18,425-file repository, with 15 seconds between launch and the first call, the first `osnova_ground` fell from 5.7 s to 0.9 s, the first `osnova_footing` from 9.4 s to 0.6 s and the first `osnova_warp` from 1.5 s to 0.2 s. A ground or footing call that arrives before the warm-up finishes builds what is missing itself. The final join of the corpus and the edge maps run in one step each, about 0.5 s and 1 s there, and any call that arrives during one of them waits for it, including calls to other tools. Closing the server cancels the warm-up. Answers do not change. `createOsnovaMcpServer` takes an optional `prewarm` flag, off by default, and its status reports `warm`.
+- `osnova_footing` keeps room for relationships. Seed definitions after the first now take at most 60% of the budget when there are relationships to show, and any room left returns to them after the relationships; the first seed and the no-relationship case keep the whole budget. On an 18,425-file repository, two questions went from 2 and 0 relationships to 9 and 4, because short seed definitions kept whole had filled the budget.
+- `osnova_footing` keeps its edge maps per index and scope instead of rebuilding them on every call; repeated calls on that repository fell from about 1.3 s to 0.5 s.
+
 ## 0.9.0 (2026-09-26)
 
 The extraction version moves to `structural-9.30` and the artifact format to 13, so the first run after upgrading rebuilds the cache once. This release lands the remediation of the 2026-09-22 repository audit, 97 findings across ten categories worked in three waves; the audit itself is a private record, and each entry below states what changed and what was measured.
