@@ -33,6 +33,13 @@ export interface CandidateTest {
   readonly basis: "test-path-and-graph-relationship";
 }
 
+export interface RequestedSymbol {
+  readonly name: string;
+  /** returned: its definition is in the answer; omitted: found but cut by the budget; unknown: no indexed symbol has
+   * this qualified name; out-of-scope: indexed outside the requested `in` scope. */
+  readonly status: "returned" | "omitted" | "unknown" | "out-of-scope";
+}
+
 export interface TaskContextResult {
   readonly task: TaskContextOptions["task"];
   readonly scope: string;
@@ -52,6 +59,8 @@ export interface TaskContextResult {
     readonly unknownSymbols: number;
   };
   readonly limitations: readonly string[];
+  /** Present only when the call named `symbols`: one entry per distinct requested name, sorted. */
+  readonly requested?: readonly RequestedSymbol[] | undefined;
 }
 
 const seedOverfetch = 4;
@@ -130,11 +139,17 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const receipt = indexReceipt(index);
   const seeds: OsnovaSymbol[] = [];
   let retrievalHits = 0, unknownSymbols = 0;
+  const requested: { name: string; status: RequestedSymbol["status"] }[] = [];
   if (options.symbols !== undefined) {
     for (const name of [...new Set(options.symbols)].sort(compareText)) {
       const symbol = index.symbols.get(name);
-      if (symbol === undefined || !inScope(symbol.file, scope)) unknownSymbols++;
-      else seeds.push(symbol);
+      if (symbol === undefined || !inScope(symbol.file, scope)) {
+        unknownSymbols++;
+        requested.push({ name, status: symbol === undefined ? "unknown" : "out-of-scope" });
+      } else {
+        seeds.push(symbol);
+        requested.push({ name, status: "returned" });
+      }
     }
   } else {
     const limit = options.limit ?? 8;
@@ -195,6 +210,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
       retrievalHits, uncertainEdges: uncertain, outOfScopeEdges: outside, depthFrontier: frontier.size, unknownSymbols },
     limitations: ["indexed-structural-evidence-only", "test-candidates-not-coverage", "receipts-not-disk-freshness", "uncertainty-counts-cover-entire-index",
       ...(receipt.diagnostics > 0 ? ["index-diagnostics-present"] : [])],
+    ...(options.symbols !== undefined ? { requested } : {}),
   };
   const measure = options.measure ?? ((value: TaskContextResult): number => JSON.stringify(value).length);
   const size = (): number => measure(result);
@@ -219,10 +235,29 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   for (const seed of seedDefinitions) {
     deferredSeeds.push(...append([seed], result.definitions, "definitions", result.definitions.length === 0 ? maxCodeUnits : seedShare));
   }
+  const seedCount = result.definitions.length;
   if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(deferredSeeds, result.definitions, "definitions");
   append(relatedDefinitions, result.definitions, "definitions");
+  const settleStatuses = (): void => {
+    const shown = new Set(result.definitions.map((definition) => definition.symbol.qualifiedName));
+    for (const entry of requested) {
+      if (entry.status === "returned" || entry.status === "omitted") entry.status = shown.has(entry.name) ? "returned" : "omitted";
+    }
+  };
+  // Settling can move an omitted name ahead in the capped requested line, so the text can grow after it was
+  // measured; drop the latest-added items until it fits again: related definitions and deferred seeds first, then
+  // candidate tests and relationships, and the seeds placed in the first pass last.
+  settleStatuses();
+  while (size() > maxCodeUnits) {
+    if (result.definitions.length > seedCount) { result.definitions.pop(); result.omitted.definitions++; }
+    else if (result.candidateTests.length > 0) { result.candidateTests.pop(); result.omitted.candidateTests++; }
+    else if (result.relationships.length > 0) { result.relationships.pop(); result.omitted.relationships++; }
+    else if (result.definitions.length > 0) { result.definitions.pop(); result.omitted.definitions++; }
+    else throw new RangeError(`osnova: task context budget cannot retain receipts and omissions; minimum ${size()} UTF-16 code units`);
+    settleStatuses();
+  }
   return result;
 }
