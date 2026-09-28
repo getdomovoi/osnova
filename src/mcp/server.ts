@@ -42,6 +42,10 @@ export const mcpInstructions = [
   "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search, including HTTP routes by verb and path (GET /users). osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of your uncommitted changes (no arguments) before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
+// The one line of the instructions that depends on the workspace: which checkout this server indexes, so an agent
+// working in another worktree sees the mismatch before it trusts or repeats a lookup.
+export const checkoutLine = (root: string): string =>
+  `This server indexes ${root}; a file in another checkout or worktree is not in it, so query paths relative to this root.`;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
@@ -335,7 +339,7 @@ export function createOsnovaMcpServer(
 
   const server = new Server(
     { name: "osnova", version: OSNOVA_VERSION },
-    { capabilities: { tools: {} }, instructions: mcpInstructions },
+    { capabilities: { tools: {} }, instructions: `${mcpInstructions}\n${checkoutLine(absRoot)}` },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));
