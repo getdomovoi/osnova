@@ -8,10 +8,15 @@ import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
 const closers: Array<() => void> = [];
-afterEach(() => { for (const close of closers.splice(0)) close(); });
+const temporaries: string[] = [];
+afterEach(async () => {
+  for (const close of closers.splice(0)) close();
+  for (const dir of temporaries.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+});
 
 async function serve(prewarm: boolean) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-prewarm-"));
+  temporaries.push(temporary);
   const workspace = path.join(temporary, "ws");
   await fs.mkdir(workspace, { recursive: true });
   await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return second(); }\n");
