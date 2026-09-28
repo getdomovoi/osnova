@@ -181,19 +181,27 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const measure = options.measure ?? ((value: TaskContextResult): number => JSON.stringify(value).length);
   const size = (): number => measure(result);
   if (size() > maxCodeUnits) throw new RangeError(`osnova: task context budget cannot retain receipts and omissions; minimum ${size()} UTF-16 code units`);
-  const append = <T>(items: Iterable<T>, target: T[], field: "definitions" | "relationships" | "candidateTests"): void => {
+  const append = <T>(items: Iterable<T>, target: T[], field: "definitions" | "relationships" | "candidateTests", limit = maxCodeUnits): T[] => {
+    const left: T[] = [];
     for (const item of items) {
       target.push(item); result.omitted[field]--;
-      if (size() > maxCodeUnits) { target.pop(); result.omitted[field]++; }
+      if (size() > limit) { target.pop(); result.omitted[field]++; left.push(item); }
     }
+    return left;
   };
   const seedNames = new Set(seeds.map((seed) => seed.qualifiedName));
   const seedDefinitions = [...definitions.values()].filter((definition) => seedNames.has(definition.symbol.qualifiedName));
   const relatedDefinitions = [...definitions.values()].filter((definition) => !seedNames.has(definition.symbol.qualifiedName));
-  append(seedDefinitions, result.definitions, "definitions");
+  // Long seed excerpts could fill the whole budget and leave no relationships, which are what footing adds over
+  // ground. With relationships to show, seeds after the first take at most this share; any room left returns to
+  // them last. The first seed always has the whole budget, so footing never answers without a definition it could fit.
+  const seedShare = relationships.size > 0 ? Math.floor(maxCodeUnits * 0.6) : maxCodeUnits;
+  const deferredSeeds = [...append(seedDefinitions.slice(0, 1), result.definitions, "definitions"),
+    ...append(seedDefinitions.slice(1), result.definitions, "definitions", seedShare)];
   if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
+  append(deferredSeeds, result.definitions, "definitions");
   append(relatedDefinitions, result.definitions, "definitions");
   return result;
 }
