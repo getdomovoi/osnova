@@ -216,8 +216,10 @@ it("measures growth within each conversation when subagent requests interleave",
 
 it("reports no new-token or cache-share figure when any session lacks the fields", () => {
   const request = (key: string, uncachedInput: number | null, output: number | null) => ({ key, startMs: null, endMs: null, calls: [],
-    usage: { uncachedInput, cacheRead: 0, cacheWrite: null, output, reasoning: null, costUsd: null } });
+    usage: { uncachedInput, cacheRead: 0, cacheWrite: 0, output, reasoning: null, costUsd: null } });
   const complete = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10)] });
+  expect(complete.newInput).toBe(100);
+  expect(complete.missedCacheInput).toBe(0);
   const noOutput = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10), request("b", 120, null)] });
   const noInput = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10), request("b", null, 10)] });
   const report = compareArms([
@@ -247,4 +249,17 @@ it("reports new input as unknown when a host that splits input omits a cache fie
   const codex = { host: "codex" as const, calls: [], settleContinuations: 0, malformedRecords: 0,
     requests: [{ key: "r0", startMs: null, endMs: null, calls: [], usage: { uncachedInput: 60, cacheRead: 40, cacheWrite: null, output: 10, reasoning: null, costUsd: null } }] };
   expect(summarizeSession(codex).newInput).toBe(100);
+});
+
+it("keeps Codex growth from the reported total but reports missed-cache input as unknown when cached input is omitted", () => {
+  const count = (input: number, cached: number | undefined, total: number) => ({ timestamp: "2026-01-01T00:00:01Z", type: "event_msg", payload: { type: "token_count", info: {
+    last_token_usage: { input_tokens: input, ...(cached === undefined ? {} : { cached_input_tokens: cached }), output_tokens: 10, total_tokens: input + 10 }, total_token_usage: { total_tokens: total } } } });
+  const session = parseCodexSession(jsonl([
+    { timestamp: "2026-01-01T00:00:00Z", type: "session_meta", payload: { id: "codex-session" } },
+    count(1000, 800, 1010),
+    count(1100, undefined, 2120),
+  ]));
+  const summary = summarizeSession(session);
+  expect(summary.newInput).toBe(1100);
+  expect(summary.missedCacheInput).toBeNull();
 });

@@ -365,7 +365,8 @@ const totalInputKnown = (host: LedgerHost, usage: LedgerUsage): boolean =>
   usage.uncachedInput !== null && (host === "codex" || (usage.cacheRead !== null && usage.cacheWrite !== null));
 
 function cacheSplit(host: LedgerHost, requests: readonly LedgerRequest[]): { newInput: number | null; missedCacheInput: number | null } {
-  let newInput = 0, missed = 0;
+  let newInput = 0;
+  let missed: number | null = 0;
   const previousBy = new Map<string, number>();
   for (const request of requests) {
     const input = inputOf(request.usage);
@@ -374,8 +375,9 @@ function cacheSplit(host: LedgerHost, requests: readonly LedgerRequest[]): { new
     const previous = previousBy.get(history);
     const fresh = previous === undefined || input < previous ? input : input - previous;
     newInput += fresh;
+    // Codex's total gives growth without a cache-read count, but the uncached part is then unknown.
     // Claude bills a miss mostly as a cache write, other hosts as uncached input; both are input not read from cache.
-    missed += Math.max(0, request.usage.uncachedInput + (request.usage.cacheWrite ?? 0) - fresh);
+    missed = missed === null || request.usage.cacheRead === null ? null : missed + Math.max(0, request.usage.uncachedInput + (request.usage.cacheWrite ?? 0) - fresh);
     previousBy.set(history, input);
   }
   return { newInput, missedCacheInput: missed };
