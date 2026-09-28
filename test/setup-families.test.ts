@@ -131,3 +131,16 @@ describe("setup family safety", () => {
     expect(existsSync(at(".codex", "config.toml"))).toBe(false);
   });
 });
+
+describe("the below-home check", () => {
+  it("treats every path under a filesystem root as below it", async () => {
+    const { isBelowHome } = await import("../src/diagnostics/setup-apply.js");
+    const root = path.parse(process.cwd()).root;
+    expect(isBelowHome(root, path.join(root, "a", "b"))).toBe(true);
+    expect(isBelowHome(at(), at(".agents", "skills"))).toBe(true);
+    expect(isBelowHome(at(), at())).toBe(false);
+    expect(isBelowHome(at(), path.dirname(home))).toBe(false);
+    expect(isBelowHome(at(), `${home}-other`)).toBe(false);
+    expect(isBelowHome(at(), at("..cache", "x"))).toBe(true);
+  });
+});

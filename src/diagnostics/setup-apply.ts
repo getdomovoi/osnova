@@ -271,8 +271,13 @@ export async function applyChanges(changes: readonly PlannedChange[]): Promise<A
 
 // The first symbolic link, dangling or not, among the file and every folder between it and home: writing there
 // would land wherever the link points, such as a dotfiles checkout.
+// path.relative, not a prefix test: a home at a filesystem root ("/" or "C:\\") would otherwise gain a doubled separator.
+export function isBelowHome(home: string, candidate: string): boolean {
+  const relative = path.relative(home, candidate);
+  return relative.length > 0 && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
 async function linkedPart(target: string, home: string): Promise<string | undefined> {
-  for (let candidate = target; candidate !== home && candidate.startsWith(`${home}${path.sep}`); candidate = path.dirname(candidate)) {
+  for (let candidate = target; isBelowHome(home, candidate); candidate = path.dirname(candidate)) {
     const stat = await fs.lstat(candidate).catch(() => undefined);
     if (stat?.isSymbolicLink() === true) return candidate;
   }
