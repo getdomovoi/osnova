@@ -201,6 +201,20 @@ describe("task context", () => {
     expect(result.omitted.uncertainEdges).toBe(1);
   });
 
+  it("gives change and review tasks both callers and tests when the budget cannot hold every test", () => {
+    const tests = Array.from({ length: 30 }, (_, i) => `test/t${String(i).padStart(2, "0")}.test.ts`);
+    const busy = index([card("src/lib.ts", ["target"]), card("src/a.ts", ["a"]), card("src/b.ts", ["b"]), card("src/c.ts", ["c"]),
+      ...tests.map((file) => card(file, ["check"]))],
+    [edge("src/a.ts#a", "src/lib.ts#target"), edge("src/b.ts#b", "src/lib.ts#target"), edge("src/c.ts#c", "src/lib.ts#target"),
+      ...tests.map((file) => edge(`${file}#check`, "src/lib.ts#target"))]);
+    for (const task of ["change", "review"] as const) {
+      const result = taskContext(busy, { task, question: "", symbols: ["src/lib.ts#target"], maxCodeUnits: 8_000 });
+      expect(result.omitted.candidateTests, task).toBeGreaterThan(0);
+      expect(result.candidateTests.length, task).toBeGreaterThan(0);
+      expect(result.relationships.map((entry) => entry.edge.fromFile).filter((file) => file.startsWith("src/")), task).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    }
+  });
+
   it("caps complete serialized UTF-16 output deterministically, retaining receipts and omissions", () => {
     const options = { task: "change" as const, question: "work", symbols: ["src/work.ts#work"], maxCodeUnits: 1600 };
     const result = taskContext(repo, options);

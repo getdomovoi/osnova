@@ -236,9 +236,18 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     deferredSeeds.push(...append([seed], result.definitions, "definitions", result.definitions.length === 0 ? maxCodeUnits : seedShare));
   }
   const seedCount = result.definitions.length;
-  if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
-  append(relationships.values(), result.relationships, "relationships");
-  if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
+  if (options.task === "understand") {
+    append(relationships.values(), result.relationships, "relationships");
+    append(candidateTests.values(), result.candidateTests, "candidateTests");
+  } else {
+    // Change and review alternate callers and tests, so a symbol with many tests still shows the call sites an edit breaks.
+    const related = [...relationships.values()];
+    const tests = [...candidateTests.values()];
+    for (let i = 0; i < Math.max(related.length, tests.length); i++) {
+      if (i < related.length) append([related[i]!], result.relationships, "relationships");
+      if (i < tests.length) append([tests[i]!], result.candidateTests, "candidateTests");
+    }
+  }
   append(deferredSeeds, result.definitions, "definitions");
   append(relatedDefinitions, result.definitions, "definitions");
   const settleStatuses = (): void => {
