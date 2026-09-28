@@ -16,7 +16,8 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { taskContext } from "../query/task-context.js";
+import { taskContext, warmTaskContext } from "../query/task-context.js";
+import { warmQueryContext } from "../query/context.js";
 import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
@@ -241,12 +242,14 @@ export interface OsnovaMcpWatchOptions {
 export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
+  readonly prewarm?: boolean;
 }
 
 export interface OsnovaMcpStatus {
   readonly watching: boolean;
   readonly refreshes: number;
   readonly pendingChanges: boolean;
+  readonly warm: "off" | "idle" | "warming" | "warm" | "closed";
 }
 
 export function createOsnovaMcpServer(
@@ -264,12 +267,34 @@ export function createOsnovaMcpServer(
   let changes = 0;
   let verifiedAt = 0;
   let refreshes = 0;
+  let warm: OsnovaMcpStatus["warm"] = options?.prewarm === true ? "idle" : "off";
+  // After each refresh, build the ranking corpus and footing's edge maps between requests, so the first
+  // ground or footing call on a large repository does not pay for them. A newer index or close stops the old warm-up,
+  // and nothing starts after close.
+  let closed = false;
+  function prewarm(index: OsnovaIndex): void {
+    if (options?.prewarm !== true || closed) return;
+    warm = "warming";
+    const stale = (): boolean => closed || latest !== index;
+    void warmQueryContext(index, { cancelled: stale }).then((context) => {
+      if (context === undefined || stale()) return;
+      warmTaskContext(index);
+      if (!stale()) warm = "warm";
+    }).catch((error: unknown) => {
+      if (closed) return;
+      warm = "idle";
+      process.stderr.write(`osnova: prewarm failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    });
+  }
   // One refresh at a time; a change that arrives during a refresh marks the result stale again.
   function refresh(): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
     inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true }).then((index) => {
-      latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false; return index;
+      const changed = latest !== index;
+      latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
+      if (changed) prewarm(index);
+      return index;
     }).finally(() => { inFlight = undefined; });
     return inFlight;
   }
@@ -304,8 +329,13 @@ export function createOsnovaMcpServer(
       watcher = undefined;
     }
   }
-  const close = (): void => { if (timer !== undefined) clearTimeout(timer); watcher?.close(); watcher = undefined; };
-  const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty });
+  const close = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    watcher?.close(); watcher = undefined;
+    closed = true;
+    if (warm !== "off") warm = "closed";
+  };
+  const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty, warm });
 
   const server = new Server(
     { name: "osnova", version: OSNOVA_VERSION },
@@ -556,8 +586,11 @@ export async function runMcpStdio(
   workspace: string,
   options?: OsnovaMcpOptions,
 ): Promise<void> {
-  const { server, close } = createOsnovaMcpServer(workspace, options);
+  const { server, close, refresh } = createOsnovaMcpServer(workspace, { prewarm: true, ...options });
   const transport = new StdioServerTransport();
   transport.onclose = close;
   await server.connect(transport);
+  // Start the first refresh now rather than on the first tool call, so the index and its warm-up are
+  // usually ready by the time an agent asks. A tool call joins this refresh instead of starting another.
+  refresh().catch((error: unknown) => { process.stderr.write(`osnova: startup refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); });
 }
