@@ -201,3 +201,30 @@ it("counts context written to the cache again as missed, as Claude bills a miss"
   expect(summary.newInput).toBe(1005 + 100 + 200);
   expect(summary.missedCacheInput).toBe(1105);
 });
+
+it("measures growth within each conversation when subagent requests interleave", () => {
+  const record = (id: string, at: string, input: number, agentId?: string) => ({ type: "assistant", timestamp: at, ...(agentId === undefined ? {} : { agentId, isSidechain: true }),
+    message: { id, content: [{ type: "text", text: "x" }], usage: { input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10 } } });
+  const session = parseClaudeSession(jsonl([
+    record("m1", "2026-09-27T00:00:00Z", 1000), record("s1", "2026-09-27T00:00:01Z", 1000, "sub"), record("m2", "2026-09-27T00:00:02Z", 1100),
+  ]));
+  expect(session.requests.map((request) => request.history)).toEqual(["main", "sub", "main"]);
+  const summary = summarizeSession(session);
+  expect(summary.newInput).toBe(2100);
+  expect(summary.missedCacheInput).toBe(1000);
+});
+
+it("reports no new-token or cache-share figure when any session lacks the fields", () => {
+  const request = (key: string, uncachedInput: number | null, output: number | null) => ({ key, startMs: null, endMs: null, calls: [],
+    usage: { uncachedInput, cacheRead: 0, cacheWrite: null, output, reasoning: null, costUsd: null } });
+  const complete = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10)] });
+  const noOutput = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10), request("b", 120, null)] });
+  const noInput = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10), request("b", null, 10)] });
+  const report = compareArms([
+    { task: "t1", arm: "cand", correct: true, summary: noOutput }, { task: "t1", arm: "base", correct: true, summary: complete },
+    { task: "t2", arm: "cand", correct: true, summary: complete }, { task: "t2", arm: "base", correct: true, summary: noInput },
+  ], "cand", "base");
+  expect(report.arms.cand?.newTokensPerCorrect).toBeNull();
+  expect(report.arms.base?.missedCacheShare).toBeNull();
+  expect(report.pairs.newTokenDelta.samples).toBe(0);
+});
