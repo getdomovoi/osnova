@@ -13,13 +13,16 @@ function card(path: string, name: string): FileCard {
 }
 
 const files = Array.from({ length: 40 }, (_, i) => card(`src/file${i}.ts`, `handler${i}`));
-const index = new OsnovaIndexImpl("/fixture", new Map(files.map((file) => [file.path, file])), []);
+// A new index object per test: the corpus is cached per index object, so reusing one would let a test read the context
+// an earlier test finished.
+const fresh = (): OsnovaIndexImpl => new OsnovaIndexImpl("/fixture", new Map(files.map((file) => [file.path, file])), []);
 
 // The MCP server warms the ranking corpus between requests; these cases pin that it yields and ends in the same context.
 describe("warming the query context", () => {
   beforeEach(() => resetQueryCaches());
 
   it("yields to the event loop while it builds, then returns the context queries use", async () => {
+    const index = fresh();
     let ticks = 0;
     let done = false;
     const tick = (): void => { ticks += 1; if (!done) setImmediate(tick); };
@@ -31,11 +34,17 @@ describe("warming the query context", () => {
     expect(files.every((file) => fileDocumentsCached(index, file.path))).toBe(true);
   });
 
-  it("stops when cancelled and leaves the rest for the next query", async () => {
+  it("stops when cancelled, and the next query builds the rest into the same context a cold query gets", async () => {
+    const index = fresh();
     let calls = 0;
     const warmed = await warmQueryContext(index, { sliceMs: 0, cancelled: () => ++calls > 3 });
     expect(warmed).toBeUndefined();
-    expect(files.filter((file) => fileDocumentsCached(index, file.path)).length).toBeLessThan(files.length);
-    expect(queryContext(index).documentCount).toBeGreaterThan(0);
+    expect(files.filter((file) => fileDocumentsCached(index, file.path))).toHaveLength(3);
+    const finished = queryContext(index);
+    expect(files.every((file) => fileDocumentsCached(index, file.path))).toBe(true);
+    resetQueryCaches();
+    const cold = queryContext(fresh());
+    expect(finished.documentCount).toBe(cold.documentCount);
+    expect([...finished.df.entries()]).toEqual([...cold.df.entries()]);
   });
 });
