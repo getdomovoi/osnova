@@ -300,6 +300,11 @@ export interface SessionSummary {
   readonly usage: UsageSums;
   /** Everything the first request read: uncached input plus reported cache reads and writes. */
   readonly firstRequestInput: number | null;
+  /** Input a perfect cache would still bill: the first prompt, then each request's growth over the one before; a prompt
+   * smaller than the one before (compaction) counts in full. Null when the host does not report input. */
+  readonly newInput: number | null;
+  /** Uncached input beyond newInput: context the provider billed again because its cache missed. */
+  readonly missedCacheInput: number | null;
   readonly calls: Readonly<Record<CallKind, number>>;
   readonly parallelRequests: number;
   readonly searchOnlyRequests: number;
@@ -345,6 +350,21 @@ function sum(values: readonly (number | null)[]): Sum {
   return { total: present.length === 0 ? null : present.reduce((a, b) => a + b, 0), missing: values.length - present.length };
 }
 
+// Splits uncached input into new text and cache misses. Provider cache misses are random and can swamp a real
+// difference in cost, so comparisons also report new input, which does not depend on the cache.
+function cacheSplit(requests: readonly LedgerRequest[]): { newInput: number | null; missedCacheInput: number | null } {
+  let newInput = 0, missed = 0, previous: number | null = null;
+  for (const request of requests) {
+    const input = inputOf(request.usage);
+    if (input === null || request.usage.uncachedInput === null) return { newInput: null, missedCacheInput: null };
+    const fresh = previous === null || input < previous ? input : input - previous;
+    newInput += fresh;
+    missed += Math.max(0, request.usage.uncachedInput - fresh);
+    previous = input;
+  }
+  return { newInput, missedCacheInput: missed };
+}
+
 export function summarizeSession(session: LedgerSession): SessionSummary {
   const byKey = new Map(session.calls.map((call) => [call.key, call]));
   const usage = Object.fromEntries((["uncachedInput", "cacheRead", "cacheWrite", "output", "reasoning", "costUsd"] as const)
@@ -371,6 +391,7 @@ export function summarizeSession(session: LedgerSession): SessionSummary {
     elapsedMs: starts.length === 0 || ends.length === 0 ? null : Math.max(...ends) - Math.min(...starts),
     usage,
     firstRequestInput: session.requests[0] === undefined ? null : inputOf(session.requests[0].usage),
+    ...cacheSplit(session.requests),
     calls,
     parallelRequests: session.requests.filter((request) => request.calls.length > 1).length,
     searchOnlyRequests: searchOnly.filter(Boolean).length,
@@ -393,6 +414,8 @@ const median = (values: readonly number[]): number | null => {
   const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 };
+const newTokens = (summary: SessionSummary): number | null =>
+  summary.newInput === null || summary.usage.output.total === null ? null : summary.newInput + summary.usage.output.total;
 const totalTokens = (summary: SessionSummary): number | null => {
   const { uncachedInput, cacheRead, cacheWrite, output } = summary.usage;
   return uncachedInput.total === null || output.total === null ? null : uncachedInput.total + (cacheRead.total ?? 0) + (cacheWrite.total ?? 0) + output.total;
@@ -410,6 +433,9 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
       costPerCorrect: perCorrect(all.map((row) => row.summary.usage.costUsd.total)),
       elapsedMsPerCorrect: perCorrect(all.map((row) => row.summary.elapsedMs)),
       tokensPerCorrect: perCorrect(all.map((row) => totalTokens(row.summary))),
+      newTokensPerCorrect: perCorrect(all.map((row) => newTokens(row.summary))),
+      missedCacheShare: ((missed, uncached) => (missed.total === null || uncached.total === null || uncached.total === 0 ? null : missed.total / uncached.total))(
+        sum(all.map((row) => row.summary.missedCacheInput)), sum(all.map((row) => row.summary.usage.uncachedInput.total))),
       totalCost: sum(all.map((row) => row.summary.usage.costUsd.total)),
       explanatory: Object.fromEntries((["requests", "searchOnlyRequests", "repeatedSearchRequests", "identifierSearches", "grepAfterOsnova", "denials", "toolErrors", "settleContinuations", "parallelRequests"] as const)
         .map((key) => [key, all.reduce((total, row) => total + row.summary[key], 0)])),
@@ -428,7 +454,7 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
   }
   const find = (task: string, name: string) => rows.find((row) => row.task === task && row.arm === name);
   let bothCorrect = 0, excluded = 0, candidateOnly = 0, baselineOnly = 0, candidateCheaper = 0;
-  const costDeltas: number[] = [], elapsedDeltas: number[] = [], tokenDeltas: number[] = [];
+  const costDeltas: number[] = [], elapsedDeltas: number[] = [], tokenDeltas: number[] = [], newTokenDeltas: number[] = [];
   for (const task of tasks) {
     const a = find(task, candidate), b = find(task, baseline);
     if (a === undefined || b === undefined) { excluded += 1; continue; }
@@ -441,13 +467,15 @@ export function compareArms(rows: readonly ArmRow[], candidate: string, baseline
     if (costA !== null && costB !== null) { costDeltas.push(costA - costB); if (costA < costB) candidateCheaper += 1; }
     if (timeA !== null && timeB !== null) elapsedDeltas.push(timeA - timeB);
     if (tokensA !== null && tokensB !== null) tokenDeltas.push(tokensA - tokensB);
+    const freshA = newTokens(a.summary), freshB = newTokens(b.summary);
+    if (freshA !== null && freshB !== null) newTokenDeltas.push(freshA - freshB);
   }
   const spread = (values: readonly number[]) => ({ samples: values.length, median: median(values), total: values.reduce((a, b) => a + b, 0) });
   return {
     candidate, baseline,
     arms: { [candidate]: arm(candidate), [baseline]: arm(baseline) },
-    pairs: { tasks: tasks.length, bothCorrect, excluded, candidateOnly, baselineOnly, candidateCheaper, costDelta: spread(costDeltas), elapsedDeltaMs: spread(elapsedDeltas), tokenDelta: spread(tokenDeltas) },
-    interpretation: "cost and time per correct session are primary; paired deltas cover tasks both arms solved; call and request counts explain, they are not savings; null means the host did not report the field",
+    pairs: { tasks: tasks.length, bothCorrect, excluded, candidateOnly, baselineOnly, candidateCheaper, costDelta: spread(costDeltas), elapsedDeltaMs: spread(elapsedDeltas), tokenDelta: spread(tokenDeltas), newTokenDelta: spread(newTokenDeltas) },
+    interpretation: "cost and time per correct session are primary; paired deltas cover tasks both arms solved; new tokens (new input plus output) do not depend on provider cache hits, so they separate a real change from cache noise; call and request counts explain, they are not savings; null means the host did not report the field",
   };
 }
 

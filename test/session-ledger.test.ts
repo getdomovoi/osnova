@@ -174,3 +174,20 @@ it("counts a search that exits 1 with no match as a finished search, and every o
   ]));
   expect(claude.calls.map((call) => call.outcome)).toEqual(["ok", "error"]);
 });
+
+it("separates new input from input a cache miss billed again", () => {
+  const request = (key: string, uncachedInput: number, cacheRead: number) => ({ key, startMs: null, endMs: null, calls: [],
+    usage: { uncachedInput, cacheRead, cacheWrite: null, output: 10, reasoning: null, costUsd: null } });
+  // 1000 new; +100 served from cache; +200 but the whole prompt missed; then a compacted, smaller prompt.
+  const summary = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0,
+    requests: [request("r0", 1000, 0), request("r1", 100, 1000), request("r2", 1300, 0), request("r3", 500, 0)] });
+  expect(summary.newInput).toBe(1800);
+  expect(summary.missedCacheInput).toBe(1100);
+
+  const row = (task: string, arm: string, correct: boolean, newInput: number) => ({ task, arm, correct,
+    summary: { ...summary, newInput, usage: { ...summary.usage, output: { total: 40, missing: 0 } } } });
+  const report = compareArms([row("t1", "cand", true, 800), row("t1", "base", true, 1000), row("t2", "cand", false, 900), row("t2", "base", true, 1000)], "cand", "base");
+  expect(report.arms.cand?.newTokensPerCorrect).toBe((800 + 40 + 900 + 40) / 1);
+  expect(report.arms.base?.missedCacheShare).toBeCloseTo(1100 / 2900);
+  expect(report.pairs.newTokenDelta).toEqual({ samples: 1, median: -200, total: -200 });
+});
