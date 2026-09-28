@@ -69,6 +69,11 @@ interface EdgeMaps {
 // A refresh publishes a new index object, which starts a new entry.
 const edgeMapCache = new WeakMap<OsnovaIndex, Map<string, EdgeMaps>>();
 
+// Builds the unscoped edge maps ahead of the first footing call; the MCP server calls it while idle.
+export function warmTaskContext(index: OsnovaIndex): void {
+  edgeMaps(index, "", indexReceipt(index));
+}
+
 function edgeMaps(index: OsnovaIndex, scope: string, receipt: IndexReceipt): EdgeMaps {
   const byScope = edgeMapCache.get(index) ?? new Map<string, EdgeMaps>();
   edgeMapCache.set(index, byScope);
