@@ -82,12 +82,12 @@ export type { ImpactOptions, ImpactResult, IndexReceipt, SourceReceipt, Definiti
 export { detectScopes, scopedAsk } from "./query/scoped.js";
 export type { PackageScope, ScopedAskHit, ScopedAskResult } from "./query/scoped.js";
 export { taskContext } from "./query/task-context.js";
-export type { TaskContextOptions, TaskContextResult, ContextDefinition, CandidateTest } from "./query/task-context.js";
+export type { TaskContextOptions, TaskContextResult, ContextDefinition, CandidateTest, RequestedSymbol } from "./query/task-context.js";
 export { testsFor, symbolsUnderTest, isTestFile } from "./query/tests.js";
 export type { TestsForOptions, TestsForResult, SymbolTests, TestFileEvidence, TestSite, SymbolsUnderTestOptions, SymbolsUnderTestResult, SymbolUnderTest, ImportUnderTest } from "./query/tests.js";
 export { unreferenced, unreferencedLimitations, unreferencedNotice } from "./query/unreferenced.js";
 export type { UnreferencedOptions, UnreferencedResult, UnreferencedCandidate, EntryPointRule } from "./query/unreferenced.js";
-export type { OsnovaMcpOptions } from "./mcp/server.js";
+export type { OsnovaMcpOptions, OsnovaMcpStatus } from "./mcp/server.js";
 export function createOsnovaMcpServer(workspace: string, options?: OsnovaMcpOptions): ReturnType<McpServerModule["createOsnovaMcpServer"]> {
   const mcp = requireSibling("./mcp.js") as McpServerModule;
   return mcp.createOsnovaMcpServer(workspace, options);
