@@ -58,6 +58,40 @@ const seedOverfetch = 4;
 
 const isTest = isTestFile;
 
+interface EdgeMaps {
+  readonly inbound: ReadonlyMap<string, readonly [number, RelationshipEvidence][]>;
+  readonly outbound: ReadonlyMap<string, readonly [number, RelationshipEvidence][]>;
+  readonly uncertain: number;
+  readonly outside: number;
+}
+
+// Evidence for every edge costs about a second on a large index, so footing keeps the maps per index object and scope.
+// A refresh publishes a new index object, which starts a new entry.
+const edgeMapCache = new WeakMap<OsnovaIndex, Map<string, EdgeMaps>>();
+
+function edgeMaps(index: OsnovaIndex, scope: string, receipt: IndexReceipt): EdgeMaps {
+  const byScope = edgeMapCache.get(index) ?? new Map<string, EdgeMaps>();
+  edgeMapCache.set(index, byScope);
+  const cached = byScope.get(scope);
+  if (cached !== undefined) return cached;
+  let uncertain = 0, outside = 0;
+  const inbound = new Map<string, [number, RelationshipEvidence][]>(), outbound = new Map<string, [number, RelationshipEvidence][]>();
+  index.edges.forEach((edge, key) => {
+    const evidence = relationshipEvidence(index, edge, receipt);
+    if (evidence === null || !isReliableEdge(edge)) { uncertain++; return; }
+    if (!inScope(evidence.source.file, scope) || !inScope(evidence.target.file, scope) ||
+      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside++; return; }
+    const from = evidence.edge.fromSymbol || evidence.edge.fromFile;
+    const to = evidence.edge.toSymbol ?? evidence.edge.toFile;
+    if (to === undefined) return;
+    const ins = inbound.get(to) ?? []; ins.push([key, evidence]); inbound.set(to, ins);
+    const outs = outbound.get(from) ?? []; outs.push([key, evidence]); outbound.set(from, outs);
+  });
+  const maps = { inbound, outbound, uncertain, outside };
+  byScope.set(scope, maps);
+  return maps;
+}
+
 const isPreferredSeed = (symbol: OsnovaSymbol): boolean =>
   !isTest(symbol.file) && !(symbol.span.endLine === symbol.span.startLine && (symbol.kind === "constant" || symbol.kind === "type"));
 
@@ -109,23 +143,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const relationships = new Map<number, RelationshipEvidence>();
   const candidateTests = new Map<string, CandidateTest>();
   const frontier = new Set<string>();
-  let uncertain = 0, outside = 0;
-  const sortedEdges: [number, RelationshipEvidence][] = [];
-  index.edges.forEach((edge, key) => {
-    const evidence = relationshipEvidence(index, edge, receipt);
-    if (evidence === null || !isReliableEdge(edge)) { uncertain++; return; }
-    if (!inScope(evidence.source.file, scope) || !inScope(evidence.target.file, scope) ||
-      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside++; return; }
-    sortedEdges.push([key, evidence]);
-  });
-  const inbound = new Map<string, [number, RelationshipEvidence][]>(), outbound = new Map<string, [number, RelationshipEvidence][]>();
-  for (const [key, evidence] of sortedEdges) {
-    const from = evidence.edge.fromSymbol || evidence.edge.fromFile;
-    const to = evidence.edge.toSymbol ?? evidence.edge.toFile;
-    if (to === undefined) continue;
-    const ins = inbound.get(to) ?? []; ins.push([key, evidence]); inbound.set(to, ins);
-    const outs = outbound.get(from) ?? []; outs.push([key, evidence]); outbound.set(from, outs);
-  }
+  const { inbound, outbound, uncertain, outside } = edgeMaps(index, scope, receipt);
   for (const direction of options.task === "understand" ? ["out", "in"] as const : ["in", "out"] as const) {
     const seen = new Set(seeds.map((seed) => seed.qualifiedName));
     const queue = seeds.map((seed) => ({ node: seed.qualifiedName, path: [] as RelationshipEvidence[] }));
