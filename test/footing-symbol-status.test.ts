@@ -32,7 +32,7 @@ describe("footing status per requested symbol", () => {
       { name: "a.ts#one", status: "returned" },
       { name: "lib/b.ts#two", status: "out-of-scope" },
     ]);
-    expect(formatTaskContext(result)).toContain("requested: a.ts#missing unknown; a.ts#one returned; lib/b.ts#two out-of-scope");
+    expect(formatTaskContext(result)).toContain("requested: 1 returned, 0 omitted, 1 unknown, 1 out-of-scope; a.ts#missing unknown; lib/b.ts#two out-of-scope; a.ts#one returned");
   });
 
   it("marks a found name omitted when its definition does not fit the budget", () => {
@@ -40,6 +40,17 @@ describe("footing status per requested symbol", () => {
     const small = taskContext(index, { task: "understand", question: "", symbols: ["a.ts#big"], maxCodeUnits: 700, measure });
     expect(small.definitions).toEqual([]);
     expect(small.requested).toEqual([{ name: "a.ts#big", status: "omitted" }]);
+  });
+
+  it("keeps a long batch of names inside the MCP budget and lists every status in the result", () => {
+    const measure = (value: Parameters<typeof formatTaskContext>[0]): number => formatTaskContext(value).length;
+    const names = Array.from({ length: 40 }, (_, i) => `src/${"deep/".repeat(18)}missing${String(i).padStart(2, "0")}.ts#nothing`);
+    const result = taskContext(index, { task: "understand", question: "", symbols: ["a.ts#one", ...names], maxCodeUnits: 4096, measure });
+    expect(result.requested).toHaveLength(41);
+    const text = formatTaskContext(result);
+    expect(text).toContain("requested: 1 returned, 0 omitted, 40 unknown, 0 out-of-scope; ");
+    expect(text).toMatch(/; \+\d+ more$/m);
+    expect(text.length).toBeLessThanOrEqual(4096);
   });
 
   it("adds no status list to a question without named symbols", () => {

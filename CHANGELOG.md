@@ -6,7 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
-- `osnova_footing` with `symbols` reports each requested name as `returned`, `omitted`, `unknown` or `out-of-scope` on a `requested:` line, and `taskContext` returns the same as `requested`. Before, every miss was one `unknown symbols` count, so a batch with one wrong name gave no hint which one to fix. The count stays in the omitted line.
+- `osnova_footing` with `symbols` reports each requested name as `returned`, `omitted`, `unknown` or `out-of-scope`: a `requested:` line gives the counts and names the names that need action first, capped at 512 code units so a long batch stays inside the budget, and `taskContext` returns every status as `requested`. Before, every miss was one `unknown symbols` count, so a batch with one wrong name gave no hint which one to fix. The count stays in the omitted line.
 
 ## 0.9.0 (2026-09-26)
 

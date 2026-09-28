@@ -683,13 +683,33 @@ export function formatMap(result: MapResult): string {
   return lines.join("\n");
 }
 
+const requestedListCodeUnits = 512;
+const requestedOrder = ["unknown", "out-of-scope", "omitted", "returned"] as const;
+
+// Counts per status, then names whose status needs action before returned ones, stopping at a fixed length so a
+// long batch cannot exceed the footing budget; the structured result keeps every entry.
+function formatRequested(requested: NonNullable<TaskContextResult["requested"]>): string {
+  const count = (status: (typeof requestedOrder)[number]): number => requested.filter((entry) => entry.status === status).length;
+  let line = `requested: ${count("returned")} returned, ${count("omitted")} omitted, ${count("unknown")} unknown, ${count("out-of-scope")} out-of-scope`;
+  const ordered = requestedOrder.flatMap((status) => requested.filter((entry) => entry.status === status));
+  let listed = "";
+  let shown = 0;
+  for (const entry of ordered) {
+    const next = `; ${entry.name} ${entry.status}`;
+    if (listed.length + next.length > requestedListCodeUnits) break;
+    listed += next;
+    shown += 1;
+  }
+  line += listed;
+  if (shown < ordered.length) line += `; +${ordered.length - shown} more`;
+  return line;
+}
+
 export function formatTaskContext(result: TaskContextResult): string {
   const lines = [
     `osnova footing: ${result.task}, scope ${result.scope === "" ? "." : result.scope}, ${result.definitions.length} definitions, ${result.relationships.length} relationships, ${result.candidateTests.length} candidate tests`,
   ];
-  if (result.requested !== undefined && result.requested.length > 0) {
-    lines.push(`requested: ${result.requested.map((entry) => `${entry.name} ${entry.status}`).join("; ")}`);
-  }
+  if (result.requested !== undefined && result.requested.length > 0) lines.push(formatRequested(result.requested));
   if (result.definitions.length > 0) lines.push("definitions:");
   for (const definition of result.definitions) {
     const { symbol } = definition;
