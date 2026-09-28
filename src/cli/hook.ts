@@ -184,7 +184,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
           cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
         }
         if (cached === undefined) {
-          emitContext(io, client, "session", boundText(formatSessionContext("Index: building in the background; starting points appear from the next prompt.", options.fullContract === true), hookSessionCodeUnits));
+          emitContext(io, client, "session", boundText(formatSessionContext("Index: building in the background; starting points appear once it finishes, and osnova tools wait for it.", options.fullContract === true), hookSessionCodeUnits));
           return;
         }
       }

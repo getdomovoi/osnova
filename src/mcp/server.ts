@@ -46,6 +46,10 @@ export const mcpInstructions = [
 // working in another worktree sees the mismatch before it trusts or repeats a lookup.
 export const checkoutLine = (root: string): string =>
   `This server indexes ${root}; a file in another checkout or worktree is not in it, so query paths relative to this root.`;
+// A session hook's background build of a large repository holds the build lock for tens of seconds, longer than the
+// default ten-second wait, so the server's first calls failed with cache-lock-timeout. The lock only waits for a live,
+// verified owner and still reclaims a dead one, so waiting longer here cannot hang on a crashed build.
+const mcpRefreshLockTimeoutMs = 120_000;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
@@ -290,7 +294,7 @@ export function createOsnovaMcpServer(
   function refresh(): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
-    inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true }).then((index) => {
+    inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs }).then((index) => {
       const changed = latest !== index;
       latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
       if (changed) prewarm(index);
