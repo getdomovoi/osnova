@@ -174,3 +174,92 @@ it("counts a search that exits 1 with no match as a finished search, and every o
   ]));
   expect(claude.calls.map((call) => call.outcome)).toEqual(["ok", "error"]);
 });
+
+it("separates new input from input a cache miss billed again", () => {
+  const request = (key: string, uncachedInput: number, cacheRead: number) => ({ key, startMs: null, endMs: null, calls: [],
+    usage: { uncachedInput, cacheRead, cacheWrite: 0, output: 10, reasoning: null, costUsd: null } });
+  // 1000 new; +100 served from cache; +200 but the whole prompt missed; then a compacted, smaller prompt.
+  const summary = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0,
+    requests: [request("r0", 1000, 0), request("r1", 100, 1000), request("r2", 1300, 0), request("r3", 500, 0)] });
+  expect(summary.newInput).toBe(1800);
+  expect(summary.missedCacheInput).toBe(1100);
+
+  const row = (task: string, arm: string, correct: boolean, newInput: number) => ({ task, arm, correct,
+    summary: { ...summary, newInput, usage: { ...summary.usage, output: { total: 40, missing: 0 } } } });
+  const report = compareArms([row("t1", "cand", true, 800), row("t1", "base", true, 1000), row("t2", "cand", false, 900), row("t2", "base", true, 1000)], "cand", "base");
+  expect(report.arms.cand?.newTokensPerCorrect).toBe((800 + 40 + 900 + 40) / 1);
+  expect(report.arms.base?.missedCacheShare).toBeCloseTo(1100 / 2900);
+  expect(report.pairs.newTokenDelta).toEqual({ samples: 1, median: -200, total: -200 });
+});
+
+it("counts context written to the cache again as missed, as Claude bills a miss", () => {
+  const request = (key: string, uncachedInput: number, cacheRead: number, cacheWrite: number) => ({ key, startMs: null, endMs: null, calls: [],
+    usage: { uncachedInput, cacheRead, cacheWrite, output: 10, reasoning: null, costUsd: null } });
+  // 1005 new and written; +100 read from cache; then the cache expired and all 1305 tokens were written again.
+  const summary = summarizeSession({ host: "claude-code", calls: [], settleContinuations: 0, malformedRecords: 0,
+    requests: [request("r0", 5, 0, 1000), request("r1", 3, 1005, 97), request("r2", 5, 0, 1300)] });
+  expect(summary.newInput).toBe(1005 + 100 + 200);
+  expect(summary.missedCacheInput).toBe(1105);
+});
+
+it("measures growth within each conversation when subagent requests interleave", () => {
+  const record = (id: string, at: string, input: number, agentId?: string) => ({ type: "assistant", timestamp: at, ...(agentId === undefined ? {} : { agentId, isSidechain: true }),
+    message: { id, content: [{ type: "text", text: "x" }], usage: { input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10 } } });
+  const session = parseClaudeSession(jsonl([
+    record("m1", "2026-09-27T00:00:00Z", 1000), record("s1", "2026-09-27T00:00:01Z", 1000, "sub"), record("m2", "2026-09-27T00:00:02Z", 1100),
+  ]));
+  expect(session.requests.map((request) => request.history)).toEqual(["main", "sub", "main"]);
+  const summary = summarizeSession(session);
+  expect(summary.newInput).toBe(2100);
+  expect(summary.missedCacheInput).toBe(1000);
+});
+
+it("reports no new-token or cache-share figure when any session lacks the fields", () => {
+  const request = (key: string, uncachedInput: number | null, output: number | null) => ({ key, startMs: null, endMs: null, calls: [],
+    usage: { uncachedInput, cacheRead: 0, cacheWrite: 0, output, reasoning: null, costUsd: null } });
+  const complete = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10)] });
+  expect(complete.newInput).toBe(100);
+  expect(complete.missedCacheInput).toBe(0);
+  const noOutput = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10), request("b", 120, null)] });
+  const noInput = summarizeSession({ host: "kilo", calls: [], settleContinuations: 0, malformedRecords: 0, requests: [request("a", 100, 10), request("b", null, 10)] });
+  const report = compareArms([
+    { task: "t1", arm: "cand", correct: true, summary: noOutput }, { task: "t1", arm: "base", correct: true, summary: complete },
+    { task: "t2", arm: "cand", correct: true, summary: complete }, { task: "t2", arm: "base", correct: true, summary: noInput },
+  ], "cand", "base");
+  expect(report.arms.cand?.newTokensPerCorrect).toBeNull();
+  expect(report.arms.base?.missedCacheShare).toBeNull();
+  expect(report.pairs.newTokenDelta.samples).toBe(0);
+});
+
+it("reports new tokens as unknown when a subagent record names no agent", () => {
+  const record = (id: string, at: string, input: number, sidechain: boolean) => ({ type: "assistant", timestamp: at, ...(sidechain ? { isSidechain: true } : {}),
+    message: { id, content: [{ type: "text", text: "x" }], usage: { input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10 } } });
+  const summary = summarizeSession(parseClaudeSession(jsonl([
+    record("m1", "2026-09-27T00:00:00Z", 1000, false), record("s1", "2026-09-27T00:00:01Z", 1000, true), record("m2", "2026-09-27T00:00:02Z", 1100, false),
+  ])));
+  expect(summary.newInput).toBeNull();
+  expect(summary.missedCacheInput).toBeNull();
+});
+
+it("reports new input as unknown when a host that splits input omits a cache field, but not for Codex's total", () => {
+  const claude = parseClaudeSession(jsonl([{ type: "assistant", timestamp: "2026-09-27T00:00:00Z",
+    message: { id: "m1", content: [{ type: "text", text: "x" }], usage: { input_tokens: 100, output_tokens: 10 } } }]));
+  expect(summarizeSession(claude).newInput).toBeNull();
+  expect(summarizeSession(claude).missedCacheInput).toBeNull();
+  const codex = { host: "codex" as const, calls: [], settleContinuations: 0, malformedRecords: 0,
+    requests: [{ key: "r0", startMs: null, endMs: null, calls: [], usage: { uncachedInput: 60, cacheRead: 40, cacheWrite: null, output: 10, reasoning: null, costUsd: null } }] };
+  expect(summarizeSession(codex).newInput).toBe(100);
+});
+
+it("keeps Codex growth from the reported total but reports missed-cache input as unknown when cached input is omitted", () => {
+  const count = (input: number, cached: number | undefined, total: number) => ({ timestamp: "2026-01-01T00:00:01Z", type: "event_msg", payload: { type: "token_count", info: {
+    last_token_usage: { input_tokens: input, ...(cached === undefined ? {} : { cached_input_tokens: cached }), output_tokens: 10, total_tokens: input + 10 }, total_token_usage: { total_tokens: total } } } });
+  const session = parseCodexSession(jsonl([
+    { timestamp: "2026-01-01T00:00:00Z", type: "session_meta", payload: { id: "codex-session" } },
+    count(1000, 800, 1010),
+    count(1100, undefined, 2120),
+  ]));
+  const summary = summarizeSession(session);
+  expect(summary.newInput).toBe(1100);
+  expect(summary.missedCacheInput).toBeNull();
+});

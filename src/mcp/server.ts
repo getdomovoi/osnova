@@ -16,7 +16,8 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { renderMapCard } from "../query/mapCard.js";
-import { taskContext } from "../query/task-context.js";
+import { taskContext, warmTaskContext } from "../query/task-context.js";
+import { warmQueryContext } from "../query/context.js";
 import { impact } from "../query/impact.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
@@ -41,6 +42,14 @@ export const mcpInstructions = [
   "osnova_footing: task context for a question or named symbols; start here. osnova_ground: ranked symbol and text search, including HTTP routes by verb and path (GET /users). osnova_thread: exhaustive regex search grouped by symbol. osnova_outline: one file's signatures. osnova_warp: callers or callees with the resolution basis of every edge; unresolved edges list same-name candidates. osnova_groundwork: repository map. osnova_settle: dependents of your uncommitted changes (no arguments) before you finish. osnova_plumb: check a claimed list of call sites. osnova_tests: the test files that reference a symbol, or the symbols one test file reaches. osnova_unreferenced: definitions with no indexed caller, as candidates with their unresolved same-name leads, never as proof.",
   "No indexed callers is not proof of absence; an unresolved edge is a lead, not a relationship.",
 ].join("\n");
+// The one line of the instructions that depends on the workspace: which checkout this server indexes, so an agent
+// working in another worktree sees the mismatch before it trusts or repeats a lookup.
+export const checkoutLine = (root: string): string =>
+  `This server indexes ${root}; a file in another checkout or worktree is not in it, so query paths relative to this root.`;
+// A session hook's background build of a large repository holds the build lock for tens of seconds, longer than the
+// default ten-second wait, so the server's first calls failed with cache-lock-timeout. A dead owner is still reclaimed
+// at once; a live but stuck owner, or one the lock cannot verify, holds a call until this deadline.
+const mcpRefreshLockTimeoutMs = 120_000;
 const maximumMcpCallersCodeUnits = 2_048;
 const maximumMcpMapCodeUnits = 2_048;
 const maximumMcpFootingCodeUnits = 4_096;
@@ -237,12 +246,14 @@ export interface OsnovaMcpWatchOptions {
 export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
+  readonly prewarm?: boolean;
 }
 
 export interface OsnovaMcpStatus {
   readonly watching: boolean;
   readonly refreshes: number;
   readonly pendingChanges: boolean;
+  readonly warm: "off" | "idle" | "warming" | "warm" | "closed";
 }
 
 export function createOsnovaMcpServer(
@@ -260,12 +271,34 @@ export function createOsnovaMcpServer(
   let changes = 0;
   let verifiedAt = 0;
   let refreshes = 0;
+  let warm: OsnovaMcpStatus["warm"] = options?.prewarm === true ? "idle" : "off";
+  // After each refresh, build the ranking corpus and footing's edge maps between requests, so the first
+  // ground or footing call on a large repository does not pay for them. A newer index or close stops the old warm-up,
+  // and nothing starts after close.
+  let closed = false;
+  function prewarm(index: OsnovaIndex): void {
+    if (options?.prewarm !== true || closed) return;
+    warm = "warming";
+    const stale = (): boolean => closed || latest !== index;
+    void warmQueryContext(index, { cancelled: stale }).then((context) => {
+      if (context === undefined || stale()) return;
+      warmTaskContext(index);
+      if (!stale()) warm = "warm";
+    }).catch((error: unknown) => {
+      if (closed) return;
+      warm = "idle";
+      process.stderr.write(`osnova: prewarm failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    });
+  }
   // One refresh at a time; a change that arrives during a refresh marks the result stale again.
   function refresh(): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
-    inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true }).then((index) => {
-      latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false; return index;
+    inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs }).then((index) => {
+      const changed = latest !== index;
+      latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
+      if (changed) prewarm(index);
+      return index;
     }).finally(() => { inFlight = undefined; });
     return inFlight;
   }
@@ -300,12 +333,17 @@ export function createOsnovaMcpServer(
       watcher = undefined;
     }
   }
-  const close = (): void => { if (timer !== undefined) clearTimeout(timer); watcher?.close(); watcher = undefined; };
-  const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty });
+  const close = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    watcher?.close(); watcher = undefined;
+    closed = true;
+    if (warm !== "off") warm = "closed";
+  };
+  const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty, warm });
 
   const server = new Server(
     { name: "osnova", version: OSNOVA_VERSION },
-    { capabilities: { tools: {} }, instructions: mcpInstructions },
+    { capabilities: { tools: {} }, instructions: `${mcpInstructions}\n${checkoutLine(absRoot)}` },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));
@@ -552,8 +590,11 @@ export async function runMcpStdio(
   workspace: string,
   options?: OsnovaMcpOptions,
 ): Promise<void> {
-  const { server, close } = createOsnovaMcpServer(workspace, options);
+  const { server, close, refresh } = createOsnovaMcpServer(workspace, { prewarm: true, ...options });
   const transport = new StdioServerTransport();
   transport.onclose = close;
   await server.connect(transport);
+  // Start the first refresh now rather than on the first tool call, so the index and its warm-up are
+  // usually ready by the time an agent asks. A tool call joins this refresh instead of starting another.
+  refresh().catch((error: unknown) => { process.stderr.write(`osnova: startup refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); });
 }
