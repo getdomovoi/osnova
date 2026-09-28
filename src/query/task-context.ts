@@ -58,6 +58,63 @@ const seedOverfetch = 4;
 
 const isTest = isTestFile;
 
+interface EdgeMaps {
+  readonly inbound: ReadonlyMap<string, readonly [number, RelationshipEvidence][]>;
+  readonly outbound: ReadonlyMap<string, readonly [number, RelationshipEvidence][]>;
+  readonly uncertain: number;
+  readonly outside: number;
+}
+
+interface EdgeEntry {
+  readonly reliable: readonly [number, RelationshipEvidence][];
+  readonly uncertain: number;
+  readonly scopes: Map<string, EdgeMaps>;
+}
+
+// Evidence for every edge costs about a second on a large index, so footing builds it once per index object and
+// derives each scope's maps from it, sharing the evidence objects. A refresh publishes a new index object, which
+// starts a new entry; within one index at most maxCachedScopes scopes are kept, the oldest dropped first.
+const edgeMapCache = new WeakMap<OsnovaIndex, EdgeEntry>();
+const maxCachedScopes = 8;
+
+// Builds the unscoped edge maps ahead of the first footing call; the MCP server calls it while idle.
+export function warmTaskContext(index: OsnovaIndex): void {
+  edgeMaps(index, "", indexReceipt(index));
+}
+
+function edgeMaps(index: OsnovaIndex, scope: string, receipt: IndexReceipt): EdgeMaps {
+  let entry = edgeMapCache.get(index);
+  if (entry === undefined) {
+    let uncertain = 0;
+    const reliable: [number, RelationshipEvidence][] = [];
+    index.edges.forEach((edge, key) => {
+      const evidence = relationshipEvidence(index, edge, receipt);
+      if (evidence === null || !isReliableEdge(edge)) { uncertain++; return; }
+      reliable.push([key, evidence]);
+    });
+    entry = { reliable, uncertain, scopes: new Map() };
+    edgeMapCache.set(index, entry);
+  }
+  const cached = entry.scopes.get(scope);
+  if (cached !== undefined) return cached;
+  let outside = 0;
+  const inbound = new Map<string, [number, RelationshipEvidence][]>(), outbound = new Map<string, [number, RelationshipEvidence][]>();
+  for (const item of entry.reliable) {
+    const evidence = item[1];
+    if (!inScope(evidence.source.file, scope) || !inScope(evidence.target.file, scope) ||
+      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside++; continue; }
+    const from = evidence.edge.fromSymbol || evidence.edge.fromFile;
+    const to = evidence.edge.toSymbol ?? evidence.edge.toFile;
+    if (to === undefined) continue;
+    const ins = inbound.get(to) ?? []; ins.push(item); inbound.set(to, ins);
+    const outs = outbound.get(from) ?? []; outs.push(item); outbound.set(from, outs);
+  }
+  const maps = { inbound, outbound, uncertain: entry.uncertain, outside };
+  if (entry.scopes.size >= maxCachedScopes) entry.scopes.delete(entry.scopes.keys().next().value!);
+  entry.scopes.set(scope, maps);
+  return maps;
+}
+
 const isPreferredSeed = (symbol: OsnovaSymbol): boolean =>
   !isTest(symbol.file) && !(symbol.span.endLine === symbol.span.startLine && (symbol.kind === "constant" || symbol.kind === "type"));
 
@@ -109,23 +166,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const relationships = new Map<number, RelationshipEvidence>();
   const candidateTests = new Map<string, CandidateTest>();
   const frontier = new Set<string>();
-  let uncertain = 0, outside = 0;
-  const sortedEdges: [number, RelationshipEvidence][] = [];
-  index.edges.forEach((edge, key) => {
-    const evidence = relationshipEvidence(index, edge, receipt);
-    if (evidence === null || !isReliableEdge(edge)) { uncertain++; return; }
-    if (!inScope(evidence.source.file, scope) || !inScope(evidence.target.file, scope) ||
-      evidence.viaSources.some((source) => !inScope(source.file, scope))) { outside++; return; }
-    sortedEdges.push([key, evidence]);
-  });
-  const inbound = new Map<string, [number, RelationshipEvidence][]>(), outbound = new Map<string, [number, RelationshipEvidence][]>();
-  for (const [key, evidence] of sortedEdges) {
-    const from = evidence.edge.fromSymbol || evidence.edge.fromFile;
-    const to = evidence.edge.toSymbol ?? evidence.edge.toFile;
-    if (to === undefined) continue;
-    const ins = inbound.get(to) ?? []; ins.push([key, evidence]); inbound.set(to, ins);
-    const outs = outbound.get(from) ?? []; outs.push([key, evidence]); outbound.set(from, outs);
-  }
+  const { inbound, outbound, uncertain, outside } = edgeMaps(index, scope, receipt);
   for (const direction of options.task === "understand" ? ["out", "in"] as const : ["in", "out"] as const) {
     const seen = new Set(seeds.map((seed) => seed.qualifiedName));
     const queue = seeds.map((seed) => ({ node: seed.qualifiedName, path: [] as RelationshipEvidence[] }));
@@ -158,19 +199,30 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   const measure = options.measure ?? ((value: TaskContextResult): number => JSON.stringify(value).length);
   const size = (): number => measure(result);
   if (size() > maxCodeUnits) throw new RangeError(`osnova: task context budget cannot retain receipts and omissions; minimum ${size()} UTF-16 code units`);
-  const append = <T>(items: Iterable<T>, target: T[], field: "definitions" | "relationships" | "candidateTests"): void => {
+  const append = <T>(items: Iterable<T>, target: T[], field: "definitions" | "relationships" | "candidateTests", limit = maxCodeUnits): T[] => {
+    const left: T[] = [];
     for (const item of items) {
       target.push(item); result.omitted[field]--;
-      if (size() > maxCodeUnits) { target.pop(); result.omitted[field]++; }
+      if (size() > limit) { target.pop(); result.omitted[field]++; left.push(item); }
     }
+    return left;
   };
   const seedNames = new Set(seeds.map((seed) => seed.qualifiedName));
   const seedDefinitions = [...definitions.values()].filter((definition) => seedNames.has(definition.symbol.qualifiedName));
   const relatedDefinitions = [...definitions.values()].filter((definition) => !seedNames.has(definition.symbol.qualifiedName));
-  append(seedDefinitions, result.definitions, "definitions");
+  // Long seed excerpts could fill the whole budget and leave no relationships, which are what footing adds over
+  // ground. With relationships to show, seeds after the first one placed take at most this share; any room left
+  // returns to them last. Until one seed is placed each gets the whole budget, so a first seed too large to fit does
+  // not push a later one that fits behind the relationships.
+  const seedShare = relationships.size > 0 ? Math.floor(maxCodeUnits * 0.6) : maxCodeUnits;
+  const deferredSeeds: ContextDefinition[] = [];
+  for (const seed of seedDefinitions) {
+    deferredSeeds.push(...append([seed], result.definitions, "definitions", result.definitions.length === 0 ? maxCodeUnits : seedShare));
+  }
   if (options.task !== "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
   append(relationships.values(), result.relationships, "relationships");
   if (options.task === "understand") append(candidateTests.values(), result.candidateTests, "candidateTests");
+  append(deferredSeeds, result.definitions, "definitions");
   append(relatedDefinitions, result.definitions, "definitions");
   return result;
 }

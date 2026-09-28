@@ -362,6 +362,31 @@ function termDocumentCounts(file: string, card: FileCard, terms: readonly string
   });
 }
 
+export interface WarmOptions {
+  readonly sliceMs?: number | undefined;
+  readonly cancelled?: (() => boolean) | undefined;
+}
+
+// Builds the same per-file documents queryContext needs, yielding to the event loop between files once sliceMs has
+// passed, so a long-lived server keeps answering while it warms. One file and the final join into a context each run
+// in one step (the join took about 0.5 s on an 18,425-file repository), and a request of any kind that arrives during
+// such a step waits for it. A query that arrives before the warm-up reaches a file builds that file itself.
+export async function warmQueryContext(index: OsnovaIndex, options: WarmOptions = {}): Promise<QueryContext | undefined> {
+  const sliceMs = options.sliceMs ?? 20;
+  let sliceStart = performance.now();
+  for (const [file, card] of index.files) {
+    if (options.cancelled?.() === true) return undefined;
+    const key = cacheKey(card);
+    if (!fileCache.has(key)) fileCache.set(key, buildFileDocuments(file, card));
+    if (performance.now() - sliceStart >= sliceMs) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      sliceStart = performance.now();
+    }
+  }
+  if (options.cancelled?.() === true) return undefined;
+  return queryContext(index);
+}
+
 // The context for a question scoped to a path: documents for files inside the scope only, with the
 // document frequency of each query term, the document count and the average length still taken over
 // the whole repository, so every score equals the one the unscoped context gives. When the whole
