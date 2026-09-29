@@ -71,13 +71,19 @@ describe("testsFor", () => {
     expect(text).not.toContain("string-only");
   });
 
+  it("names the test functions that make the calls, so a runner can target them without reading the file", () => {
+    const text = formatTestsFor(testsFor(index, ["add"]));
+    expect(text).toContain("- test/direct.test.ts (resolved edge): test/direct.test.ts:3,4 calls import-binding; in helper");
+    expect(text).not.toMatch(/import-only\.test\.ts:1 imports import-path; in/);
+  });
+
   it("prints the two evidence tiers under separate headings and names an empty resolved tier", () => {
     const both = formatTestsFor(testsFor(index, ["add"])).split("\n");
     expect(both.slice(0, 6)).toEqual([
       "osnova tests: 1 symbols; 1 test files with a resolved edge; 1 import the file only",
       "function src/math.ts#add src/math.ts:1: 1 test files with a resolved edge; 1 import the file only",
       "resolved edge (calls or references the symbol):",
-      "- test/direct.test.ts (resolved edge): test/direct.test.ts:3,4 calls import-binding",
+      "- test/direct.test.ts (resolved edge): test/direct.test.ts:3,4 calls import-binding; in helper",
       "imports the file only (no indexed call or reference to the symbol):",
       "- test/import-only.test.ts (imports the file only): test/import-only.test.ts:1 imports import-path",
     ]);

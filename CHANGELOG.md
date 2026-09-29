@@ -14,6 +14,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
+- `osnova_tests` names the test functions that make each file's calls: a resolved-edge line ends with `; in test_x, TestFoo.test_bar`, so a runner can target them without reading the file. The names come from the calls' enclosing definitions, which the index already stored; a call inside an anonymous callback such as `it("...", () => ...)` has none.
 - Caller, reach and test answers share one scan of the index's edges per index instead of rescanning every edge on each call. On an 18,425-file repository (1.5 million edges), after the first call a caller lookup fell from 213 ms to under 0.1 ms, a reach count from 121 ms to under 0.1 ms, and a test lookup from 26 ms to under 0.1 ms. Answers do not change; a refresh builds fresh scans.
 
 ### Fixed
