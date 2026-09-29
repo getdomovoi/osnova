@@ -16,6 +16,7 @@ import type {
   UnresolvedCallerEdge,
 } from "../types.js";
 import { maximumIndexedFileSizeBytes } from "../types.js";
+import { localOfQualifiedName } from "../index/indexImpl.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { DiagnosticCheck, DoctorReport, LanguageCapability } from "../diagnostics/doctor.js";
@@ -878,7 +879,7 @@ function testSiteText(file: string, sites: readonly TestSite[], omitted: number,
   let text = [...groups].map(([key, lines]) => `${file}:${lines.join(",")} ${key}`).join("; ");
   // The enclosing test function is known only for calls inside a named definition (a pytest `def test_x`,
   // a class method); a call inside an anonymous `it(...)` callback or at file level records none.
-  const callers = nameCallers ? [...new Set(sites.flatMap((site) => (site.fromSymbol ? [site.fromSymbol.slice(site.fromSymbol.indexOf("#") + 1)] : [])))] : [];
+  const callers = nameCallers ? [...new Set(sites.map((site) => localOfQualifiedName(site.fromSymbol ?? "")).filter((name) => name !== ""))] : [];
   if (callers.length > 0) text += `; in ${callers.join(", ")}`;
   return omitted > 0 ? `${text}; +${omitted} more sites` : text;
 }

@@ -77,6 +77,20 @@ describe("testsFor", () => {
     expect(text).not.toMatch(/import-only\.test\.ts:1 imports import-path; in/);
   });
 
+  it("never prints a file-only or empty caller as a test function name", () => {
+    const real = testsFor(index, ["add"]);
+    const withCallers = (callers: readonly (string | null)[]) => ({
+      ...real,
+      symbols: real.symbols.map((entry) => ({
+        ...entry,
+        tests: entry.tests.map((test) => ({ ...test, sites: test.sites.map((site, i) => ({ ...site, fromSymbol: callers[i] ?? null })) })),
+      })),
+    });
+    const text = formatTestsFor(withCallers(["test/direct.test.ts", "test/direct.test.ts#"]));
+    expect(text).toContain("- test/direct.test.ts (resolved edge): test/direct.test.ts:3,4 calls import-binding\n");
+    expect(formatTestsFor(withCallers(["test/direct.test.ts", "test/direct.test.ts#test_adds"]))).toContain("calls import-binding; in test_adds\n");
+  });
+
   it("prints the two evidence tiers under separate headings and names an empty resolved tier", () => {
     const both = formatTestsFor(testsFor(index, ["add"])).split("\n");
     expect(both.slice(0, 6)).toEqual([
