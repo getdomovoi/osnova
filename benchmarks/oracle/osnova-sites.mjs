@@ -20,8 +20,9 @@ export function claimedSites(index) {
       basis: resolution?.status === "resolved" ? resolution.method : null,
     });
   }
-  const text = (value) => value ?? "";
-  sites.sort((a, b) => a.callerFile.localeCompare(b.callerFile) || a.line - b.line || text(a.calleeName).localeCompare(text(b.calleeName)) || a.targetFile.localeCompare(b.targetFile) || a.targetStartLine - b.targetStartLine);
+  // Ordinal comparison, so the order does not depend on the machine's locale.
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  sites.sort((a, b) => cmp(a.callerFile, b.callerFile) || a.line - b.line || cmp(a.calleeName ?? "", b.calleeName ?? "") || cmp(a.targetFile, b.targetFile) || a.targetStartLine - b.targetStartLine);
   return { tool: "osnova", sites };
 }
 

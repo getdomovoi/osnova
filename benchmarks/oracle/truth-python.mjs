@@ -4,7 +4,7 @@
 // typeshed, site-packages), and undecided when pyright returns nothing.
 // usage: node truth-python.mjs --root <checkout> --sites <sites.json> --server <pyright/langserver.index.js>
 //        --output <truth.json> [--corpus <id>] [--concurrency 8]
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -18,6 +18,13 @@ const root = path.resolve(values.root);
 const input = JSON.parse(await fs.readFile(values.sites, "utf8"));
 const concurrency = Number(values.concurrency);
 
+// pyright does not report its version on initialize; its package.json sits beside the server script's folder.
+const serverPackageVersion = () => {
+  for (const dir of [path.dirname(values.server), path.dirname(path.dirname(values.server))]) {
+    try { return JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")).version ?? null; } catch { /* try the next folder */ }
+  }
+  return null;
+};
 const child = spawn(process.execPath, [values.server, "--stdio"], { stdio: ["pipe", "pipe", "pipe"] });
 let buffer = Buffer.alloc(0);
 const pending = new Map();
@@ -100,7 +107,7 @@ for (const [file, siteList] of byFile) {
 
 child.kill();
 await fs.writeFile(values.output, JSON.stringify({
-  schemaVersion: 1, oracle: "pyright", oracleVersion: initialized?.result?.serverInfo?.version ?? null, corpus: values.corpus ?? null,
+  schemaVersion: 1, oracle: "pyright", oracleVersion: initialized?.result?.serverInfo?.version ?? serverPackageVersion(), corpus: values.corpus ?? null,
   method: "pyright-langserver over stdio; textDocument/definition at every call-site callee identifier enumerated from the Python AST (UTF-16 columns); in-repo when a definition lands inside the corpus, external when every definition is outside it, undecided when pyright returns none",
   stats: { sites: input.sites.length, files: input.files, inRepoDecided, external, undecided },
   entries,

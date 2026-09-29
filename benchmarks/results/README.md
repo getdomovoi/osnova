@@ -22,6 +22,8 @@ Every file here is a frozen measurement with its corpus fingerprint. A record in
 | `cross-file-payload-experiment-2026-09-15.json` | The bounded-MCP experiment that missed its retention gate | `docs/reference.md` |
 | `graph-ranking-experiment-2026-09-14.json` | The graph-ranking adjustment that was measured and rejected | `docs/reference.md` |
 
+`type-checker-oracle-2026-09-21.json` is frozen as recorded. Two of its statements are out of date: its limits say the harness is not shipped, and it is now in [`../oracle/`](../oracle/README.md); its method says a site is in-repo when every declaration is inside the checkout, while the run counted a site in-repo when at least one declaration is (on zod, 1 of 28,185 in-repo sites also has an outside declaration).
+
 ## Superseded records
 
 | Record | Replaced by | Note |

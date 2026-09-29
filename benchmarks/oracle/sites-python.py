@@ -1,10 +1,8 @@
 """Enumerate every Python call site in a corpus for truth-python.mjs.
 
-For each ast.Call the callee identifier is located (Name -> itself, Attribute -> the attribute
-name token) and emitted with a 0-based line/character position suitable for LSP. Attribute
-positions are recovered by scanning the source line for the attribute name after the value's
-end, because ast does not record the attribute token position. Columns are converted to UTF-16 code units, which
-is what LSP positions count; ast reports UTF-8 byte offsets.
+For each ast.Call the callee identifier is located (Name -> itself, Attribute -> the attribute name token, which
+ends where the attribute node ends) and emitted with a 1-based line and a 0-based column. Columns are converted to
+UTF-16 code units, which is what LSP positions count; ast reports UTF-8 byte offsets.
 usage: python3 sites-python.py <checkout> <sites.json>
 """
 import ast
@@ -43,22 +41,11 @@ for dirpath, dirnames, filenames in os.walk(root):
             func = node.func
             if isinstance(func, ast.Name):
                 sites.append({"file": relative, "line": func.lineno, "character": utf16(func.lineno, func.col_offset), "name": func.id})
-            elif isinstance(func, ast.Attribute):
-                start_line = getattr(func.value, "end_lineno", func.lineno)
-                start_col = getattr(func.value, "end_col_offset", func.col_offset)
-                found = None
-                for offset in range(0, 4):
-                    index = start_line - 1 + offset
-                    if index >= len(lines):
-                        break
-                    text = lines[index]
-                    search_from = start_col if offset == 0 else 0
-                    position = text.find(func.attr, len(text.encode("utf-8")[:search_from].decode("utf-8", "replace")) if offset == 0 else 0)
-                    if position >= 0:
-                        found = (index + 1, len(text[:position].encode("utf-16-le")) // 2)
-                        break
-                if found is not None:
-                    sites.append({"file": relative, "line": found[0], "character": found[1], "name": func.attr})
+            elif isinstance(func, ast.Attribute) and func.end_lineno is not None and func.end_col_offset is not None:
+                # The attribute node ends at the end of the attribute name, so its start is exact; a text search from
+                # the value's end could stop at the same name inside a comment.
+                start = func.end_col_offset - len(func.attr.encode("utf-8"))
+                sites.append({"file": relative, "line": func.end_lineno, "character": utf16(func.end_lineno, start), "name": func.attr})
 
 json.dump({"files": files, "sites": sites, "unparsed": unparsed}, open(out, "w"))
 print(json.dumps({"files": files, "sites": len(sites), "unparsed": len(unparsed)}))

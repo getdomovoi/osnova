@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { buildIndex } from "../src/index.js";
 // @ts-expect-error -- plain ESM script shipped for reproduction, without type declarations
 import { scoreSites } from "../benchmarks/oracle/score.mjs";
@@ -35,9 +36,30 @@ describe("scoreSites", () => {
     expect(report).toMatchObject({ truePositive: 0, falsePositive: 0, undecided: 2, decided: 0, precision: null });
   });
 
+  it("counts a claimed target false when the declaration is one line outside its span", () => {
+    const report = scoreSites(oracle, { sites: [site(3, "foo", "b.py", 11, 12)] }, { tolerance: 1 });
+    expect(report).toMatchObject({ truePositive: 0, falsePositive: 1 });
+  });
+
   it("does not stretch the tolerance past the requested lines", () => {
     const report = scoreSites(oracle, { sites: [site(4, "foo", "b.py", 9, 12)] }, { tolerance: 0 });
     expect(report).toMatchObject({ truePositive: 0, undecided: 1 });
+  });
+});
+
+describe("sites-python.py", () => {
+  it("places an attribute call at the attribute token, never at the same name in a comment, in UTF-16 columns", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-oracle-py-"));
+    const out = path.join(root, "..", `${path.basename(root)}-sites.json`);
+    try {
+      fs.writeFileSync(path.join(root, "m.py"), "(obj # foo\n .foo)()\n\u00e9 = 1; x.bar()\n");
+      execFileSync("python3", [path.join(__dirname, "../benchmarks/oracle/sites-python.py"), root, out]);
+      const { sites } = JSON.parse(fs.readFileSync(out, "utf8"));
+      expect(sites).toEqual([
+        { file: "m.py", line: 2, character: 2, name: "foo" },
+        { file: "m.py", line: 3, character: 9, name: "bar" },
+      ]);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(out, { force: true }); }
   });
 });
 

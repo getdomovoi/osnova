@@ -4,10 +4,11 @@
 //
 // Verdicts per claimed edge:
 //   true       the checker resolves the site inside the repository and the claimed target span holds one of its
-//              declaration lines (one line of slack at each end of the span)
+//              declaration lines
 //   false      the checker decided the site (inside or outside the repository) and no declaration falls in the span
 //   undecided  the checker gave no verdict for the site, or did not enumerate it
 // Recall is over the checker's in-repository sites: a site is covered when some claimed edge at it is true.
+// `tolerance` lets a claimed call line sit up to that many lines from the checker's line for the same callee name.
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
@@ -43,7 +44,7 @@ export function scoreSites(oracle, claimed, { tolerance = 1 } = {}) {
     if (entry === undefined) { undecided += 1; continue; }
     const hit = entry.verdict === "in-repo" && entry.defs.some((def) =>
       def.file === site.targetFile && site.targetStartLine !== undefined && site.targetStartLine !== null &&
-      def.line >= site.targetStartLine - 1 && def.line <= (site.targetEndLine ?? site.targetStartLine) + 1);
+      def.line >= site.targetStartLine && def.line <= (site.targetEndLine ?? site.targetStartLine));
     if (hit) {
       truePositive += 1;
       const k = key(entry.file, entry.line, entry.name);

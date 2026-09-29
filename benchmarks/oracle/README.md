@@ -1,8 +1,8 @@
 # Type-checker scoring harness
 
-These scripts score call edges against the language's own type checker, on a pinned checkout. They produce the numbers in [`../results/type-checker-oracle-2026-09-21.json`](../results/type-checker-oracle-2026-09-21.json), and they can score any tool that can list the call edges it claims.
+These scripts score Osnova's call edges against the language's own type checker, on a pinned checkout. They produce the numbers in [`../results/type-checker-oracle-2026-09-21.json`](../results/type-checker-oracle-2026-09-21.json).
 
-The unit is a call site: caller file, line and callee name. For every call the checker is asked for the callee's declarations. A claimed edge is true when the checker resolves that site inside the checkout and the claimed target span holds one of the checker's declaration lines (one line of slack at each end). It is false when the checker decided the site and no declaration falls in the span, including an in-checkout target where the checker says the callee is external. A site the checker did not decide, or did not enumerate, counts in neither rate. Recall is the share of the checker's in-checkout sites covered by at least one true edge.
+The unit is a call site: caller file, line and callee name. For every call the checker is asked for the callee's declarations. A site is in-checkout when at least one declaration is inside the checkout (on zod, 1 of 28,185 such sites also has a declaration outside it) and external when every declaration is outside. An edge is true when the checker resolves its site inside the checkout and the edge's target span holds one of the checker's declaration lines. It is false when the checker decided the site and no declaration falls in the span, including an in-checkout target where the checker says the callee is external. A claimed call line may sit one line from the checker's line for the same callee name. A site the checker did not decide, or did not enumerate, counts in neither rate. Recall is the share of the checker's in-checkout sites covered by at least one true edge.
 
 ## Files
 
@@ -17,11 +17,11 @@ The unit is a call site: caller file, line and callee name. For every call the c
 
 ## Claimed-sites format
 
-A tool is scored from one JSON file:
+`score.mjs` reads the edges to score from one JSON file, which `osnova-sites.mjs` writes:
 
 ```json
 {
-  "tool": "name",
+  "tool": "osnova",
   "sites": [
     { "callerFile": "src/a.py", "line": 12, "calleeName": "load", "targetFile": "src/b.py",
       "targetName": "load", "targetStartLine": 40, "targetEndLine": 58 }
@@ -29,7 +29,7 @@ A tool is scored from one JSON file:
 }
 ```
 
-Paths are relative to the checkout root with `/` separators. `line` is the 1-based line of the callee name at the call. `targetStartLine` and `targetEndLine` are the 1-based span of the definition the tool says is called. List one entry per call edge the tool claims; leave out calls it does not resolve.
+Paths are relative to the checkout root with `/` separators. `line` is the 1-based line of the callee name at the call. `targetStartLine` and `targetEndLine` are the 1-based span of the definition the edge points to. There is one entry per resolved call edge; unresolved calls are left out.
 
 ## Reproducing the recorded numbers
 
@@ -50,8 +50,8 @@ node benchmarks/oracle/osnova-sites.mjs --workspace <zod> --output zod-osnova.js
 node benchmarks/oracle/score.mjs --oracle zod-truth.json --sites zod-osnova.json
 ```
 
-On 2026-09-29 these steps reproduced every count in the recorded file with Osnova 0.10.0: click 2,903 claimed edges, 0 false, recall 0.9038; zod 21,630 claimed edges, 4 false, recall 0.7693.
+On 2026-09-29, on the machine that made the recording, these steps reproduced every count in the recorded file with Osnova 0.10.0: click 2,903 claimed edges, 0 false, recall 0.9038; zod 21,630 claimed edges, 4 false, recall 0.7693. pyright's answers depend on the Python environment it finds: on a second machine with the same pyright version, 3,212 click sites resolved inside the checkout instead of 3,208, with 0 false edges and recall 0.9039.
 
 ## Limits
 
-The checker is the reference, not ground truth: a site the checker cannot resolve is left out, and dynamic dispatch the checker cannot see is invisible to both sides. Recall counts only sites the checker resolves inside the checkout. The scripts read the checkout and write only the output files they are given; they never write into the checkout.
+The checker is the reference, not ground truth: a site the checker cannot resolve is left out, and dynamic dispatch the checker cannot see is invisible to both sides. Recall counts only sites the checker resolves inside the checkout. The scripts never write into the checkout. They write the output files they are given, and `osnova-sites.mjs` also writes Osnova's index cache (to `--cache-dir` when given, otherwise the default cache directory).
