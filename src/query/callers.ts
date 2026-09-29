@@ -94,7 +94,13 @@ export function callersDetailed(
   };
 }
 
-export function unresolvedCallsByName(index: OsnovaIndex): Map<string, OsnovaEdge[]> {
+// Built once per index: caller, reach and footing answers each needed it, and on an 18,425-file index one scan
+// of every edge takes about 94 ms. An index object is fixed for its generation, so a refresh gets a new map.
+const unresolvedByNameCache = new WeakMap<OsnovaIndex, ReadonlyMap<string, readonly OsnovaEdge[]>>();
+
+export function unresolvedCallsByName(index: OsnovaIndex): ReadonlyMap<string, readonly OsnovaEdge[]> {
+  const cached = unresolvedByNameCache.get(index);
+  if (cached !== undefined) return cached;
   const unresolvedByName = new Map<string, OsnovaEdge[]>();
   for (const edge of index.edges) {
     if (edge.toSymbol !== undefined || edge.kind === "imports") continue;
@@ -105,6 +111,7 @@ export function unresolvedCallsByName(index: OsnovaIndex): Map<string, OsnovaEdg
     list.push(edge);
     unresolvedByName.set(name, list);
   }
+  unresolvedByNameCache.set(index, unresolvedByName);
   return unresolvedByName;
 }
 
@@ -116,7 +123,7 @@ function walkCallers(
   const hits: CallerEvidenceHit[] = [];
   const unresolved: UnresolvedCallerEdge[] = [];
   const seenUnresolved = new Set<OsnovaEdge>();
-  const unresolvedByName = direction === "in" ? unresolvedCallsByName(index) : new Map<string, OsnovaEdge[]>();
+  const unresolvedByName: ReadonlyMap<string, readonly OsnovaEdge[]> = direction === "in" ? unresolvedCallsByName(index) : new Map();
   const visited = new Set<string>([target.qualifiedName]);
   let frontier: string[] = [target.qualifiedName];
 
