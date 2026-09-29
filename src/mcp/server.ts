@@ -74,7 +74,7 @@ const toolDefinitions = [
         in: { type: "string", description: "Restrict to a file or directory path (repo-relative)" },
         limit: { type: "number", description: "Maximum hits (default 8)" },
         full: { type: "boolean", description: "Inline whole definitions instead of 8-line excerpts" },
-        lean: { type: "boolean", description: "Default true: keep file:line, kind, definition span and signature without source; false inlines source" },
+        lean: { type: "boolean", description: "Default true: keep file:line, kind, definition span and signature without source; false inlines source; an explicit true overrides full" },
       },
       required: ["question"],
     },
@@ -359,8 +359,8 @@ export function createOsnovaMcpServer(
         case "osnova_ground": {
           const question = requireString(args, "question");
           const askOptions = { in: optionalString(args, "in"), limit: optionalNumber(args, "limit"), full: optionalBoolean(args, "full") };
-          // Lean by default: in a paired agent pilot the inlined source made matched answers about four times longer
-          // without reducing file reads (727 against 735 in total), and no agent asked for it back.
+          // Lean by default: in a paired agent pilot, matched lean answers were about 76% smaller, with similar file
+          // reads (727 against 735) and similar solves; no ground call asked for lean: false or full: true.
           const lean = optionalBoolean(args, "lean");
           if (lean === true || (lean !== false && optionalBoolean(args, "full") !== true)) {
             return textResult(`${prefix}\n${formatAsk(ask(index, question, { ...askOptions, full: false }), { lean: true })}`);
