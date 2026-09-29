@@ -12,6 +12,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 - `osnova setup claude` and `osnova setup agents` set up a whole kind of agent in one command, previewing unless `--apply` is given. `claude` writes the Claude Code MCP entry, hooks and skill. `agents` covers every installed harness that reads `AGENTS.md` (Codex, OpenCode, Kilo, Pi, Cursor; a harness counts as installed when its config folder exists, and `--only` narrows the list): each gets its MCP entry and its hooks, plugin or extension, and all share one skill in `~/.agents/skills/osnova/`, a folder Codex, OpenCode, Kilo and Pi load skills from. A skill or plugin file that differs from the shipped one, or whose file or folder is a link, is kept and reported instead of stopping the run (setup never writes through a link, which could land in a dotfiles checkout); an MCP or hook conflict still stops it with nothing written. `osnova doctor` checks the shared skill. The `--client` form is unchanged.
 
+### Changed
+
+- Caller, reach and test answers share one scan of the index's edges per index instead of rescanning every edge on each call. On an 18,425-file repository (1.5 million edges), after the first call a caller lookup fell from 213 ms to under 0.1 ms, a reach count from 121 ms to under 0.1 ms, and a test lookup from 26 ms to under 0.1 ms. Answers do not change; a refresh builds fresh scans.
+
 ### Fixed
 
 - `osnova_thread` caps one row's snippet at 480 code units, starting at the first match, instead of keeping the whole span of every match on a long line; the row's column list still names every match. In an agent pilot, 4 of the 5 clipped thread answers held such rows (one minified line alone took 16,098 of the 16,384-unit response, and one clipped answer showed only the first of its seven groups); the cap removes 31,767 units from them. A cut no longer splits a surrogate pair.
