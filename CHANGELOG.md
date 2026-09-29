@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Fixed
+
+- `osnova_thread` caps one row's snippet at 480 code units, starting at the first match, instead of keeping the whole span of every match on a long line; the row's column list still names every match. In an agent pilot, 4 of the 5 clipped thread answers held such rows (one minified line alone took 16,098 of the 16,384-unit response, and one clipped answer showed only the first of its seven groups); the cap removes 31,767 units from them. A cut no longer splits a surrogate pair.
+
 ## 0.10.0 (2026-09-28)
 
 ### Changed

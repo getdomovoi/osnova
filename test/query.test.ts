@@ -184,6 +184,20 @@ describe("thread formatting", () => {
     expect(wide).toBe(`…${long.slice(10, 200)}…`);
   });
 
+  it("caps a snippet whose matches span a huge line, starting at the first match", () => {
+    const huge = "x".repeat(20_000);
+    const capped = clipThreadText(huge, 100, 19_000);
+    expect(capped.length).toBeLessThanOrEqual(482);
+    expect(capped).toBe(`…${huge.slice(100, 580)}…`);
+  });
+
+  it("never splits a surrogate pair at a cut", () => {
+    const line = `${"a".repeat(119)}😀${"b".repeat(200)}`;
+    const clipped = clipThreadText(line, 0, 3);
+    expect(clipped.endsWith("\ud83d…")).toBe(false);
+    expect([...clipped].every((char) => char.length === 2 || !/[\ud800-\udfff]/.test(char))).toBe(true);
+  });
+
   it("keeps short lines whole and trims indentation", () => {
     expect(clipThreadText("    const x = 1;", 10, 11)).toBe("const x = 1;");
   });

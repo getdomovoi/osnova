@@ -149,6 +149,10 @@ export function formatAsk(result: AskResult, options?: { readonly lean?: boolean
 
 
 const threadWindowCodeUnits = 120;
+// A match span longer than the window stays whole so one long match is never cut, up to this limit: the span of
+// many matches on a minified or generated line once took 16,098 of a 16,384-unit response. The columns still
+// list every match on the row.
+const threadSnippetMaxCodeUnits = 4 * threadWindowCodeUnits;
 
 interface ThreadRow {
   readonly line: number;
@@ -169,14 +173,19 @@ export function clipThreadText(text: string, spanStart: number, spanEnd: number,
   let end: number;
   if (span >= window) {
     start = from;
-    end = to;
+    end = Math.min(to, from + threadSnippetMaxCodeUnits);
   } else {
     start = Math.max(0, from - Math.floor((window - span) / 2));
     end = Math.min(trimmed.length, start + window);
     start = Math.max(0, end - window);
   }
+  // Never leave half of a surrogate pair at either cut.
+  if (start > 0 && isLowSurrogate(trimmed.charCodeAt(start))) start -= 1;
+  if (end < trimmed.length && isLowSurrogate(trimmed.charCodeAt(end))) end -= 1;
   return `${start > 0 ? "…" : ""}${trimmed.slice(start, end)}${end < trimmed.length ? "…" : ""}`;
 }
+
+const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
 
 function threadRows(matches: readonly FindTextMatch[]): ThreadRow[] {
   const rows: ThreadRow[] = [];
