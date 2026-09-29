@@ -6,7 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
-- Caller, reach and test answers share one scan of the index's edges per index instead of rescanning every edge on each call. On an 18,425-file repository (1.5 million edges), after the first call a reach count fell from 116 ms to under 1 ms, a test lookup from 25 ms to under 1 ms, and `osnova_warp` on a symbol with few callers from 234 ms to 9 ms. Answers do not change; a refresh builds fresh scans.
+- Caller, reach and test answers share one scan of the index's edges per index instead of rescanning every edge on each call. On an 18,425-file repository (1.5 million edges), after the first call a caller lookup fell from 213 ms to under 0.1 ms, a reach count from 121 ms to under 0.1 ms, and a test lookup from 26 ms to under 0.1 ms. Answers do not change; a refresh builds fresh scans.
 
 ## 0.10.0 (2026-09-28)
 
