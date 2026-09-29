@@ -6,7 +6,6 @@ UTF-16 code units, which is what LSP positions count; ast reports UTF-8 byte off
 usage: python3 sites-python.py <checkout> <sites.json>
 """
 import ast
-import re
 import json
 import os
 import sys
@@ -48,10 +47,14 @@ for dirpath, dirnames, filenames in os.walk(root):
                 # Python normalizes identifiers (NFKC), so the written token can differ from func.attr: read it from
                 # the source text just before the node's end.
                 written = lines[func.end_lineno - 1].encode("utf-8")[:func.end_col_offset].decode("utf-8", "replace")
-                token = re.search(r"\w+$", written)
-                if token is None:
+                # Walk back over characters Python accepts inside an identifier (letters, digits, "_" and
+                # combining marks, which \w does not match).
+                start = len(written)
+                while start > 0 and ("a" + written[start - 1]).isidentifier():
+                    start -= 1
+                if start == len(written):
                     continue
-                character = len(written[:token.start()].encode("utf-16-le")) // 2
+                character = len(written[:start].encode("utf-16-le")) // 2
                 sites.append({"file": relative, "line": func.end_lineno, "character": character, "name": func.attr})
 
 json.dump({"files": files, "sites": sites, "unparsed": unparsed}, open(out, "w"))
