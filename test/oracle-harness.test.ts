@@ -52,12 +52,13 @@ describe("sites-python.py", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-oracle-py-"));
     const out = path.join(root, "..", `${path.basename(root)}-sites.json`);
     try {
-      fs.writeFileSync(path.join(root, "m.py"), "(obj # foo\n .foo)()\n\u00e9 = 1; x.bar()\n");
+      fs.writeFileSync(path.join(root, "m.py"), "(obj # foo\n .foo)()\n\u00e9 = 1; x.bar()\nx.\u212a()\n");
       execFileSync("python3", [path.join(__dirname, "../benchmarks/oracle/sites-python.py"), root, out]);
       const { sites } = JSON.parse(fs.readFileSync(out, "utf8"));
       expect(sites).toEqual([
         { file: "m.py", line: 2, character: 2, name: "foo" },
         { file: "m.py", line: 3, character: 9, name: "bar" },
+        { file: "m.py", line: 4, character: 2, name: "K" },
       ]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(out, { force: true }); }
   });

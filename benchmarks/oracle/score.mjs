@@ -1,6 +1,5 @@
-// Scores one tool's claimed call edges against a type-checker truth set, at call-site granularity, so differences in
-// how tools name the caller cannot change the result. Any tool can be scored: write its edges in the claimed-sites
-// format described in README.md.
+// Scores claimed call edges against a type-checker truth set, at call-site granularity, so how the caller is named
+// cannot change the result. The claimed-sites input format is described in README.md.
 //
 // Verdicts per claimed edge:
 //   true       the checker resolves the site inside the repository and the claimed target span holds one of its

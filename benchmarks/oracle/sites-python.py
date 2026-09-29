@@ -6,6 +6,7 @@ UTF-16 code units, which is what LSP positions count; ast reports UTF-8 byte off
 usage: python3 sites-python.py <checkout> <sites.json>
 """
 import ast
+import re
 import json
 import os
 import sys
@@ -44,8 +45,14 @@ for dirpath, dirnames, filenames in os.walk(root):
             elif isinstance(func, ast.Attribute) and func.end_lineno is not None and func.end_col_offset is not None:
                 # The attribute node ends at the end of the attribute name, so its start is exact; a text search from
                 # the value's end could stop at the same name inside a comment.
-                start = func.end_col_offset - len(func.attr.encode("utf-8"))
-                sites.append({"file": relative, "line": func.end_lineno, "character": utf16(func.end_lineno, start), "name": func.attr})
+                # Python normalizes identifiers (NFKC), so the written token can differ from func.attr: read it from
+                # the source text just before the node's end.
+                written = lines[func.end_lineno - 1].encode("utf-8")[:func.end_col_offset].decode("utf-8", "replace")
+                token = re.search(r"\w+$", written)
+                if token is None:
+                    continue
+                character = len(written[:token.start()].encode("utf-16-le")) // 2
+                sites.append({"file": relative, "line": func.end_lineno, "character": character, "name": func.attr})
 
 json.dump({"files": files, "sites": sites, "unparsed": unparsed}, open(out, "w"))
 print(json.dumps({"files": files, "sites": len(sites), "unparsed": len(unparsed)}))
