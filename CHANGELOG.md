@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Changed
+
+- Caller, reach and test answers share one scan of the index's edges per index instead of rescanning every edge on each call. On an 18,425-file repository (1.5 million edges), after the first call a reach count fell from 116 ms to under 1 ms, a test lookup from 25 ms to under 1 ms, and `osnova_warp` on a symbol with few callers from 234 ms to 9 ms. Answers do not change; a refresh builds fresh scans.
+
 ## 0.10.0 (2026-09-28)
 
 ### Changed
