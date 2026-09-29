@@ -359,8 +359,8 @@ export function createOsnovaMcpServer(
         case "osnova_ground": {
           const question = requireString(args, "question");
           const askOptions = { in: optionalString(args, "in"), limit: optionalNumber(args, "limit"), full: optionalBoolean(args, "full") };
-          // Lean by default: in a paired agent pilot the inlined source did not save a file read, since agents
-          // read the file after 96% of ground calls either way, and it made each answer about four times longer.
+          // Lean by default: in a paired agent pilot the inlined source made matched answers about four times longer
+          // without reducing file reads (727 against 735 in total), and no agent asked for it back.
           const lean = optionalBoolean(args, "lean");
           if (lean === true || (lean !== false && optionalBoolean(args, "full") !== true)) {
             return textResult(`${prefix}\n${formatAsk(ask(index, question, { ...askOptions, full: false }), { lean: true })}`);

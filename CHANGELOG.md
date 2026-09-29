@@ -6,7 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Breaking
 
-- `osnova_ground` over MCP answers without source by default: each hit keeps its `file:line`, kind, qualified name, definition span and signature. Pass `lean: false` for the previous shape (short definitions whole, longer ones as an 8-line excerpt) or `full: true` for whole definitions; an explicit `lean: true` still overrides `full`. The tool names and argument shapes are unchanged, and the CLI keeps source unless `--lean`. In a paired agent pilot (15 SWE-bench tasks, three runs each) agents read a file right after 96 percent of ground calls whether or not the source was inlined, while ground output per session fell from 11,362 to 1,805 characters; solves were 37 against 36 of 45, and on the 36 tasks both arms solved the lean arm was cheaper in 23 (median 37 s faster).
+- `osnova_ground` over MCP answers without source by default: each hit keeps its `file:line`, kind, qualified name, definition span and signature. Pass `lean: false` for the previous shape (short definitions whole, longer ones as an 8-line excerpt) or `full: true` for whole definitions; an explicit `lean: true` still overrides `full`. The tool names and argument shapes are unchanged, and the CLI keeps source unless `--lean`. In a paired agent pilot (15 SWE-bench tasks, three runs each, graded twice independently) matched ground answers were 76 percent smaller, total file reads did not rise (727 against 735), and no agent asked for the source back; solves were 37 against 36 of 45 and the lean arm was faster on 10 of 12 tasks, while cost and new tokens did not differ measurably.
 
 ## 0.10.0 (2026-09-28)
 
