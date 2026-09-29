@@ -200,18 +200,18 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
-  it("inlines short definitions in ground and footing so no read is needed", async () => {
+  it("inlines short definitions in ground (lean: false) and footing so no read is needed", async () => {
     write("src/greet.ts", 'import { shout } from "./loud.js";\nexport function greet(name: string): string { return shout(`hello ${name}`); }\n');
     write("src/loud.ts", "export function shout(text: string): string {\n  const upper = text.toUpperCase();\n  return upper;\n}\n");
     const long = `export function tall(): number {\n${Array.from({ length: 60 }, (_, i) => `  const v${i} = ${i};`).join("\n")}\n  return v59;\n}\n`;
     write("src/tall.ts", long);
     const client = await connect();
     try {
-      const ground = await callTool(client, "osnova_ground", { question: "shout" });
+      const ground = await callTool(client, "osnova_ground", { question: "shout", lean: false });
       expect(ground).toContain("L1: export function shout(text: string): string {");
       expect(ground).toContain("L4: }");
       expect(ground).not.toContain("excerpt: lines");
-      const tallHit = await callTool(client, "osnova_ground", { question: "tall" });
+      const tallHit = await callTool(client, "osnova_ground", { question: "tall", lean: false });
       expect(tallHit).toContain("excerpt: lines");
       const footing = await callTool(client, "osnova_footing", { symbols: ["src/loud.ts#shout"], task: "change" });
       expect(footing).toContain("  return upper;\n  }");
@@ -243,7 +243,7 @@ describe("mcp stdio server", () => {
     for (let n = 0; n < 12; n++) write(`src/wide${n}.ts`, `export function wideFn${n}(): string {\n${Array.from({ length: 30 }, (_, i) => `  const a${i} = "${wide}";`).join("\n")}\n  return a0;\n}\n`);
     const client = await connect();
     try {
-      const text = await callTool(client, "osnova_ground", { question: "wide", limit: 12 });
+      const text = await callTool(client, "osnova_ground", { question: "wide", limit: 12, lean: false });
       expect(text.length).toBeLessThanOrEqual(16_384);
       expect(text).toContain("excerpt: lines");
       expect(text).not.toContain("[output truncated");
@@ -404,7 +404,7 @@ describe("mcp stdio server", () => {
     }
   }, 60_000);
 
-  it("offers a lean ground shape that drops inlined source but keeps file:line, span and signature", async () => {
+  it("answers ground lean by default, keeping file:line, span and signature, and inlines source on request", async () => {
     write("src/lean-target.ts", [
       "export function assembleReport(rows: readonly string[], title: string): string {",
       "  const header = `# ${title}`;",
@@ -421,12 +421,17 @@ describe("mcp stdio server", () => {
       expect(ground?.inputSchema.properties).toHaveProperty("lean");
 
       const question = "assembleReport rows title";
-      const inlined = await callTool(client, "osnova_ground", { question });
+      const byDefault = await callTool(client, "osnova_ground", { question });
       const lean = await callTool(client, "osnova_ground", { question, lean: true });
+      const inlined = await callTool(client, "osnova_ground", { question, lean: false });
+      const full = await callTool(client, "osnova_ground", { question, full: true });
+      expect(byDefault).toBe(lean);
       expect(lean.length).toBeLessThan(inlined.length);
       expect(lean).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
       expect(lean).not.toContain("const header =");
       expect(inlined).toContain("const header =");
+      expect(full).toContain("const header =");
+      expect(await callTool(client, "osnova_ground", { question, lean: true, full: true })).toBe(lean);
     } finally {
       await client.close();
     }
