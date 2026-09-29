@@ -11,6 +11,8 @@ import type { HookClient } from "../cli/hook.js";
 // timestamped backup of whatever was there. A conflict is never resolved by writing.
 export interface PlannedChange {
   readonly kind: "mcp" | "hooks" | "instructions" | "plugin" | "skill";
+  /** A skill or plugin whose file or folder is a link; setup never writes through it. */
+  readonly linked?: boolean | undefined;
   readonly path: string;
   readonly action: "create" | "append" | "update" | "unchanged" | "conflict";
   readonly diff: string;
@@ -152,8 +154,10 @@ export async function planPlugin(client: PluginClient, options: { home?: string 
   const home = path.resolve(options.home ?? os.homedir());
   const target = pluginTarget(client, home);
   const source = await fs.readFile(options.source ?? pluginSource(client), "utf8");
-  const existing = await readOptional(target);
+  const pluginLink = await linkedPart(target, home);
+  const existing = pluginLink === undefined ? await readOptional(target) : await readLinked(target);
   if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova ${client === "pi" ? "extension" : "plugin"}.` };
+  if (pluginLink !== undefined) return { kind: "plugin", path: target, action: "conflict", linked: true, diff: "", merged: existing ?? "", notice: `${pluginLink} is a link; osnova never writes through a link. Replace it with a plain file or compare by hand.` };
   if (existing !== null) return { kind: "plugin", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a plugin file. Remove it or compare by hand.` };
   return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN).` };
 }
@@ -165,14 +169,20 @@ export function skillSource(): string {
 export function skillTarget(home: string): string {
   return path.join(home, ".claude", "skills", "osnova", "SKILL.md");
 }
-export async function planSkill(options: { home?: string | undefined; source?: string | undefined }): Promise<PlannedChange> {
+// The shared Agent Skills folder: Codex, OpenCode, Kilo and Pi load skills from ~/.agents/skills/ at start.
+export function agentsSkillTarget(home: string): string {
+  return path.join(home, ".agents", "skills", "osnova", "SKILL.md");
+}
+export async function planSkill(options: { home?: string | undefined; source?: string | undefined; shared?: boolean | undefined }): Promise<PlannedChange> {
   const home = path.resolve(options.home ?? os.homedir());
-  const target = skillTarget(home);
+  const target = options.shared === true ? agentsSkillTarget(home) : skillTarget(home);
   const source = await fs.readFile(options.source ?? skillSource(), "utf8");
-  const existing = await readOptional(target);
+  const skillLink = await linkedPart(target, home);
+  const existing = skillLink === undefined ? await readOptional(target) : await readLinked(target);
   if (existing === source) return { kind: "skill", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova skill.` };
+  if (skillLink !== undefined) return { kind: "skill", path: target, action: "conflict", linked: true, diff: "", merged: existing ?? "", notice: `${skillLink} is a link; osnova never writes through a link. Replace it with a plain folder or compare by hand.` };
   if (existing !== null) return { kind: "skill", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a skill file. Remove it or compare by hand.` };
-  return { kind: "skill", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: "Claude Code loads skills from ~/.claude/skills/ at start; the skill's description decides when it is used." };
+  return { kind: "skill", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${options.shared === true ? "Codex, OpenCode, Kilo and Pi load skills from ~/.agents/skills/" : "Claude Code loads skills from ~/.claude/skills/"} at start; the skill's description decides when it is used.` };
 }
 
 // The instructions block for an AGENTS.md or CLAUDE.md, appended once between markers and never rewritten.
@@ -197,6 +207,52 @@ export async function planInstructions(file: string): Promise<PlannedChange> {
   return { kind: "instructions", path: target, action: existing === null ? "create" : "append", diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `The block sits between ${instructionsStart} and ${instructionsEnd}; osnova never touches it again.` };
 }
 
+// Families: one command per kind of harness. "claude" is Claude Code (MCP entry, hooks, skill); "agents" is every
+// installed harness that reads AGENTS.md (MCP entry plus its hooks, plugin or extension) and one shared skill.
+// A harness counts as installed when its config folder exists. A skill or plugin file that differs from the
+// shipped one is kept and reported instead of stopping the run; an MCP or hook conflict still stops it.
+export const setupFamilies = ["claude", "agents"] as const;
+export type SetupFamily = (typeof setupFamilies)[number];
+export const agentHarnesses = ["codex", "opencode", "kilo", "pi", "cursor"] as const;
+export type AgentHarness = (typeof agentHarnesses)[number];
+export function harnessFolder(harness: AgentHarness, home: string): string {
+  if (harness === "codex") return path.join(home, ".codex");
+  if (harness === "cursor") return path.join(home, ".cursor");
+  if (harness === "pi") return path.join(home, ".pi", "agent");
+  return path.join(home, ".config", harness);
+}
+export interface FamilyPlan {
+  readonly changes: readonly (PlannedChange & { readonly client?: SetupClientId | undefined })[];
+  readonly kept: readonly PlannedChange[];
+  readonly skipped: readonly { readonly harness: AgentHarness; readonly reason: string }[];
+}
+export async function planFamily(family: SetupFamily, options: { home?: string | undefined; command?: readonly string[] | undefined; nudge?: boolean | undefined; only?: readonly AgentHarness[] | undefined }): Promise<FamilyPlan> {
+  const home = path.resolve(options.home ?? os.homedir());
+  const changes: (PlannedChange & { readonly client?: SetupClientId | undefined })[] = [];
+  const skipped: { harness: AgentHarness; reason: string }[] = [];
+  if (family === "claude") {
+    changes.push({ ...(await planMcp("claude-code", { home, command: options.command })), client: "claude-code" });
+    changes.push(await planHooks({ home, command: options.command, client: "claude-code", nudge: options.nudge }));
+    changes.push(await planSkill({ home }));
+  } else {
+    for (const harness of agentHarnesses) {
+      if (options.only !== undefined && !options.only.includes(harness)) continue;
+      const folder = harnessFolder(harness, home);
+      if (!existsSync(folder)) { skipped.push({ harness, reason: `not installed (${folder} not found)` }); continue; }
+      changes.push({ ...(await planMcp(harness, { home, command: options.command })), client: harness });
+      if (harness === "codex" || harness === "cursor") changes.push(await planHooks({ home, command: options.command, client: harness, nudge: options.nudge }));
+      else changes.push(await planPlugin(harness, { home }));
+    }
+    if (changes.length > 0) changes.push(await planSkill({ home, shared: true }));
+  }
+  const keptKinds = new Set<PlannedChange["kind"]>(["skill", "plugin"]);
+  return {
+    changes: changes.filter((change) => !(change.action === "conflict" && keptKinds.has(change.kind))),
+    kept: changes.filter((change) => change.action === "conflict" && keptKinds.has(change.kind)),
+    skipped,
+  };
+}
+
 export async function applyChanges(changes: readonly PlannedChange[]): Promise<AppliedChange[]> {
   const conflict = changes.find((change) => change.action === "conflict");
   if (conflict !== undefined) throw new Error(`osnova setup: ${conflict.path} conflicts with the proposal; nothing was written. ${conflict.notice}`);
@@ -211,6 +267,26 @@ export async function applyChanges(changes: readonly PlannedChange[]): Promise<A
     applied.push({ ...change, written: true, backup });
   }
   return applied;
+}
+
+// The first symbolic link, dangling or not, among the file and every folder between it and home: writing there
+// would land wherever the link points, such as a dotfiles checkout.
+// path.relative, not a prefix test: a home at a filesystem root ("/" or "C:\\") would otherwise gain a doubled separator.
+export function isBelowHome(home: string, candidate: string): boolean {
+  const relative = path.relative(home, candidate);
+  return relative.length > 0 && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+async function linkedPart(target: string, home: string): Promise<string | undefined> {
+  for (let candidate = target; isBelowHome(home, candidate); candidate = path.dirname(candidate)) {
+    const stat = await fs.lstat(candidate).catch(() => undefined);
+    if (stat?.isSymbolicLink() === true) return candidate;
+  }
+  return undefined;
+}
+
+// Content behind a link may be unreadable (a loop, a missing target); treat it as absent rather than failing the run.
+async function readLinked(file: string): Promise<string | null> {
+  try { return await readOptional(file); } catch { return null; }
 }
 
 async function readOptional(file: string): Promise<string | null> {
