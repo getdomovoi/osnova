@@ -16,6 +16,7 @@ import type {
   UnresolvedCallerEdge,
 } from "../types.js";
 import { maximumIndexedFileSizeBytes } from "../types.js";
+import { localOfQualifiedName } from "../index/indexImpl.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { DiagnosticCheck, DoctorReport, LanguageCapability } from "../diagnostics/doctor.js";
@@ -869,13 +870,17 @@ export function formatPlumb(result: PlumbResult, symbol?: string): string {
 
 const testsNotice = "No indexed test is not proof of no test: unindexed files, dynamic calls and name-heuristic references are invisible; a listed test references the symbol, it does not prove coverage.";
 
-function testSiteText(file: string, sites: readonly TestSite[], omitted: number): string {
+function testSiteText(file: string, sites: readonly TestSite[], omitted: number, nameCallers = false): string {
   const groups = new Map<string, number[]>();
   for (const site of sites) {
     const key = `${site.kind} ${site.method}`;
     groups.set(key, [...(groups.get(key) ?? []), site.line]);
   }
-  const text = [...groups].map(([key, lines]) => `${file}:${lines.join(",")} ${key}`).join("; ");
+  let text = [...groups].map(([key, lines]) => `${file}:${lines.join(",")} ${key}`).join("; ");
+  // The enclosing test function is known only for calls inside a named definition (a pytest `def test_x`,
+  // a class method); a call inside an anonymous `it(...)` callback or at file level records none.
+  const callers = nameCallers ? [...new Set(sites.map((site) => localOfQualifiedName(site.fromSymbol ?? "")).filter((name) => name !== ""))] : [];
+  if (callers.length > 0) text += `; in ${callers.join(", ")}`;
   return omitted > 0 ? `${text}; +${omitted} more sites` : text;
 }
 
@@ -894,7 +899,7 @@ export function formatTestsFor(result: TestsForResult): string {
     lines.push(`${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}: ${testTierCounts(resolved.length, importOnly.length, result.includeImportOnly)}${item.omittedTests > 0 ? `; ${item.omittedTests} omitted` : ""}`);
     if (resolved.length === 0) lines.push(`no indexed test file has a resolved call or reference edge to ${symbol.qualifiedName}`);
     else lines.push("resolved edge (calls or references the symbol):");
-    for (const test of resolved) lines.push(`- ${test.file} (resolved edge): ${testSiteText(test.file, test.sites, test.omittedSites)}`);
+    for (const test of resolved) lines.push(`- ${test.file} (resolved edge): ${testSiteText(test.file, test.sites, test.omittedSites, true)}`);
     if (importOnly.length === 0) continue;
     lines.push("imports the file only (no indexed call or reference to the symbol):");
     for (const test of importOnly) lines.push(`- ${test.file} (imports the file only): ${testSiteText(test.file, test.sites, test.omittedSites)}`);
