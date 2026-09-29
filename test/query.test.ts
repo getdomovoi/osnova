@@ -198,6 +198,18 @@ describe("thread formatting", () => {
     expect([...clipped].every((char) => char.length === 2 || !/[\ud800-\udfff]/.test(char))).toBe(true);
   });
 
+  it("keeps the cap when a pair sits at the first match", () => {
+    const line = `${"a".repeat(99)}😀${"b".repeat(1000)}`;
+    const clipped = clipThreadText(line, 100, 1000);
+    expect(clipped.length).toBeLessThanOrEqual(482);
+    expect(clipped.startsWith("…😀")).toBe(true);
+  });
+
+  it("widens to a whole pair at a match's own end instead of cutting the match", () => {
+    const line = `${"a".repeat(120)}😀${"b".repeat(200)}`;
+    expect(clipThreadText(line, 0, 121)).toBe(`${line.slice(0, 122)}…`);
+  });
+
   it("keeps short lines whole and trims indentation", () => {
     expect(clipThreadText("    const x = 1;", 10, 11)).toBe("const x = 1;");
   });

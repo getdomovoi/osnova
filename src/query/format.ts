@@ -171,17 +171,21 @@ export function clipThreadText(text: string, spanStart: number, spanEnd: number,
   const span = to - from;
   let start: number;
   let end: number;
+  // Never leave half of a surrogate pair at a cut: a match's own edge widens to keep the whole pair, and a cut made
+  // only to fit the budget moves inward so the budget still holds.
+  const splits = (at: number): boolean => at > 0 && at < trimmed.length && isLowSurrogate(trimmed.charCodeAt(at));
   if (span >= window) {
-    start = from;
-    end = Math.min(to, from + threadSnippetMaxCodeUnits);
+    start = splits(from) ? from - 1 : from;
+    const limit = start + threadSnippetMaxCodeUnits;
+    end = Math.min(to, limit);
+    if (splits(end)) end = end === to && end + 1 <= limit ? end + 1 : end - 1;
   } else {
     start = Math.max(0, from - Math.floor((window - span) / 2));
     end = Math.min(trimmed.length, start + window);
     start = Math.max(0, end - window);
+    if (splits(start)) start = start === from ? start - 1 : start + 1;
+    if (splits(end)) end = end === to ? end + 1 : end - 1;
   }
-  // Never leave half of a surrogate pair at either cut.
-  if (start > 0 && isLowSurrogate(trimmed.charCodeAt(start))) start -= 1;
-  if (end < trimmed.length && isLowSurrogate(trimmed.charCodeAt(end))) end -= 1;
   return `${start > 0 ? "…" : ""}${trimmed.slice(start, end)}${end < trimmed.length ? "…" : ""}`;
 }
 
