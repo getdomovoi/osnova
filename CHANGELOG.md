@@ -2,7 +2,7 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
-## Unreleased
+## 0.11.0 (2026-09-30)
 
 ### Breaking
 
@@ -39,7 +39,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 - `osnova_footing` builds relationship evidence once per index and derives each scope's edge maps from it, keeping at most eight scopes, instead of rebuilding them on every call; repeated calls on that repository fell from about 1.3 s to 0.5 s.
 - The package exports the `RequestedSymbol` and `OsnovaMcpStatus` types.
 - `osnova mcp` waits up to two minutes for a build another osnova process is running, instead of ten seconds. With a session hook's background build of an 18,425-file repository, the first two tool calls each failed after 10 s with `cache-lock-timeout` and advice to delete the lock; now the first call waits about 29 s and answers. The lock still reclaims a dead owner at once; a stuck or unverifiable owner now holds the call up to two minutes before the same error. The session hook no longer promises starting points from the next prompt while that build runs.
-- `osnova_footing` with `symbols` reports each requested name as `returned`, `omitted`, `unknown` or `out-of-scope`: a `requested:` line gives the counts and names the names that need action first, capped at 512 code units so a long batch stays inside the budget, and `taskContext` returns every status as `requested`. Before, every miss was one `unknown symbols` count, so a batch with one wrong name gave no hint which one to fix. The count stays in the omitted line.
+- `osnova_footing` with `symbols` reports each requested name as `returned`, `omitted`, `unknown` or `out-of-scope`: a `requested:` line gives the counts, then lists the names that need action first, the list of names capped at 512 code units with a `+N more` suffix for the rest so a long batch stays inside the budget, and `taskContext` returns every status as `requested`. Before, every miss was one `unknown symbols` count, so a batch with one wrong name gave no hint which one to fix. The count stays in the omitted line.
 - The MCP `instructions` sent on initialize end with one line naming the checkout the server indexes. Agents working in a second worktree had queried a server indexing another checkout and repeated failing lookups; 51 such lookup errors were counted in earlier recorded sessions. The tool contract itself is unchanged.
 - `osnova_footing` for a `change` or `review` task alternates relationships and candidate tests when filling its budget. Before, test files filled the budget first, so a function with many tests showed none of its callers: on this repository `buildIndex` showed 36 test files and 0 of its 244 callers, and now shows 12 test files and 10 relationships. `understand` tasks keep relationships first.
 - The OpenCode and Kilo plugin no longer adds the hook's tool contract to the system prompt; it only appends starting points to each user message. OpenCode 1.18 and Kilo 7.8 already put the MCP server's instructions into the system prompt, which cover the same tools, so the plugin's text restated them on every request. The plugin still runs the session hook once before the first prompt, discarding its text, so a cold cache starts building as before. The Pi extension is unchanged, because it was not verified that Pi forwards MCP instructions.
