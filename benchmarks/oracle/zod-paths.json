@@ -1,0 +1,1 @@
+{"zod": ["packages/zod/src/index.ts"], "zod/*": ["packages/zod/src/*"], "@zod/core": ["packages/zod/src/v4/core/index.ts"], "@zod/mini": ["packages/mini/src/index.ts"], "@/*": ["packages/docs/*"]}

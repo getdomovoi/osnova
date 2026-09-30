@@ -26,10 +26,11 @@ Node.js 22.13 or newer. Serve a repository to any MCP client:
 npx -y @getdomovoi/osnova mcp --workspace /path/to/repo
 ```
 
-Claude Code, one command after `npm install -g @getdomovoi/osnova`: the MCP entry and the session, prompt and stop hooks, with a backup of each file it changes.
+After `npm install -g @getdomovoi/osnova`, one command per kind of agent: `claude` wires Claude Code (MCP entry, session, prompt and stop hooks, and the skill); `agents` wires every installed harness that reads `AGENTS.md` (Codex, OpenCode, Kilo, Pi, Cursor), each with its hooks, plugin or extension, plus one shared skill in `~/.agents/skills/`. Each previews its changes; `--apply` writes them, backing up every file it changes.
 
 ```sh
-osnova setup --apply --client claude-code --hooks
+osnova setup claude --apply
+osnova setup agents --apply
 ```
 
 Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` when there is no global install.
@@ -83,7 +84,7 @@ A call site counts as resolved when the index ties it to one definition through 
 
 Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 
-Resolved is not the same as right, so the call edges are also scored against a type checker. Every call site in two pinned checkouts was sent to the language's own checker for the callee's declarations, and each osnova edge was marked true when the symbol it names contains that declaration and false when it does not. Measured at 0.8.0: on click (160 files, pyright 1.1.414) 2883 edges were decided and 0 are false, and osnova covers 90.4% of the call sites the checker resolves inside the repository. On zod (702 files, TypeScript 5.9.3) 21276 edges were decided and 4 are false, a false-edge rate of 0.02%, with 76.9% of in-repo sites covered. The four false edges are listed by site in [`benchmarks/results/type-checker-oracle-2026-09-21.json`](benchmarks/results/type-checker-oracle-2026-09-21.json) with the method and its limits.
+Resolved is not the same as right, so the call edges are also scored against a type checker. Every call site in two pinned checkouts was sent to the language's own checker for the callee's declarations, and each osnova edge was marked true when the symbol it names contains that declaration and false when it does not. Measured at 0.8.0: on click (160 files, pyright 1.1.414) 2883 edges were decided and 0 are false, and osnova covers 90.4% of the call sites the checker resolves inside the repository. On zod (702 files, TypeScript 5.9.3) 21276 edges were decided and 4 are false, a false-edge rate of 0.02%, with 76.9% of in-repo sites covered. The four false edges are listed by site in [`benchmarks/results/type-checker-oracle-2026-09-21.json`](benchmarks/results/type-checker-oracle-2026-09-21.json) with the method and its limits. The scripts that produce these numbers are in [`benchmarks/oracle/`](benchmarks/oracle/README.md), and they reproduce every count at 0.10.0.
 
 ## Grep versus the graph
 
@@ -124,15 +125,15 @@ Every MCP response opens with its index generation, says when the index is parti
 
 ## Hooks and clients
 
-One global install serves every repository and every client: one entry in each client's global config, nothing per project, nothing written inside your repository. `osnova setup --preview --client <name>` shows the diff and writes nothing. What each hook prints, when it stays quiet, and what the trials measured are in the [reference](docs/reference.md#hooks-and-setup-in-full).
+One global install serves every repository and every client: one entry in each client's global config, nothing per project, nothing written inside your repository. `osnova setup claude` and `osnova setup agents` show the diff and write nothing until `--apply`; `agents` skips a harness whose config folder is missing, `--only codex,pi` narrows it, and a skill or plugin file you edited is kept and reported. `--uninstall` reverses either family the same way, previewing first. The table lists the per-client form, for one piece at a time. What each hook prints, when it stays quiet, and what the trials measured are in the [reference](docs/reference.md#hooks-and-setup-in-full).
 
 | Client | How to wire | What it adds |
 | --- | --- | --- |
 | Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
 | Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace |
-| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently |
+| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently; step by step in [Osnova with Codex](docs/codex.md) |
 | Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message |
-| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin: full contract in the system prompt, starting points on each message |
+| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin that appends starting points to each message; the tool guidance comes from the MCP instructions |
 | Kilo | `osnova setup --apply --client kilo --plugin` | MCP entry plus the same plugin |
 | Pi | `osnova setup --apply --client pi --plugin` | MCP entry through `pi-mcp-adapter` plus an extension that does the same |
 
@@ -144,7 +145,7 @@ The action runs `osnova settle --base-ref` against the pull request base and lis
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: getdomovoi/osnova@v0.10.0
+- uses: getdomovoi/osnova@v0.11.0
   with:
     depth: "2"
 ```

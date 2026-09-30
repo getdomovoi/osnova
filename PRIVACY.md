@@ -8,7 +8,7 @@ Osnova reads the source files of the repository you point it at, applying the re
 
 ## What it writes
 
-One cache directory per repository: the structural index, the source-text sidecar and hook state (a small per-session file keyed by the client's session id). The default location is under your user cache directory; `OSNOVA_CACHE_DIR` or `--cache-dir` moves it. Osnova writes nothing inside your repository and nothing outside the cache directory. `osnova setup --apply` is the one exception: it edits the client configuration files you name, backs each one up first, and shows the diff with `--preview` before touching anything.
+One cache directory per repository: the structural index, the source-text sidecar and hook state (a small per-session file keyed by the client's session id). The default location is under your user cache directory; `OSNOVA_CACHE_DIR` or `--cache-dir` moves it. Osnova writes nothing inside your repository and nothing outside the cache directory. `osnova setup --apply` is the one exception: it edits the client configuration files you name, backs each one up first, and shows the diff with `--preview` before touching anything. `osnova setup claude --uninstall` and `osnova setup agents --uninstall` reverse it the same way: they preview first, remove only osnova's own entries, delete only the plugin, extension and skill files osnova installed while they are unchanged, and back up each file first.
 
 ## What it sends
 
@@ -16,7 +16,7 @@ Nothing. Indexing and every query run offline. Osnova collects no usage data, no
 
 The Claude Code plugin runs its commands as `npx -y @getdomovoi/osnova`, so the first use fetches the package from the npm registry; that is npm's request, not Osnova's, and it happens once per machine.
 
-Optional LSP enrichment, when you enable it, runs a language server executable that you supply and approve on each use. What that server does with your code is governed by its own policy; Osnova never launches one from stored configuration.
+Optional LSP enrichment, when you enable it, runs a language server executable that you supply and approve on each use. What that server does with your code is governed by its own policy; Osnova never launches one from its own stored configuration. The one other way to run a language server is to name it on the command line that starts the MCP server (`osnova mcp --lsp-server <path>`); an MCP client that keeps that command in its configuration starts the server with every session, and removing the flag stops it.
 
 ## What third parties get
 

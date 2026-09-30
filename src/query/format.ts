@@ -16,6 +16,7 @@ import type {
   UnresolvedCallerEdge,
 } from "../types.js";
 import { maximumIndexedFileSizeBytes } from "../types.js";
+import { localOfQualifiedName } from "../index/indexImpl.js";
 import type { ImpactResult } from "./impact.js";
 import type { CoverageReport, LanguageCoverage } from "./coverage.js";
 import type { DiagnosticCheck, DoctorReport, LanguageCapability } from "../diagnostics/doctor.js";
@@ -149,6 +150,10 @@ export function formatAsk(result: AskResult, options?: { readonly lean?: boolean
 
 
 const threadWindowCodeUnits = 120;
+// A match span longer than the window stays whole so one long match is never cut, up to this limit: the span of
+// many matches on a minified or generated line once took 16,098 of a 16,384-unit response. The columns still
+// list every match on the row.
+const threadSnippetMaxCodeUnits = 4 * threadWindowCodeUnits;
 
 interface ThreadRow {
   readonly line: number;
@@ -167,16 +172,25 @@ export function clipThreadText(text: string, spanStart: number, spanEnd: number,
   const span = to - from;
   let start: number;
   let end: number;
+  // Never leave half of a surrogate pair at a cut: a match's own edge widens to keep the whole pair, and a cut made
+  // only to fit the budget moves inward so the budget still holds.
+  const splits = (at: number): boolean => at > 0 && at < trimmed.length && isLowSurrogate(trimmed.charCodeAt(at));
   if (span >= window) {
-    start = from;
-    end = to;
+    start = splits(from) ? from - 1 : from;
+    const limit = start + threadSnippetMaxCodeUnits;
+    end = Math.min(to, limit);
+    if (splits(end)) end = end === to && end + 1 <= limit ? end + 1 : end - 1;
   } else {
     start = Math.max(0, from - Math.floor((window - span) / 2));
     end = Math.min(trimmed.length, start + window);
     start = Math.max(0, end - window);
+    if (splits(start)) start = start === from ? start - 1 : start + 1;
+    if (splits(end)) end = end === to ? end + 1 : end - 1;
   }
   return `${start > 0 ? "…" : ""}${trimmed.slice(start, end)}${end < trimmed.length ? "…" : ""}`;
 }
+
+const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
 
 function threadRows(matches: readonly FindTextMatch[]): ThreadRow[] {
   const rows: ThreadRow[] = [];
@@ -856,13 +870,17 @@ export function formatPlumb(result: PlumbResult, symbol?: string): string {
 
 const testsNotice = "No indexed test is not proof of no test: unindexed files, dynamic calls and name-heuristic references are invisible; a listed test references the symbol, it does not prove coverage.";
 
-function testSiteText(file: string, sites: readonly TestSite[], omitted: number): string {
+function testSiteText(file: string, sites: readonly TestSite[], omitted: number, nameCallers = false): string {
   const groups = new Map<string, number[]>();
   for (const site of sites) {
     const key = `${site.kind} ${site.method}`;
     groups.set(key, [...(groups.get(key) ?? []), site.line]);
   }
-  const text = [...groups].map(([key, lines]) => `${file}:${lines.join(",")} ${key}`).join("; ");
+  let text = [...groups].map(([key, lines]) => `${file}:${lines.join(",")} ${key}`).join("; ");
+  // The enclosing test function is known only for calls inside a named definition (a pytest `def test_x`,
+  // a class method); a call inside an anonymous `it(...)` callback or at file level records none.
+  const callers = nameCallers ? [...new Set(sites.map((site) => localOfQualifiedName(site.fromSymbol ?? "")).filter((name) => name !== ""))] : [];
+  if (callers.length > 0) text += `; in ${callers.join(", ")}`;
   return omitted > 0 ? `${text}; +${omitted} more sites` : text;
 }
 
@@ -881,7 +899,7 @@ export function formatTestsFor(result: TestsForResult): string {
     lines.push(`${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}: ${testTierCounts(resolved.length, importOnly.length, result.includeImportOnly)}${item.omittedTests > 0 ? `; ${item.omittedTests} omitted` : ""}`);
     if (resolved.length === 0) lines.push(`no indexed test file has a resolved call or reference edge to ${symbol.qualifiedName}`);
     else lines.push("resolved edge (calls or references the symbol):");
-    for (const test of resolved) lines.push(`- ${test.file} (resolved edge): ${testSiteText(test.file, test.sites, test.omittedSites)}`);
+    for (const test of resolved) lines.push(`- ${test.file} (resolved edge): ${testSiteText(test.file, test.sites, test.omittedSites, true)}`);
     if (importOnly.length === 0) continue;
     lines.push("imports the file only (no indexed call or reference to the symbol):");
     for (const test of importOnly) lines.push(`- ${test.file} (imports the file only): ${testSiteText(test.file, test.sites, test.omittedSites)}`);

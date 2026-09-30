@@ -19,7 +19,8 @@ import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
 import { unreferenced } from "../query/unreferenced.js";
-import type { OsnovaIndex, SymbolKind } from "../types.js";
+import type { LanguageId, OsnovaIndex, SymbolKind } from "../types.js";
+import type { LspServerLaunch } from "../enrichment/session.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
@@ -56,9 +57,11 @@ usage:
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--json] [--workspace <path>] [--cache-dir <path>]
+  osnova setup <claude|agents> [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--nudge] [--command <exe>] [--home <path>]   (one harness family; previews unless --apply)
+  osnova setup <claude|agents> --uninstall [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--instructions <file>] [--home <path>]   (removes osnova's own parts; previews unless --apply)
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
-  osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm]   (default workspace: current directory)
+  osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm] [--lsp-server <absolute path> --lsp-languages <list> [--lsp-arg=<arg>]... [--lsp-timeout-ms <n>]]   (default workspace: current directory)
   osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
 queries refresh the index first so answers describe current disk state.
@@ -126,12 +129,74 @@ function numericOption(value: string | undefined, name: string, minimum = 0): nu
   return number;
 }
 
+// `osnova setup claude|agents`: plan a whole harness family, print it, and write it only with --apply.
+async function setupFamily(positionals: readonly string[], values: { uninstall?: boolean | undefined; apply?: boolean | undefined; preview?: boolean | undefined; home?: string | undefined; command?: string[] | undefined; nudge?: boolean | undefined; only?: string | undefined; client?: string | undefined; hooks?: boolean | undefined; plugin?: boolean | undefined; skill?: boolean | undefined; instructions?: string | undefined; config?: string | undefined }, io: CliIo): Promise<number> {
+  const { setupFamilies, agentHarnesses, planFamily, planUninstall, applyChanges, SetupApplyError } = await import("../diagnostics/setup-apply.js");
+  const family = positionals[0];
+  if (positionals.length !== 1 || !(setupFamilies as readonly string[]).includes(family ?? "")) throw new Error(`osnova setup takes ${setupFamilies.join(" or ")} (or the --client form); got ${positionals.join(" ")}`);
+  const uninstall = values.uninstall === true;
+  if (values.client !== undefined || values.hooks === true || values.plugin === true || values.skill === true || (values.instructions !== undefined && !uninstall) || values.config !== undefined) throw new Error(`osnova setup ${family} sets up the whole family; use the --client form for single pieces`);
+  if (uninstall && (values.command !== undefined || values.nudge === true)) throw new Error("osnova setup --uninstall removes osnova's own parts whatever command they run; it takes no --command or --nudge");
+  if (values.apply === true && values.preview === true) throw new Error("osnova setup takes --apply or --preview, not both");
+  const only = values.only?.split(",").map((name) => name.trim()).filter((name) => name.length > 0);
+  if (only !== undefined && (family !== "agents" || only.length === 0 || only.some((name) => !(agentHarnesses as readonly string[]).includes(name)))) throw new Error(`osnova setup agents --only takes ${agentHarnesses.join(", ")}`);
+  const command = values.command !== undefined && values.command.length > 0 ? values.command : undefined;
+  const plan = uninstall
+    ? await planUninstall(family as (typeof setupFamilies)[number], { home: values.home, only: only as (typeof agentHarnesses)[number][] | undefined, instructions: values.instructions })
+    : await planFamily(family as (typeof setupFamilies)[number], { home: values.home, command, nudge: values.nudge === true, only: only as (typeof agentHarnesses)[number][] | undefined });
+  const label = (change: { kind: string; client?: string | undefined }): string => (change.kind === "mcp" ? change.client ?? "mcp" : change.kind);
+  const lines = [
+    ...plan.skipped.map((entry) => `osnova setup skipped: ${entry.harness}, ${entry.reason}`),
+    ...plan.kept.map((change) => (change.linked === true || uninstall
+      ? `osnova setup kept: ${change.kind}, ${change.notice}`
+      : `osnova setup kept: ${change.kind}, ${change.path} differs from the shipped file; left in place. Remove it and run again to install the shipped one.`)),
+  ];
+  if (plan.changes.length === 0 || (uninstall && plan.changes.every((change) => change.action === "unchanged"))) { io.stdout([...lines, uninstall ? `osnova setup ${family} --uninstall: nothing to remove.` : `osnova setup ${family}: nothing to set up.`].join("\n")); return EXIT_OK; }
+  if (values.apply !== true) {
+    io.stdout([...plan.changes.map((change) => [`osnova setup preview: ${label(change)}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")), ...lines, "Repeat this command with --apply to write these changes."].join("\n\n"));
+    return EXIT_OK;
+  }
+  const report = (applied: readonly { kind: string; client?: string | undefined; written: boolean; action: string; path: string; backup?: string | undefined; notice: string }[]): string[] =>
+    applied.map((change) => `osnova setup applied: ${label(change)}, ${change.written ? change.action : "unchanged"}, ${change.path}${change.backup === undefined ? "" : ` (backup ${change.backup})`}${change.written && change.notice.length > 0 ? `\n  ${change.notice}` : ""}`);
+  let applied;
+  try { applied = await applyChanges(plan.changes); }
+  catch (error) {
+    // What was already written, with its backups, is reported before the failure.
+    if (error instanceof SetupApplyError) io.stdout([...report(error.applied), ...lines].join("\n"));
+    throw error;
+  }
+  io.stdout([...report(applied), ...lines].join("\n"));
+  return EXIT_OK;
+}
+
 function jsonOutput(value: unknown, label: string): string {
   const text = JSON.stringify(value);
   if (text.length > maximumTextResponseCodeUnits) {
     throw new RangeError(`osnova: ${label} JSON exceeds ${maximumTextResponseCodeUnits} code units; use the API for complete structured output`);
   }
   return text;
+}
+
+const lspLanguageNames: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
+
+// The language server for osnova_warp is named on the command line that starts the MCP server, never read from
+// stored configuration. Returns an error message for an incomplete or unsafe launch.
+function mcpLspLaunch(values: { "lsp-server"?: string | undefined; "lsp-arg"?: string[] | undefined; "lsp-languages"?: string | undefined; "lsp-timeout-ms"?: string | undefined }): LspServerLaunch | string | undefined {
+  const server = values["lsp-server"];
+  if (server === undefined) {
+    return values["lsp-arg"] !== undefined || values["lsp-languages"] !== undefined || values["lsp-timeout-ms"] !== undefined ? "--lsp-arg, --lsp-languages and --lsp-timeout-ms need --lsp-server" : undefined;
+  }
+  if (!path.isAbsolute(server)) return "--lsp-server must be an absolute path";
+  const languages = (values["lsp-languages"] ?? "").split(",").map((name) => name.trim()).filter((name) => name.length > 0);
+  if (languages.length === 0) return `--lsp-server needs --lsp-languages, a comma-separated list of ${lspLanguageNames.join(", ")}`;
+  const unknown = languages.filter((name) => !lspLanguageNames.includes(name as LanguageId));
+  if (unknown.length > 0) return `unknown --lsp-languages ${unknown.join(", ")}; expected ${lspLanguageNames.join(", ")}`;
+  let requestTimeoutMs: number | undefined;
+  if (values["lsp-timeout-ms"] !== undefined) {
+    requestTimeoutMs = Number(values["lsp-timeout-ms"]);
+    if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 60_000) return "--lsp-timeout-ms must be a whole number from 1 to 60000";
+  }
+  return { executable: server, args: values["lsp-arg"] ?? [], languages: languages as LanguageId[], ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}) };
 }
 
 export async function runCli(
@@ -457,7 +522,10 @@ export async function runCli(
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {
-      const parsed = parseArgs({ args: rest, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" }, only: { type: "string" }, uninstall: { type: "boolean" } } });
+      if (parsed.positionals.length > 0) return await setupFamily(parsed.positionals, parsed.values, io);
+      if (parsed.values.uninstall === true) throw new Error("osnova setup --uninstall belongs to osnova setup claude or osnova setup agents");
+      if (parsed.values.only !== undefined) throw new Error("osnova setup --only belongs to osnova setup agents");
       const mode = parsed.values.apply === true ? "apply" : parsed.values.preview === true ? "preview" : undefined;
       if (mode === undefined) throw new Error("osnova setup requires --preview or --apply");
       const client = parsed.values.client;
@@ -477,7 +545,7 @@ export async function runCli(
       if (parsed.values.skill === true) planned.push(await planSkill({ home: parsed.values.home }));
       if (parsed.values.instructions !== undefined) planned.push(await planInstructions(parsed.values.instructions));
       if (mode === "preview") {
-        io.stdout(planned.map((change) => [`osnova setup preview: ${change.kind === "mcp" ? client : change.kind}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")).join("\n\n"));
+        io.stdout([...planned.map((change) => [`osnova setup preview: ${change.kind === "mcp" ? client : change.kind}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")), "Repeat this command with --apply in place of --preview to write these changes."].join("\n\n"));
         return EXIT_OK;
       }
       const applied = await applyChanges(planned);
@@ -498,14 +566,20 @@ export async function runCli(
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" }, "no-prewarm": { type: "boolean" } },
+        options: {
+          workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" }, "no-prewarm": { type: "boolean" },
+          "lsp-server": { type: "string" }, "lsp-arg": { type: "string", multiple: true }, "lsp-languages": { type: "string" }, "lsp-timeout-ms": { type: "string" },
+        },
       });
+      const lsp = mcpLspLaunch(parsed.values);
+      if (typeof lsp === "string") { io.stderr(`osnova mcp: ${lsp}\n`); return EXIT_ERROR; }
       const workspace = parsed.values.workspace ?? workspaceRootFor(process.cwd());
       const { runMcpStdio } = await import("../mcp/server.js");
       await runMcpStdio(path.resolve(workspace), {
         ...(parsed.values["cache-dir"] !== undefined ? { cacheDir: parsed.values["cache-dir"] } : {}),
         ...(parsed.values.watch === true ? { watch: true } : {}),
         ...(parsed.values["no-prewarm"] === true ? { prewarm: false } : {}),
+        ...(lsp !== undefined ? { lsp } : {}),
       });
       return EXIT_OK;
     }

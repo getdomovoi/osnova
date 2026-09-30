@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -61,12 +61,161 @@ export async function previewSetup(client: SetupClientId, options: SetupPreviewO
   const result = spec.shape === "codex-toml" ? mergeToml(existing, command) : mergeJson(existing, spec.shape, command);
   const action: SetupPreview["action"] = existing === null ? "create" : result.state;
   const diff = action === "create" || action === "append" || action === "update" ? unifiedDiff(target, existing ?? "", result.merged) : "";
-  const notice = action === "conflict"
+  const notice = result.reason === "duplicate"
+    ? `${target} repeats the ${spec.shape === "opencode" ? "mcp" : "mcpServers"} key or the osnova entry, and the client reads only the last one; osnova never guesses which to edit. Compare by hand.`
+    : action === "conflict"
     ? `${target} already has an osnova entry that does not launch osnova; osnova never edits it. Compare by hand.`
     : action === "unchanged" ? `${target} already contains this entry.`
     : action === "update" ? `The osnova entry in ${target} is repointed at ${command.join(" ")}; flags after mcp and every other key are kept.`
-    : `osnova never applies this change. Review the diff, then paste it into ${target} yourself.`;
+    : `The osnova MCP entry is added to ${target}; every other entry is kept.`;
   return { mode: "preview", client, path: target, action, diff, merged: result.merged, notice };
+}
+
+export interface SetupRemoval {
+  readonly client: SetupClientId;
+  readonly path: string;
+  readonly action: "remove" | "unchanged" | "conflict";
+  readonly diff: string;
+  readonly merged: string;
+  readonly notice: string;
+}
+
+// The reverse of previewSetup: the top-level `osnova` MCP entry is cut out of the file's text, with its comma, so
+// comments and every other key keep their bytes. Only an entry that launches osnova is removed; one of the same name
+// that runs something else is a conflict and stays.
+export async function previewRemoval(client: SetupClientId, options: { home?: string | undefined; configPath?: string | undefined } = {}): Promise<SetupRemoval> {
+  const spec = setupClients.find((candidate) => candidate.id === client);
+  if (spec === undefined) throw new Error(`osnova setup: unknown client ${JSON.stringify(client)}; known: ${setupClients.map((c) => c.id).join(", ")}`);
+  const home = path.resolve(options.home ?? os.homedir());
+  let target = options.configPath === undefined ? spec.configPath(home) : path.resolve(options.configPath);
+  if (options.configPath === undefined) {
+    for (const alternate of [spec.configPath, ...(spec.alternates ?? [])]) {
+      const candidate = alternate(home);
+      if (await exists(candidate)) { target = candidate; break; }
+    }
+  }
+  const relative = path.relative(home, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`osnova setup: config path must be inside the home directory ${home}`);
+  const link = await firstLink(target, home);
+  if (link !== undefined) return { client, path: target, action: "conflict", diff: "", merged: "", notice: `${link} is a link; osnova never edits a config through a link. Remove the osnova entry by hand.` };
+  const existing = await readExisting(target);
+  if (existing === null) return { client, path: target, action: "unchanged", diff: "", merged: "", notice: `${target} does not exist.` };
+  const result = spec.shape === "codex-toml" ? removeToml(existing) : removeJson(existing, spec.shape);
+  const notice = result.reason === "duplicate"
+    ? `${target} has more than one osnova entry; osnova never guesses which to remove. Compare by hand.`
+    : result.state === "conflict"
+    ? `${target} has an osnova entry that does not launch osnova; osnova never edits it. Compare by hand.`
+    : result.state === "unchanged" ? `${target} has no osnova entry.` : `The osnova entry is removed from ${target}; every other key is kept.`;
+  return { client, path: target, action: result.state === "append" || result.state === "update" ? "remove" : result.state, diff: result.state === "update" ? unifiedDiff(target, existing, result.merged) : "", merged: result.merged, notice };
+}
+
+function removeJson(existing: string, shape: Shape): Merge {
+  const rootKey = shape === "opencode" ? "mcp" : "mcpServers";
+  let parsed: unknown;
+  try { parsed = JSON.parse(stripJsonc(existing)); } catch (error) {
+    throw new Error(`osnova setup: cannot parse the existing config as JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("osnova setup: the existing config is not a JSON object");
+  const root = (parsed as Record<string, unknown>)[rootKey];
+  const current = root !== null && typeof root === "object" && !Array.isArray(root) ? (root as Record<string, unknown>).osnova : undefined;
+  if (current === undefined) return { state: "unchanged", merged: existing };
+  if (current === null || typeof current !== "object" || Array.isArray(current)) return { state: "conflict", merged: existing };
+  const record = current as Record<string, unknown>;
+  const launch = shape === "opencode" ? record.command : [record.command, ...(Array.isArray(record.args) ? record.args : [])];
+  if (!Array.isArray(launch) || osnovaLaunchTail(launch) === undefined) return { state: "conflict", merged: existing };
+  const parent = locateObject(existing, [rootKey]);
+  const plain = stripJsoncKeepingOffsets(existing);
+  const top = plain.indexOf("{");
+  if (top >= 0 && memberSpans(plain, top, matchingClose(plain, top), rootKey).length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
+  if (parent !== null && memberSpans(plain, parent.open, parent.close, "osnova").length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
+  const member = parent === null ? null : memberSpan(plain, parent.open, parent.close, "osnova");
+  if (parent === null || member === null) throw new Error(`osnova setup: cannot locate the ${rootKey}.osnova entry in the existing config`);
+  let start = member.start, end = member.end;
+  let before = start - 1;
+  while (before > parent.open && /\s/.test(plain[before]!)) before--;
+  if (plain[before] === ",") start = before;
+  else {
+    let after = end;
+    while (after < parent.close && /\s/.test(plain[after]!)) after++;
+    // Past the comma only true whitespace goes; a comment there belongs to the next entry.
+    if (plain[after] === ",") { after++; while (after < parent.close && /\s/.test(existing[after]!)) after++; end = after; }
+    else { start = parent.open + 1; end = parent.close; }
+  }
+  return { state: "update", merged: `${existing.slice(0, start)}${existing.slice(end)}` };
+}
+
+function memberSpans(text: string, open: number, close: number, key: string): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  let from = open;
+  for (;;) {
+    const span = memberSpan(text, from, close, key);
+    if (span === null) return spans;
+    spans.push(span);
+    from = span.end;
+    while (from < close && /\s/.test(text[from]!)) from++;
+    if (text[from] !== ",") return spans;
+  }
+}
+
+// The first symbolic link among the file and every folder between it and home.
+async function firstLink(target: string, home: string): Promise<string | undefined> {
+  for (let candidate = target; ; candidate = path.dirname(candidate)) {
+    const relative = path.relative(home, candidate);
+    if (relative.length === 0 || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
+    const stat = await fs.lstat(candidate).catch(() => undefined);
+    if (stat?.isSymbolicLink() === true) return candidate;
+  }
+}
+
+// The key's opening quote and the offset just past its value, for a member of the object between `open` and `close`.
+function memberSpan(text: string, open: number, close: number, key: string): { start: number; end: number } | null {
+  let i = open + 1;
+  while (i < close) {
+    while (i < close && /[\s,]/.test(text[i]!)) i++;
+    if (i >= close || text[i] !== "\"") return null;
+    const start = i;
+    const nameEnd = stringEnd(text, i);
+    const name = JSON.parse(text.slice(i, nameEnd + 1)) as string;
+    i = nameEnd + 1;
+    while (i < close && /[\s:]/.test(text[i]!)) i++;
+    if (text[i] === "{" || text[i] === "[") i = matchingClose(text, i) + 1;
+    else while (i < close && text[i] !== "," && text[i] !== "}") i = text[i] === "\"" ? stringEnd(text, i) + 1 : i + 1;
+    if (name === key) { let end = i; while (end > start && /\s/.test(text[end - 1]!)) end--; return { start, end }; }
+  }
+  return null;
+}
+
+// The `[mcp_servers.osnova]` table and its `[mcp_servers.osnova.*]` tables, with the blank line setup put before them.
+function removeToml(existing: string): Merge {
+  const header = /^[ \t]*\[mcp_servers\.osnova\][ \t]*\r?$/m.exec(existing);
+  if (header === null) return { state: "unchanged", merged: existing };
+  const bodyStart = header.index + header[0].length;
+  const next = /^[ \t]*\[(?!mcp_servers\.osnova[.\]])/m.exec(existing.slice(bodyStart));
+  const end = next === null ? existing.length : bodyStart + next.index;
+  const body = existing.slice(bodyStart, end).split(/^[ \t]*\[/m)[0]!;
+  const commandLine = /^[ \t]*command[ \t]*=[ \t]*(".*")[ \t]*\r?$/m.exec(body), argsLine = /^[ \t]*args[ \t]*=[ \t]*(\[.*\])[ \t]*\r?$/m.exec(body);
+  if (commandLine === null || argsLine === null) return { state: "conflict", merged: existing };
+  let launch: unknown[];
+  try { launch = [JSON.parse(commandLine[1]!), ...(JSON.parse(argsLine[1]!) as unknown[])]; } catch { return { state: "conflict", merged: existing }; }
+  if (osnovaLaunchTail(launch) === undefined) return { state: "conflict", merged: existing };
+  // Comment lines just before the next table describe that table and stay.
+  let cut = end;
+  if (next !== null) {
+    let offset = end;
+    const lines = existing.slice(bodyStart, end).split("\n");
+    lines.pop();
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]!;
+      offset -= line.length + 1;
+      if (line.trim().startsWith("#")) cut = offset;
+      else if (line.trim().length > 0) break;
+    }
+  }
+  // Mid-file, the tables' own trailing blank line goes with them; at the end, the blank line setup put before them does.
+  let start = header.index;
+  const blank = next === null ? /(\r?\n)\r?\n$/.exec(existing.slice(0, start)) : null;
+  if (blank !== null) start -= blank[1]!.length;
+  return { state: "update", merged: `${existing.slice(0, start)}${existing.slice(cut)}` };
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -85,18 +234,91 @@ async function readExisting(file: string): Promise<string | null> {
   return fs.readFile(file, "utf8");
 }
 
-interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"; readonly merged: string; }
+interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"; readonly merged: string; readonly reason?: "duplicate" | undefined; }
 
 // The program a launch runs is its last part before `mcp` or `hook`. It is osnova's own only when it is the
 // `osnova` executable, the `@getdomovoi/osnova` package, or a `dist/bin.js` inside a folder named for osnova; a
 // user's script that merely lives under such a folder is not.
-export function isOsnovaLauncher(parts: readonly string[]): boolean {
-  const program = (parts.at(-1) ?? "").replace(/^(["'])(.*)\1$/, "$2").replace(/\\/g, "/");
-  const segments = program.split("/");
-  const base = segments.at(-1) ?? "";
-  if (/^osnova(?:\.(?:cmd|exe|js|mjs))?$/.test(base)) return true;
+// Whether one launch part is osnova's program: the bare `osnova` command (resolved on PATH, as setup writes it), the
+// scoped `@getdomovoi/osnova` package, or a path to an existing file inside a package whose package.json names
+// `@getdomovoi/osnova` as the file that package declares for its `osnova` command. A path is checked on disk, never by its name, so a user's own `osnova.js` or a script under a
+// folder named osnova is not osnova's, and neither is a path that no longer exists.
+export function isOsnovaProgram(part: string): boolean {
+  // Quotes at either end go, matched or not: inside `bash -c 'osnova hook x'` the word is `'osnova`.
+  const program = part.replace(/^["']+|["']+$/g, "");
+  if (/^osnova(?:\.(?:cmd|exe))?$/.test(program)) return true;
   if (/^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program)) return true;
-  return base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment));
+  if (!/[\\/]/.test(program)) return false;
+  let file: string;
+  try { file = realpathSync(program); } catch { return false; }
+  // The nearest package.json above the file must name @getdomovoi/osnova and declare this very file as its `osnova` command.
+  for (let dir = path.dirname(file), level = 0; level < 4; dir = path.dirname(dir), level += 1) {
+    let manifest: { name?: unknown; bin?: unknown };
+    try { manifest = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as { name?: unknown; bin?: unknown }; }
+    catch { if (path.dirname(dir) === dir) return false; continue; }
+    const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin !== null && typeof manifest.bin === "object" ? (manifest.bin as Record<string, unknown>).osnova : undefined;
+    if (manifest.name !== "@getdomovoi/osnova" || typeof bin !== "string") return false;
+    try { return realpathSync(path.join(dir, bin)) === file; } catch { return false; }
+  }
+  return false;
+}
+
+// A launch is osnova's own only in a form that runs osnova's own program: the `osnova` executable or a path to it
+// alone; `node`, `nodejs` or `bun` running a path to it; or `npx`, `bunx`, `pnpx` or `pnpm dlx` running the scoped
+// `@getdomovoi/osnova` package; with only plain flags between. `pnpm osnova` (a project script), `npx osnova` (another
+// package), `echo osnova` and `node -e osnova` are not.
+const plainLaunchFlag = /^(?:-y|--yes|-q|--quiet|--silent|--no-install|--prefer-offline|--prefer-online|--enable-source-maps|--no-warnings|--no-deprecation|--max-old-space-size=\d+|--stack-size=\d+)$/;
+export function isOsnovaLauncher(parts: readonly string[]): boolean {
+  const program = (parts.at(-1) ?? "").replace(/^["']+|["']+$/g, "").replace(/\\/g, "/");
+  if (!isOsnovaProgram(program)) return false;
+  if (parts.length === 1) return true;
+  const runner = parts[0]!.replace(/^["']+|["']+$/g, "").replace(/\\/g, "/").split("/").at(-1) ?? "";
+  const middle = parts.slice(1, -1);
+  const scoped = /^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program);
+  if (/^(?:node|nodejs|bun)(?:\.exe)?$/i.test(runner)) return !scoped && /[\\/]/.test(program) && middle.every((part) => plainLaunchFlag.test(part));
+  if (/^(?:npx|bunx|pnpx)(?:\.(?:cmd|exe))?$/i.test(runner)) return scoped && middle.every((part) => plainLaunchFlag.test(part));
+  if (/^pnpm(?:\.(?:cmd|exe))?$/i.test(runner)) return scoped && middle[0] === "dlx" && middle.slice(1).every((part) => plainLaunchFlag.test(part));
+  return false;
+}
+
+// A shell script's command segments, split on `&&`, `||`, `;`, `|` and newlines outside single and double quotes.
+function shellSegments(script: string): string[] {
+  const segments: string[] = [];
+  let current = "", quote: "'" | "\"" | undefined;
+  for (let i = 0; i < script.length; i += 1) {
+    const ch = script[i]!;
+    if (quote !== undefined) {
+      if (ch === "\\" && quote === "\"" && i + 1 < script.length) { current += ch + script[i + 1]!; i += 1; continue; }
+      if (ch === quote) quote = undefined;
+      current += ch;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < script.length) { current += ch + script[i + 1]!; i += 1; continue; }
+    if (ch === "'" || ch === "\"") { quote = ch; current += ch; continue; }
+    if (ch === ";" || ch === "\n" || ch === "|" || (ch === "&" && script[i + 1] === "&")) {
+      segments.push(current);
+      current = "";
+      if ((ch === "&" || ch === "|") && script[i + 1] === ch) i += 1;
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments;
+}
+
+export function shellWrappedOsnovaHook(command: string): string | undefined {
+  const match = /^\s*["']?([^\s"']+)["']?\s+-\w*c\s+(["'])([\s\S]*)\2\s*$/.exec(command);
+  if (match === null) return undefined;
+  const shell = match[1]!.replace(/\\/g, "/").split("/").at(-1) ?? "";
+  if (!/^(?:bash|sh|zsh|fish|dash|ksh|pwsh|powershell)(?:\.exe)?$/i.test(shell)) return undefined;
+  for (const segment of shellSegments(match[3]!)) {
+    const words: string[] = [...(segment.trim().match(/"[^"]*"|'[^']*'|\S+/g) ?? [])];
+    while (words.length > 0 && (words[0] === "exec" || /^[A-Za-z_]\w*=/.test(words[0]!))) words.shift();
+    const at = words.indexOf("hook");
+    if (at > 0 && words[at + 1] !== undefined && isOsnovaLauncher(words.slice(0, at))) return words[at + 1];
+  }
+  return undefined;
 }
 
 // An existing entry is osnova's own when its launch runs `mcp` through an osnova launcher. Only such an entry
@@ -163,6 +385,11 @@ function mergeJson(existing: string | null, shape: Shape, command: readonly stri
     throw new Error(`osnova setup: cannot parse the existing config as JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("osnova setup: the existing config is not a JSON object");
+  // JSON.parse keeps the last of two same-named keys but the edits below write into the first, so an entry added or
+  // repointed there would be one the client never reads.
+  const plain = stripJsoncKeepingOffsets(existing), top = plain.indexOf("{"), parent = locateObject(existing, [rootKey]);
+  if (top >= 0 && memberSpans(plain, top, matchingClose(plain, top), rootKey).length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
+  if (parent !== null && memberSpans(plain, parent.open, parent.close, "osnova").length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
   const root = (parsed as Record<string, unknown>)[rootKey];
   const current = root !== null && typeof root === "object" && !Array.isArray(root) ? (root as Record<string, unknown>).osnova : undefined;
   const indent = detectIndent(existing);

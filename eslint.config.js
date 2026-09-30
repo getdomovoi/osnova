@@ -28,7 +28,7 @@ export default tseslint.config(
     languageOptions: { globals: { process: "readonly", setTimeout: "readonly", clearTimeout: "readonly", Buffer: "readonly" } },
   },
   {
-    files: ["scripts/**/*.mjs"],
+    files: ["scripts/**/*.mjs", "benchmarks/oracle/*.mjs"],
     languageOptions: {
       globals: {
         console: "readonly",
