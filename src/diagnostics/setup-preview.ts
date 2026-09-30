@@ -123,6 +123,8 @@ function removeJson(existing: string, shape: Shape): Merge {
   if (!Array.isArray(launch) || osnovaLaunchTail(launch) === undefined) return { state: "conflict", merged: existing };
   const parent = locateObject(existing, [rootKey]);
   const plain = stripJsoncKeepingOffsets(existing);
+  const top = plain.indexOf("{");
+  if (top >= 0 && memberSpans(plain, top, matchingClose(plain, top), rootKey).length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
   if (parent !== null && memberSpans(plain, parent.open, parent.close, "osnova").length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
   const member = parent === null ? null : memberSpan(plain, parent.open, parent.close, "osnova");
   if (parent === null || member === null) throw new Error(`osnova setup: cannot locate the ${rootKey}.osnova entry in the existing config`);
@@ -248,14 +250,22 @@ export function isOsnovaProgram(part: string): boolean {
     || (base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment)));
 }
 
-// A launch is osnova's own only when it is that program alone, or a known runtime running it with only flags (and
-// `dlx`, `exec` or `x`) between them, so a command that merely mentions osnova, such as `echo osnova mcp`, is not.
+// A launch is osnova's own only when it is that program alone, or a known runtime running it with only listed flags
+// between them, so a command that merely mentions osnova (`echo osnova mcp`) or evaluates code (`node -e osnova`)
+// is not.
 export function isOsnovaLauncher(parts: readonly string[]): boolean {
   if (!isOsnovaProgram(parts.at(-1) ?? "")) return false;
   if (parts.length === 1) return true;
   const runner = parts[0]!.replace(/^(["'])(.*)\1$/, "$2").replace(/\\/g, "/").split("/").at(-1) ?? "";
   return /^(?:node|nodejs|npx|pnpm|pnpx|bun|bunx|deno)(?:\.(?:exe|cmd))?$/.test(runner)
-    && parts.slice(1, -1).every((part) => part.startsWith("-") || part === "dlx" || part === "exec" || part === "x");
+    && parts.slice(1, -1).every((part) => /^(?:-y|--yes|-q|--quiet|--silent|--no-install|--prefer-offline|--prefer-online|--enable-source-maps|--no-warnings|--no-deprecation|--max-old-space-size=\d+|--stack-size=\d+|dlx|exec|x)$/.test(part));
+}
+
+// A hook written as a shell command (`bash -c "... osnova hook x"`): recognised so setup counts it as present and
+// uninstall reports it, never rewritten or removed.
+export function isShellWrappedOsnova(parts: readonly string[]): boolean {
+  const shell = (parts[0] ?? "").replace(/^["']+|["']+$/g, "").replace(/\\/g, "/").split("/").at(-1) ?? "";
+  return /^(?:bash|sh|zsh|fish|dash|ksh|cmd|pwsh|powershell)(?:\.exe)?$/i.test(shell) && isOsnovaProgram(parts.at(-1) ?? "");
 }
 
 // An existing entry is osnova's own when its launch runs `mcp` through an osnova launcher. Only such an entry

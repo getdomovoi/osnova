@@ -2,7 +2,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isOsnovaLauncher, isOsnovaProgram, previewRemoval, previewSetup, unifiedDiff } from "./setup-preview.js";
+import { isOsnovaLauncher, isShellWrappedOsnova, previewRemoval, previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
 import { hookSettingsObject, isHookEvent } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
@@ -79,7 +79,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     const parts = hook === undefined ? [] : hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     if (hook === undefined) return item;
     // A shell-wrapped command cannot be rewritten safely: it still counts as present, but is never changed.
-    if (!plainCommand(hook)) { if (isOsnovaProgram(parts.at(-1) ?? "") && isHookEvent(hook.name)) kept.add(hook.name); return item; }
+    if (!plainCommand(hook)) { if (isShellWrappedOsnova(parts) && isHookEvent(hook.name)) kept.add(hook.name); return item; }
     if (!isOsnovaLauncher(parts)) return item;
     if (!isHookEvent(hook.name)) { unknown.add(hook.name); return undefined; }
     const proposed = wantedEvent.get(hook.name);
@@ -278,9 +278,10 @@ async function applyEach(changes: readonly PlannedChange[], applied: AppliedChan
     if (change.action === "append" || change.action === "update" || change.action === "remove" || change.action === "delete") { backup = `${change.path}.bak-osnova-${stamp}`; await fs.copyFile(change.path, backup); }
     if (change.action === "delete") {
       await fs.rm(change.path);
-      // A skill folder osnova created holds only SKILL.md; with it gone (and its backup beside it moved out), drop the folder.
-      if (change.kind === "skill") backup = await removeEmptySkillFolder(change.path, backup);
+      // Recorded before the folder clean-up, so a failure there still reports the deleted file and its backup.
       applied.push({ ...change, written: true, backup });
+      // A skill folder osnova created holds only SKILL.md; with it gone (and its backup beside it moved out), drop the folder.
+      if (change.kind === "skill") applied[applied.length - 1] = { ...change, written: true, backup: await removeEmptySkillFolder(change.path, backup) };
       continue;
     }
     await fs.mkdir(path.dirname(change.path), { recursive: true });
@@ -357,7 +358,7 @@ export async function planHookRemoval(options: { home?: string | undefined; clie
     const parts = hook === undefined ? [] : hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     if (hook === undefined) return true;
     // Reported only: osnova run inside a shell command cannot be removed safely, so it stays.
-    if (!plainCommand(hook)) { if (isOsnovaProgram(parts.at(-1) ?? "")) wrapped.add(command as string); return true; }
+    if (!plainCommand(hook)) { if (isShellWrappedOsnova(parts)) wrapped.add(command as string); return true; }
     if (!isOsnovaLauncher(parts)) return true;
     removed += 1;
     return false;
@@ -410,6 +411,10 @@ export async function planSkillRemoval(options: { home?: string | undefined; sou
 // file changes. A file that held only the block is deleted; an edited block is kept and reported.
 export async function planInstructionsRemoval(file: string): Promise<PlannedChange> {
   const target = path.resolve(file);
+  if ((await fs.lstat(target).catch(() => undefined))?.isSymbolicLink() === true) {
+    const real = await fs.realpath(target).catch(() => undefined);
+    return { kind: "instructions", path: target, action: "conflict", linked: true, diff: "", merged: "", notice: `${target} is a link; osnova never edits through a link.${real === undefined ? "" : ` Pass ${real} to remove the block there.`}` };
+  }
   const existing = await readOptional(target);
   if (existing === null || !existing.includes(instructionsStart)) return { kind: "instructions", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} has no osnova block.` };
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";

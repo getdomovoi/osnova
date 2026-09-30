@@ -225,3 +225,50 @@ describe("review round one", () => {
     } finally { await fs.chmod(at(".claude", "skills", "osnova"), 0o755); }
   });
 });
+
+describe("review round two", () => {
+  it("does not edit an instructions file reached through a link", async () => {
+    const real = at("repo", "AGENTS.md");
+    await write(real, "# Rules\n");
+    expect(await runCli(["setup", "--apply", "--client", "claude-code", "--instructions", real, "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const installed = await fs.readFile(real, "utf8");
+    await fs.symlink(real, at("repo", "CLAUDE.md"));
+    const c = capture();
+    expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--instructions", at("repo", "CLAUDE.md"), "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(real, "utf8")).toBe(installed);
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: instructions, .*link/);
+  });
+
+  it("does not count a runtime that evaluates code as osnova's launch", async () => {
+    const { isOsnovaLauncher } = await import("../src/diagnostics/setup-preview.js");
+    expect(isOsnovaLauncher(["node", "-e", "osnova"])).toBe(false);
+    expect(isOsnovaLauncher(["node", "--eval", "osnova"])).toBe(false);
+    expect(isOsnovaLauncher(["node", "--enable-source-maps", "/x/osnova/dist/bin.js"])).toBe(true);
+  });
+
+  it("stops on a file with two MCP root objects", async () => {
+    const text = "{\n  \"mcpServers\": { \"osnova\": { \"command\": \"mine\", \"args\": [] } },\n  \"mcpServers\": { \"osnova\": { \"command\": \"osnova\", \"args\": [\"mcp\"] } }\n}\n";
+    await write(at(".claude.json"), text);
+    const c = capture();
+    expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(at(".claude.json"), "utf8")).toBe(text);
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: mcp, .*more than one/);
+  });
+
+  it("does not count a quoted echo of an osnova hook as that hook", async () => {
+    await write(at(".claude", "settings.json"), `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo 'osnova hook stop'" }] }] } }, null, 2)}\n`);
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const commands = JSON.parse(await fs.readFile(at(".claude", "settings.json"), "utf8")).hooks.Stop.flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((hook) => hook.command));
+    expect(commands).toContain("osnova hook stop");
+  });
+
+  it.skipIf(process.platform === "win32")("reports a deleted skill even when moving its backup fails", async () => {
+    expect(await runCli(["setup", "claude", "--apply", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    await fs.chmod(at(".claude", "skills"), 0o555);
+    const c = capture();
+    try {
+      await expect(runCli(["setup", "claude", "--uninstall", "--apply", "--home", home], c.io)).rejects.toThrow();
+      expect(c.out.join("\n")).toMatch(/osnova setup applied: skill, delete, .*SKILL\.md \(backup /);
+    } finally { await fs.chmod(at(".claude", "skills"), 0o755); }
+  });
+});
