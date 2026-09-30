@@ -286,3 +286,13 @@ describe("review round three", () => {
     expect(commands("UserPromptSubmit")).not.toContain("osnova hook prompt");
   });
 });
+
+describe("review round four", () => {
+  it("splits a shell script only outside quotes", async () => {
+    const { shellWrappedOsnovaHook } = await import("../src/diagnostics/setup-preview.js");
+    expect(shellWrappedOsnovaHook("bash -c 'echo \"text; osnova hook stop \"'")).toBeUndefined();
+    expect(shellWrappedOsnovaHook("bash -c \"echo 'a && osnova hook stop'\"")).toBeUndefined();
+    expect(shellWrappedOsnovaHook("bash -c 'cd ~; osnova hook stop'")).toBe("stop");
+    expect(shellWrappedOsnovaHook("bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"")).toBe("prompt");
+  });
+});

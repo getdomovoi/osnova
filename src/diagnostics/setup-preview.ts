@@ -265,12 +265,38 @@ export function isOsnovaLauncher(parts: readonly string[]): boolean {
 // split on `&&`, `||`, `;`, `|` and newlines, and a segment counts when its words, after `exec` and variable
 // assignments, are an osnova launch followed by `hook <name>`. Returns that name; `bash -c 'echo osnova hook x'` gets
 // none. Such a hook counts as present for setup and is reported by uninstall, but is never rewritten or removed.
+// A shell script's command segments, split on `&&`, `||`, `;`, `|` and newlines outside single and double quotes.
+function shellSegments(script: string): string[] {
+  const segments: string[] = [];
+  let current = "", quote: "'" | "\"" | undefined;
+  for (let i = 0; i < script.length; i += 1) {
+    const ch = script[i]!;
+    if (quote !== undefined) {
+      if (ch === "\\" && quote === "\"" && i + 1 < script.length) { current += ch + script[i + 1]!; i += 1; continue; }
+      if (ch === quote) quote = undefined;
+      current += ch;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < script.length) { current += ch + script[i + 1]!; i += 1; continue; }
+    if (ch === "'" || ch === "\"") { quote = ch; current += ch; continue; }
+    if (ch === ";" || ch === "\n" || ch === "|" || (ch === "&" && script[i + 1] === "&")) {
+      segments.push(current);
+      current = "";
+      if ((ch === "&" || ch === "|") && script[i + 1] === ch) i += 1;
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments;
+}
+
 export function shellWrappedOsnovaHook(command: string): string | undefined {
   const match = /^\s*["']?([^\s"']+)["']?\s+-\w*c\s+(["'])([\s\S]*)\2\s*$/.exec(command);
   if (match === null) return undefined;
   const shell = match[1]!.replace(/\\/g, "/").split("/").at(-1) ?? "";
   if (!/^(?:bash|sh|zsh|fish|dash|ksh|pwsh|powershell)(?:\.exe)?$/i.test(shell)) return undefined;
-  for (const segment of match[3]!.split(/&&|\|\||;|\||\n/)) {
+  for (const segment of shellSegments(match[3]!)) {
     const words: string[] = [...(segment.trim().match(/"[^"]*"|'[^']*'|\S+/g) ?? [])];
     while (words.length > 0 && (words[0] === "exec" || /^[A-Za-z_]\w*=/.test(words[0]!))) words.shift();
     const at = words.indexOf("hook");
