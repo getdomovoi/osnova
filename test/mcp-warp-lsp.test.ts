@@ -9,11 +9,11 @@ import { createOsnovaMcpServer, type OsnovaMcpOptions } from "../src/mcp/server.
 
 const serverScript = path.join(import.meta.dirname, "fixtures/lsp/references-server.mjs");
 const temporaries: string[] = [];
-const closers: (() => void)[] = [];
-let lastClose: (() => void) | undefined;
+const closers: (() => Promise<void>)[] = [];
+let lastClose: (() => Promise<void>) | undefined;
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 afterEach(async () => {
-  for (const close of closers.splice(0)) close();
+  for (const close of closers.splice(0)) await close();
   for (const dir of temporaries.splice(0)) await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -194,9 +194,8 @@ it("stops a server whose start-up close interrupted", async () => {
   const client = await connect(f);
   const pending = client.callTool({ name: "osnova_warp", arguments: { symbol: "lib.ts#helper" } }).catch(() => undefined);
   for (let i = 0; i < 100 && (await launches(f)) === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
-  lastClose?.();
+  await lastClose?.();
   await pending;
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
   const pid = Number((await fs.readFile(f.launches, "utf8")).split("\n").find((line) => line.startsWith("launch "))?.slice(7));
   expect(pid).toBeGreaterThan(0);
   expect(alive(pid)).toBe(false);
@@ -266,9 +265,8 @@ it("launches nothing when close lands before the server starts", async () => {
   await respond(f, [], { initDelayMs: 5_000 });
   const client = await connect(f);
   const pending = client.callTool({ name: "osnova_warp", arguments: { symbol: "lib.ts#helper" } }).catch(() => undefined);
-  lastClose?.();
+  await lastClose?.();
   await pending;
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
   const pids = (await fs.readFile(f.launches, "utf8")).split("\n").filter((line) => line.startsWith("launch ")).map((line) => Number(line.slice(7)));
   expect(pids.filter(alive)).toEqual([]);
 });

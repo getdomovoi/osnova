@@ -263,7 +263,7 @@ export interface OsnovaMcpStatus {
 export function createOsnovaMcpServer(
   workspace: string,
   options?: OsnovaMcpOptions,
-): { server: Server; refresh: () => Promise<OsnovaIndex>; status: () => OsnovaMcpStatus; close: () => void } {
+): { server: Server; refresh: () => Promise<OsnovaIndex>; status: () => OsnovaMcpStatus; close: () => Promise<void> } {
   const cacheDir = resolveCacheDir(options?.cacheDir);
   const absRoot = path.resolve(workspace);
   const watchOptions = options?.watch === true ? {} : options?.watch === false || options?.watch === undefined ? undefined : options.watch;
@@ -338,12 +338,13 @@ export function createOsnovaMcpServer(
     }
   }
   const lspSession = options?.lsp === undefined ? undefined : new LspReferenceSession(absRoot, options.lsp, options.cacheDir);
-  const close = (): void => {
-    void lspSession?.close();
+  // Resolves once a language server this MCP server started has stopped; the rest of close is immediate.
+  const close = (): Promise<void> => {
     if (timer !== undefined) clearTimeout(timer);
     watcher?.close(); watcher = undefined;
     closed = true;
     if (warm !== "off") warm = "closed";
+    return lspSession?.close() ?? Promise.resolve();
   };
   const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty, warm });
 
@@ -604,7 +605,7 @@ export async function runMcpStdio(
 ): Promise<void> {
   const { server, close, refresh } = createOsnovaMcpServer(workspace, { prewarm: true, ...options });
   const transport = new StdioServerTransport();
-  transport.onclose = close;
+  transport.onclose = () => { close().catch(() => undefined); };
   await server.connect(transport);
   // Start the first refresh now rather than on the first tool call, so the index and its warm-up are
   // usually ready by the time an agent asks. A tool call joins this refresh instead of starting another.
