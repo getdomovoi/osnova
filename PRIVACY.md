@@ -8,7 +8,7 @@ Osnova reads the source files of the repository you point it at, applying the re
 
 ## What it writes
 
-One cache directory per repository: the structural index, the source-text sidecar and hook state (a small per-session file keyed by the client's session id). The default location is under your user cache directory; `OSNOVA_CACHE_DIR` or `--cache-dir` moves it. Osnova writes nothing inside your repository and nothing outside the cache directory. `osnova setup --apply` is the one exception: it edits the client configuration files you name, backs each one up first, and shows the diff with `--preview` before touching anything.
+One cache directory per repository: the structural index, the source-text sidecar and hook state (a small per-session file keyed by the client's session id). The default location is under your user cache directory; `OSNOVA_CACHE_DIR` or `--cache-dir` moves it. Osnova writes nothing inside your repository and nothing outside the cache directory. `osnova setup --apply` is the one exception: it edits the client configuration files you name, backs each one up first, and shows the diff with `--preview` before touching anything. `osnova setup claude --uninstall` and `osnova setup agents --uninstall` reverse it the same way: they preview first, remove only osnova's own entries, delete only the plugin, extension and skill files osnova installed while they are unchanged, and back up each file first.
 
 ## What it sends
 
