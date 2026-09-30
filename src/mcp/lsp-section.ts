@@ -213,14 +213,18 @@ export function settleTargets(index: OsnovaIndex, result: ImpactResult, handles:
 /**
  * The server's references to the changed symbols settle asked about, against the dependents above: declarations,
  * references inside a changed symbol, references inside a listed dependent, and the rest, which are listed. A reference
- * is inside a dependent when its innermost enclosing definition is one (or, at top level, its file is one), or when it
- * sits on the line of a listed dependent's edge. Server locations never become graph edges.
+ * belongs to the definition the graph attributes any edge on its line to (the file, for module-level code), or else to
+ * its innermost enclosing definition, or at top level to its file. Server locations never become graph edges.
  */
 export function formatLspSettle(index: OsnovaIndex, result: ImpactResult, asked: LspSymbolAnswers, eligible: number, budget = maximumLspSectionCodeUnits): string {
   const changed = new Set(result.changes.flatMap((change) => (change.after === null ? [] : [change.after.symbol.qualifiedName])));
   const current = result.dependents.filter((dependent) => dependent.snapshot === "current");
   const nodes = new Set(current.map((dependent) => dependent.symbol?.qualifiedName ?? dependent.file));
-  const edgeLines = new Set(current.flatMap((dependent) => dependent.path.map((step) => `${step.edge.fromFile}:${step.edge.line}`)));
+  // The graph attributes module-level code, such as a constant's initializer, to the file rather than to a definition.
+  const owners = (spot: At): string[] => [
+    ...index.edgesForFile(spot.file).filter((edge) => edge.fromFile === spot.file && edge.line === spot.line).map((edge) => edge.fromSymbol || edge.fromFile),
+    enclosing(index, spot.file, spot.line)?.qualifiedName ?? spot.file,
+  ];
   let total = 0;
   let declarations = 0;
   let inside = 0;
@@ -234,9 +238,9 @@ export function formatLspSettle(index: OsnovaIndex, result: ImpactResult, asked:
     declarations += declaration;
     const rest: At[] = [];
     for (const spot of at) {
-      const node = enclosing(index, spot.file, spot.line)?.qualifiedName ?? spot.file;
-      if (changed.has(node)) inside += 1;
-      else if (nodes.has(node) || edgeLines.has(`${spot.file}:${spot.line}`)) among += 1;
+      const candidates = owners(spot);
+      if (candidates.some((node) => changed.has(node))) inside += 1;
+      else if (candidates.some((node) => nodes.has(node))) among += 1;
       else rest.push(spot);
     }
     outside += rest.length;

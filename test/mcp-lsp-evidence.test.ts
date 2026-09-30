@@ -259,3 +259,17 @@ it("tests: bounds the section with an exact count of the lines it leaves out", a
   expect(section).toContain(`+${80 - shown} more lines not shown`);
   expect(section.length).toBeLessThanOrEqual(1_024);
 });
+
+it("settle: counts a reference on a line the graph attributes to a listed dependent as among them", async () => {
+  const f = await settleFixture();
+  // The graph attributes both module-level calls to the file, and lists the file once, by its first edge.
+  await fs.writeFile(path.join(f.workspace, "consts.ts"), "import { helper } from \"./lib\";\nexport const a = helper();\nexport const b = helper();\n");
+  await respond(f, [], { byPosition: { "lib.ts:0": [
+    { file: "lib.ts", line: 0, character: 16 },
+    { file: "consts.ts", line: 1, character: 17 },
+    { file: "consts.ts", line: 2, character: 17 },
+  ] } });
+  const text = await call(await connect(f), "osnova_settle", { diff: await rewrite(f, "lib.ts", [1]) });
+  expect(text).toContain("current d1 consts.ts ");
+  expect(split(text).section).toContain("3 locations: declaration 1, inside changed symbols 0, among the dependents above 2, not among them 0");
+});
