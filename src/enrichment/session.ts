@@ -89,6 +89,7 @@ export class LspReferenceSession {
     await this.stop();
     const home = path.join(workspaceDirFor(path.resolve(resolveCacheDir(this.cacheDir)), this.root), "lsp", "session");
     await fs.mkdir(home, { recursive: true });
+    if (this.closed) throw new Error("client-closed");
     const client: LspClient = new LspClient(
       { id: "mcp", executable: this.launch.executable, args: this.launch.args ?? [], workspace: this.root, languages: this.launch.languages },
       home,
@@ -136,21 +137,25 @@ export class LspReferenceSession {
       const deadline = Date.now() + timeout;
       const ask = async (signal?: AbortSignal) => serverLocations(await client.request("textDocument/references", { textDocument: { uri }, position, context: { includeDeclaration: true } }, signal), index, lspSessionDefaults.maxLocations);
       const same = (a: ReturnType<typeof serverLocations>, b: ReturnType<typeof serverLocations>): boolean => a.partial === b.partial && JSON.stringify(a.locations) === JSON.stringify(b.locations);
-      let parsed = await ask();
-      if (this.settled) {
-        const again = await ask();
-        if (!same(again, parsed)) this.settled = false;
-        parsed = again;
-      }
+      // Every request after the first runs against the one deadline, so a slow server cannot hold the answer past it.
+      const bounded = async (): Promise<ReturnType<typeof serverLocations> | undefined> => {
+        try { return await ask(AbortSignal.timeout(Math.max(1, deadline - Date.now()))); }
+        catch (error) { if (error instanceof Error && error.message === "cancelled") return undefined; throw error; }
+      };
+      let parsed = await ask(AbortSignal.timeout(timeout));
       let loading = false;
-      if (!this.settled) {
+      if (this.settled) {
+        const again = await bounded();
+        if (again === undefined) loading = true;
+        else { if (!same(again, parsed)) this.settled = false; parsed = again; }
+      }
+      if (!this.settled && !loading) {
         loading = true;
         // Every repeat is cut off at the deadline, so a slow server cannot hold the answer past the request timeout.
         for (let attempt = 0; attempt < lspSessionDefaults.settleAttempts && deadline - Date.now() > lspSessionDefaults.settleIntervalMs; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, lspSessionDefaults.settleIntervalMs));
-          let next: ReturnType<typeof serverLocations>;
-          try { next = await ask(AbortSignal.timeout(Math.max(1, deadline - Date.now()))); }
-          catch (error) { if (error instanceof Error && error.message === "cancelled") break; throw error; }
+          const next = await bounded();
+          if (next === undefined) break;
           const agreed = same(next, parsed);
           parsed = next;
           if (agreed) { loading = false; this.settled = true; break; }

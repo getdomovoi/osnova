@@ -224,7 +224,7 @@ it("keeps the section when a full answer fills the text cap", async () => {
   expect(text.length).toBeLessThanOrEqual(16_384);
 });
 
-it("counts a recursive call on the declaration line as a call, and splits a line holding both kinds", async () => {
+it("counts a recursive call on the declaration line as a call, and does not guess on a line holding both kinds", async () => {
   const f = await fixture();
   await fs.writeFile(path.join(f.workspace, "lib.ts"), "export function helper(n: number): number { return n ? helper(n - 1) : 0; }\n");
   await fs.writeFile(path.join(f.workspace, "use.ts"), "import { helper } from \"./lib\";\nexport function both(x: any): number { return helper(1) + x.helper(); }\n");
@@ -235,8 +235,8 @@ it("counts a recursive call on the declaration line as a call, and splits a line
     { file: "use.ts", line: 1, character: 60 },
   ]);
   const text = await warp(await connect(f), { symbol: "lib.ts#helper" });
-  expect(text).toContain("4 locations: declaration 1, resolved above 2, confirmed unresolved leads 1, not in the graph 0");
-  expect(text).toMatch(/confirmed unresolved leads \(1 line\):\n\s+use\.ts:2 in both/);
+  // The graph stores no column, so a line with both a resolved call and a lead confirms nothing.
+  expect(text).toContain("4 locations: declaration 1, resolved above 3, confirmed unresolved leads 0, not in the graph 0");
 });
 
 it("ends a settle wait at its deadline even when the server answers slowly", async () => {
@@ -247,4 +247,28 @@ it("ends a settle wait at its deadline even when the server answers slowly", asy
   const text = await warp(client, { symbol: "lib.ts#helper" });
   expect(Date.now() - started).toBeLessThan(1_450);
   expect(text).toContain("still loading");
+});
+
+it("ends a settled session's repeat at the deadline too", async () => {
+  const f = await fixture();
+  const client = await connect(f, true, 1_000);
+  await warp(client, { symbol: "lib.ts#helper" });
+  const locations = JSON.parse(await fs.readFile(f.responses, "utf8")).locations;
+  await respond(f, locations, { delayMs: 800 });
+  const started = Date.now();
+  const text = await warp(client, { symbol: "lib.ts#helper" });
+  expect(Date.now() - started).toBeLessThan(1_450);
+  expect(text).toContain("still loading");
+});
+
+it("launches nothing when close lands before the server starts", async () => {
+  const f = await fixture();
+  await respond(f, [], { initDelayMs: 5_000 });
+  const client = await connect(f);
+  const pending = client.callTool({ name: "osnova_warp", arguments: { symbol: "lib.ts#helper" } }).catch(() => undefined);
+  lastClose?.();
+  await pending;
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  const pids = (await fs.readFile(f.launches, "utf8")).split("\n").filter((line) => line.startsWith("launch ")).map((line) => Number(line.slice(7)));
+  expect(pids.filter(alive)).toEqual([]);
 });

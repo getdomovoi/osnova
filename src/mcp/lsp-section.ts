@@ -9,11 +9,6 @@ type Found = Extract<CallersDetailedResult, { status: "found" }>;
 // A reference written as a declaration of the name (an overload signature, `def`, `class`, `const`...), read from the
 // text before the name on its line. Declarations without a keyword, such as a method signature, are not recognised.
 const declarationKeyword = /(?:^|[^\p{L}\p{N}_$])(?:function\*?|def|class|interface|type|enum|struct|trait|fn|func|const|let|var|val)\s+$/u;
-function memberCall(index: OsnovaIndex, file: string, line: number, character: number): boolean {
-  const text = index.files.get(file)?.text.split(/\r\n|\r|\n/)[line];
-  return text !== undefined && /(?:\.|::)\s*$/.test(text.slice(0, character));
-}
-
 function declaredAt(index: OsnovaIndex, file: string, line: number, character: number): boolean {
   const text = index.files.get(file)?.text.split(/\r\n|\r|\n/)[line];
   return text !== undefined && declarationKeyword.test(text.slice(0, character));
@@ -50,11 +45,10 @@ export function formatLspReferences(index: OsnovaIndex, result: Found, answer: L
     if ((location.file === result.target.file && location.range.start.line === answer.queried.line && location.range.start.character === answer.queried.character) || declaredAt(index, location.file, location.range.start.line, location.range.start.character)) { declaration += 1; continue; }
     const line = location.range.start.line + 1;
     const key = `${location.file}:${line}`;
-    // The graph stores no column, so on a line holding both a resolved call and an unresolved lead, a location written
-    // after `.` or `::` is taken as the member call the lead stands for.
-    const lead = leads.has(key) && (!resolved.has(key) || memberCall(index, location.file, location.range.start.line, location.range.start.character));
-    if (resolved.has(key) && !lead) { already += 1; matched.add(key); }
-    else if (lead) { confirmedAt.push({ file: location.file, line }); matched.add(key); }
+    // The graph stores no column, so a line holding both a resolved call and an unresolved lead confirms nothing:
+    // its locations count as resolved above.
+    if (resolved.has(key)) { already += 1; matched.add(key); }
+    else if (leads.has(key)) { confirmedAt.push({ file: location.file, line }); matched.add(key); }
     else pending.push({ file: location.file, line });
   }
   const outsideAt: { file: string; line: number }[] = [];
