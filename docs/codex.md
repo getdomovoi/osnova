@@ -46,7 +46,7 @@ The hooks never write to the repository. On a failure they print one error line 
 Flags go after `mcp` in the `args` of `[mcp_servers.osnova]`; setup keeps them when it later repoints the entry.
 
 - `--no-prewarm` skips warming the search data after each index build, saving memory on very large repositories (about 200 MB on an 18,000-file one) at the cost of a slower first search. The index itself is still built at launch.
-- `--lsp-server <absolute path> --lsp-languages <list>` adds a language server's references to callers answers from `osnova_warp` and to callers claims checked by `osnova_plumb`, as a separate section; they never become graph edges. For Python with pyright:
+- `--lsp-server <absolute path> --lsp-languages <list>` adds a language server's references to callers answers from `osnova_warp`, to callers claims checked by `osnova_plumb` and to change impact from `osnova_settle`, as a separate section; they never become graph edges. For Python with pyright:
 
   ```toml
   [mcp_servers.osnova]

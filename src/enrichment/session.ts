@@ -24,6 +24,16 @@ export type LspReferencesAnswer =
 // languages, within the same file and byte limits as the enrichment sidecar.
 export const lspSessionDefaults = Object.freeze({ requestTimeoutMs: 10_000, maxLocations: 4_096, maxOpenFiles: 4_096, maxOpenBytes: 67_108_864, settleIntervalMs: 200, settleAttempts: 25 });
 
+// A tool that asks about several symbols in one call asks about this many at most, all under one request timeout.
+export const lspSymbolsPerCall = 8;
+
+export interface LspSymbolAnswers {
+  readonly answers: readonly { readonly symbol: OsnovaSymbol; readonly answer: LspReferencesAnswer }[];
+  readonly overCap: number;
+  readonly pastDeadline: number;
+  readonly afterFailure: number;
+}
+
 function errorCode(error: unknown): string {
   return error instanceof Error && /^[a-z0-9-]{1,64}$/.test(error.message) ? error.message : "request-failed";
 }
@@ -69,10 +79,31 @@ export class LspReferenceSession {
     return this.launch.languages.includes(language as LanguageId);
   }
 
-  references(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol): Promise<LspReferencesAnswer> {
-    const run = this.queue.then(() => this.run(index, generation, symbol));
+  references(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol, until?: number): Promise<LspReferencesAnswer> {
+    const run = this.queue.then(() => this.run(index, generation, symbol, until));
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * References for up to `cap` symbols, in the order given, under one deadline for the whole call. A symbol left when
+   * the deadline has passed, or after a failed request, is counted rather than asked, so one call never restarts a
+   * failing server more than once.
+   */
+  async referencesEach(index: OsnovaIndex, generation: string, symbols: readonly OsnovaSymbol[], cap: number = lspSymbolsPerCall): Promise<LspSymbolAnswers> {
+    const deadline = Date.now() + (this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs);
+    const answers: { symbol: OsnovaSymbol; answer: LspReferencesAnswer }[] = [];
+    let pastDeadline = 0;
+    let afterFailure = 0;
+    let failed = false;
+    for (const symbol of symbols.slice(0, cap)) {
+      if (Date.now() >= deadline) { pastDeadline += 1; continue; }
+      if (failed) { afterFailure += 1; continue; }
+      const answer = await this.references(index, generation, symbol, deadline);
+      answers.push({ symbol, answer });
+      if (answer.status === "unavailable" && answer.code !== "name-not-found") failed = true;
+    }
+    return { answers, overCap: Math.max(0, symbols.length - cap), pastDeadline, afterFailure };
   }
 
   async close(): Promise<void> {
@@ -128,8 +159,9 @@ export class LspReferenceSession {
     this.opened.add(card.path);
   }
 
-  private async run(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol): Promise<LspReferencesAnswer> {
+  private async run(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol, until: number | undefined): Promise<LspReferencesAnswer> {
     if (this.closed) return { status: "unavailable", code: "client-closed" };
+    if (until !== undefined && Date.now() >= until) return { status: "unavailable", code: "deadline" };
     const card = index.files.get(symbol.file);
     if (card === undefined || !this.handles(card.language)) return { status: "unavailable", code: "no-server" };
     const position = namePosition(card.text, symbol);
@@ -139,8 +171,8 @@ export class LspReferenceSession {
       if (this.capabilities.referencesProvider !== true && !isRecord(this.capabilities.referencesProvider)) return { status: "unavailable", code: "method-unavailable" };
       const uri = pathToFileURL(sourcePath(index.root, card.path)).href;
       if (!this.opened.has(card.path)) this.open(client, index, card.path);
-      const timeout = this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs;
-      const deadline = Date.now() + timeout;
+      // A caller asking about several symbols passes its own deadline, shared by all of them.
+      const deadline = until ?? Date.now() + (this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs);
       const ask = async (signal?: AbortSignal) => serverLocations(await client.request("textDocument/references", { textDocument: { uri }, position, context: { includeDeclaration: true } }, signal), index, lspSessionDefaults.maxLocations);
       const same = (a: ReturnType<typeof serverLocations>, b: ReturnType<typeof serverLocations>): boolean => a.partial === b.partial && JSON.stringify(a.locations) === JSON.stringify(b.locations);
       // Every request after the first runs against the one deadline, so a slow server cannot hold the answer past it.
@@ -148,7 +180,7 @@ export class LspReferenceSession {
         try { return await ask(AbortSignal.timeout(Math.max(1, deadline - Date.now()))); }
         catch (error) { if (error instanceof Error && error.message === "cancelled") return undefined; throw error; }
       };
-      let parsed = await ask(AbortSignal.timeout(timeout));
+      let parsed = await ask(AbortSignal.timeout(Math.max(1, deadline - Date.now())));
       let loading = false;
       if (this.settled) {
         const again = await bounded();
@@ -171,7 +203,7 @@ export class LspReferenceSession {
     } catch (error) {
       // Any failure ends this session; the next request starts a new one.
       await this.stop().catch(() => undefined);
-      return { status: "unavailable", code: errorCode(error) };
+      return { status: "unavailable", code: until !== undefined && Date.now() >= until && errorCode(error) === "cancelled" ? "deadline" : errorCode(error) };
     }
   }
 }

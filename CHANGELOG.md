@@ -7,6 +7,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 ### Added
 
 - With `osnova mcp --lsp-server`, `osnova_plumb` checks a callers claim against the language server's `textDocument/references` too, in a section after the unchanged verdicts: how many claims the server confirms, by the graph's verdict for each, the claims it confirms that the graph called name-only or no-call, and the sites the claim left out that the graph does not list as missing. The section has its own 1,024-code-unit budget with an exact count of lines it leaves out, and server locations never change a verdict or become graph edges.
+- With `osnova mcp --lsp-server`, `osnova_settle` asks the language server for references to the changed symbols and lists, in a section after the unchanged impact answer, those not inside a listed dependent or a changed symbol. It asks about at most 8 symbols per call, most graph dependents first, under one request timeout for the whole call, and counts exactly the symbols it did not ask about (over the cap, past the deadline, after a failure) and the lines its 1,024-code-unit budget leaves out.
 
 ## 0.11.0 (2026-09-30)
 

@@ -1,5 +1,6 @@
-import type { LspReferencesAnswer } from "../enrichment/session.js";
+import { lspSymbolsPerCall, type LspReferencesAnswer, type LspSymbolAnswers } from "../enrichment/session.js";
 import type { LspLocation } from "../enrichment/types.js";
+import type { ImpactResult } from "../query/impact.js";
 import type { PlumbResult, PlumbVerdict } from "../query/plumb.js";
 import type { CallersDetailedResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
 
@@ -26,6 +27,8 @@ function isDeclaration(index: OsnovaIndex, target: OsnovaSymbol, answer: Answere
   return (location.file === target.file && location.range.start.line === answer.queried.line && location.range.start.character === answer.queried.character)
     || declaredAt(index, location.file, location.range.start.line, location.range.start.character);
 }
+
+const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 // Nearest enclosing definition, for a location the section lists.
 function enclosing(index: OsnovaIndex, file: string, line: number): OsnovaSymbol | undefined {
@@ -167,4 +170,77 @@ export function formatLspPlumb(index: OsnovaIndex, result: PlumbResult, answer: 
     { title: "claims the server confirms and the graph does not", entries: entries(index, confirmed.filter((item) => item.verdict !== "confirmed").map((item) => ({ ...item.claim, before: item.verdict }))) },
     { title: "left out of the claim and not missing above", entries: entries(index, elsewhere.map((spot) => (sameNameCall(spot) ? { ...spot, after: " (graph: name-only)" } : spot))) },
   ], budget);
+}
+
+// Counts over the answers of a several-symbol call, and the notes any of them carried.
+function answersSummary(asked: LspSymbolAnswers, eligible: number, noun: string): string {
+  const answered = asked.answers.map((item) => item.answer).filter((answer): answer is Answered => answer.status !== "unavailable");
+  const unanswered = asked.answers.length - answered.length;
+  const count = (test: (answer: Answered) => boolean): number => answered.filter(test).length;
+  const partial = count((answer) => answer.status === "partial");
+  const loading = count((answer) => answer.loading);
+  const fewer = answered.find((answer) => answer.filesGiven < answer.filesEligible);
+  const found = [
+    ...(partial > 0 ? [`${partial} of the server's lists were cut or held locations outside the index`] : []),
+    ...(fewer !== undefined ? [`the server was given ${fewer.filesGiven} of ${fewer.filesEligible} files`] : []),
+    ...(loading > 0 ? [`${loading} ${loading === 1 ? "answer came" : "answers came"} while the server was still loading its projects, so ${loading === 1 ? "it" : "they"} may be incomplete`] : []),
+  ];
+  return `asked about ${asked.answers.length} of ${eligible} ${noun} in its languages (not asked: ${asked.overCap} over the cap of ${lspSymbolsPerCall}, ${asked.pastDeadline} past the deadline, ${asked.afterFailure} after a failure)${unanswered > 0 ? `; ${unanswered} unavailable` : ""}${found.length > 0 ? `; ${found.join("; ")}` : ""}`;
+}
+
+function unavailableEntries(asked: LspSymbolAnswers): string[] {
+  return asked.answers.flatMap(({ symbol, answer }) => (answer.status === "unavailable" ? [`    ${symbol.qualifiedName} (${answer.code})`] : []));
+}
+
+/**
+ * The changed symbols settle asks the server about: current definitions in the server's languages, most graph
+ * dependents first, then by qualified name, so the same diff always asks about the same symbols.
+ */
+export function settleTargets(index: OsnovaIndex, result: ImpactResult, handles: (language: string) => boolean): OsnovaSymbol[] {
+  const byName = new Map<string, OsnovaSymbol>();
+  for (const change of result.changes) {
+    const symbol = change.after?.symbol;
+    if (symbol !== undefined && handles(index.files.get(symbol.file)?.language ?? "")) byName.set(symbol.qualifiedName, symbol);
+  }
+  const dependents = (symbol: OsnovaSymbol): number => new Set(index.incoming(symbol.qualifiedName)
+    .filter((edge) => edge.evidence?.source === "syntax" && edge.evidence.resolution.status === "resolved")
+    .map((edge) => edge.fromSymbol || edge.fromFile)).size;
+  const counted = [...byName.values()].map((symbol) => ({ symbol, dependents: dependents(symbol) }));
+  return counted.sort((a, b) => b.dependents - a.dependents || compareText(a.symbol.qualifiedName, b.symbol.qualifiedName)).map((item) => item.symbol);
+}
+
+/**
+ * The server's references to the changed symbols settle asked about, against the dependents above: declarations,
+ * references inside a changed symbol, references inside a listed dependent, and the rest, which are listed. A reference
+ * is inside a dependent when its innermost enclosing definition is one (or, at top level, its file is one), or when it
+ * sits on the line of a listed dependent's edge. Server locations never become graph edges.
+ */
+export function formatLspSettle(index: OsnovaIndex, result: ImpactResult, asked: LspSymbolAnswers, eligible: number, budget = maximumLspSectionCodeUnits): string {
+  const changed = new Set(result.changes.flatMap((change) => (change.after === null ? [] : [change.after.symbol.qualifiedName])));
+  const current = result.dependents.filter((dependent) => dependent.snapshot === "current");
+  const nodes = new Set(current.map((dependent) => dependent.symbol?.qualifiedName ?? dependent.file));
+  const edgeLines = new Set(current.flatMap((dependent) => dependent.path.map((step) => `${step.edge.fromFile}:${step.edge.line}`)));
+  let total = 0;
+  let declarations = 0;
+  let inside = 0;
+  let among = 0;
+  let outside = 0;
+  const groups: { title: string; entries: string[] }[] = [{ title: "unavailable", entries: unavailableEntries(asked) }];
+  for (const { symbol, answer } of asked.answers) {
+    if (answer.status === "unavailable") continue;
+    total += answer.locations.length;
+    const { declaration, at } = sites(index, symbol, answer);
+    declarations += declaration;
+    const rest: At[] = [];
+    for (const spot of at) {
+      const node = enclosing(index, spot.file, spot.line)?.qualifiedName ?? spot.file;
+      if (changed.has(node)) inside += 1;
+      else if (nodes.has(node) || edgeLines.has(`${spot.file}:${spot.line}`)) among += 1;
+      else rest.push(spot);
+    }
+    outside += rest.length;
+    groups.push({ title: `${symbol.qualifiedName}: not among the dependents`, entries: entries(index, rest) });
+  }
+  const first = `${header}, not syntax edges): ${answersSummary(asked, eligible, "changed symbols")}; ${total} locations: declaration ${declarations}, inside changed symbols ${inside}, among the dependents above ${among}, not among them ${outside}`;
+  return bounded(first, groups, budget);
 }

@@ -126,3 +126,75 @@ it("plumb: bounds the section with an exact count of the lines it leaves out", a
   expect(section).toContain(`+${300 - shown} more lines not shown`);
   expect(section.length).toBeLessThanOrEqual(1_024);
 });
+
+// A diff that rewrites the given one-based lines of a file in place, so settle attributes them to the symbols there.
+async function rewrite(f: Fixture, file: string, lines: readonly number[]): Promise<string> {
+  const text = (await fs.readFile(path.join(f.workspace, file), "utf8")).split("\n");
+  return [`--- a/${file}`, `+++ b/${file}`, ...lines.flatMap((line) => [`@@ -${line},1 +${line},1 @@`, `-${text[line - 1]} `, `+${text[line - 1]}`]), ""].join("\n");
+}
+
+async function settleFixture(): Promise<Fixture> {
+  const f = await fixture();
+  await fs.writeFile(path.join(f.workspace, "lib.ts"), "export function helper(): number { return 1; }\nexport function other(): number { return helper(); }\n");
+  await respond(f, [], { byPosition: { "lib.ts:0": [
+    { file: "lib.ts", line: 0, character: 16 },
+    { file: "lib.ts", line: 1, character: 42 },
+    { file: "use.ts", line: 0, character: 9 },
+    { file: "use.ts", line: 1, character: 42 },
+    { file: "use.ts", line: 2, character: 50 },
+  ] } });
+  return f;
+}
+
+it("settle: lists server references not among the graph dependents, after the unchanged impact answer", async () => {
+  const f = await settleFixture();
+  const args = { diff: await rewrite(f, "lib.ts", [1]) };
+  const without = await call(await connect(f, false), "osnova_settle", args);
+  const { graph, section } = split(await call(await connect(f), "osnova_settle", args));
+  expect(graph).toBe(without);
+  expect(graph).toContain("current d1 use.ts#direct");
+  expect(section).toContain("language server (textDocument/references, not syntax edges): asked about 1 of 1 changed symbols in its languages (not asked: 0 over the cap of 8, 0 past the deadline, 0 after a failure); 5 locations: declaration 1, inside changed symbols 0, among the dependents above 2, not among them 2");
+  expect(section).toMatch(/ lib\.ts#helper: not among the dependents \(2 lines\):\n\s+use\.ts:1 \(top level\)\n\s+use\.ts:3 in viaAny/);
+});
+
+it("settle: asks about at most 8 symbols, most depended-on first, and counts the rest", async () => {
+  const f = await settleFixture();
+  await fs.writeFile(path.join(f.workspace, "cap.ts"), `${Array.from({ length: 10 }, (_, i) => `export function f${i}(): number { return ${i}; }`).join("\n")}\n`);
+  await fs.writeFile(path.join(f.workspace, "caller.ts"), "import { f9 } from \"./cap\";\nexport function g(): number { return f9(); }\n");
+  const { section } = split(await call(await connect(f), "osnova_settle", { diff: await rewrite(f, "cap.ts", Array.from({ length: 10 }, (_, i) => i + 1)) }));
+  expect(section).toContain("asked about 8 of 10 changed symbols in its languages (not asked: 2 over the cap of 8, 0 past the deadline, 0 after a failure)");
+  expect([...new Set(await logged(f, "references "))].sort()).toEqual(["cap.ts:0", "cap.ts:1", "cap.ts:2", "cap.ts:3", "cap.ts:4", "cap.ts:5", "cap.ts:6", "cap.ts:9"]);
+});
+
+it("settle: stops asking at one deadline for the whole call", async () => {
+  const f = await settleFixture();
+  await respond(f, [{ file: "use.ts", line: 2, character: 50 }], { delayMs: 700 });
+  const client = await connect(f, true, 1_000);
+  const started = Date.now();
+  const { section } = split(await call(client, "osnova_settle", { diff: await rewrite(f, "lib.ts", [1, 2]) + await rewrite(f, "use.ts", [2]) }));
+  expect(Date.now() - started).toBeLessThan(2_500);
+  expect(section).toContain("asked about 1 of 3 changed symbols in its languages (not asked: 0 over the cap of 8, 2 past the deadline, 0 after a failure)");
+});
+
+it("settle: stops asking after a server failure and keeps the impact answer", async () => {
+  const f = await settleFixture();
+  await respond(f, [], { exitOnReferences: true });
+  const text = await call(await connect(f), "osnova_settle", { diff: await rewrite(f, "lib.ts", [1, 2]) });
+  expect(text).toContain("current d1 use.ts#direct");
+  const { section } = split(text);
+  expect(section).toContain("asked about 1 of 2 changed symbols in its languages (not asked: 0 over the cap of 8, 0 past the deadline, 1 after a failure); 1 unavailable; 0 locations");
+  expect(section).toMatch(/unavailable \(1 line\):\n\s+lib\.ts#helper \([a-z0-9-]+\)/);
+});
+
+it("settle: bounds the section with an exact count of the lines it leaves out", async () => {
+  const f = await settleFixture();
+  const calls = Array.from({ length: 300 }, (_, i) => `export function caller${i}(x: any): number { return x.helper(); }`);
+  await fs.writeFile(path.join(f.workspace, "many.ts"), `${calls.join("\n")}\n`);
+  await respond(f, [], { byPosition: { "lib.ts:0": calls.map((_, i) => ({ file: "many.ts", line: i, character: 50 })) } });
+  const { section } = split(await call(await connect(f), "osnova_settle", { diff: await rewrite(f, "lib.ts", [1]) }));
+  expect(section).toContain("300 locations: declaration 0, inside changed symbols 0, among the dependents above 0, not among them 300");
+  const shown = (section.match(/many\.ts:\d+ in caller\d+/g) ?? []).length;
+  expect(shown).toBeGreaterThan(0);
+  expect(section).toContain(`+${300 - shown} more lines not shown`);
+  expect(section.length).toBeLessThanOrEqual(1_024);
+});

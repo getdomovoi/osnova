@@ -16,7 +16,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { LspReferenceSession, type LspServerLaunch } from "../enrichment/session.js";
-import { formatLspPlumb, formatLspReferences } from "./lsp-section.js";
+import { formatLspPlumb, formatLspReferences, formatLspSettle, settleTargets } from "./lsp-section.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext, warmTaskContext } from "../query/task-context.js";
 import { warmQueryContext } from "../query/context.js";
@@ -249,7 +249,7 @@ export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
   readonly prewarm?: boolean;
-  /** A language server whose references osnova_warp and osnova_plumb add, in their own section, to a callers answer or claim check. */
+  /** A language server whose references osnova_warp, osnova_plumb and osnova_settle add to their answers, each in its own section. */
   readonly lsp?: LspServerLaunch;
 }
 
@@ -470,7 +470,11 @@ export function createOsnovaMcpServer(
             result = measured(() => impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth, diffPathPrefix }));
           }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
+          // The server's references to the changed symbols get their own section after the unchanged impact answer.
+          const targets = lspSession === undefined ? [] : settleTargets(index, result, (language) => lspSession.handles(language));
+          const lsp = lspSession !== undefined && targets.length > 0
+            ? `\n${formatLspSettle(index, result, await lspSession.referencesEach(index, indexGeneration(index), targets), targets.length)}` : "";
+          return textResult(`${prefix}\n${boundText(formatImpact(result), available)}${lsp}`);
         }
         case "osnova_plumb": {
           const symbol = requireString(args, "symbol");
