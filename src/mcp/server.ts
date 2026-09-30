@@ -338,7 +338,8 @@ export function createOsnovaMcpServer(
     }
   }
   const lspSession = options?.lsp === undefined ? undefined : new LspReferenceSession(absRoot, options.lsp, options.cacheDir);
-  // Resolves once a language server this MCP server started has stopped; the rest of close is immediate.
+  // Resolves once a language server this MCP server started has exited, or has been killed and a further grace
+  // period has passed; the rest of close is immediate.
   const close = (): Promise<void> => {
     if (timer !== undefined) clearTimeout(timer);
     watcher?.close(); watcher = undefined;

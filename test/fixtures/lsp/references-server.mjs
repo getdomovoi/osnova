@@ -1,7 +1,7 @@
 // A minimal language server for tests: it answers textDocument/references with the locations listed in a JSON file
 // and appends one line to a log for every launch ("launch <pid>") and every opened file ("open <file>").
 // usage: node references-server.mjs <responses.json> <launch.log>
-// responses.json: { "delayMs"?: number, "initDelayMs"?: number, "exitOnReferences"?: boolean, "grow"?: boolean, "locations": [{ "file", "line", "character" }] }
+// responses.json: { "delayMs"?: number, "initDelayMs"?: number, "ignoreShutdown"?: boolean, "exitOnReferences"?: boolean, "grow"?: boolean, "locations": [{ "file", "line", "character" }] }
 // With grow, the n-th request gets only the first n locations, as a server still loading its projects would answer.
 // (file relative to the workspace, line and character zero-based)
 import { appendFileSync, readFileSync } from "node:fs";
@@ -34,9 +34,9 @@ function handle(message) {
     const result = listed.map((l) => ({ uri: pathToFileURL(path.join(root, l.file)).href, range: { start: { line: l.line, character: l.character }, end: { line: l.line, character: l.character + 1 } } }));
     setTimeout(() => send({ id: message.id, result }), responses.delayMs ?? 0);
   } else if (message.method === "shutdown") {
-    send({ id: message.id, result: null });
+    if (!JSON.parse(readFileSync(responsesFile, "utf8")).ignoreShutdown) send({ id: message.id, result: null });
   } else if (message.method === "exit") {
-    process.exit(0);
+    if (!JSON.parse(readFileSync(responsesFile, "utf8")).ignoreShutdown) process.exit(0);
   } else if (message.id !== undefined) {
     send({ id: message.id, result: null });
   }

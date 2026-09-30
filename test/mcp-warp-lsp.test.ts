@@ -270,3 +270,18 @@ it("launches nothing when close lands before the server starts", async () => {
   const pids = (await fs.readFile(f.launches, "utf8")).split("\n").filter((line) => line.startsWith("launch ")).map((line) => Number(line.slice(7)));
   expect(pids.filter(alive)).toEqual([]);
 });
+
+it("waits in close for a shutdown that a failed request already started", async () => {
+  const f = await fixture();
+  // The request times out, the session starts shutting the server down, and the server ignores shutdown, so the
+  // shutdown is still running when close is called.
+  await respond(f, [], { delayMs: 5_000, ignoreShutdown: true });
+  const client = await connect(f, true, 300);
+  const pending = client.callTool({ name: "osnova_warp", arguments: { symbol: "lib.ts#helper" } }).catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await lastClose?.();
+  const pid = Number((await fs.readFile(f.launches, "utf8")).split("\n").find((line) => line.startsWith("launch "))?.slice(7));
+  expect(pid).toBeGreaterThan(0);
+  expect(alive(pid)).toBe(false);
+  await pending;
+});

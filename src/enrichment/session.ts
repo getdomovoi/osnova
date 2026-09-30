@@ -57,6 +57,8 @@ export class LspReferenceSession {
   private settled = false;
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
+  // Shutdowns still running, so close can wait for one that a failed request or a restart began.
+  private readonly stopping = new Set<Promise<void>>();
   private readonly root: string;
 
   constructor(root: string, private readonly launch: LspServerLaunch, private readonly cacheDir: string | undefined) {
@@ -76,13 +78,17 @@ export class LspReferenceSession {
   async close(): Promise<void> {
     this.closed = true;
     await this.stop();
+    await Promise.all([...this.stopping]);
   }
 
   private async stop(): Promise<void> {
     const client = this.client;
     this.client = undefined;
     this.opened.clear();
-    await client?.close();
+    if (client === undefined) return;
+    const stopped = client.close();
+    this.stopping.add(stopped);
+    try { await stopped; } finally { this.stopping.delete(stopped); }
   }
 
   private async start(index: OsnovaIndex, generation: string): Promise<LspClient> {
