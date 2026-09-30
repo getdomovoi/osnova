@@ -1,5 +1,5 @@
 // A minimal language server for tests: it answers textDocument/references with the locations listed in a JSON file
-// and appends one line to a log for every launch ("launch <pid>") and every opened file ("open <file>").
+// and appends one line to a log for every launch ("launch <pid>") and every opened file ("open <file>") and every shutdown request ("shutdown").
 // usage: node references-server.mjs <responses.json> <launch.log>
 // responses.json: { "delayMs"?: number, "initDelayMs"?: number, "ignoreShutdown"?: boolean, "exitOnReferences"?: boolean, "grow"?: boolean, "locations": [{ "file", "line", "character" }] }
 // With grow, the n-th request gets only the first n locations, as a server still loading its projects would answer.
@@ -34,6 +34,7 @@ function handle(message) {
     const result = listed.map((l) => ({ uri: pathToFileURL(path.join(root, l.file)).href, range: { start: { line: l.line, character: l.character }, end: { line: l.line, character: l.character + 1 } } }));
     setTimeout(() => send({ id: message.id, result }), responses.delayMs ?? 0);
   } else if (message.method === "shutdown") {
+    appendFileSync(launchLog, "shutdown\n");
     if (!JSON.parse(readFileSync(responsesFile, "utf8")).ignoreShutdown) send({ id: message.id, result: null });
   } else if (message.method === "exit") {
     if (!JSON.parse(readFileSync(responsesFile, "utf8")).ignoreShutdown) process.exit(0);

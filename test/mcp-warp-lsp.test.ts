@@ -278,7 +278,9 @@ it("waits in close for a shutdown that a failed request already started", async 
   await respond(f, [], { delayMs: 5_000, ignoreShutdown: true });
   const client = await connect(f, true, 300);
   const pending = client.callTool({ name: "osnova_warp", arguments: { symbol: "lib.ts#helper" } }).catch(() => undefined);
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  // Wait until the session has begun that shutdown, however slow the runner.
+  for (let i = 0; i < 500 && !(await fs.readFile(f.launches, "utf8")).includes("shutdown\n"); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(await fs.readFile(f.launches, "utf8")).toContain("shutdown\n");
   await lastClose?.();
   const pid = Number((await fs.readFile(f.launches, "utf8")).split("\n").find((line) => line.startsWith("launch "))?.slice(7));
   expect(pid).toBeGreaterThan(0);
