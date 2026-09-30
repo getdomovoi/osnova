@@ -124,6 +124,15 @@ describe("setup preview", () => {
     expect(preview.diff).toContain('+      "enabled": true');
   });
 
+  it("refuses a config with a duplicated root or osnova key, since the client reads only the last one", async () => {
+    const file = path.join(home, ".cursor", "mcp.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '{\n  "mcpServers": { "a": { "command": "a" } },\n  "mcpServers": { "b": { "command": "b" } }\n}\n');
+    expect((await previewSetup("cursor", { home })).action).toBe("conflict");
+    await fs.writeFile(file, '{\n  "mcpServers": {\n    "osnova": { "command": "elsewhere", "args": ["mcp"] },\n    "osnova": { "command": "osnova", "args": ["mcp"] }\n  }\n}\n');
+    expect((await previewSetup("cursor", { home })).action).toBe("conflict");
+  });
+
   it("appends a TOML table for codex and detects an existing one", async () => {
     const file = path.join(home, ".codex", "config.toml");
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -167,7 +176,8 @@ describe("setup preview", () => {
     expect(code).toBe(0);
     expect(out.join("\n")).toContain("osnova setup preview: cursor, create");
     expect(out.join("\n")).toContain("+++ ");
-    expect(out.join("\n")).toContain("osnova never applies this change");
+    expect(out.join("\n")).toContain("Repeat this command with --apply in place of --preview to write these changes.");
+    expect(out.join("\n")).not.toMatch(/never applies|yourself/);
     expect(await snapshot()).toEqual([]);
     await expect(runCli(["setup", "--client", "cursor", "--home", home])).rejects.toThrow(/--preview/);
     await expect(runCli(["setup", "--preview", "--home", home])).rejects.toThrow(/--client/);

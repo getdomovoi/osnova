@@ -40,6 +40,8 @@ describe("osnova setup agents", () => {
     expect(existsSync(at(".pi", "agent", "extensions", "osnova.ts"))).toBe(true);
     expect(await fs.readFile(at(".pi", "agent", "mcp.json"), "utf8")).toContain("osnova");
     expect(await fs.readFile(at(".agents", "skills", "osnova", "SKILL.md"), "utf8")).toContain("osnova_settle");
+    expect(out).toMatch(/The osnova MCP entry is added to .*config\.toml; every other entry is kept\./);
+    expect(out).not.toMatch(/never applies|yourself/);
     expect(out).toMatch(/osnova setup skipped: opencode, not installed/);
     expect(out).toMatch(/osnova setup skipped: cursor, not installed/);
     for (const absent of [[".config", "opencode"], [".cursor"], [".claude"], [".claude.json"]]) expect(existsSync(at(...absent))).toBe(false);
