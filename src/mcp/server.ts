@@ -15,6 +15,8 @@ import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
+import { LspReferenceSession, type LspServerLaunch } from "../enrichment/session.js";
+import { formatLspReferences } from "./lsp-section.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext, warmTaskContext } from "../query/task-context.js";
 import { warmQueryContext } from "../query/context.js";
@@ -247,6 +249,8 @@ export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
   readonly prewarm?: boolean;
+  /** A language server whose references osnova_warp adds, in their own section, to a callers answer. */
+  readonly lsp?: LspServerLaunch;
 }
 
 export interface OsnovaMcpStatus {
@@ -333,7 +337,9 @@ export function createOsnovaMcpServer(
       watcher = undefined;
     }
   }
+  const lspSession = options?.lsp === undefined ? undefined : new LspReferenceSession(absRoot, options.lsp, options.cacheDir);
   const close = (): void => {
+    void lspSession?.close();
     if (timer !== undefined) clearTimeout(timer);
     watcher?.close(); watcher = undefined;
     closed = true;
@@ -399,9 +405,12 @@ export function createOsnovaMcpServer(
             ...(direction !== undefined ? { direction } : {}),
             ...(depthValue !== undefined ? { depth: depthValue } : {}),
           });
-          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits));
+          // The language server's references get their own section and budget after the graph answer, which is unchanged.
+          const lsp = lspSession !== undefined && result.status === "found" && result.direction === "in" && lspSession.handles(index.files.get(result.target.file)?.language ?? "")
+            ? `\n${formatLspReferences(index, result, await lspSession.references(index, indexGeneration(index), result.target))}` : "";
+          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits) + lsp);
           const available = maximumMcpCallersCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}`);
+          return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}${lsp}`);
         }
         case "osnova_groundwork": {
           const card = await renderMapCard(index, {
