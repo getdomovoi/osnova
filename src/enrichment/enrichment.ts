@@ -12,7 +12,7 @@ import type { LspCacheOptions, LspDiagnostic, LspEnrichmentResult, LspLaunchSpec
 
 export const lspEnrichmentLimits = Object.freeze({ maxServers: 16, maxQueries: 256, maxLocations: 256, maxFiles: 4_096, maxSourceBytes: 67_108_864, maxSidecarBytes: 16_777_216, refreshTimeoutMs: 30_000 });
 const languageIds: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
-const protocolLanguages: Readonly<Partial<Record<LanguageId, string>>> = { typescript: "typescript", tsx: "typescriptreact", javascript: "javascript", python: "python", go: "go", rust: "rust", java: "java", c_sharp: "csharp" };
+export const protocolLanguages: Readonly<Partial<Record<LanguageId, string>>> = { typescript: "typescript", tsx: "typescriptreact", javascript: "javascript", python: "python", go: "go", rust: "rust", java: "java", c_sharp: "csharp" };
 const queues = new Map<string, Promise<unknown>>();
 
 function digest(value: string | Buffer): string { return createHash("sha256").update(value).digest("hex"); }
@@ -30,7 +30,7 @@ function within(root: string, file: string): boolean {
   return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
 }
 
-function sourcePath(root: string, file: string): string {
+export function sourcePath(root: string, file: string): string {
   root = workspaceIdentity(root);
   if (!file || path.isAbsolute(file) || file.includes("\\") || file.split("/").some((part) => part === ".." || part === "." || part === "")) throw new Error("invalid-source-path");
   const absolute = path.resolve(root, file);
@@ -242,11 +242,12 @@ export async function loadLspEnrichment(index: OsnovaIndex, options: LspCacheOpt
   return serialized(directory(workspaceIdentity(index.root), options), () => load(index, options));
 }
 
-function locations(raw: unknown, index: OsnovaIndex): { locations: LspLocation[]; partial: boolean } {
+// Shared with the MCP reference session, which passes its own location cap.
+export function serverLocations(raw: unknown, index: OsnovaIndex, maxLocations: number = lspEnrichmentLimits.maxLocations): { locations: LspLocation[]; partial: boolean } {
   const values = raw === null ? [] : Array.isArray(raw) ? raw : [raw];
   const found = new Map<string, LspLocation>();
-  let partial = values.length > lspEnrichmentLimits.maxLocations;
-  for (const value of values.slice(0, lspEnrichmentLimits.maxLocations)) {
+  let partial = values.length > maxLocations;
+  for (const value of values.slice(0, maxLocations)) {
     try {
       if (!isRecord(value)) throw new Error();
       const uri = value.uri ?? value.targetUri;
@@ -326,7 +327,7 @@ async function refresh(index: OsnovaIndex, options: LspRefreshOptions): Promise<
             try {
               const method = `textDocument/${q.method}` as const;
               const response = await client.request(method, { textDocument: { uri: pathToFileURL(sourcePath(index.root, q.file)).href }, position: q.position, ...(q.method === "references" ? { context: { includeDeclaration: true } } : {}) }, controller.signal);
-              const parsed = locations(response, index);
+              const parsed = serverLocations(response, index);
               if (parsed.partial) diagnostics.push({ code: "locations-partial", serverId: server.id, file: q.file });
               results.push({ query: q, language: index.files.get(q.file)!.language as LanguageId, baseGeneration: previous.baseGeneration, workspaceHash: previous.workspaceHash, status: parsed.partial ? "partial" : "complete", locations: parsed.locations, evidence: { source: "lsp", claim: "server-locations", serverId: server.id, launchHash: digest(canonical(server)), method, positionEncoding: "utf-16", dependencyScope: "indexed-workspace" } });
             } catch (error) { diagnostics.push({ code: errorCode(error, "request-failed"), serverId: server.id, file: q.file }); }

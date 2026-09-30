@@ -14,11 +14,24 @@ export const lspLimits: Readonly<LspLimits> = Object.freeze({
   maxMessages: 4_096,
 });
 
-export function resolveLspLimits(overrides: Partial<LspLimits> = {}): LspLimits {
+// A long-lived MCP session answers many requests over hours, so it has its own, higher ceilings; a failure at any
+// limit ends the session and the next request starts a new one.
+export const lspSessionCeilings: Readonly<LspLimits> = Object.freeze({
+  requestTimeoutMs: 60_000,
+  sessionTimeoutMs: 86_400_000,
+  shutdownTimeoutMs: 1_000,
+  maxRequests: 1_000_000,
+  maxPending: 8,
+  maxMessageBytes: 16_777_216,
+  maxSessionBytes: 1_073_741_824,
+  maxMessages: 10_000_000,
+});
+
+export function resolveLspLimits(overrides: Partial<LspLimits> = {}, ceilings: Readonly<LspLimits> = lspLimits): LspLimits {
   const limits = { ...lspLimits };
   for (const key of Object.keys(overrides) as (keyof LspLimits)[]) {
     const value = overrides[key];
-    if (!Object.hasOwn(lspLimits, key) || value === undefined || !Number.isSafeInteger(value) || value < 1 || value > lspLimits[key]) throw new Error("invalid-lsp-limit");
+    if (!Object.hasOwn(lspLimits, key) || value === undefined || !Number.isSafeInteger(value) || value < 1 || value > ceilings[key]) throw new Error("invalid-lsp-limit");
     limits[key] = value;
   }
   return limits;
@@ -52,10 +65,10 @@ export class LspClient {
   private ended = false;
   private readonly spec: LspLaunchSpec;
 
-  constructor(spec: LspLaunchSpec, cacheDirectory: string, limits: Partial<LspLimits> = {}) {
+  constructor(spec: LspLaunchSpec, cacheDirectory: string, limits: Partial<LspLimits> = {}, ceilings: Readonly<LspLimits> = lspLimits) {
     if (!path.isAbsolute(spec.executable) || !path.isAbsolute(spec.workspace) || !path.isAbsolute(cacheDirectory)) throw new Error("absolute-launch-path-required");
     this.spec = spec;
-    this.limits = resolveLspLimits(limits);
+    this.limits = resolveLspLimits(limits, ceilings);
     this.child = spawn(spec.executable, [...(spec.args ?? [])], {
       cwd: cacheDirectory,
       shell: false,

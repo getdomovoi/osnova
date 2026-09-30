@@ -19,7 +19,8 @@ import { resolutionCoverage } from "../query/coverage.js";
 import { plumb, parseClaims } from "../query/plumb.js";
 import { symbolsUnderTest, testsFor } from "../query/tests.js";
 import { unreferenced } from "../query/unreferenced.js";
-import type { OsnovaIndex, SymbolKind } from "../types.js";
+import type { LanguageId, OsnovaIndex, SymbolKind } from "../types.js";
+import type { LspServerLaunch } from "../enrichment/session.js";
 import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
@@ -59,7 +60,7 @@ usage:
   osnova setup <claude|agents> [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--nudge] [--command <exe>] [--home <path>]   (one harness family; previews unless --apply)
   osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
   osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
-  osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm]   (default workspace: current directory)
+  osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm] [--lsp-server <absolute path> --lsp-languages <list> [--lsp-arg=<arg>]... [--lsp-timeout-ms <n>]]   (default workspace: current directory)
   osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
 queries refresh the index first so answers describe current disk state.
@@ -161,6 +162,28 @@ function jsonOutput(value: unknown, label: string): string {
     throw new RangeError(`osnova: ${label} JSON exceeds ${maximumTextResponseCodeUnits} code units; use the API for complete structured output`);
   }
   return text;
+}
+
+const lspLanguageNames: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
+
+// The language server for osnova_warp is named on the command line that starts the MCP server, never read from
+// stored configuration. Returns an error message for an incomplete or unsafe launch.
+function mcpLspLaunch(values: { "lsp-server"?: string | undefined; "lsp-arg"?: string[] | undefined; "lsp-languages"?: string | undefined; "lsp-timeout-ms"?: string | undefined }): LspServerLaunch | string | undefined {
+  const server = values["lsp-server"];
+  if (server === undefined) {
+    return values["lsp-arg"] !== undefined || values["lsp-languages"] !== undefined || values["lsp-timeout-ms"] !== undefined ? "--lsp-arg, --lsp-languages and --lsp-timeout-ms need --lsp-server" : undefined;
+  }
+  if (!path.isAbsolute(server)) return "--lsp-server must be an absolute path";
+  const languages = (values["lsp-languages"] ?? "").split(",").map((name) => name.trim()).filter((name) => name.length > 0);
+  if (languages.length === 0) return `--lsp-server needs --lsp-languages, a comma-separated list of ${lspLanguageNames.join(", ")}`;
+  const unknown = languages.filter((name) => !lspLanguageNames.includes(name as LanguageId));
+  if (unknown.length > 0) return `unknown --lsp-languages ${unknown.join(", ")}; expected ${lspLanguageNames.join(", ")}`;
+  let requestTimeoutMs: number | undefined;
+  if (values["lsp-timeout-ms"] !== undefined) {
+    requestTimeoutMs = Number(values["lsp-timeout-ms"]);
+    if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 60_000) return "--lsp-timeout-ms must be a whole number from 1 to 60000";
+  }
+  return { executable: server, args: values["lsp-arg"] ?? [], languages: languages as LanguageId[], ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}) };
 }
 
 export async function runCli(
@@ -529,14 +552,20 @@ export async function runCli(
       const parsed = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" }, "no-prewarm": { type: "boolean" } },
+        options: {
+          workspace: { type: "string" }, "cache-dir": { type: "string" }, watch: { type: "boolean" }, "no-prewarm": { type: "boolean" },
+          "lsp-server": { type: "string" }, "lsp-arg": { type: "string", multiple: true }, "lsp-languages": { type: "string" }, "lsp-timeout-ms": { type: "string" },
+        },
       });
+      const lsp = mcpLspLaunch(parsed.values);
+      if (typeof lsp === "string") { io.stderr(`osnova mcp: ${lsp}\n`); return EXIT_ERROR; }
       const workspace = parsed.values.workspace ?? workspaceRootFor(process.cwd());
       const { runMcpStdio } = await import("../mcp/server.js");
       await runMcpStdio(path.resolve(workspace), {
         ...(parsed.values["cache-dir"] !== undefined ? { cacheDir: parsed.values["cache-dir"] } : {}),
         ...(parsed.values.watch === true ? { watch: true } : {}),
         ...(parsed.values["no-prewarm"] === true ? { prewarm: false } : {}),
+        ...(lsp !== undefined ? { lsp } : {}),
       });
       return EXIT_OK;
     }

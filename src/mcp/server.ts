@@ -15,6 +15,8 @@ import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
+import { LspReferenceSession, type LspServerLaunch } from "../enrichment/session.js";
+import { formatLspReferences } from "./lsp-section.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext, warmTaskContext } from "../query/task-context.js";
 import { warmQueryContext } from "../query/context.js";
@@ -247,6 +249,8 @@ export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
   readonly prewarm?: boolean;
+  /** A language server whose references osnova_warp adds, in their own section, to a callers answer. */
+  readonly lsp?: LspServerLaunch;
 }
 
 export interface OsnovaMcpStatus {
@@ -259,7 +263,7 @@ export interface OsnovaMcpStatus {
 export function createOsnovaMcpServer(
   workspace: string,
   options?: OsnovaMcpOptions,
-): { server: Server; refresh: () => Promise<OsnovaIndex>; status: () => OsnovaMcpStatus; close: () => void } {
+): { server: Server; refresh: () => Promise<OsnovaIndex>; status: () => OsnovaMcpStatus; close: () => Promise<void> } {
   const cacheDir = resolveCacheDir(options?.cacheDir);
   const absRoot = path.resolve(workspace);
   const watchOptions = options?.watch === true ? {} : options?.watch === false || options?.watch === undefined ? undefined : options.watch;
@@ -333,11 +337,15 @@ export function createOsnovaMcpServer(
       watcher = undefined;
     }
   }
-  const close = (): void => {
+  const lspSession = options?.lsp === undefined ? undefined : new LspReferenceSession(absRoot, options.lsp, options.cacheDir);
+  // Resolves once a language server this MCP server started has exited, or has been killed and a further grace
+  // period has passed; the rest of close is immediate.
+  const close = (): Promise<void> => {
     if (timer !== undefined) clearTimeout(timer);
     watcher?.close(); watcher = undefined;
     closed = true;
     if (warm !== "off") warm = "closed";
+    return lspSession?.close() ?? Promise.resolve();
   };
   const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty, warm });
 
@@ -399,9 +407,12 @@ export function createOsnovaMcpServer(
             ...(direction !== undefined ? { direction } : {}),
             ...(depthValue !== undefined ? { depth: depthValue } : {}),
           });
-          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits));
+          // The language server's references get their own section and budget after the graph answer, which is unchanged.
+          const lsp = lspSession !== undefined && result.status === "found" && result.direction === "in" && lspSession.handles(index.files.get(result.target.file)?.language ?? "")
+            ? `\n${formatLspReferences(index, result, await lspSession.references(index, indexGeneration(index), result.target))}` : "";
+          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits - lsp.length) + lsp);
           const available = maximumMcpCallersCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}`);
+          return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}${lsp}`);
         }
         case "osnova_groundwork": {
           const card = await renderMapCard(index, {
@@ -595,7 +606,7 @@ export async function runMcpStdio(
 ): Promise<void> {
   const { server, close, refresh } = createOsnovaMcpServer(workspace, { prewarm: true, ...options });
   const transport = new StdioServerTransport();
-  transport.onclose = close;
+  transport.onclose = () => { close().catch(() => undefined); };
   await server.connect(transport);
   // Start the first refresh now rather than on the first tool call, so the index and its warm-up are
   // usually ready by the time an agent asks. A tool call joins this refresh instead of starting another.
