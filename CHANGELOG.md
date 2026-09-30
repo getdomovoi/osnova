@@ -17,12 +17,13 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
+- `osnova setup --hooks` no longer counts a shell-wrapped osnova hook (`bash -c "... osnova hook x"`) as installed, since what a script runs cannot be checked: it is still left as written, the plain hook is added beside it, and the notice names the command.
 - `osnova_tests` names the test functions that make each file's calls: a resolved-edge line adds `; in test_x, TestFoo.test_bar` after its sites, so a runner can target them without reading the file. The names come from the calls' enclosing definitions, which the index already stored; a call inside an anonymous callback such as `it("...", () => ...)` has none.
 - Caller, reach and test answers share one scan of the index's edges per index instead of rescanning every edge on each call. On an 18,425-file repository (1.5 million edges), after the first call a caller lookup fell from 213 ms to under 0.1 ms, a reach count from 121 ms to under 0.1 ms, and a test lookup from 26 ms to under 0.1 ms. Answers do not change; a refresh builds fresh scans.
 
 ### Fixed
 
-- `osnova setup` counts a hook or MCP entry as osnova's only when its whole launch is osnova's program alone or a known runtime running it with plain flags, so a command that only mentions osnova (`echo osnova mcp`, `node -e osnova`) is no longer repointed, and a shell-wrapped hook counts only when the shell's script actually runs osnova's hook; hook files keep CRLF line endings when setup rewrites them.
+- `osnova setup` counts a hook or MCP entry as osnova's only when its whole launch is osnova's program alone or a known runtime running it with plain flags, so a command that only mentions osnova (`echo osnova mcp`, `node -e osnova`) is no longer repointed, and each runtime counts only in the form that runs osnova's own program (`pnpm osnova` and `npx osnova` do not); hook files keep CRLF line endings when setup rewrites them.
 - `osnova_thread` caps one row's snippet at 480 code units, starting at the first match, instead of keeping the whole span of every match on a long line; the row's column list still names every match. In an agent pilot, 4 of the 5 clipped thread answers held such rows (one minified line alone took 16,098 of the 16,384-unit response, and one clipped answer showed only the first of its seven groups); the cap removes 31,767 units from them. A cut no longer splits a surrogate pair.
 - The README no longer says the OpenCode and Kilo plugin puts the tool contract in the system prompt, which 0.10.0 stopped doing.
 

@@ -274,16 +274,30 @@ describe("review round two", () => {
 });
 
 describe("review round three", () => {
-  it("does not count a shell that only prints an osnova hook, but still counts one that runs it", async () => {
+  it("adds the plain hook beside a shell-wrapped one instead of guessing what the script runs", async () => {
     await write(at(".claude", "settings.json"), `${JSON.stringify({ hooks: {
-      Stop: [{ hooks: [{ type: "command", command: "bash -c 'echo osnova hook stop'" }] }],
+      Stop: [{ hooks: [{ type: "command", command: "bash -c 'exit 0; osnova hook stop'" }] }],
       UserPromptSubmit: [{ hooks: [{ type: "command", command: "bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"" }] }],
     } }, null, 2)}\n`);
-    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const c = capture();
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], c.io)).toBe(0);
     const hooks = JSON.parse(await fs.readFile(at(".claude", "settings.json"), "utf8")).hooks;
     const commands = (event: string): string[] => hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((hook) => hook.command));
-    expect(commands("Stop")).toContain("osnova hook stop");
-    expect(commands("UserPromptSubmit")).not.toContain("osnova hook prompt");
+    expect(commands("Stop")).toEqual(["bash -c 'exit 0; osnova hook stop'", "osnova hook stop"]);
+    expect(commands("UserPromptSubmit")).toEqual(["bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"", "osnova hook prompt"]);
+    expect(c.out.join("\n")).toMatch(/shell command/);
+  });
+
+  it("accepts each runtime only in the form that runs osnova's own program", async () => {
+    const { isOsnovaLauncher } = await import("../src/diagnostics/setup-preview.js");
+    expect(isOsnovaLauncher(["pnpm", "osnova"])).toBe(false);
+    expect(isOsnovaLauncher(["npx", "osnova"])).toBe(false);
+    expect(isOsnovaLauncher(["node", "osnova"])).toBe(false);
+    expect(isOsnovaLauncher(["pnpm", "dlx", "@getdomovoi/osnova"])).toBe(true);
+    expect(isOsnovaLauncher(["npx", "-y", "@getdomovoi/osnova@0.10.0"])).toBe(true);
+    expect(isOsnovaLauncher(["bunx", "@getdomovoi/osnova"])).toBe(true);
+    expect(isOsnovaLauncher(["node", "/opt/homebrew/lib/node_modules/@getdomovoi/osnova/dist/bin.js"])).toBe(true);
+    expect(isOsnovaLauncher(["osnova"])).toBe(true);
   });
 });
 

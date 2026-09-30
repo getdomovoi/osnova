@@ -250,21 +250,24 @@ export function isOsnovaProgram(part: string): boolean {
     || (base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment)));
 }
 
-// A launch is osnova's own only when it is that program alone, or a known runtime running it with only listed flags
-// between them, so a command that merely mentions osnova (`echo osnova mcp`) or evaluates code (`node -e osnova`)
-// is not.
+// A launch is osnova's own only in a form that runs osnova's own program: the `osnova` executable or a path to it
+// alone; `node`, `nodejs` or `bun` running a path to it; or `npx`, `bunx`, `pnpx` or `pnpm dlx` running the scoped
+// `@getdomovoi/osnova` package; with only plain flags between. `pnpm osnova` (a project script), `npx osnova` (another
+// package), `echo osnova` and `node -e osnova` are not.
+const plainLaunchFlag = /^(?:-y|--yes|-q|--quiet|--silent|--no-install|--prefer-offline|--prefer-online|--enable-source-maps|--no-warnings|--no-deprecation|--max-old-space-size=\d+|--stack-size=\d+)$/;
 export function isOsnovaLauncher(parts: readonly string[]): boolean {
-  if (!isOsnovaProgram(parts.at(-1) ?? "")) return false;
+  const program = (parts.at(-1) ?? "").replace(/^["']+|["']+$/g, "").replace(/\\/g, "/");
+  if (!isOsnovaProgram(program)) return false;
   if (parts.length === 1) return true;
-  const runner = parts[0]!.replace(/^(["'])(.*)\1$/, "$2").replace(/\\/g, "/").split("/").at(-1) ?? "";
-  return /^(?:node|nodejs|npx|pnpm|pnpx|bun|bunx|deno)(?:\.(?:exe|cmd))?$/.test(runner)
-    && parts.slice(1, -1).every((part) => /^(?:-y|--yes|-q|--quiet|--silent|--no-install|--prefer-offline|--prefer-online|--enable-source-maps|--no-warnings|--no-deprecation|--max-old-space-size=\d+|--stack-size=\d+|dlx|exec|x)$/.test(part));
+  const runner = parts[0]!.replace(/^["']+|["']+$/g, "").replace(/\\/g, "/").split("/").at(-1) ?? "";
+  const middle = parts.slice(1, -1);
+  const scoped = /^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program);
+  if (/^(?:node|nodejs|bun)(?:\.exe)?$/i.test(runner)) return !scoped && program.includes("/") && middle.every((part) => plainLaunchFlag.test(part));
+  if (/^(?:npx|bunx|pnpx)(?:\.(?:cmd|exe))?$/i.test(runner)) return scoped && middle.every((part) => plainLaunchFlag.test(part));
+  if (/^pnpm(?:\.(?:cmd|exe))?$/i.test(runner)) return scoped && middle[0] === "dlx" && middle.slice(1).every((part) => plainLaunchFlag.test(part));
+  return false;
 }
 
-// A hook written as a shell command (`bash -c "cd ~ && node .../dist/bin.js hook prompt"`): the shell's script is
-// split on `&&`, `||`, `;`, `|` and newlines, and a segment counts when its words, after `exec` and variable
-// assignments, are an osnova launch followed by `hook <name>`. Returns that name; `bash -c 'echo osnova hook x'` gets
-// none. Such a hook counts as present for setup and is reported by uninstall, but is never rewritten or removed.
 // A shell script's command segments, split on `&&`, `||`, `;`, `|` and newlines outside single and double quotes.
 function shellSegments(script: string): string[] {
   const segments: string[] = [];

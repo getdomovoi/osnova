@@ -70,7 +70,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (name !== undefined) wantedEvent.set(name, event);
   }
   const prefix = splitHook(commandOf(Object.values(wantedHooks)[0]?.[0])[0] ?? "")?.prefix ?? "osnova";
-  const kept = new Set<string>(), unknown = new Set<string>(), duplicates = new Set<string>(), moved = new Set<string>();
+  const kept = new Set<string>(), unknown = new Set<string>(), duplicates = new Set<string>(), moved = new Set<string>(), shellLeft = new Set<string>();
   let repointed = 0;
   // Returns the entry to keep, rewritten when its prefix changes, or undefined to drop it.
   const reconcile = (event: string, item: unknown): unknown => {
@@ -78,8 +78,9 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     const hook = typeof command === "string" ? splitHook(command) : undefined;
     const parts = hook === undefined ? [] : hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     if (hook === undefined) return item;
-    // A shell-wrapped command cannot be rewritten safely: it still counts as present, but is never changed.
-    if (!plainCommand(hook)) { const wrapped = shellWrappedOsnovaHook(command as string); if (wrapped !== undefined && isHookEvent(wrapped)) kept.add(wrapped); return item; }
+    // What a shell command runs cannot be known for sure, so one that may run an osnova hook is left as written and
+    // does not count as installed: the plain hook is added beside it, and the notice says so.
+    if (!plainCommand(hook)) { if (shellWrappedOsnovaHook(command as string) !== undefined) shellLeft.add(command as string); return item; }
     if (!isOsnovaLauncher(parts)) return item;
     if (!isHookEvent(hook.name)) { unknown.add(hook.name); return undefined; }
     const proposed = wantedEvent.get(hook.name);
@@ -123,6 +124,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     unknown.size > 0 ? `removed hooks this osnova cannot run: ${names(unknown)}` : "",
     duplicates.size > 0 ? `removed duplicates: ${names(duplicates)}` : "",
     moved.size > 0 ? `moved to their proposed event: ${names(moved)}` : "",
+    shellLeft.size > 0 && added > 0 ? `left as written, since what a shell command runs cannot be checked: ${names(shellLeft)} (remove it if the added hook now runs osnova twice)` : "",
   ].filter((part) => part.length > 0);
   return { kind: "hooks", path: target, action, diff: unifiedDiff(target, existing ?? "", merged), merged, notice: `${parts.join("; ")} for ${client} in ${target}; hooks that are not osnova's are kept, the file is re-serialized with its indent.${client === "codex" ? " Codex skips new or changed hooks until you trust them: open /hooks in Codex and trust the osnova entries." : ""}` };
 }

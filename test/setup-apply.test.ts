@@ -97,7 +97,9 @@ describe("osnova setup --apply", () => {
     await fs.writeFile(settingsPath, JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [wrapped] }], PreToolUse: [{ hooks: [foreign, shellGate] }] } }));
     expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
     const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
-    expect(settings.hooks.UserPromptSubmit).toEqual([{ hooks: [wrapped] }]);
+    // A shell command is left as written; since what it runs cannot be checked, the plain hook is added beside it.
+    expect(settings.hooks.UserPromptSubmit[0]).toEqual({ hooks: [wrapped] });
+    expect(settings.hooks.UserPromptSubmit.flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((hook) => hook.command))).toContain("osnova hook prompt");
     expect(settings.hooks.PreToolUse).toEqual([{ hooks: [foreign, shellGate] }]);
     expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("osnova hook session");
   });
