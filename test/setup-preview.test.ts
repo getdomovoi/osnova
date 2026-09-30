@@ -124,6 +124,15 @@ describe("setup preview", () => {
     expect(preview.diff).toContain('+      "enabled": true');
   });
 
+  it("refuses a config with a duplicated root or osnova key, since the client reads only the last one", async () => {
+    const file = path.join(home, ".cursor", "mcp.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '{\n  "mcpServers": { "a": { "command": "a" } },\n  "mcpServers": { "b": { "command": "b" } }\n}\n');
+    expect((await previewSetup("cursor", { home })).action).toBe("conflict");
+    await fs.writeFile(file, '{\n  "mcpServers": {\n    "osnova": { "command": "elsewhere", "args": ["mcp"] },\n    "osnova": { "command": "osnova", "args": ["mcp"] }\n  }\n}\n');
+    expect((await previewSetup("cursor", { home })).action).toBe("conflict");
+  });
+
   it("appends a TOML table for codex and detects an existing one", async () => {
     const file = path.join(home, ".codex", "config.toml");
     await fs.mkdir(path.dirname(file), { recursive: true });

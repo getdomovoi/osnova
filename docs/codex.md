@@ -28,10 +28,10 @@ Without `--only codex`, `osnova setup agents` also sets up any other installed h
 
 ```sh
 codex mcp list    # osnova should be listed as enabled
-osnova doctor     # checks the install, the grammars, the cache and each client's entries
+osnova doctor     # checks the install, the grammars and the cache
 ```
 
-In a repository, ask Codex something that needs the graph, for example "who calls `parseConfig`, and which tests reach it?". The first question in a new repository builds the index; later questions reuse it.
+In a repository, ask Codex something that needs the graph, for example "who calls `parseConfig`, and which tests reach it?". The MCP server starts building the index when Codex launches it; the first question waits for that build, and later questions reuse the index.
 
 ## What the hooks do
 
@@ -39,13 +39,13 @@ In a repository, ask Codex something that needs the graph, for example "who call
 - **Each prompt:** up to eight starting points, the definitions your prompt names in code form (a backticked name or an identifier such as `parseConfig`), with exact `file:line`.
 - **Stop:** before Codex finishes, the indexed dependents of what it changed. If more than one lies outside the change, the turn continues once so Codex can check them.
 
-The hooks never write to the repository and print nothing on a failure.
+The hooks never write to the repository. On a failure they print one error line and nothing else.
 
 ## Options
 
 Flags go after `mcp` in the `args` of `[mcp_servers.osnova]`; setup keeps them when it later repoints the entry.
 
-- `--no-prewarm` skips building the search data at launch, saving memory on very large repositories at the cost of a slower first query.
+- `--no-prewarm` skips warming the search data after each index build, saving memory on very large repositories (about 200 MB on an 18,000-file one) at the cost of a slower first search. The index itself is still built at launch.
 - `--lsp-server <absolute path> --lsp-languages <list>` adds a language server's references to callers answers from `osnova_warp`, as a separate section; they never become graph edges. For Python with pyright:
 
   ```toml
@@ -59,8 +59,8 @@ The [reference](reference.md) lists every flag.
 ## Troubleshooting
 
 - **The hooks never fire:** open `/hooks` and trust the osnova entries.
-- **A file or symbol is not found:** the MCP server indexes the directory Codex started in, and its instructions name that checkout. If Codex works in another checkout or worktree, start Codex there.
-- **The first answer on a large repository is slow:** the first query waits for the index build, up to two minutes; later queries reuse it.
+- **A file or symbol is not found:** the MCP server indexes the Git repository that holds the directory Codex started in (that directory itself outside Git), and its instructions name that checkout. If Codex works in another checkout or worktree, start Codex there.
+- **The first answer on a large repository is slow:** the first query waits for the index build to finish; later queries reuse the index.
 
 ## Remove it
 
@@ -69,4 +69,4 @@ osnova setup agents --only codex --uninstall           # preview
 osnova setup agents --only codex --uninstall --apply   # removes osnova's entries, backing up each file
 ```
 
-Only osnova's own entries go; other MCP servers and hooks stay. The skill is deleted only if it is still the shipped copy.
+Only osnova's own entries go; other MCP servers and hooks stay. The shared skill is deleted only if it is still the shipped copy and no other installed harness that reads it (OpenCode, Kilo, Pi) is left out of the removal, as `--only codex` leaves them.

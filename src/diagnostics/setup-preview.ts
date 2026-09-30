@@ -61,7 +61,9 @@ export async function previewSetup(client: SetupClientId, options: SetupPreviewO
   const result = spec.shape === "codex-toml" ? mergeToml(existing, command) : mergeJson(existing, spec.shape, command);
   const action: SetupPreview["action"] = existing === null ? "create" : result.state;
   const diff = action === "create" || action === "append" || action === "update" ? unifiedDiff(target, existing ?? "", result.merged) : "";
-  const notice = action === "conflict"
+  const notice = result.reason === "duplicate"
+    ? `${target} repeats the ${spec.shape === "opencode" ? "mcp" : "mcpServers"} key or the osnova entry, and the client reads only the last one; osnova never guesses which to edit. Compare by hand.`
+    : action === "conflict"
     ? `${target} already has an osnova entry that does not launch osnova; osnova never edits it. Compare by hand.`
     : action === "unchanged" ? `${target} already contains this entry.`
     : action === "update" ? `The osnova entry in ${target} is repointed at ${command.join(" ")}; flags after mcp and every other key are kept.`
@@ -383,6 +385,11 @@ function mergeJson(existing: string | null, shape: Shape, command: readonly stri
     throw new Error(`osnova setup: cannot parse the existing config as JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("osnova setup: the existing config is not a JSON object");
+  // JSON.parse keeps the last of two same-named keys but the edits below write into the first, so an entry added or
+  // repointed there would be one the client never reads.
+  const plain = stripJsoncKeepingOffsets(existing), top = plain.indexOf("{"), parent = locateObject(existing, [rootKey]);
+  if (top >= 0 && memberSpans(plain, top, matchingClose(plain, top), rootKey).length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
+  if (parent !== null && memberSpans(plain, parent.open, parent.close, "osnova").length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
   const root = (parsed as Record<string, unknown>)[rootKey];
   const current = root !== null && typeof root === "object" && !Array.isArray(root) ? (root as Record<string, unknown>).osnova : undefined;
   const indent = detectIndent(existing);
