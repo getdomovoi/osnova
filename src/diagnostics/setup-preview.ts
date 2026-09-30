@@ -69,6 +69,109 @@ export async function previewSetup(client: SetupClientId, options: SetupPreviewO
   return { mode: "preview", client, path: target, action, diff, merged: result.merged, notice };
 }
 
+export interface SetupRemoval {
+  readonly client: SetupClientId;
+  readonly path: string;
+  readonly action: "remove" | "unchanged" | "conflict";
+  readonly diff: string;
+  readonly merged: string;
+  readonly notice: string;
+}
+
+// The reverse of previewSetup: the top-level `osnova` MCP entry is cut out of the file's text, with its comma, so
+// comments and every other key keep their bytes. Only an entry that launches osnova is removed; one of the same name
+// that runs something else is a conflict and stays.
+export async function previewRemoval(client: SetupClientId, options: { home?: string | undefined; configPath?: string | undefined } = {}): Promise<SetupRemoval> {
+  const spec = setupClients.find((candidate) => candidate.id === client);
+  if (spec === undefined) throw new Error(`osnova setup: unknown client ${JSON.stringify(client)}; known: ${setupClients.map((c) => c.id).join(", ")}`);
+  const home = path.resolve(options.home ?? os.homedir());
+  let target = options.configPath === undefined ? spec.configPath(home) : path.resolve(options.configPath);
+  if (options.configPath === undefined) {
+    for (const alternate of [spec.configPath, ...(spec.alternates ?? [])]) {
+      const candidate = alternate(home);
+      if (await exists(candidate)) { target = candidate; break; }
+    }
+  }
+  const relative = path.relative(home, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`osnova setup: config path must be inside the home directory ${home}`);
+  const existing = await readExisting(target);
+  if (existing === null) return { client, path: target, action: "unchanged", diff: "", merged: "", notice: `${target} does not exist.` };
+  const result = spec.shape === "codex-toml" ? removeToml(existing) : removeJson(existing, spec.shape);
+  const notice = result.state === "conflict"
+    ? `${target} has an osnova entry that does not launch osnova; osnova never edits it. Compare by hand.`
+    : result.state === "unchanged" ? `${target} has no osnova entry.` : `The osnova entry is removed from ${target}; every other key is kept.`;
+  return { client, path: target, action: result.state === "append" || result.state === "update" ? "remove" : result.state, diff: result.state === "update" ? unifiedDiff(target, existing, result.merged) : "", merged: result.merged, notice };
+}
+
+function removeJson(existing: string, shape: Shape): Merge {
+  const rootKey = shape === "opencode" ? "mcp" : "mcpServers";
+  let parsed: unknown;
+  try { parsed = JSON.parse(stripJsonc(existing)); } catch (error) {
+    throw new Error(`osnova setup: cannot parse the existing config as JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("osnova setup: the existing config is not a JSON object");
+  const root = (parsed as Record<string, unknown>)[rootKey];
+  const current = root !== null && typeof root === "object" && !Array.isArray(root) ? (root as Record<string, unknown>).osnova : undefined;
+  if (current === undefined) return { state: "unchanged", merged: existing };
+  if (current === null || typeof current !== "object" || Array.isArray(current)) return { state: "conflict", merged: existing };
+  const record = current as Record<string, unknown>;
+  const launch = shape === "opencode" ? record.command : [record.command, ...(Array.isArray(record.args) ? record.args : [])];
+  if (!Array.isArray(launch) || osnovaLaunchTail(launch) === undefined) return { state: "conflict", merged: existing };
+  const parent = locateObject(existing, [rootKey]);
+  const plain = stripJsoncKeepingOffsets(existing);
+  const member = parent === null ? null : memberSpan(plain, parent.open, parent.close, "osnova");
+  if (parent === null || member === null) throw new Error(`osnova setup: cannot locate the ${rootKey}.osnova entry in the existing config`);
+  let start = member.start, end = member.end;
+  let before = start - 1;
+  while (before > parent.open && /\s/.test(plain[before]!)) before--;
+  if (plain[before] === ",") start = before;
+  else {
+    let after = end;
+    while (after < parent.close && /\s/.test(plain[after]!)) after++;
+    if (plain[after] === ",") { after++; while (after < parent.close && /\s/.test(plain[after]!)) after++; end = after; }
+    else { start = parent.open + 1; end = parent.close; }
+  }
+  return { state: "update", merged: `${existing.slice(0, start)}${existing.slice(end)}` };
+}
+
+// The key's opening quote and the offset just past its value, for a member of the object between `open` and `close`.
+function memberSpan(text: string, open: number, close: number, key: string): { start: number; end: number } | null {
+  let i = open + 1;
+  while (i < close) {
+    while (i < close && /[\s,]/.test(text[i]!)) i++;
+    if (i >= close || text[i] !== "\"") return null;
+    const start = i;
+    const nameEnd = stringEnd(text, i);
+    const name = JSON.parse(text.slice(i, nameEnd + 1)) as string;
+    i = nameEnd + 1;
+    while (i < close && /[\s:]/.test(text[i]!)) i++;
+    if (text[i] === "{" || text[i] === "[") i = matchingClose(text, i) + 1;
+    else while (i < close && text[i] !== "," && text[i] !== "}") i = text[i] === "\"" ? stringEnd(text, i) + 1 : i + 1;
+    if (name === key) { let end = i; while (end > start && /\s/.test(text[end - 1]!)) end--; return { start, end }; }
+  }
+  return null;
+}
+
+// The `[mcp_servers.osnova]` table and its `[mcp_servers.osnova.*]` tables, with the blank line setup put before them.
+function removeToml(existing: string): Merge {
+  const header = /^[ \t]*\[mcp_servers\.osnova\][ \t]*\r?$/m.exec(existing);
+  if (header === null) return { state: "unchanged", merged: existing };
+  const bodyStart = header.index + header[0].length;
+  const next = /^[ \t]*\[(?!mcp_servers\.osnova[.\]])/m.exec(existing.slice(bodyStart));
+  const end = next === null ? existing.length : bodyStart + next.index;
+  const body = existing.slice(bodyStart, end).split(/^[ \t]*\[/m)[0]!;
+  const commandLine = /^[ \t]*command[ \t]*=[ \t]*(".*")[ \t]*\r?$/m.exec(body), argsLine = /^[ \t]*args[ \t]*=[ \t]*(\[.*\])[ \t]*\r?$/m.exec(body);
+  if (commandLine === null || argsLine === null) return { state: "conflict", merged: existing };
+  let launch: unknown[];
+  try { launch = [JSON.parse(commandLine[1]!), ...(JSON.parse(argsLine[1]!) as unknown[])]; } catch { return { state: "conflict", merged: existing }; }
+  if (osnovaLaunchTail(launch) === undefined) return { state: "conflict", merged: existing };
+  // Mid-file, the tables' own trailing blank line goes with them; at the end, the blank line setup put before them does.
+  let start = header.index;
+  const blank = next === null ? /(\r?\n)\r?\n$/.exec(existing.slice(0, start)) : null;
+  if (blank !== null) start -= blank[1]!.length;
+  return { state: "update", merged: `${existing.slice(0, start)}${existing.slice(end)}` };
+}
+
 async function exists(file: string): Promise<boolean> {
   try { await fs.access(file); return true; } catch { return false; }
 }

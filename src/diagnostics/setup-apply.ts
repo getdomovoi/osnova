@@ -2,7 +2,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isOsnovaLauncher, previewSetup, unifiedDiff } from "./setup-preview.js";
+import { isOsnovaLauncher, previewRemoval, previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
 import { hookSettingsObject, isHookEvent } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
@@ -14,7 +14,8 @@ export interface PlannedChange {
   /** A skill or plugin whose file or folder is a link; setup never writes through it. */
   readonly linked?: boolean | undefined;
   readonly path: string;
-  readonly action: "create" | "append" | "update" | "unchanged" | "conflict";
+  /** remove edits osnova's part out of a file; delete removes a file osnova installed (and its folder once empty). */
+  readonly action: "create" | "append" | "update" | "remove" | "delete" | "unchanged" | "conflict";
   readonly diff: string;
   readonly merged: string;
   readonly notice: string;
@@ -261,7 +262,14 @@ export async function applyChanges(changes: readonly PlannedChange[]): Promise<A
   for (const change of changes) {
     if (change.action === "unchanged") { applied.push({ ...change, written: false }); continue; }
     let backup: string | undefined;
-    if (change.action === "append" || change.action === "update") { backup = `${change.path}.bak-osnova-${stamp}`; await fs.copyFile(change.path, backup); }
+    if (change.action === "append" || change.action === "update" || change.action === "remove" || change.action === "delete") { backup = `${change.path}.bak-osnova-${stamp}`; await fs.copyFile(change.path, backup); }
+    if (change.action === "delete") {
+      await fs.rm(change.path);
+      // A skill folder osnova created holds only SKILL.md; with it gone (and its backup beside it moved out), drop the folder.
+      if (change.kind === "skill") backup = await removeEmptySkillFolder(change.path, backup);
+      applied.push({ ...change, written: true, backup });
+      continue;
+    }
     await fs.mkdir(path.dirname(change.path), { recursive: true });
     await fs.writeFile(change.path, change.merged);
     applied.push({ ...change, written: true, backup });
@@ -291,4 +299,127 @@ async function readLinked(file: string): Promise<string | null> {
 
 async function readOptional(file: string): Promise<string | null> {
   try { return await fs.readFile(file, "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+
+// The skill backup would keep the folder alive, so it moves next to the folder, as osnova-SKILL.md.bak-osnova-<stamp>.
+async function removeEmptySkillFolder(file: string, backup: string | undefined): Promise<string | undefined> {
+  const folder = path.dirname(file);
+  const moved = backup === undefined ? undefined : path.join(path.dirname(folder), `osnova-${path.basename(backup)}`);
+  if (backup !== undefined && moved !== undefined) await fs.rename(backup, moved);
+  await fs.rmdir(folder).catch(() => undefined);
+  return moved;
+}
+
+// Uninstall: the reverse of each planner above. Only osnova's own parts go; anything else, or anything changed since
+// it was installed, is kept and reported. Every edited or deleted file is backed up first.
+export async function planMcpRemoval(client: SetupClientId, options: { home?: string | undefined }): Promise<PlannedChange> {
+  const removal = await previewRemoval(client, options);
+  return { kind: "mcp", path: removal.path, action: removal.action, diff: removal.diff, merged: removal.merged, notice: removal.notice };
+}
+
+export async function planHookRemoval(options: { home?: string | undefined; client?: HookClient | undefined }): Promise<PlannedChange[]> {
+  const client = options.client ?? "claude-code";
+  const home = path.resolve(options.home ?? os.homedir());
+  const target = client === "codex" ? path.join(home, ".codex", "hooks.json") : client === "cursor" ? path.join(home, ".cursor", "hooks.json") : path.join(home, ".claude", "settings.json");
+  const existing = await readOptional(target);
+  if (existing === null || existing.trim().length === 0) return [{ kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} has no hooks.` }];
+  let parsed: unknown;
+  try { parsed = JSON.parse(existing); } catch (error) { throw new Error(`osnova setup: cannot parse ${target} as JSON: ${error instanceof Error ? error.message : String(error)}`); }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`osnova setup: ${target} is not a JSON object`);
+  const root = parsed as Record<string, unknown>;
+  if (root.hooks === null || typeof root.hooks !== "object" || Array.isArray(root.hooks)) return [{ kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} has no hooks.` }];
+  const hooks = { ...(root.hooks as Record<string, unknown>) };
+  let removed = 0;
+  const wrapped = new Set<string>();
+  // Returns false to drop an osnova hook; a shell-wrapped one cannot be told apart safely and stays.
+  const keep = (item: unknown): boolean => {
+    const command = item !== null && typeof item === "object" ? (item as { command?: unknown }).command : undefined;
+    const hook = typeof command === "string" ? splitHook(command) : undefined;
+    if (hook === undefined || !isOsnovaLauncher(hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? []) || !plainCommand(hook)) {
+      // Reported only: osnova run inside a shell command cannot be removed safely, so it stays.
+      if (typeof command === "string" && /(?:^|[\s/'"])(?:osnova(?:\.(?:cmd|exe|js|mjs))?|@getdomovoi\/osnova\S*|bin\.js)['"]?\s+hook\s+[\w-]/.test(command)) wrapped.add(command);
+      return true;
+    }
+    removed += 1;
+    return false;
+  };
+  for (const [event, value] of Object.entries(hooks)) {
+    if (!Array.isArray(value)) continue;
+    const groups: unknown[] = [];
+    for (const group of value) {
+      const inner = group !== null && typeof group === "object" ? (group as { hooks?: unknown }).hooks : undefined;
+      if (!Array.isArray(inner)) { if (keep(group)) groups.push(group); continue; }
+      const items = inner.filter(keep);
+      if (items.length === 0 && inner.length > 0) continue;
+      groups.push(items.length === inner.length ? group : { ...(group as Record<string, unknown>), hooks: items });
+    }
+    if (groups.length === 0 && value.length > 0) delete hooks[event];
+    else hooks[event] = groups;
+  }
+  const changes: PlannedChange[] = [];
+  if (removed === 0) changes.push({ kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} has no osnova hooks to remove.` });
+  else {
+    const indent = /^( +|\t+)"/m.exec(existing)?.[1] ?? "  ";
+    const merged = `${JSON.stringify({ ...root, hooks }, null, indent)}\n`;
+    changes.push({ kind: "hooks", path: target, action: "remove", diff: unifiedDiff(target, existing, merged), merged, notice: `${removed} osnova hook entr${removed === 1 ? "y" : "ies"} removed for ${client} from ${target}; hooks that are not osnova's are kept, the file is re-serialized with its indent.` });
+  }
+  if (wrapped.size > 0) changes.push({ kind: "hooks", path: target, action: "conflict", diff: "", merged: existing, notice: `${target} runs osnova inside a shell command (${[...wrapped].sort().join("; ")}); osnova never rewrites it. Remove it by hand.` });
+  return changes;
+}
+
+// A plugin, extension or skill file is deleted only while it is byte-identical to the shipped one and no link leads to it.
+async function planInstalledFile(kind: "plugin" | "skill", target: string, source: string, home: string, label: string): Promise<PlannedChange> {
+  const link = await linkedPart(target, home);
+  if (link !== undefined) return { kind, path: target, action: "conflict", linked: true, diff: "", merged: "", notice: `${link} is a link; osnova never removes through a link. Remove it by hand if you no longer want it.` };
+  const existing = await readOptional(target);
+  if (existing === null) return { kind, path: target, action: "unchanged", diff: "", merged: "", notice: `${target} is not installed.` };
+  if (existing !== source) return { kind, path: target, action: "conflict", diff: "", merged: existing, notice: `${target} differs from the shipped ${label}; left in place. Remove it by hand if you no longer want it.` };
+  return { kind, path: target, action: "delete", diff: unifiedDiff(target, existing, ""), merged: "", notice: `The shipped ${label} is removed.` };
+}
+
+export async function planPluginRemoval(client: PluginClient, options: { home?: string | undefined; source?: string | undefined }): Promise<PlannedChange> {
+  const home = path.resolve(options.home ?? os.homedir());
+  return planInstalledFile("plugin", pluginTarget(client, home), await fs.readFile(options.source ?? pluginSource(client), "utf8"), home, client === "pi" ? "Pi extension" : `${client} plugin`);
+}
+
+export async function planSkillRemoval(options: { home?: string | undefined; source?: string | undefined; shared?: boolean | undefined }): Promise<PlannedChange> {
+  const home = path.resolve(options.home ?? os.homedir());
+  return planInstalledFile("skill", options.shared === true ? agentsSkillTarget(home) : skillTarget(home), await fs.readFile(options.source ?? skillSource(), "utf8"), home, "osnova skill");
+}
+
+// The block between the markers goes, with the blank line setup put before it; a file left empty is deleted.
+export async function planInstructionsRemoval(file: string): Promise<PlannedChange> {
+  const target = path.resolve(file);
+  const existing = await readOptional(target);
+  const start = existing?.indexOf(instructionsStart) ?? -1;
+  const end = existing === null || start < 0 ? -1 : existing.indexOf(instructionsEnd, start);
+  if (existing === null || start < 0 || end < 0) return { kind: "instructions", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} has no osnova block.` };
+  const head = existing.slice(0, start).replace(/\s*$/, "");
+  const tail = existing.slice(end + instructionsEnd.length).replace(/^\r?\n/, "");
+  const merged = head.length === 0 ? tail : `${head}\n${tail.length > 0 ? `\n${tail}` : ""}`;
+  if (merged.trim().length === 0) return { kind: "instructions", path: target, action: "delete", diff: unifiedDiff(target, existing, ""), merged: "", notice: `${target} held only the osnova block and is removed.` };
+  return { kind: "instructions", path: target, action: "remove", diff: unifiedDiff(target, existing, merged), merged, notice: `The osnova block is removed from ${target}.` };
+}
+
+export async function planUninstall(family: SetupFamily, options: { home?: string | undefined; only?: readonly AgentHarness[] | undefined; instructions?: string | undefined }): Promise<FamilyPlan> {
+  const home = path.resolve(options.home ?? os.homedir());
+  const changes: (PlannedChange & { readonly client?: SetupClientId | undefined })[] = [];
+  const skipped: { harness: AgentHarness; reason: string }[] = [];
+  if (family === "claude") {
+    changes.push({ ...(await planMcpRemoval("claude-code", { home })), client: "claude-code" });
+    changes.push(...await planHookRemoval({ home, client: "claude-code" }));
+    changes.push(await planSkillRemoval({ home }));
+  } else {
+    for (const harness of agentHarnesses) {
+      if (options.only !== undefined && !options.only.includes(harness)) continue;
+      const folder = harnessFolder(harness, home);
+      if (!existsSync(folder)) { skipped.push({ harness, reason: `not installed (${folder} not found)` }); continue; }
+      changes.push({ ...(await planMcpRemoval(harness, { home })), client: harness });
+      if (harness === "codex" || harness === "cursor") changes.push(...await planHookRemoval({ home, client: harness }));
+      else changes.push(await planPluginRemoval(harness, { home }));
+    }
+    changes.push(await planSkillRemoval({ home, shared: true }));
+  }
+  if (options.instructions !== undefined) changes.push(await planInstructionsRemoval(options.instructions));
+  return { changes: changes.filter((change) => change.action !== "conflict"), kept: changes.filter((change) => change.action === "conflict"), skipped };
 }

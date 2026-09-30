@@ -125,7 +125,7 @@ Every MCP response opens with its index generation, says when the index is parti
 
 ## Hooks and clients
 
-One global install serves every repository and every client: one entry in each client's global config, nothing per project, nothing written inside your repository. `osnova setup claude` and `osnova setup agents` show the diff and write nothing until `--apply`; `agents` skips a harness whose config folder is missing, `--only codex,pi` narrows it, and a skill or plugin file you edited is kept and reported. The table lists the per-client form, for one piece at a time. What each hook prints, when it stays quiet, and what the trials measured are in the [reference](docs/reference.md#hooks-and-setup-in-full).
+One global install serves every repository and every client: one entry in each client's global config, nothing per project, nothing written inside your repository. `osnova setup claude` and `osnova setup agents` show the diff and write nothing until `--apply`; `agents` skips a harness whose config folder is missing, `--only codex,pi` narrows it, and a skill or plugin file you edited is kept and reported. `--uninstall` reverses either family the same way, previewing first. The table lists the per-client form, for one piece at a time. What each hook prints, when it stays quiet, and what the trials measured are in the [reference](docs/reference.md#hooks-and-setup-in-full).
 
 | Client | How to wire | What it adds |
 | --- | --- | --- |
