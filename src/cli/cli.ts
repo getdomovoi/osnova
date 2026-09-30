@@ -131,7 +131,7 @@ function numericOption(value: string | undefined, name: string, minimum = 0): nu
 
 // `osnova setup claude|agents`: plan a whole harness family, print it, and write it only with --apply.
 async function setupFamily(positionals: readonly string[], values: { uninstall?: boolean | undefined; apply?: boolean | undefined; preview?: boolean | undefined; home?: string | undefined; command?: string[] | undefined; nudge?: boolean | undefined; only?: string | undefined; client?: string | undefined; hooks?: boolean | undefined; plugin?: boolean | undefined; skill?: boolean | undefined; instructions?: string | undefined; config?: string | undefined }, io: CliIo): Promise<number> {
-  const { setupFamilies, agentHarnesses, planFamily, planUninstall, applyChanges } = await import("../diagnostics/setup-apply.js");
+  const { setupFamilies, agentHarnesses, planFamily, planUninstall, applyChanges, SetupApplyError } = await import("../diagnostics/setup-apply.js");
   const family = positionals[0];
   if (positionals.length !== 1 || !(setupFamilies as readonly string[]).includes(family ?? "")) throw new Error(`osnova setup takes ${setupFamilies.join(" or ")} (or the --client form); got ${positionals.join(" ")}`);
   const uninstall = values.uninstall === true;
@@ -156,8 +156,16 @@ async function setupFamily(positionals: readonly string[], values: { uninstall?:
     io.stdout([...plan.changes.map((change) => [`osnova setup preview: ${label(change)}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")), ...lines, "Repeat this command with --apply to write these changes."].join("\n\n"));
     return EXIT_OK;
   }
-  const applied = await applyChanges(plan.changes);
-  io.stdout([...applied.map((change) => `osnova setup applied: ${label(change)}, ${change.written ? change.action : "unchanged"}, ${change.path}${change.backup === undefined ? "" : ` (backup ${change.backup})`}${change.written && change.notice.length > 0 ? `\n  ${change.notice}` : ""}`), ...lines].join("\n"));
+  const report = (applied: readonly { kind: string; client?: string | undefined; written: boolean; action: string; path: string; backup?: string | undefined; notice: string }[]): string[] =>
+    applied.map((change) => `osnova setup applied: ${label(change)}, ${change.written ? change.action : "unchanged"}, ${change.path}${change.backup === undefined ? "" : ` (backup ${change.backup})`}${change.written && change.notice.length > 0 ? `\n  ${change.notice}` : ""}`);
+  let applied;
+  try { applied = await applyChanges(plan.changes); }
+  catch (error) {
+    // What was already written, with its backups, is reported before the failure.
+    if (error instanceof SetupApplyError) io.stdout([...report(error.applied), ...lines].join("\n"));
+    throw error;
+  }
+  io.stdout([...report(applied), ...lines].join("\n"));
   return EXIT_OK;
 }
 

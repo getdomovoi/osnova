@@ -132,3 +132,96 @@ describe("removing the MCP entry from text", () => {
     expect((await previewRemoval("codex", { home })).merged).toBe(`${before}${after}`);
   });
 });
+
+describe("review round one", () => {
+  it("never treats a command that only mentions osnova as osnova's", async () => {
+    const { isOsnovaLauncher } = await import("../src/diagnostics/setup-preview.js");
+    expect(isOsnovaLauncher(["echo", "osnova"])).toBe(false);
+    expect(isOsnovaLauncher(["osnova"])).toBe(true);
+    expect(isOsnovaLauncher(["npx", "-y", "@getdomovoi/osnova"])).toBe(true);
+    expect(isOsnovaLauncher(["/opt/homebrew/bin/node", "/opt/homebrew/lib/node_modules/@getdomovoi/osnova/dist/bin.js"])).toBe(true);
+    await write(at(".claude.json"), `${JSON.stringify({ mcpServers: { osnova: { command: "echo", args: ["osnova", "mcp"] } } }, null, 2)}\n`);
+    await write(at(".claude", "settings.json"), `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo osnova hook stop" }] }] } }, null, 2)}\n`);
+    const before = await snapshot([at(".claude.json"), at(".claude", "settings.json")]);
+    expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--home", home], capture().io)).toBe(0);
+    for (const [file, text] of before) expect(await fs.readFile(file, "utf8")).toBe(text);
+  });
+
+  it("does not edit a config reached through a link", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-uninstall-dots-"));
+    try {
+      await write(path.join(outside, "claude", "settings.json"), `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "osnova hook stop" }] }] } }, null, 2)}\n`);
+      await fs.symlink(path.join(outside, "claude"), at(".claude"));
+      const before = await fs.readFile(path.join(outside, "claude", "settings.json"), "utf8");
+      const c = capture();
+      expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--home", home], c.io)).toBe(0);
+      expect(await fs.readFile(path.join(outside, "claude", "settings.json"), "utf8")).toBe(before);
+      expect(c.out.join("\n")).toMatch(/osnova setup kept: hooks, .*link/);
+    } finally { await fs.rm(outside, { recursive: true, force: true }); }
+  });
+
+  it("keeps the comment above the next entry or table", async () => {
+    const { previewRemoval } = await import("../src/diagnostics/setup-preview.js");
+    await write(at(".config", "kilo", "kilo.jsonc"), "{\n  \"mcp\": {\n    \"osnova\": { \"type\": \"local\", \"command\": [\"osnova\", \"mcp\"] },\n    // about other\n    \"other\": { \"type\": \"local\" }\n  }\n}\n");
+    expect((await previewRemoval("kilo", { home })).merged).toBe("{\n  \"mcp\": {\n    // about other\n    \"other\": { \"type\": \"local\" }\n  }\n}\n");
+    await write(at(".codex", "config.toml"), "[mcp_servers.osnova]\ncommand = \"osnova\"\nargs = [\"mcp\"]\n\n# about b\n[mcp_servers.b]\ncommand = \"b\"\n");
+    expect((await previewRemoval("codex", { home })).merged).toBe("# about b\n[mcp_servers.b]\ncommand = \"b\"\n");
+  });
+
+  it("keeps the shared skill while an installed harness outside --only still reads it", async () => {
+    for (const dir of [[".codex"], [".cursor"]]) await fs.mkdir(at(...dir), { recursive: true });
+    expect(await runCli(["setup", "agents", "--apply", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const c = capture();
+    expect(await runCli(["setup", "agents", "--uninstall", "--apply", "--only", "cursor", "--home", home], c.io)).toBe(0);
+    expect(existsSync(at(".agents", "skills", "osnova", "SKILL.md"))).toBe(true);
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: skill, .*codex/);
+    expect(await runCli(["setup", "agents", "--uninstall", "--apply", "--home", home], capture().io)).toBe(0);
+    expect(existsSync(at(".agents", "skills", "osnova"))).toBe(false);
+  });
+
+  it("keeps CRLF line endings through setup and uninstall", async () => {
+    const crlf = claudeSettings.replace(/\n/g, "\r\n");
+    await write(at(".claude", "settings.json"), crlf);
+    await write(at(".claude.json"), claudeJson.replace(/\n/g, "\r\n"));
+    expect(await runCli(["setup", "claude", "--apply", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    expect(await fs.readFile(at(".claude", "settings.json"), "utf8")).not.toMatch(/[^\r]\n/);
+    expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--home", home], capture().io)).toBe(0);
+    expect(await fs.readFile(at(".claude", "settings.json"), "utf8")).toBe(crlf);
+    expect(await fs.readFile(at(".claude.json"), "utf8")).toBe(claudeJson.replace(/\n/g, "\r\n"));
+  });
+
+  it("stops on duplicate osnova keys instead of guessing which to cut", async () => {
+    const text = "{\n  \"mcpServers\": {\n    \"osnova\": { \"command\": \"mine\", \"args\": [] },\n    \"osnova\": { \"command\": \"osnova\", \"args\": [\"mcp\"] }\n  }\n}\n";
+    await write(at(".claude.json"), text);
+    const c = capture();
+    expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(at(".claude.json"), "utf8")).toBe(text);
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: mcp, .*more than one osnova/);
+  });
+
+  it("keeps an instructions block that was edited, and cuts an unedited one exactly", async () => {
+    const edited = at("repo", "EDITED.md");
+    await write(edited, "# Rules\n\n<!-- osnova:start -->\n## Osnova\nmy own notes\n<!-- osnova:end -->\n");
+    const exact = at("repo", "AGENTS.md");
+    await write(exact, "# Rules\n\n\n");
+    expect(await runCli(["setup", "--apply", "--client", "claude-code", "--instructions", exact, "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const installed = await fs.readFile(exact, "utf8");
+    const c = capture();
+    expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--instructions", edited, "--home", home], c.io)).toBe(0);
+    expect(await fs.readFile(edited, "utf8")).toContain("my own notes");
+    expect(c.out.join("\n")).toMatch(/osnova setup kept: instructions, .*edited/);
+    expect(await runCli(["setup", "claude", "--uninstall", "--apply", "--instructions", exact, "--home", home], capture().io)).toBe(0);
+    expect(await fs.readFile(exact, "utf8")).toBe(installed.slice(0, installed.indexOf("\n\n<!-- osnova:start -->")) + "\n");
+  });
+
+  it.skipIf(process.platform === "win32")("reports what it already changed when a later step fails", async () => {
+    await write(at(".claude.json"), claudeJson);
+    expect(await runCli(["setup", "claude", "--apply", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    await fs.chmod(at(".claude", "skills", "osnova"), 0o555);
+    const c = capture();
+    try {
+      await expect(runCli(["setup", "claude", "--uninstall", "--apply", "--home", home], c.io)).rejects.toThrow();
+      expect(c.out.join("\n")).toMatch(/osnova setup applied: claude-code, remove, .*\(backup /);
+    } finally { await fs.chmod(at(".claude", "skills", "osnova"), 0o755); }
+  });
+});

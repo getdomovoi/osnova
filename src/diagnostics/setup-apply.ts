@@ -2,7 +2,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isOsnovaLauncher, previewRemoval, previewSetup, unifiedDiff } from "./setup-preview.js";
+import { isOsnovaLauncher, isOsnovaProgram, previewRemoval, previewSetup, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
 import { hookSettingsObject, isHookEvent } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
@@ -76,9 +76,11 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
   const reconcile = (event: string, item: unknown): unknown => {
     const command = item !== null && typeof item === "object" ? (item as { command?: unknown }).command : undefined;
     const hook = typeof command === "string" ? splitHook(command) : undefined;
-    if (hook === undefined || !isOsnovaLauncher(hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [])) return item;
+    const parts = hook === undefined ? [] : hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    if (hook === undefined) return item;
     // A shell-wrapped command cannot be rewritten safely: it still counts as present, but is never changed.
-    if (!plainCommand(hook)) { if (isHookEvent(hook.name)) kept.add(hook.name); return item; }
+    if (!plainCommand(hook)) { if (isOsnovaProgram(parts.at(-1) ?? "") && isHookEvent(hook.name)) kept.add(hook.name); return item; }
+    if (!isOsnovaLauncher(parts)) return item;
     if (!isHookEvent(hook.name)) { unknown.add(hook.name); return undefined; }
     const proposed = wantedEvent.get(hook.name);
     if (proposed !== undefined && proposed !== event) { moved.add(hook.name); return undefined; }
@@ -112,7 +114,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
   const removed = unknown.size + duplicates.size + moved.size;
   if (added === 0 && repointed === 0 && removed === 0) return { kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} already runs every osnova hook for ${client} from ${prefix}.` };
   const indent = existing === null ? "  " : (/^( +|\t+)"/m.exec(existing)?.[1] ?? "  ");
-  const merged = `${JSON.stringify({ ...(client === "cursor" && root.version === undefined ? { version: 1 } : {}), ...root, hooks }, null, indent)}\n`;
+  const merged = withEol(`${JSON.stringify({ ...(client === "cursor" && root.version === undefined ? { version: 1 } : {}), ...root, hooks }, null, indent)}\n`, existing);
   const action = existing === null ? "create" : repointed === 0 && removed === 0 ? "append" : "update";
   const names = (set: ReadonlySet<string>): string => [...set].sort().join(", ");
   const parts = [
@@ -254,10 +256,21 @@ export async function planFamily(family: SetupFamily, options: { home?: string |
   };
 }
 
+/** A write that failed part way: `applied` lists the changes already made, with their backups. */
+export class SetupApplyError extends Error {
+  constructor(message: string, readonly applied: readonly AppliedChange[]) { super(message); }
+}
+
 export async function applyChanges(changes: readonly PlannedChange[]): Promise<AppliedChange[]> {
   const conflict = changes.find((change) => change.action === "conflict");
   if (conflict !== undefined) throw new Error(`osnova setup: ${conflict.path} conflicts with the proposal; nothing was written. ${conflict.notice}`);
   const applied: AppliedChange[] = [];
+  try { await applyEach(changes, applied); }
+  catch (error) { throw new SetupApplyError(`osnova setup: stopped after ${applied.filter((change) => change.written).length} change(s): ${error instanceof Error ? error.message : String(error)}`, applied); }
+  return applied;
+}
+
+async function applyEach(changes: readonly PlannedChange[], applied: AppliedChange[]): Promise<void> {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   for (const change of changes) {
     if (change.action === "unchanged") { applied.push({ ...change, written: false }); continue; }
@@ -274,7 +287,11 @@ export async function applyChanges(changes: readonly PlannedChange[]): Promise<A
     await fs.writeFile(change.path, change.merged);
     applied.push({ ...change, written: true, backup });
   }
-  return applied;
+}
+
+// A re-serialized file keeps the line endings it had.
+function withEol(text: string, existing: string | null): string {
+  return existing !== null && existing.includes("\r\n") ? text.replace(/\r?\n/g, "\r\n") : text;
 }
 
 // The first symbolic link, dangling or not, among the file and every folder between it and home: writing there
@@ -321,6 +338,8 @@ export async function planHookRemoval(options: { home?: string | undefined; clie
   const client = options.client ?? "claude-code";
   const home = path.resolve(options.home ?? os.homedir());
   const target = client === "codex" ? path.join(home, ".codex", "hooks.json") : client === "cursor" ? path.join(home, ".cursor", "hooks.json") : path.join(home, ".claude", "settings.json");
+  const link = await linkedPart(target, home);
+  if (link !== undefined) return [{ kind: "hooks", path: target, action: "conflict", linked: true, diff: "", merged: "", notice: `${link} is a link; osnova never edits a config through a link. Remove the osnova hooks by hand.` }];
   const existing = await readOptional(target);
   if (existing === null || existing.trim().length === 0) return [{ kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} has no hooks.` }];
   let parsed: unknown;
@@ -335,11 +354,11 @@ export async function planHookRemoval(options: { home?: string | undefined; clie
   const keep = (item: unknown): boolean => {
     const command = item !== null && typeof item === "object" ? (item as { command?: unknown }).command : undefined;
     const hook = typeof command === "string" ? splitHook(command) : undefined;
-    if (hook === undefined || !isOsnovaLauncher(hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? []) || !plainCommand(hook)) {
-      // Reported only: osnova run inside a shell command cannot be removed safely, so it stays.
-      if (typeof command === "string" && /(?:^|[\s/'"])(?:osnova(?:\.(?:cmd|exe|js|mjs))?|@getdomovoi\/osnova\S*|bin\.js)['"]?\s+hook\s+[\w-]/.test(command)) wrapped.add(command);
-      return true;
-    }
+    const parts = hook === undefined ? [] : hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    if (hook === undefined) return true;
+    // Reported only: osnova run inside a shell command cannot be removed safely, so it stays.
+    if (!plainCommand(hook)) { if (isOsnovaProgram(parts.at(-1) ?? "")) wrapped.add(command as string); return true; }
+    if (!isOsnovaLauncher(parts)) return true;
     removed += 1;
     return false;
   };
@@ -360,7 +379,7 @@ export async function planHookRemoval(options: { home?: string | undefined; clie
   if (removed === 0) changes.push({ kind: "hooks", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} has no osnova hooks to remove.` });
   else {
     const indent = /^( +|\t+)"/m.exec(existing)?.[1] ?? "  ";
-    const merged = `${JSON.stringify({ ...root, hooks }, null, indent)}\n`;
+    const merged = withEol(`${JSON.stringify({ ...root, hooks }, null, indent)}\n`, existing);
     changes.push({ kind: "hooks", path: target, action: "remove", diff: unifiedDiff(target, existing, merged), merged, notice: `${removed} osnova hook entr${removed === 1 ? "y" : "ies"} removed for ${client} from ${target}; hooks that are not osnova's are kept, the file is re-serialized with its indent.` });
   }
   if (wrapped.size > 0) changes.push({ kind: "hooks", path: target, action: "conflict", diff: "", merged: existing, notice: `${target} runs osnova inside a shell command (${[...wrapped].sort().join("; ")}); osnova never rewrites it. Remove it by hand.` });
@@ -387,17 +406,18 @@ export async function planSkillRemoval(options: { home?: string | undefined; sou
   return planInstalledFile("skill", options.shared === true ? agentsSkillTarget(home) : skillTarget(home), await fs.readFile(options.source ?? skillSource(), "utf8"), home, "osnova skill");
 }
 
-// The block between the markers goes, with the blank line setup put before it; a file left empty is deleted.
+// Only the block exactly as this osnova writes it goes, with the blank line setup put before it; nothing else in the
+// file changes. A file that held only the block is deleted; an edited block is kept and reported.
 export async function planInstructionsRemoval(file: string): Promise<PlannedChange> {
   const target = path.resolve(file);
   const existing = await readOptional(target);
-  const start = existing?.indexOf(instructionsStart) ?? -1;
-  const end = existing === null || start < 0 ? -1 : existing.indexOf(instructionsEnd, start);
-  if (existing === null || start < 0 || end < 0) return { kind: "instructions", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} has no osnova block.` };
-  const head = existing.slice(0, start).replace(/\s*$/, "");
-  const tail = existing.slice(end + instructionsEnd.length).replace(/^\r?\n/, "");
-  const merged = head.length === 0 ? tail : `${head}\n${tail.length > 0 ? `\n${tail}` : ""}`;
-  if (merged.trim().length === 0) return { kind: "instructions", path: target, action: "delete", diff: unifiedDiff(target, existing, ""), merged: "", notice: `${target} held only the osnova block and is removed.` };
+  if (existing === null || !existing.includes(instructionsStart)) return { kind: "instructions", path: target, action: "unchanged", diff: "", merged: existing ?? "", notice: `${target} has no osnova block.` };
+  const eol = existing.includes("\r\n") ? "\r\n" : "\n";
+  const block = instructionsBlock().replace(/\n/g, eol);
+  if (existing === `${block}${eol}`) return { kind: "instructions", path: target, action: "delete", diff: unifiedDiff(target, existing, ""), merged: "", notice: `${target} held only the osnova block and is removed.` };
+  const cut = existing.includes(`${eol}${eol}${block}`) ? `${eol}${eol}${block}` : existing.includes(`${block}${eol}`) ? `${block}${eol}` : existing.includes(block) ? block : undefined;
+  if (cut === undefined) return { kind: "instructions", path: target, action: "conflict", diff: "", merged: existing, notice: `The osnova block in ${target} was edited since setup; left in place. Remove it by hand.` };
+  const merged = existing.replace(cut, "");
   return { kind: "instructions", path: target, action: "remove", diff: unifiedDiff(target, existing, merged), merged, notice: `The osnova block is removed from ${target}.` };
 }
 
@@ -418,7 +438,11 @@ export async function planUninstall(family: SetupFamily, options: { home?: strin
       if (harness === "codex" || harness === "cursor") changes.push(...await planHookRemoval({ home, client: harness }));
       else changes.push(await planPluginRemoval(harness, { home }));
     }
-    changes.push(await planSkillRemoval({ home, shared: true }));
+    // The shared skill is read by Codex, OpenCode, Kilo and Pi; it goes only when none of those that are installed stays.
+    const readers = (["codex", "opencode", "kilo", "pi"] as const).filter((harness) => existsSync(harnessFolder(harness, home)) && options.only !== undefined && !options.only.includes(harness));
+    const shared = agentsSkillTarget(home);
+    if (readers.length > 0 && existsSync(shared)) changes.push({ kind: "skill", path: shared, action: "conflict", diff: "", merged: "", notice: `${shared} is still read by ${readers.join(", ")}, which --only leaves installed; left in place.` });
+    else changes.push(await planSkillRemoval({ home, shared: true }));
   }
   if (options.instructions !== undefined) changes.push(await planInstructionsRemoval(options.instructions));
   return { changes: changes.filter((change) => change.action !== "conflict"), kept: changes.filter((change) => change.action === "conflict"), skipped };

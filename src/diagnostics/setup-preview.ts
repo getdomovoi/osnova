@@ -94,10 +94,14 @@ export async function previewRemoval(client: SetupClientId, options: { home?: st
   }
   const relative = path.relative(home, target);
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`osnova setup: config path must be inside the home directory ${home}`);
+  const link = await firstLink(target, home);
+  if (link !== undefined) return { client, path: target, action: "conflict", diff: "", merged: "", notice: `${link} is a link; osnova never edits a config through a link. Remove the osnova entry by hand.` };
   const existing = await readExisting(target);
   if (existing === null) return { client, path: target, action: "unchanged", diff: "", merged: "", notice: `${target} does not exist.` };
   const result = spec.shape === "codex-toml" ? removeToml(existing) : removeJson(existing, spec.shape);
-  const notice = result.state === "conflict"
+  const notice = result.reason === "duplicate"
+    ? `${target} has more than one osnova entry; osnova never guesses which to remove. Compare by hand.`
+    : result.state === "conflict"
     ? `${target} has an osnova entry that does not launch osnova; osnova never edits it. Compare by hand.`
     : result.state === "unchanged" ? `${target} has no osnova entry.` : `The osnova entry is removed from ${target}; every other key is kept.`;
   return { client, path: target, action: result.state === "append" || result.state === "update" ? "remove" : result.state, diff: result.state === "update" ? unifiedDiff(target, existing, result.merged) : "", merged: result.merged, notice };
@@ -119,6 +123,7 @@ function removeJson(existing: string, shape: Shape): Merge {
   if (!Array.isArray(launch) || osnovaLaunchTail(launch) === undefined) return { state: "conflict", merged: existing };
   const parent = locateObject(existing, [rootKey]);
   const plain = stripJsoncKeepingOffsets(existing);
+  if (parent !== null && memberSpans(plain, parent.open, parent.close, "osnova").length > 1) return { state: "conflict", merged: existing, reason: "duplicate" };
   const member = parent === null ? null : memberSpan(plain, parent.open, parent.close, "osnova");
   if (parent === null || member === null) throw new Error(`osnova setup: cannot locate the ${rootKey}.osnova entry in the existing config`);
   let start = member.start, end = member.end;
@@ -128,10 +133,34 @@ function removeJson(existing: string, shape: Shape): Merge {
   else {
     let after = end;
     while (after < parent.close && /\s/.test(plain[after]!)) after++;
-    if (plain[after] === ",") { after++; while (after < parent.close && /\s/.test(plain[after]!)) after++; end = after; }
+    // Past the comma only true whitespace goes; a comment there belongs to the next entry.
+    if (plain[after] === ",") { after++; while (after < parent.close && /\s/.test(existing[after]!)) after++; end = after; }
     else { start = parent.open + 1; end = parent.close; }
   }
   return { state: "update", merged: `${existing.slice(0, start)}${existing.slice(end)}` };
+}
+
+function memberSpans(text: string, open: number, close: number, key: string): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  let from = open;
+  for (;;) {
+    const span = memberSpan(text, from, close, key);
+    if (span === null) return spans;
+    spans.push(span);
+    from = span.end;
+    while (from < close && /\s/.test(text[from]!)) from++;
+    if (text[from] !== ",") return spans;
+  }
+}
+
+// The first symbolic link among the file and every folder between it and home.
+async function firstLink(target: string, home: string): Promise<string | undefined> {
+  for (let candidate = target; ; candidate = path.dirname(candidate)) {
+    const relative = path.relative(home, candidate);
+    if (relative.length === 0 || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
+    const stat = await fs.lstat(candidate).catch(() => undefined);
+    if (stat?.isSymbolicLink() === true) return candidate;
+  }
 }
 
 // The key's opening quote and the offset just past its value, for a member of the object between `open` and `close`.
@@ -165,11 +194,24 @@ function removeToml(existing: string): Merge {
   let launch: unknown[];
   try { launch = [JSON.parse(commandLine[1]!), ...(JSON.parse(argsLine[1]!) as unknown[])]; } catch { return { state: "conflict", merged: existing }; }
   if (osnovaLaunchTail(launch) === undefined) return { state: "conflict", merged: existing };
+  // Comment lines just before the next table describe that table and stay.
+  let cut = end;
+  if (next !== null) {
+    let offset = end;
+    const lines = existing.slice(bodyStart, end).split("\n");
+    lines.pop();
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]!;
+      offset -= line.length + 1;
+      if (line.trim().startsWith("#")) cut = offset;
+      else if (line.trim().length > 0) break;
+    }
+  }
   // Mid-file, the tables' own trailing blank line goes with them; at the end, the blank line setup put before them does.
   let start = header.index;
   const blank = next === null ? /(\r?\n)\r?\n$/.exec(existing.slice(0, start)) : null;
   if (blank !== null) start -= blank[1]!.length;
-  return { state: "update", merged: `${existing.slice(0, start)}${existing.slice(end)}` };
+  return { state: "update", merged: `${existing.slice(0, start)}${existing.slice(cut)}` };
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -188,18 +230,32 @@ async function readExisting(file: string): Promise<string | null> {
   return fs.readFile(file, "utf8");
 }
 
-interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"; readonly merged: string; }
+interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"; readonly merged: string; readonly reason?: "duplicate" | undefined; }
 
 // The program a launch runs is its last part before `mcp` or `hook`. It is osnova's own only when it is the
 // `osnova` executable, the `@getdomovoi/osnova` package, or a `dist/bin.js` inside a folder named for osnova; a
 // user's script that merely lives under such a folder is not.
-export function isOsnovaLauncher(parts: readonly string[]): boolean {
-  const program = (parts.at(-1) ?? "").replace(/^(["'])(.*)\1$/, "$2").replace(/\\/g, "/");
+// Whether one launch part names osnova's program: the `osnova` executable, the `@getdomovoi/osnova` package, or a
+// `dist/bin.js` inside a folder named for osnova. Alone it only recognises osnova inside a shell command, which is
+// left as written; ownership needs isOsnovaLauncher.
+export function isOsnovaProgram(part: string): boolean {
+  // Quotes at either end go, matched or not: inside `bash -c 'osnova hook x'` the word is `'osnova`.
+  const program = part.replace(/^["']+|["']+$/g, "").replace(/\\/g, "/");
   const segments = program.split("/");
   const base = segments.at(-1) ?? "";
-  if (/^osnova(?:\.(?:cmd|exe|js|mjs))?$/.test(base)) return true;
-  if (/^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program)) return true;
-  return base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment));
+  return /^osnova(?:\.(?:cmd|exe|js|mjs))?$/.test(base)
+    || /^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program)
+    || (base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment)));
+}
+
+// A launch is osnova's own only when it is that program alone, or a known runtime running it with only flags (and
+// `dlx`, `exec` or `x`) between them, so a command that merely mentions osnova, such as `echo osnova mcp`, is not.
+export function isOsnovaLauncher(parts: readonly string[]): boolean {
+  if (!isOsnovaProgram(parts.at(-1) ?? "")) return false;
+  if (parts.length === 1) return true;
+  const runner = parts[0]!.replace(/^(["'])(.*)\1$/, "$2").replace(/\\/g, "/").split("/").at(-1) ?? "";
+  return /^(?:node|nodejs|npx|pnpm|pnpx|bun|bunx|deno)(?:\.(?:exe|cmd))?$/.test(runner)
+    && parts.slice(1, -1).every((part) => part.startsWith("-") || part === "dlx" || part === "exec" || part === "x");
 }
 
 // An existing entry is osnova's own when its launch runs `mcp` through an osnova launcher. Only such an entry
