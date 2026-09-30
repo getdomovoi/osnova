@@ -318,11 +318,22 @@ describe("review round five", () => {
     await write(at("project", "osnova.js"), "console.log(1)\n");
     await write(at("osnova-notes", "dist", "bin.js"), "console.log(1)\n");
     await write(at("install", "node_modules", "@getdomovoi", "osnova", "dist", "bin.js"), "#!/usr/bin/env node\n");
-    await write(at("install", "node_modules", "@getdomovoi", "osnova", "package.json"), JSON.stringify({ name: "@getdomovoi/osnova" }));
+    await write(at("install", "node_modules", "@getdomovoi", "osnova", "package.json"), JSON.stringify({ name: "@getdomovoi/osnova", bin: { osnova: "dist/bin.js" } }));
     expect(isOsnovaLauncher(["node", at("project", "osnova.js")])).toBe(false);
     expect(isOsnovaLauncher(["node", at("osnova-notes", "dist", "bin.js")])).toBe(false);
     expect(isOsnovaLauncher(["node", at("missing", "osnova", "dist", "bin.js")])).toBe(false);
     expect(isOsnovaLauncher(["node", at("install", "node_modules", "@getdomovoi", "osnova", "dist", "bin.js")])).toBe(true);
     expect(isOsnovaLauncher([at("install", "node_modules", "@getdomovoi", "osnova", "dist", "bin.js")])).toBe(true);
+  });
+});
+
+describe("review round six", () => {
+  it("counts only the file the package declares as its osnova command", async () => {
+    const { isOsnovaLauncher } = await import("../src/diagnostics/setup-preview.js");
+    const { bin } = await fakeOsnovaInstall();
+    const other = path.join(path.dirname(bin), "index.js");
+    await fs.writeFile(other, "export {};\n");
+    expect(isOsnovaLauncher(["node", other])).toBe(false);
+    expect(isOsnovaLauncher(["node", bin])).toBe(true);
   });
 });

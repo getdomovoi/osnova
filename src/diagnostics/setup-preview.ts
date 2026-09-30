@@ -239,7 +239,7 @@ interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"
 // user's script that merely lives under such a folder is not.
 // Whether one launch part is osnova's program: the bare `osnova` command (resolved on PATH, as setup writes it), the
 // scoped `@getdomovoi/osnova` package, or a path to an existing file inside a package whose package.json names
-// `@getdomovoi/osnova`. A path is checked on disk, never by its name, so a user's own `osnova.js` or a script under a
+// `@getdomovoi/osnova` as the file that package declares for its `osnova` command. A path is checked on disk, never by its name, so a user's own `osnova.js` or a script under a
 // folder named osnova is not osnova's, and neither is a path that no longer exists.
 export function isOsnovaProgram(part: string): boolean {
   // Quotes at either end go, matched or not: inside `bash -c 'osnova hook x'` the word is `'osnova`.
@@ -249,9 +249,14 @@ export function isOsnovaProgram(part: string): boolean {
   if (!/[\\/]/.test(program)) return false;
   let file: string;
   try { file = realpathSync(program); } catch { return false; }
+  // The nearest package.json above the file must name @getdomovoi/osnova and declare this very file as its `osnova` command.
   for (let dir = path.dirname(file), level = 0; level < 4; dir = path.dirname(dir), level += 1) {
-    try { return (JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as { name?: unknown }).name === "@getdomovoi/osnova"; }
-    catch { if (path.dirname(dir) === dir) return false; }
+    let manifest: { name?: unknown; bin?: unknown };
+    try { manifest = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as { name?: unknown; bin?: unknown }; }
+    catch { if (path.dirname(dir) === dir) return false; continue; }
+    const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin !== null && typeof manifest.bin === "object" ? (manifest.bin as Record<string, unknown>).osnova : undefined;
+    if (manifest.name !== "@getdomovoi/osnova" || typeof bin !== "string") return false;
+    try { return realpathSync(path.join(dir, bin)) === file; } catch { return false; }
   }
   return false;
 }
