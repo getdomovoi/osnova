@@ -2,7 +2,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isOsnovaLauncher, isShellWrappedOsnova, previewRemoval, previewSetup, unifiedDiff } from "./setup-preview.js";
+import { isOsnovaLauncher, previewRemoval, previewSetup, shellWrappedOsnovaHook, unifiedDiff } from "./setup-preview.js";
 import type { SetupClientId } from "./setup-preview.js";
 import { hookSettingsObject, isHookEvent } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
@@ -79,7 +79,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     const parts = hook === undefined ? [] : hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     if (hook === undefined) return item;
     // A shell-wrapped command cannot be rewritten safely: it still counts as present, but is never changed.
-    if (!plainCommand(hook)) { if (isShellWrappedOsnova(parts) && isHookEvent(hook.name)) kept.add(hook.name); return item; }
+    if (!plainCommand(hook)) { const wrapped = shellWrappedOsnovaHook(command as string); if (wrapped !== undefined && isHookEvent(wrapped)) kept.add(wrapped); return item; }
     if (!isOsnovaLauncher(parts)) return item;
     if (!isHookEvent(hook.name)) { unknown.add(hook.name); return undefined; }
     const proposed = wantedEvent.get(hook.name);
@@ -358,7 +358,7 @@ export async function planHookRemoval(options: { home?: string | undefined; clie
     const parts = hook === undefined ? [] : hook.prefix.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     if (hook === undefined) return true;
     // Reported only: osnova run inside a shell command cannot be removed safely, so it stays.
-    if (!plainCommand(hook)) { if (isShellWrappedOsnova(parts)) wrapped.add(command as string); return true; }
+    if (!plainCommand(hook)) { if (shellWrappedOsnovaHook(command as string) !== undefined) wrapped.add(command as string); return true; }
     if (!isOsnovaLauncher(parts)) return true;
     removed += 1;
     return false;

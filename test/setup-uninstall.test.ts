@@ -272,3 +272,17 @@ describe("review round two", () => {
     } finally { await fs.chmod(at(".claude", "skills"), 0o755); }
   });
 });
+
+describe("review round three", () => {
+  it("does not count a shell that only prints an osnova hook, but still counts one that runs it", async () => {
+    await write(at(".claude", "settings.json"), `${JSON.stringify({ hooks: {
+      Stop: [{ hooks: [{ type: "command", command: "bash -c 'echo osnova hook stop'" }] }],
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: "bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"" }] }],
+    } }, null, 2)}\n`);
+    expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], capture().io)).toBe(0);
+    const hooks = JSON.parse(await fs.readFile(at(".claude", "settings.json"), "utf8")).hooks;
+    const commands = (event: string): string[] => hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((hook) => hook.command));
+    expect(commands("Stop")).toContain("osnova hook stop");
+    expect(commands("UserPromptSubmit")).not.toContain("osnova hook prompt");
+  });
+});

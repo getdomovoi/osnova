@@ -261,11 +261,22 @@ export function isOsnovaLauncher(parts: readonly string[]): boolean {
     && parts.slice(1, -1).every((part) => /^(?:-y|--yes|-q|--quiet|--silent|--no-install|--prefer-offline|--prefer-online|--enable-source-maps|--no-warnings|--no-deprecation|--max-old-space-size=\d+|--stack-size=\d+|dlx|exec|x)$/.test(part));
 }
 
-// A hook written as a shell command (`bash -c "... osnova hook x"`): recognised so setup counts it as present and
-// uninstall reports it, never rewritten or removed.
-export function isShellWrappedOsnova(parts: readonly string[]): boolean {
-  const shell = (parts[0] ?? "").replace(/^["']+|["']+$/g, "").replace(/\\/g, "/").split("/").at(-1) ?? "";
-  return /^(?:bash|sh|zsh|fish|dash|ksh|cmd|pwsh|powershell)(?:\.exe)?$/i.test(shell) && isOsnovaProgram(parts.at(-1) ?? "");
+// A hook written as a shell command (`bash -c "cd ~ && node .../dist/bin.js hook prompt"`): the shell's script is
+// split on `&&`, `||`, `;`, `|` and newlines, and a segment counts when its words, after `exec` and variable
+// assignments, are an osnova launch followed by `hook <name>`. Returns that name; `bash -c 'echo osnova hook x'` gets
+// none. Such a hook counts as present for setup and is reported by uninstall, but is never rewritten or removed.
+export function shellWrappedOsnovaHook(command: string): string | undefined {
+  const match = /^\s*["']?([^\s"']+)["']?\s+-\w*c\s+(["'])([\s\S]*)\2\s*$/.exec(command);
+  if (match === null) return undefined;
+  const shell = match[1]!.replace(/\\/g, "/").split("/").at(-1) ?? "";
+  if (!/^(?:bash|sh|zsh|fish|dash|ksh|pwsh|powershell)(?:\.exe)?$/i.test(shell)) return undefined;
+  for (const segment of match[3]!.split(/&&|\|\||;|\||\n/)) {
+    const words: string[] = [...(segment.trim().match(/"[^"]*"|'[^']*'|\S+/g) ?? [])];
+    while (words.length > 0 && (words[0] === "exec" || /^[A-Za-z_]\w*=/.test(words[0]!))) words.shift();
+    const at = words.indexOf("hook");
+    if (at > 0 && words[at + 1] !== undefined && isOsnovaLauncher(words.slice(0, at))) return words[at + 1];
+  }
+  return undefined;
 }
 
 // An existing entry is osnova's own when its launch runs `mcp` through an osnova launcher. Only such an entry
