@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { previewSetup, setupClients } from "../src/diagnostics/setup-preview.js";
 import { runCli } from "../src/cli/cli.js";
+import { fakeOsnovaInstall } from "./helpers/fake-osnova.js";
 
 let home: string;
 beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-setup-")); });
@@ -65,7 +66,7 @@ describe("setup preview", () => {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "osnova", args: ["mcp"] } } }, null, 2));
     expect((await previewSetup("pi", { home })).action).toBe("unchanged");
-    await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "/old/osnova", args: ["mcp", "--watch"], env: { A: "1" } } } }, null, 2));
+    await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: (await fakeOsnovaInstall()).shim, args: ["mcp", "--watch"], env: { A: "1" } } } }, null, 2));
     const update = await previewSetup("pi", { home });
     expect(update.action).toBe("update");
     expect(update.diff).toContain('+      "command": "osnova",');
@@ -78,7 +79,7 @@ describe("setup preview", () => {
     expect(conflict.notice).toContain("does not launch osnova");
     await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: "/Users/me/osnova-notes/run.sh", args: ["mcp"] } } }, null, 2));
     expect((await previewSetup("pi", { home })).action).toBe("conflict");
-    for (const launch of [["npx", "-y", "@getdomovoi/osnova@0.8.1"], ["node", "/opt/osnova-strict/dist/bin.js"], ["/usr/local/bin/osnova"]]) {
+    for (const launch of [["npx", "-y", "@getdomovoi/osnova@0.8.1"], ["node", (await fakeOsnovaInstall()).bin], [(await fakeOsnovaInstall()).shim]]) {
       await fs.writeFile(file, JSON.stringify({ mcpServers: { osnova: { command: launch[0], args: [...launch.slice(1), "mcp"] } } }, null, 2));
       expect((await previewSetup("pi", { home })).action).toBe("update");
     }
@@ -87,7 +88,7 @@ describe("setup preview", () => {
   it("edits only the top-level entry in ~/.claude.json, never a project's", async () => {
     const file = path.join(home, ".claude.json");
     const project = '{\n  "projects": {\n    "/p": {\n      "mcpServers": {\n        "osnova": { "command": "node", "args": ["/p/osnova/bin.js", "mcp"] }\n      }\n    }\n  },\n';
-    await fs.writeFile(file, `${project}  "mcpServers": {\n    "osnova": {\n      "type": "stdio",\n      "command": "node",\n      "args": ["/x/osnova-strict/dist/bin.js", "mcp", "--watch"],\n      "env": {}\n    }\n  },\n  "theme": "dark"\n}\n`);
+    await fs.writeFile(file, `${project}  "mcpServers": {\n    "osnova": {\n      "type": "stdio",\n      "command": "node",\n      "args": [${JSON.stringify((await fakeOsnovaInstall()).bin)}, "mcp", "--watch"],\n      "env": {}\n    }\n  },\n  "theme": "dark"\n}\n`);
     const update = await previewSetup("claude-code", { home });
     expect(update.action).toBe("update");
     expect(update.merged.startsWith(project)).toBe(true);
@@ -106,7 +107,7 @@ describe("setup preview", () => {
   it("repoints a kilo command array and keeps comments and other keys", async () => {
     const file = path.join(home, ".config", "kilo", "kilo.jsonc");
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, '{\n  // mine\n  "mcp": {\n    "osnova": {\n      "type": "local",\n      "command": ["node", "/x/osnova-strict/dist/bin.js", "mcp"],\n      "enabled": true\n    }\n  }\n}\n');
+    await fs.writeFile(file, `{\n  // mine\n  "mcp": {\n    "osnova": {\n      "type": "local",\n      "command": ["node", ${JSON.stringify((await fakeOsnovaInstall()).bin)}, "mcp"],\n      "enabled": true\n    }\n  }\n}\n`);
     const update = await previewSetup("kilo", { home });
     expect(update.action).toBe("update");
     expect(update.merged).toContain("// mine");
@@ -140,7 +141,7 @@ describe("setup preview", () => {
     const file = path.join(home, ".codex", "config.toml");
     await fs.mkdir(path.dirname(file), { recursive: true });
     const tools = '[mcp_servers.osnova.tools.osnova_footing]\napproval_mode = "approve"\n';
-    await fs.writeFile(file, `model = "gpt"\n\n[mcp_servers.osnova]\ncommand = "/opt/node"\nargs = ["/x/osnova-strict/dist/bin.js", "mcp"]\nstartup_timeout_sec = 30\n\n${tools}`);
+    await fs.writeFile(file, `model = "gpt"\n\n[mcp_servers.osnova]\ncommand = "/opt/node"\nargs = [${JSON.stringify((await fakeOsnovaInstall()).bin)}, "mcp"]\nstartup_timeout_sec = 30\n\n${tools}`);
     const update = await previewSetup("codex", { home });
     expect(update.action).toBe("update");
     expect(update.merged).toBe(`model = "gpt"\n\n[mcp_servers.osnova]\ncommand = "osnova"\nargs = ["mcp"]\nstartup_timeout_sec = 30\n\n${tools}`);

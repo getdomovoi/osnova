@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -237,17 +237,23 @@ interface Merge { readonly state: "append" | "update" | "unchanged" | "conflict"
 // The program a launch runs is its last part before `mcp` or `hook`. It is osnova's own only when it is the
 // `osnova` executable, the `@getdomovoi/osnova` package, or a `dist/bin.js` inside a folder named for osnova; a
 // user's script that merely lives under such a folder is not.
-// Whether one launch part names osnova's program: the `osnova` executable, the `@getdomovoi/osnova` package, or a
-// `dist/bin.js` inside a folder named for osnova. Alone it only recognises osnova inside a shell command, which is
-// left as written; ownership needs isOsnovaLauncher.
+// Whether one launch part is osnova's program: the bare `osnova` command (resolved on PATH, as setup writes it), the
+// scoped `@getdomovoi/osnova` package, or a path to an existing file inside a package whose package.json names
+// `@getdomovoi/osnova`. A path is checked on disk, never by its name, so a user's own `osnova.js` or a script under a
+// folder named osnova is not osnova's, and neither is a path that no longer exists.
 export function isOsnovaProgram(part: string): boolean {
   // Quotes at either end go, matched or not: inside `bash -c 'osnova hook x'` the word is `'osnova`.
-  const program = part.replace(/^["']+|["']+$/g, "").replace(/\\/g, "/");
-  const segments = program.split("/");
-  const base = segments.at(-1) ?? "";
-  return /^osnova(?:\.(?:cmd|exe|js|mjs))?$/.test(base)
-    || /^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program)
-    || (base === "bin.js" && segments.at(-2) === "dist" && segments.slice(0, -2).some((segment) => /osnova/.test(segment)));
+  const program = part.replace(/^["']+|["']+$/g, "");
+  if (/^osnova(?:\.(?:cmd|exe))?$/.test(program)) return true;
+  if (/^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program)) return true;
+  if (!/[\\/]/.test(program)) return false;
+  let file: string;
+  try { file = realpathSync(program); } catch { return false; }
+  for (let dir = path.dirname(file), level = 0; level < 4; dir = path.dirname(dir), level += 1) {
+    try { return (JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as { name?: unknown }).name === "@getdomovoi/osnova"; }
+    catch { if (path.dirname(dir) === dir) return false; }
+  }
+  return false;
 }
 
 // A launch is osnova's own only in a form that runs osnova's own program: the `osnova` executable or a path to it
@@ -262,7 +268,7 @@ export function isOsnovaLauncher(parts: readonly string[]): boolean {
   const runner = parts[0]!.replace(/^["']+|["']+$/g, "").replace(/\\/g, "/").split("/").at(-1) ?? "";
   const middle = parts.slice(1, -1);
   const scoped = /^@getdomovoi\/osnova(?:@[^/\s]+)?$/.test(program);
-  if (/^(?:node|nodejs|bun)(?:\.exe)?$/i.test(runner)) return !scoped && program.includes("/") && middle.every((part) => plainLaunchFlag.test(part));
+  if (/^(?:node|nodejs|bun)(?:\.exe)?$/i.test(runner)) return !scoped && /[\\/]/.test(program) && middle.every((part) => plainLaunchFlag.test(part));
   if (/^(?:npx|bunx|pnpx)(?:\.(?:cmd|exe))?$/i.test(runner)) return scoped && middle.every((part) => plainLaunchFlag.test(part));
   if (/^pnpm(?:\.(?:cmd|exe))?$/i.test(runner)) return scoped && middle[0] === "dlx" && middle.slice(1).every((part) => plainLaunchFlag.test(part));
   return false;

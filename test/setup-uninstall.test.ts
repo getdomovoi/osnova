@@ -3,6 +3,7 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCli } from "../src/cli/cli.js";
+import { fakeOsnovaInstall } from "./helpers/fake-osnova.js";
 
 let home: string;
 beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-uninstall-")); });
@@ -139,7 +140,7 @@ describe("review round one", () => {
     expect(isOsnovaLauncher(["echo", "osnova"])).toBe(false);
     expect(isOsnovaLauncher(["osnova"])).toBe(true);
     expect(isOsnovaLauncher(["npx", "-y", "@getdomovoi/osnova"])).toBe(true);
-    expect(isOsnovaLauncher(["/opt/homebrew/bin/node", "/opt/homebrew/lib/node_modules/@getdomovoi/osnova/dist/bin.js"])).toBe(true);
+    expect(isOsnovaLauncher(["/opt/homebrew/bin/node", (await fakeOsnovaInstall()).bin])).toBe(true);
     await write(at(".claude.json"), `${JSON.stringify({ mcpServers: { osnova: { command: "echo", args: ["osnova", "mcp"] } } }, null, 2)}\n`);
     await write(at(".claude", "settings.json"), `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo osnova hook stop" }] }] } }, null, 2)}\n`);
     const before = await snapshot([at(".claude.json"), at(".claude", "settings.json")]);
@@ -243,7 +244,7 @@ describe("review round two", () => {
     const { isOsnovaLauncher } = await import("../src/diagnostics/setup-preview.js");
     expect(isOsnovaLauncher(["node", "-e", "osnova"])).toBe(false);
     expect(isOsnovaLauncher(["node", "--eval", "osnova"])).toBe(false);
-    expect(isOsnovaLauncher(["node", "--enable-source-maps", "/x/osnova/dist/bin.js"])).toBe(true);
+    expect(isOsnovaLauncher(["node", "--enable-source-maps", (await fakeOsnovaInstall()).bin])).toBe(true);
   });
 
   it("stops on a file with two MCP root objects", async () => {
@@ -277,14 +278,14 @@ describe("review round three", () => {
   it("adds the plain hook beside a shell-wrapped one instead of guessing what the script runs", async () => {
     await write(at(".claude", "settings.json"), `${JSON.stringify({ hooks: {
       Stop: [{ hooks: [{ type: "command", command: "bash -c 'exit 0; osnova hook stop'" }] }],
-      UserPromptSubmit: [{ hooks: [{ type: "command", command: "bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"" }] }],
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: `bash -c "cd ~ && node ${(await fakeOsnovaInstall()).bin} hook prompt"` }] }],
     } }, null, 2)}\n`);
     const c = capture();
     expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], c.io)).toBe(0);
     const hooks = JSON.parse(await fs.readFile(at(".claude", "settings.json"), "utf8")).hooks;
     const commands = (event: string): string[] => hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((hook) => hook.command));
     expect(commands("Stop")).toEqual(["bash -c 'exit 0; osnova hook stop'", "osnova hook stop"]);
-    expect(commands("UserPromptSubmit")).toEqual(["bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"", "osnova hook prompt"]);
+    expect(commands("UserPromptSubmit")).toEqual([`bash -c "cd ~ && node ${(await fakeOsnovaInstall()).bin} hook prompt"`, "osnova hook prompt"]);
     expect(c.out.join("\n")).toMatch(/shell command/);
   });
 
@@ -296,7 +297,7 @@ describe("review round three", () => {
     expect(isOsnovaLauncher(["pnpm", "dlx", "@getdomovoi/osnova"])).toBe(true);
     expect(isOsnovaLauncher(["npx", "-y", "@getdomovoi/osnova@0.10.0"])).toBe(true);
     expect(isOsnovaLauncher(["bunx", "@getdomovoi/osnova"])).toBe(true);
-    expect(isOsnovaLauncher(["node", "/opt/homebrew/lib/node_modules/@getdomovoi/osnova/dist/bin.js"])).toBe(true);
+    expect(isOsnovaLauncher(["node", (await fakeOsnovaInstall()).bin])).toBe(true);
     expect(isOsnovaLauncher(["osnova"])).toBe(true);
   });
 });
@@ -307,6 +308,21 @@ describe("review round four", () => {
     expect(shellWrappedOsnovaHook("bash -c 'echo \"text; osnova hook stop \"'")).toBeUndefined();
     expect(shellWrappedOsnovaHook("bash -c \"echo 'a && osnova hook stop'\"")).toBeUndefined();
     expect(shellWrappedOsnovaHook("bash -c 'cd ~; osnova hook stop'")).toBe("stop");
-    expect(shellWrappedOsnovaHook("bash -c \"cd ~ && node /opt/osnova-strict/dist/bin.js hook prompt\"")).toBe("prompt");
+    expect(shellWrappedOsnovaHook(`bash -c "cd ~ && node ${(await fakeOsnovaInstall()).bin} hook prompt"`)).toBe("prompt");
+  });
+});
+
+describe("review round five", () => {
+  it("counts a path as osnova's only inside a package named @getdomovoi/osnova", async () => {
+    const { isOsnovaLauncher } = await import("../src/diagnostics/setup-preview.js");
+    await write(at("project", "osnova.js"), "console.log(1)\n");
+    await write(at("osnova-notes", "dist", "bin.js"), "console.log(1)\n");
+    await write(at("install", "node_modules", "@getdomovoi", "osnova", "dist", "bin.js"), "#!/usr/bin/env node\n");
+    await write(at("install", "node_modules", "@getdomovoi", "osnova", "package.json"), JSON.stringify({ name: "@getdomovoi/osnova" }));
+    expect(isOsnovaLauncher(["node", at("project", "osnova.js")])).toBe(false);
+    expect(isOsnovaLauncher(["node", at("osnova-notes", "dist", "bin.js")])).toBe(false);
+    expect(isOsnovaLauncher(["node", at("missing", "osnova", "dist", "bin.js")])).toBe(false);
+    expect(isOsnovaLauncher(["node", at("install", "node_modules", "@getdomovoi", "osnova", "dist", "bin.js")])).toBe(true);
+    expect(isOsnovaLauncher([at("install", "node_modules", "@getdomovoi", "osnova", "dist", "bin.js")])).toBe(true);
   });
 });

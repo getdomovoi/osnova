@@ -23,7 +23,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Fixed
 
-- `osnova setup` counts a hook or MCP entry as osnova's only when its whole launch is osnova's program alone or a known runtime running it with plain flags, so a command that only mentions osnova (`echo osnova mcp`, `node -e osnova`) is no longer repointed, and each runtime counts only in the form that runs osnova's own program (`pnpm osnova` and `npx osnova` do not); hook files keep CRLF line endings when setup rewrites them.
+- `osnova setup` counts a hook or MCP entry as osnova's only when its whole launch is osnova's program alone or a known runtime running it with plain flags, so a command that only mentions osnova (`echo osnova mcp`, `node -e osnova`) is no longer repointed, and each runtime counts only in the form that runs osnova's own program (`pnpm osnova` and `npx osnova` do not); a path counts only when it exists inside a package named `@getdomovoi/osnova`, so a user's `osnova.js` or a missing path does not; hook files keep CRLF line endings when setup rewrites them.
 - `osnova_thread` caps one row's snippet at 480 code units, starting at the first match, instead of keeping the whole span of every match on a long line; the row's column list still names every match. In an agent pilot, 4 of the 5 clipped thread answers held such rows (one minified line alone took 16,098 of the 16,384-unit response, and one clipped answer showed only the first of its seven groups); the cap removes 31,767 units from them. A cut no longer splits a surrogate pair.
 - The README no longer says the OpenCode and Kilo plugin puts the tool contract in the system prompt, which 0.10.0 stopped doing.
 

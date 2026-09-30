@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { runCli } from "../src/cli/cli.js";
 import { doctor } from "../src/diagnostics/doctor.js";
+import { fakeOsnovaInstall } from "./helpers/fake-osnova.js";
 
 let home: string;
 beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-apply-")); });
@@ -52,7 +53,7 @@ describe("osnova setup --apply", () => {
   });
 
   it("repoints osnova hooks at this install, removes hooks it cannot run and duplicates, and leaves other hooks alone", async () => {
-    const old = "node /opt/osnova-strict/dist/bin.js";
+    const old = `node ${(await fakeOsnovaInstall()).bin}`;
     const settingsPath = path.join(home, ".claude", "settings.json");
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
     await fs.writeFile(settingsPath, JSON.stringify({
@@ -120,7 +121,7 @@ describe("osnova setup --apply", () => {
   it("repoints Codex hooks and keeps their client flag", async () => {
     const hooksPath = path.join(home, ".codex", "hooks.json");
     await fs.mkdir(path.dirname(hooksPath), { recursive: true });
-    await fs.writeFile(hooksPath, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "node /opt/osnova-strict/dist/bin.js hook stop --client codex", timeout: 30 }] }], PreToolUse: [{ hooks: [{ type: "command", command: "node /opt/osnova-strict/dist/bin.js hook gate --client codex" }] }] } }));
+    await fs.writeFile(hooksPath, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: `node ${(await fakeOsnovaInstall()).bin} hook stop --client codex`, timeout: 30 }] }], PreToolUse: [{ hooks: [{ type: "command", command: `node ${(await fakeOsnovaInstall()).bin} hook gate --client codex` }] }] } }));
     const c = capture();
     expect(await runCli(["setup", "--apply", "--hooks", "--client", "codex", "--home", home, "--command", "osnova"], c.io)).toBe(0);
     expect(c.out.join("\n")).toContain("open /hooks in Codex");
