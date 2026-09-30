@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- With `osnova mcp --lsp-server`, `osnova_plumb` checks a callers claim against the language server's `textDocument/references` too, in a section after the unchanged verdicts: how many claims the server confirms, by the graph's verdict for each, the claims it confirms that the graph called name-only or no-call, and the sites the claim left out that the graph does not list as missing. The section has its own 1,024-code-unit budget with an exact count of lines it leaves out, and server locations never change a verdict or become graph edges.
+
 ## 0.11.0 (2026-09-30)
 
 ### Breaking

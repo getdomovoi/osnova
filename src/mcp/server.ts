@@ -16,7 +16,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { LspReferenceSession, type LspServerLaunch } from "../enrichment/session.js";
-import { formatLspReferences } from "./lsp-section.js";
+import { formatLspPlumb, formatLspReferences } from "./lsp-section.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext, warmTaskContext } from "../query/task-context.js";
 import { warmQueryContext } from "../query/context.js";
@@ -249,7 +249,7 @@ export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
   readonly prewarm?: boolean;
-  /** A language server whose references osnova_warp adds, in their own section, to a callers answer. */
+  /** A language server whose references osnova_warp and osnova_plumb add, in their own section, to a callers answer or claim check. */
   readonly lsp?: LspServerLaunch;
 }
 
@@ -480,7 +480,10 @@ export function createOsnovaMcpServer(
           if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
           const result = plumb(index, symbol, parseClaims(sites), { direction, depth: optionalNumber(args, "depth") });
           const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
+          // Server references are direct callers, so only a callers claim gets them, in a section after the unchanged verdicts.
+          const lsp = lspSession !== undefined && result.direction === "in" && lspSession.handles(index.files.get(result.target.file)?.language ?? "")
+            ? `\n${formatLspPlumb(index, result, await lspSession.references(index, indexGeneration(index), result.target))}` : "";
+          return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}${lsp}`);
         }
         case "osnova_tests": {
           const symbols = optionalStringArray(args, "symbols");
