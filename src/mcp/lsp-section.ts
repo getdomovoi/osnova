@@ -2,6 +2,7 @@ import { lspSymbolsPerCall, type LspReferencesAnswer, type LspSymbolAnswers } fr
 import type { LspLocation } from "../enrichment/types.js";
 import type { ImpactResult } from "../query/impact.js";
 import type { PlumbResult, PlumbVerdict } from "../query/plumb.js";
+import { collectTestImports, isIndexedTestEdge, isTestFile, type TestsForResult } from "../query/tests.js";
 import type { CallersDetailedResult, OsnovaIndex, OsnovaSymbol } from "../types.js";
 
 export const maximumLspSectionCodeUnits = 1_024;
@@ -63,15 +64,15 @@ function notes(answer: Answered): string {
 
 // Adds each titled group of entries after the first line while the section fits its budget, and ends with an exact
 // count of the entries it left out.
-function bounded(first: string, groups: readonly { title: string; entries: readonly string[] }[], budget: number): string {
+function bounded(first: string, groups: readonly { title: string; entries: readonly string[]; unit?: readonly [string, string] | undefined }[], budget: number): string {
   const lines = [first];
   const total = groups.reduce((sum, group) => sum + group.entries.length, 0);
   let shown = 0;
   let used = first.length;
   const reserve = `\n  +${total} more lines not shown`.length;
-  for (const { title, entries } of groups) {
+  for (const { title, entries, unit = ["line", "lines"] } of groups) {
     if (entries.length === 0) continue;
-    const heading = `  ${title} (${entries.length} ${entries.length === 1 ? "line" : "lines"}):`;
+    const heading = `  ${title} (${entries.length} ${entries.length === 1 ? unit[0] : unit[1]}):`;
     if (used + 1 + heading.length + reserve > budget) continue;
     const start = lines.length;
     lines.push(heading); used += 1 + heading.length;
@@ -242,5 +243,41 @@ export function formatLspSettle(index: OsnovaIndex, result: ImpactResult, asked:
     groups.push({ title: `${symbol.qualifiedName}: not among the dependents`, entries: entries(index, rest) });
   }
   const first = `${header}, not syntax edges): ${answersSummary(asked, eligible, "changed symbols")}; ${total} locations: declaration ${declarations}, inside changed symbols ${inside}, among the dependents above ${among}, not among them ${outside}`;
+  return bounded(first, groups, budget);
+}
+
+/**
+ * The server's references to the symbols osnova_tests asked about, sorted against the two graph tiers: locations
+ * outside test files, in a test file either tier holds (counted against the whole tier, including files its limit
+ * did not show), and in test files neither tier holds, which form a third tier listed per symbol. Server locations
+ * never become graph edges.
+ */
+export function formatLspTests(index: OsnovaIndex, result: TestsForResult, asked: LspSymbolAnswers, eligible: number, budget = maximumLspSectionCodeUnits): string {
+  const imports = collectTestImports(index);
+  let total = 0;
+  let declarations = 0;
+  let outside = 0;
+  let inResolved = 0;
+  let inImportOnly = 0;
+  let inOther = 0;
+  const groups: { title: string; entries: string[]; unit?: readonly [string, string] | undefined }[] = [{ title: "unavailable", entries: unavailableEntries(asked) }];
+  for (const { symbol, answer } of asked.answers) {
+    if (answer.status === "unavailable") continue;
+    total += answer.locations.length;
+    const resolved = new Set(index.incoming(symbol.qualifiedName).filter((edge) => isIndexedTestEdge(index, edge)).map((edge) => edge.fromFile));
+    const importOnly = result.includeImportOnly ? imports.get(symbol.file) ?? new Map<string, readonly number[]>() : new Map<string, readonly number[]>();
+    const { declaration, at } = sites(index, symbol, answer);
+    declarations += declaration;
+    const found = new Map<string, Set<number>>();
+    for (const spot of at) {
+      if (!isTestFile(spot.file)) outside += 1;
+      else if (resolved.has(spot.file)) inResolved += 1;
+      else if (importOnly.has(spot.file)) inImportOnly += 1;
+      else { inOther += 1; found.set(spot.file, (found.get(spot.file) ?? new Set()).add(spot.line)); }
+    }
+    const listed = [...found].sort(([a], [b]) => compareText(a, b)).map(([file, lines]) => `    ${file}:${[...lines].sort((a, b) => a - b).join(",")}`);
+    groups.push({ title: `${symbol.qualifiedName}: test files neither tier lists, by the language server`, entries: listed, unit: ["file", "files"] });
+  }
+  const first = `${header}, not syntax edges): ${answersSummary(asked, eligible, "symbols")}; ${total} locations: declaration ${declarations}, outside test files ${outside}, in resolved-edge test files above ${inResolved}, in import-only test files above ${inImportOnly}, in other test files ${inOther}`;
   return bounded(first, groups, budget);
 }

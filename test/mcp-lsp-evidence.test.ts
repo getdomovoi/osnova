@@ -198,3 +198,64 @@ it("settle: bounds the section with an exact count of the lines it leaves out", 
   expect(section).toContain(`+${300 - shown} more lines not shown`);
   expect(section.length).toBeLessThanOrEqual(1_024);
 });
+
+async function testsFixture(): Promise<Fixture> {
+  const f = await fixture();
+  await fs.mkdir(path.join(f.workspace, "test"));
+  // A test the graph resolves, one that only imports the file, and one the graph cannot tie to lib.ts at all.
+  await fs.writeFile(path.join(f.workspace, "test/helper.test.ts"), "import { helper } from \"../lib\";\nexport function checks(): number { return helper(); }\n");
+  await fs.writeFile(path.join(f.workspace, "lib.ts"), "export function helper(): number { return 1; }\nexport function other(): number { return 2; }\n");
+  await fs.writeFile(path.join(f.workspace, "test/imports.test.ts"), "import { other } from \"../lib\";\nexport function checks(x: any): number { return other() + x.helper(); }\n");
+  await fs.writeFile(path.join(f.workspace, "test/any.spec.ts"), "export function run(x: any): number { return x.helper(); }\n");
+  await respond(f, [
+    { file: "lib.ts", line: 0, character: 16 },
+    { file: "use.ts", line: 1, character: 42 },
+    { file: "test/helper.test.ts", line: 1, character: 42 },
+    { file: "test/imports.test.ts", line: 1, character: 62 },
+    { file: "test/any.spec.ts", line: 0, character: 47 },
+  ]);
+  return f;
+}
+
+it("tests: adds test files only the server finds as a third, separately labelled tier after the unchanged tiers", async () => {
+  const f = await testsFixture();
+  const args = { symbols: ["lib.ts#helper"] };
+  const without = await call(await connect(f, false), "osnova_tests", args);
+  const { graph, section } = split(await call(await connect(f), "osnova_tests", args));
+  expect(graph).toBe(without);
+  expect(graph).toContain("- test/helper.test.ts (resolved edge)");
+  expect(graph).toContain("- test/imports.test.ts (imports the file only)");
+  expect(graph).not.toContain("any.spec.ts");
+  expect(section).toContain("language server (textDocument/references, not syntax edges): asked about 1 of 1 symbols in its languages (not asked: 0 over the cap of 8, 0 past the deadline, 0 after a failure); 5 locations: declaration 1, outside test files 1, in resolved-edge test files above 1, in import-only test files above 1, in other test files 1");
+  expect(section).toMatch(/ lib\.ts#helper: test files neither tier lists, by the language server \(1 file\):\n\s+test\/any\.spec\.ts:1$/);
+});
+
+it("tests: counts a file the graph tier holds but its limit did not show as held, and adds nothing in file mode", async () => {
+  const f = await testsFixture();
+  const { graph, section } = split(await call(await connect(f), "osnova_tests", { symbols: ["lib.ts#helper"], limit: 1 }));
+  expect(graph).not.toContain("imports.test.ts");
+  expect(section).toContain("in resolved-edge test files above 1, in import-only test files above 1, in other test files 1");
+  expect(await call(await connect(f), "osnova_tests", { file: "test/helper.test.ts" })).not.toContain("language server");
+});
+
+it("tests: stops asking at one deadline for the whole call", async () => {
+  const f = await testsFixture();
+  await respond(f, [{ file: "test/any.spec.ts", line: 0, character: 47 }], { delayMs: 700 });
+  const started = Date.now();
+  const { section } = split(await call(await connect(f, true, 1_000), "osnova_tests", { symbols: ["lib.ts#helper", "use.ts#direct", "use.ts#viaAny"] }));
+  expect(Date.now() - started).toBeLessThan(2_500);
+  expect(section).toContain("asked about 1 of 3 symbols in its languages (not asked: 0 over the cap of 8, 2 past the deadline, 0 after a failure)");
+});
+
+it("tests: bounds the section with an exact count of the lines it leaves out", async () => {
+  const f = await testsFixture();
+  const files = Array.from({ length: 80 }, (_, i) => `test/case${i}.spec.ts`);
+  for (const file of files) await fs.writeFile(path.join(f.workspace, file), "export function run(x: any): number { return x.helper(); }\n");
+  await respond(f, files.map((file) => ({ file, line: 0, character: 47 })));
+  const { section } = split(await call(await connect(f), "osnova_tests", { symbols: ["lib.ts#helper"] }));
+  expect(section).toContain("80 locations: declaration 0, outside test files 0, in resolved-edge test files above 0, in import-only test files above 0, in other test files 80");
+  const shown = (section.match(/test\/case\d+\.spec\.ts:1/g) ?? []).length;
+  expect(shown).toBeGreaterThan(0);
+  expect(section).toContain(`+${80 - shown} more lines not shown`);
+  expect(section.length).toBeLessThanOrEqual(1_024);
+});

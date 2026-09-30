@@ -16,7 +16,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { LspReferenceSession, type LspServerLaunch } from "../enrichment/session.js";
-import { formatLspPlumb, formatLspReferences, formatLspSettle, settleTargets } from "./lsp-section.js";
+import { formatLspPlumb, formatLspReferences, formatLspSettle, formatLspTests, settleTargets } from "./lsp-section.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext, warmTaskContext } from "../query/task-context.js";
 import { warmQueryContext } from "../query/context.js";
@@ -249,7 +249,7 @@ export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
   readonly prewarm?: boolean;
-  /** A language server whose references osnova_warp, osnova_plumb and osnova_settle add to their answers, each in its own section. */
+  /** A language server whose references osnova_warp, osnova_plumb, osnova_settle and osnova_tests add to their answers, each in its own section. */
   readonly lsp?: LspServerLaunch;
 }
 
@@ -496,8 +496,13 @@ export function createOsnovaMcpServer(
           const limit = optionalNumber(args, "limit");
           const includeImportOnly = optionalBoolean(args, "includeImportOnly");
           const available = maximumMcpTestsCodeUnits - prefix.length - 1;
-          const text = symbols !== undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit }));
-          return textResult(`${prefix}\n${boundText(text, available)}`);
+          if (symbols === undefined) return textResult(`${prefix}\n${boundText(formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit })), available)}`);
+          const result = testsFor(index, symbols, { limit, includeImportOnly });
+          // Server references in test files neither graph tier holds form a third tier, in a section after the unchanged answer.
+          const targets = lspSession === undefined ? [] : result.symbols.map((item) => item.symbol).filter((symbol) => lspSession.handles(index.files.get(symbol.file)?.language ?? ""));
+          const lsp = lspSession !== undefined && targets.length > 0
+            ? `\n${formatLspTests(index, result, await lspSession.referencesEach(index, indexGeneration(index), targets), targets.length)}` : "";
+          return textResult(`${prefix}\n${boundText(formatTestsFor(result), available)}${lsp}`);
         }
         case "osnova_unreferenced": {
           const kinds = optionalStringArray(args, "kinds");
