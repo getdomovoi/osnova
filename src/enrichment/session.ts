@@ -51,8 +51,9 @@ export class LspReferenceSession {
   private generation: string | undefined;
   private readonly opened = new Set<string>();
   private filesEligible = 0;
-  // A new session's server may still be loading projects, and answers only part of the references until it has.
-  // Until one answer has repeated unchanged, each request is repeated until two in a row agree.
+  // A server still loading projects answers only part of the references. A new session repeats each request until two
+  // answers agree; a settled one still repeats once and falls back to that loop when the two differ, because a later
+  // symbol may sit in a project the first one did not need.
   private settled = false;
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
@@ -88,23 +89,27 @@ export class LspReferenceSession {
     await this.stop();
     const home = path.join(workspaceDirFor(path.resolve(resolveCacheDir(this.cacheDir)), this.root), "lsp", "session");
     await fs.mkdir(home, { recursive: true });
-    const client = new LspClient(
+    const client: LspClient = new LspClient(
       { id: "mcp", executable: this.launch.executable, args: this.launch.args ?? [], workspace: this.root, languages: this.launch.languages },
       home,
       { requestTimeoutMs: this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs, sessionTimeoutMs: lspSessionCeilings.sessionTimeoutMs, maxRequests: lspSessionCeilings.maxRequests, maxSessionBytes: lspSessionCeilings.maxSessionBytes, maxMessages: lspSessionCeilings.maxMessages, maxMessageBytes: lspSessionCeilings.maxMessageBytes, shutdownTimeoutMs: lspSessionCeilings.shutdownTimeoutMs },
       lspSessionCeilings,
     );
-    this.capabilities = await client.initialize();
+    // Held before initialize, so a close that lands during start-up stops this server too.
     this.client = client;
-    this.generation = generation;
+    this.generation = undefined;
     this.settled = false;
+    this.capabilities = await client.initialize();
+    if (this.closed || this.client !== client) { await client.close(); throw new Error("client-closed"); }
+    this.generation = generation;
     const eligible = [...index.files.values()].filter((card) => this.handles(card.language)).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     this.filesEligible = eligible.length;
     let bytes = 0;
     for (const card of eligible) {
-      if (this.opened.size >= lspSessionDefaults.maxOpenFiles || bytes + card.text.length > lspSessionDefaults.maxOpenBytes) break;
+      const size = Buffer.byteLength(card.text);
+      if (this.opened.size >= lspSessionDefaults.maxOpenFiles || bytes + size > lspSessionDefaults.maxOpenBytes) break;
       this.open(client, index, card.path);
-      bytes += card.text.length;
+      bytes += size;
     }
     return client;
   }
@@ -127,18 +132,28 @@ export class LspReferenceSession {
       if (this.capabilities.referencesProvider !== true && !isRecord(this.capabilities.referencesProvider)) return { status: "unavailable", code: "method-unavailable" };
       const uri = pathToFileURL(sourcePath(index.root, card.path)).href;
       if (!this.opened.has(card.path)) this.open(client, index, card.path);
-      const ask = async () => serverLocations(await client.request("textDocument/references", { textDocument: { uri }, position, context: { includeDeclaration: true } }), index, lspSessionDefaults.maxLocations);
+      const timeout = this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs;
+      const deadline = Date.now() + timeout;
+      const ask = async (signal?: AbortSignal) => serverLocations(await client.request("textDocument/references", { textDocument: { uri }, position, context: { includeDeclaration: true } }, signal), index, lspSessionDefaults.maxLocations);
+      const same = (a: ReturnType<typeof serverLocations>, b: ReturnType<typeof serverLocations>): boolean => a.partial === b.partial && JSON.stringify(a.locations) === JSON.stringify(b.locations);
       let parsed = await ask();
+      if (this.settled) {
+        const again = await ask();
+        if (!same(again, parsed)) this.settled = false;
+        parsed = again;
+      }
       let loading = false;
       if (!this.settled) {
-        const deadline = Date.now() + (this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs);
         loading = true;
-        for (let attempt = 0; attempt < lspSessionDefaults.settleAttempts && Date.now() < deadline; attempt += 1) {
+        // Every repeat is cut off at the deadline, so a slow server cannot hold the answer past the request timeout.
+        for (let attempt = 0; attempt < lspSessionDefaults.settleAttempts && deadline - Date.now() > lspSessionDefaults.settleIntervalMs; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, lspSessionDefaults.settleIntervalMs));
-          const next = await ask();
-          const same = next.partial === parsed.partial && JSON.stringify(next.locations) === JSON.stringify(parsed.locations);
+          let next: ReturnType<typeof serverLocations>;
+          try { next = await ask(AbortSignal.timeout(Math.max(1, deadline - Date.now()))); }
+          catch (error) { if (error instanceof Error && error.message === "cancelled") break; throw error; }
+          const agreed = same(next, parsed);
           parsed = next;
-          if (same) { loading = false; this.settled = true; break; }
+          if (agreed) { loading = false; this.settled = true; break; }
         }
       }
       return { status: parsed.partial ? "partial" : "complete", locations: parsed.locations, queried: position, filesGiven: this.opened.size, filesEligible: this.filesEligible, loading };

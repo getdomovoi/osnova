@@ -10,6 +10,8 @@ import { createOsnovaMcpServer, type OsnovaMcpOptions } from "../src/mcp/server.
 const serverScript = path.join(import.meta.dirname, "fixtures/lsp/references-server.mjs");
 const temporaries: string[] = [];
 const closers: (() => void)[] = [];
+let lastClose: (() => void) | undefined;
+const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 afterEach(async () => {
   for (const close of closers.splice(0)) close();
   for (const dir of temporaries.splice(0)) await fs.rm(dir, { recursive: true, force: true });
@@ -46,7 +48,7 @@ async function respond(f: Fixture, locations: { file: string; line: number; char
 }
 
 async function launches(f: Fixture): Promise<number> {
-  return (await fs.readFile(f.launches, "utf8")).split("\n").filter((line) => line === "launch").length;
+  return (await fs.readFile(f.launches, "utf8")).split("\n").filter((line) => line.startsWith("launch ")).length;
 }
 
 async function connect(f: Fixture, withLsp = true, requestTimeoutMs?: number): Promise<Client> {
@@ -56,6 +58,7 @@ async function connect(f: Fixture, withLsp = true, requestTimeoutMs?: number): P
   };
   const { server, close } = createOsnovaMcpServer(f.workspace, options);
   closers.push(close);
+  lastClose = close;
   const client = new Client({ name: "osnova-test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -183,4 +186,65 @@ it("counts every call on a line the graph already resolved", async () => {
   ]);
   const text = await warp(await connect(f), { symbol: "lib.ts#helper" });
   expect(text).toContain("3 locations: declaration 1, resolved above 2, confirmed unresolved leads 0, not in the graph 0");
+});
+
+it("stops a server whose start-up close interrupted", async () => {
+  const f = await fixture();
+  await respond(f, [], { initDelayMs: 300 });
+  const client = await connect(f);
+  const pending = client.callTool({ name: "osnova_warp", arguments: { symbol: "lib.ts#helper" } }).catch(() => undefined);
+  for (let i = 0; i < 100 && (await launches(f)) === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+  lastClose?.();
+  await pending;
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  const pid = Number((await fs.readFile(f.launches, "utf8")).split("\n").find((line) => line.startsWith("launch "))?.slice(7));
+  expect(pid).toBeGreaterThan(0);
+  expect(alive(pid)).toBe(false);
+});
+
+it("checks every later request of a settled session for a server still loading", async () => {
+  const f = await fixture();
+  const client = await connect(f);
+  await warp(client, { symbol: "lib.ts#helper" });
+  // Two requests settled the session. From here the server answers with one more location per request, as it would
+  // while loading a project the first symbol did not need; the next single answer would hold 3 of the 4.
+  const locations = JSON.parse(await fs.readFile(f.responses, "utf8")).locations;
+  await respond(f, locations, { grow: true });
+  const text = await warp(client, { symbol: "lib.ts#helper" });
+  expect(text).toContain("4 locations: declaration 1, resolved above 1, confirmed unresolved leads 1, not in the graph 1");
+});
+
+it("keeps the section when a full answer fills the text cap", async () => {
+  const f = await fixture();
+  const callers = Array.from({ length: 1_500 }, (_, i) => `export function caller${i}(): number { return helper(); }`);
+  await fs.writeFile(path.join(f.workspace, "many.ts"), `import { helper } from "./lib";\n${callers.join("\n")}\n`);
+  await respond(f, [{ file: "lib.ts", line: 0, character: 16 }]);
+  const text = await warp(await connect(f), { symbol: "lib.ts#helper", full: true });
+  expect(text).toContain("\nlanguage server (textDocument/references, not syntax edges): 1 locations: declaration 1");
+  expect(text.length).toBeLessThanOrEqual(16_384);
+});
+
+it("counts a recursive call on the declaration line as a call, and splits a line holding both kinds", async () => {
+  const f = await fixture();
+  await fs.writeFile(path.join(f.workspace, "lib.ts"), "export function helper(n: number): number { return n ? helper(n - 1) : 0; }\n");
+  await fs.writeFile(path.join(f.workspace, "use.ts"), "import { helper } from \"./lib\";\nexport function both(x: any): number { return helper(1) + x.helper(); }\n");
+  await respond(f, [
+    { file: "lib.ts", line: 0, character: 16 },
+    { file: "lib.ts", line: 0, character: 55 },
+    { file: "use.ts", line: 1, character: 46 },
+    { file: "use.ts", line: 1, character: 60 },
+  ]);
+  const text = await warp(await connect(f), { symbol: "lib.ts#helper" });
+  expect(text).toContain("4 locations: declaration 1, resolved above 2, confirmed unresolved leads 1, not in the graph 0");
+  expect(text).toMatch(/confirmed unresolved leads \(1 line\):\n\s+use\.ts:2 in both/);
+});
+
+it("ends a settle wait at its deadline even when the server answers slowly", async () => {
+  const f = await fixture();
+  await respond(f, Array.from({ length: 60 }, (_, i) => ({ file: "use.ts", line: 2, character: i })), { grow: true, delayMs: 700 });
+  const client = await connect(f, true, 1_000);
+  const started = Date.now();
+  const text = await warp(client, { symbol: "lib.ts#helper" });
+  expect(Date.now() - started).toBeLessThan(1_450);
+  expect(text).toContain("still loading");
 });

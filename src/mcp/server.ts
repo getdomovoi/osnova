@@ -408,7 +408,7 @@ export function createOsnovaMcpServer(
           // The language server's references get their own section and budget after the graph answer, which is unchanged.
           const lsp = lspSession !== undefined && result.status === "found" && result.direction === "in" && lspSession.handles(index.files.get(result.target.file)?.language ?? "")
             ? `\n${formatLspReferences(index, result, await lspSession.references(index, indexGeneration(index), result.target))}` : "";
-          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits) + lsp);
+          if (full) return textResult(boundText(`${prefix}\n${formatCallersDetailed(result)}`, maximumTextResponseCodeUnits - lsp.length) + lsp);
           const available = maximumMcpCallersCodeUnits - prefix.length - 1;
           return textResult(`${prefix}\n${formatCallersDetailedBounded(result, available)}${lsp}`);
         }

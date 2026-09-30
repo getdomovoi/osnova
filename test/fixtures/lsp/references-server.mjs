@@ -1,7 +1,7 @@
 // A minimal language server for tests: it answers textDocument/references with the locations listed in a JSON file
-// and appends one line to a log for every launch ("launch") and every opened file ("open <file>").
+// and appends one line to a log for every launch ("launch <pid>") and every opened file ("open <file>").
 // usage: node references-server.mjs <responses.json> <launch.log>
-// responses.json: { "delayMs"?: number, "exitOnReferences"?: boolean, "grow"?: boolean, "locations": [{ "file", "line", "character" }] }
+// responses.json: { "delayMs"?: number, "initDelayMs"?: number, "exitOnReferences"?: boolean, "grow"?: boolean, "locations": [{ "file", "line", "character" }] }
 // With grow, the n-th request gets only the first n locations, as a server still loading its projects would answer.
 // (file relative to the workspace, line and character zero-based)
 import { appendFileSync, readFileSync } from "node:fs";
@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const [responsesFile, launchLog] = process.argv.slice(2);
-appendFileSync(launchLog, "launch\n");
+appendFileSync(launchLog, `launch ${process.pid}\n`);
 let root = "";
 let requests = 0;
 let buffer = Buffer.alloc(0);
@@ -22,7 +22,8 @@ function send(message) {
 function handle(message) {
   if (message.method === "initialize") {
     root = fileURLToPath(message.params.rootUri);
-    send({ id: message.id, result: { capabilities: { referencesProvider: true } } });
+    const { initDelayMs } = JSON.parse(readFileSync(responsesFile, "utf8"));
+    setTimeout(() => send({ id: message.id, result: { capabilities: { referencesProvider: true } } }), initDelayMs ?? 0);
   } else if (message.method === "textDocument/didOpen") {
     appendFileSync(launchLog, `open ${path.relative(root, fileURLToPath(message.params.textDocument.uri)).split(path.sep).join("/")}\n`);
   } else if (message.method === "textDocument/references") {
