@@ -167,7 +167,8 @@ describe("setup preview", () => {
     expect(code).toBe(0);
     expect(out.join("\n")).toContain("osnova setup preview: cursor, create");
     expect(out.join("\n")).toContain("+++ ");
-    expect(out.join("\n")).toContain("osnova never applies this change");
+    expect(out.join("\n")).toContain("Repeat this command with --apply in place of --preview to write these changes.");
+    expect(out.join("\n")).not.toMatch(/never applies|yourself/);
     expect(await snapshot()).toEqual([]);
     await expect(runCli(["setup", "--client", "cursor", "--home", home])).rejects.toThrow(/--preview/);
     await expect(runCli(["setup", "--preview", "--home", home])).rejects.toThrow(/--client/);

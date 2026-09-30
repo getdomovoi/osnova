@@ -545,7 +545,7 @@ export async function runCli(
       if (parsed.values.skill === true) planned.push(await planSkill({ home: parsed.values.home }));
       if (parsed.values.instructions !== undefined) planned.push(await planInstructions(parsed.values.instructions));
       if (mode === "preview") {
-        io.stdout(planned.map((change) => [`osnova setup preview: ${change.kind === "mcp" ? client : change.kind}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")).join("\n\n"));
+        io.stdout([...planned.map((change) => [`osnova setup preview: ${change.kind === "mcp" ? client : change.kind}, ${change.action}, ${change.path}`, change.diff.trimEnd(), change.notice].filter((line) => line.length > 0).join("\n")), "Repeat this command with --apply in place of --preview to write these changes."].join("\n\n"));
         return EXIT_OK;
       }
       const applied = await applyChanges(planned);

@@ -65,7 +65,7 @@ export async function previewSetup(client: SetupClientId, options: SetupPreviewO
     ? `${target} already has an osnova entry that does not launch osnova; osnova never edits it. Compare by hand.`
     : action === "unchanged" ? `${target} already contains this entry.`
     : action === "update" ? `The osnova entry in ${target} is repointed at ${command.join(" ")}; flags after mcp and every other key are kept.`
-    : `osnova never applies this change. Review the diff, then paste it into ${target} yourself.`;
+    : `The osnova MCP entry is added to ${target}; every other entry is kept.`;
   return { mode: "preview", client, path: target, action, diff, merged: result.merged, notice };
 }
 
