@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCli } from "../src/cli/cli.js";
+import { renderSitePages } from "../scripts/site-pages.js";
 
 const root = path.join(import.meta.dirname, "..");
 const page = fs.readFileSync(path.join(root, "site", "public", "index.html"), "utf8");
@@ -64,6 +65,10 @@ describe("marketing site install commands", () => {
     for (const sub of subcommands) expect(known, sub).toContain(`osnova ${sub}`);
   });
 
+  it("links the footer to the site's own document pages", () => {
+    for (const href of ["/changelog/", "/privacy/", "/security/"]) expect(page).toContain(`href="${href}"`);
+  });
+
   it("installs the published package, plugin and Node.js version", () => {
     const commands = shownCommands();
     for (const line of commands.filter((entry) => entry.startsWith("npm install") || entry.startsWith("npx "))) {
@@ -72,5 +77,29 @@ describe("marketing site install commands", () => {
     expect(commands).toContain(`npm install -g ${pkg.name}`);
     expect(commands).toContain(`/plugin install ${marketplace.plugins[0]?.name}@${marketplace.name}`);
     expect(decode(page)).toContain(`Node.js ${pkg.engines.node.replace(/^>=/, "").replace(/\.0$/, "")} or newer`);
+  });
+});
+
+describe("marketing site document pages", () => {
+  const pages = renderSitePages(root);
+
+  it("renders the changelog, privacy and security pages", () => {
+    expect(Object.keys(pages).sort()).toEqual(["changelog/index.html", "privacy/index.html", "security/index.html"]);
+  });
+
+  it("matches the committed pages, so a changed source document fails until the pages are rebuilt", () => {
+    for (const [rel, html] of Object.entries(pages)) {
+      const file = path.join(root, "site", "public", rel);
+      expect(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "", `${rel} is stale; run pnpm site:pages`).toBe(html);
+    }
+  });
+
+  it("keeps the source text, escapes code and points links at the site", () => {
+    expect(pages["security/index.html"]).toContain('<a href="/privacy/">Privacy</a>');
+    expect(pages["privacy/index.html"]).toContain('<a href="https://github.com/getdomovoi/osnova/issues">https://github.com/getdomovoi/osnova/issues</a>');
+    expect(pages["changelog/index.html"]).toContain('<h2 id="v0-11-0">0.11.0 (2026-09-30)</h2>');
+    expect(pages["changelog/index.html"]).toContain('<h3 id="v0-11-0-breaking">Breaking</h3>');
+    expect(pages["changelog/index.html"]).toContain("<code>--instructions &lt;file&gt;</code>");
+    expect(pages["changelog/index.html"]).toContain('href="#v0-11-0"');
   });
 });

@@ -14,6 +14,8 @@ npx -y live-server@1.2.2 site/public --port=8788 --no-browser
 
 - The film near the top tells the lede in eight scenes. Every number and output line in it comes from osnova 0.11.0 run on its own source: index counts, the callees of `refreshWorkspace`, `osnova warp` lines and the hashes of two fresh builds. Re-measure them before changing the copy.
 - The install prompts must only use commands the CLI accepts. `test/site.test.ts` previews every `osnova setup` command on the page against an empty home directory and fails on an unknown subcommand.
+- `/changelog/`, `/privacy/` and `/security/` are built from `CHANGELOG.md`, `PRIVACY.md` and `SECURITY.md` by `pnpm site:pages`. Edit the Markdown, never the generated HTML; `test/site.test.ts` fails while a page is out of date.
+- The npm badge in the header shows the version written into the page, then replaces it with the registry's latest version when the page loads.
 - Colours, type and motion follow `assets/brand/README.md`.
 
 ## Deploy
