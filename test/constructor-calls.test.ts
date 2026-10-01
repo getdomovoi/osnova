@@ -189,6 +189,27 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(await loadIndex(workspace, { cacheDir })).not.toBeUndefined();
   });
 
+  it("leaves a creation qualified by an enclosing instance to name resolution", async () => {
+    await write({ "Types.java": "class A {\n  class Inner { Inner() {} }\n}\nclass B {\n  class Inner { Inner() {} }\n  void use(A a) { a.new Inner(); }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.java", 6)).toMatchObject({ toSymbol: undefined, constructs: undefined });
+  });
+
+  it("does not inherit a private member type, or a package one from another package", async () => {
+    await write({
+      "Types.java": "class A {\n  private static class T { T() {} }\n  protected static class U { U() {} }\n}\nclass B extends A {\n  static void use() { new T(); new U(); }\n}\nclass T { T() {} }\nclass U { U() {} }\n",
+      "q/Base.java": "package q;\npublic class Base {\n  static class V { V() {} }\n}\n",
+      "p/Sub.java": "package p;\nimport q.Base;\nclass Sub extends Base {\n  static void use() { new V(); }\n}\nclass V { V() {} }\n",
+      "q/Near.java": "package q;\nclass Near extends Base {\n  static void use() { new V(); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.constructs !== undefined && edge.line !== 0).map((edge) => [edge.fromFile, edge.line, edge.toName, edge.toSymbol]);
+    expect(creations).toContainEqual(["Types.java", 6, "T", "Types.java#T.T"]);
+    expect(creations).toContainEqual(["Types.java", 6, "U", "Types.java#A.U.U"]);
+    expect(creations).toContainEqual(["p/Sub.java", 4, "V", "p/Sub.java#V.V"]);
+    expect(creations).toContainEqual(["q/Near.java", 3, "V", "q/Base.java#Base.V.V"]);
+  });
+
   it("reads Java imports as declarations, not lines", async () => {
     await write({
       "q/T.java": "package q; public class T { public T() {} }\n",
@@ -252,6 +273,22 @@ describe("object creation across the cache and incremental updates", () => {
       (symbols: Stored["files"][number]["symbols"]) => { symbols[0]!.primary = false; },
       (symbols: Stored["files"][number]["symbols"]) => { symbols[1]!.primary = true; },
       (symbols: Stored["files"][number]["symbols"]) => { symbols[1]!.parameters!.constructs = 1; },
+    ]) expect(() => deserializeArtifact(corrupt(change), undefined)).toThrow(/corrupt/);
+  });
+
+  it("refuses corrupted member-type access metadata on load", async () => {
+    await write({ "A.java": "class A {\n  private static class T { }\n  void run() { }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    type Stored = { files: { symbols: { q: string; access?: unknown }[] }[] };
+    const corrupt = (change: (symbols: Stored["files"][number]["symbols"]) => void): string => {
+      const data = JSON.parse(serializeArtifact(index).toString()) as Stored;
+      change(data.files[0]!.symbols);
+      return JSON.stringify(data);
+    };
+    expect(() => deserializeArtifact(corrupt((symbols) => { expect(symbols.find((symbol) => symbol.q === "A.T")!.access).toBe("private"); }), undefined)).not.toThrow(/corrupt/);
+    for (const change of [
+      (symbols: Stored["files"][number]["symbols"]) => { symbols.find((symbol) => symbol.q === "A.T")!.access = "public"; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols.find((symbol) => symbol.q === "A.run")!.access = "private"; },
     ]) expect(() => deserializeArtifact(corrupt(change), undefined)).toThrow(/corrupt/);
   });
 

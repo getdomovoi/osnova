@@ -16,6 +16,9 @@ function accessOf(method: Node): ParameterRange["access"] {
   return method.parent?.type === "interface_body" || method.parent?.type === "annotation_type_body" ? undefined : "package";
 }
 
+// The bodies whose type declarations are member types; a class declared in a block is a local class.
+const MEMBER_PARENTS = new Set(["class_body", "interface_body", "enum_body_declarations", "annotation_type_body"]);
+
 const PRIMITIVES = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"]);
 const JAVA_LANG = new Set(["Object", "String", "CharSequence", "Number", "Integer", "Long", "Short", "Byte", "Character", "Boolean",
   "Float", "Double", "Void", "Class", "Enum", "Record", "Iterable", "Comparable", "Runnable", "Throwable", "Exception",
@@ -137,6 +140,8 @@ export const javaAdapter: LanguageAdapter = {
           if (supertypes > 0) out.markSupertypes(supertypes, bindings.interfaces(node));
           // A record always has a canonical constructor, written on its header or in a compact declaration.
           if (node.type === "record_declaration") out.markPrimary();
+          const access = MEMBER_PARENTS.has(node.parent?.type ?? "") ? accessOf(node) : undefined;
+          if (access !== undefined) out.markAccess(access);
           out.push(nameNode.text);
           typeVariables.push(typeParametersOf(node));
           for (const child of childrenOf(node)) visit(child);
@@ -190,11 +195,14 @@ export const javaAdapter: LanguageAdapter = {
           return;
         }
         case "object_creation_expression": {
-          // `new Box<>(1)` names Box; a class body after the arguments makes an anonymous subclass.
+          // `new Box<>(1)` names Box; a class body after the arguments makes an anonymous subclass. `a.new Inner()`
+          // names a member type of the qualifying instance's type, which the index does not follow, so it is a plain call.
           const typeNode = node.childForFieldName("type");
           if (typeNode !== null) {
+            const qualified = childrenOf(node).some((child) => child.type !== "comment" && child.endIndex <= typeNode.startIndex && child.type !== "type_arguments" && !child.type.endsWith("annotation"));
             const anonymous = childOfType(node, "class_body") !== null;
-            out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, argumentCount(node.childForFieldName("arguments")), anonymous ? "anonymous" : "instance");
+            if (qualified) out.addEdge("calls", typeNode.text, typeNode);
+            else out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, argumentCount(node.childForFieldName("arguments")), anonymous ? "anonymous" : "instance");
           }
           for (const child of childrenOf(node)) visit(child);
           return;

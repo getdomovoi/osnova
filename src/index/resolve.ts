@@ -694,7 +694,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     return constructors.find((symbol) => symbol.file === type.file) ?? constructors[0]!;
   };
   // The member type `name` that a Java type declares or inherits: undefined when it has none, null when a
-  // supertype cannot be followed (or is an enum, whose java.lang.Enum declares member types).
+  // supertype cannot be followed (or is an enum, whose java.lang.Enum declares member types). A supertype's
+  // member type is not inherited when it is private, or package-private in another package; it still hides the
+  // same name further up that supertype's chain, so the walk does not look past it there.
   const javaMemberTypeOf = (type: OsnovaSymbol, name: string, seen: Set<string>): OsnovaSymbol | null | undefined => {
     if (seen.has(type.qualifiedName) || seen.size > 32) return null;
     seen.add(type.qualifiedName);
@@ -703,11 +705,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (type.kind === "enum") return null;
     const followed = [...(type.heritage ?? []), ...(type.interfaces ?? [])];
     if (followed.length !== (type.supertypes ?? 0)) return null;
+    const home = javaPackageOf(files.get(type.file));
     for (const binding of followed) {
       const base = baseOf(type, binding);
       if (base === undefined) return null;
       const member = javaMemberTypeOf(base, name, seen);
-      if (member !== undefined) return member;
+      if (member === null) return null;
+      if (member === undefined || member.access === "private" || (member.access === "package" && javaPackageOf(files.get(member.file)) !== home)) continue;
+      return member;
     }
     return undefined;
   };

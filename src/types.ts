@@ -55,6 +55,9 @@ export interface OsnovaSymbol {
   readonly shadowed?: true | undefined;
   // A Java record: its canonical constructor is written on the type's declaration.
   readonly primary?: true | undefined;
+  // A Java member type a subclass does not inherit: `private`, or `package` (no access modifier, outside an
+  // interface), which a subclass in another package does not inherit.
+  readonly access?: "private" | "package" | undefined;
   // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
   // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.

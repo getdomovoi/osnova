@@ -198,16 +198,16 @@
         "external": 12202,
         "noVerdict": 0
       },
-      "claimedEdges": 8138,
-      "decided": 8131,
+      "claimedEdges": 8140,
+      "decided": 8133,
       "undecided": 7,
-      "truePositive": 8127,
+      "truePositive": 8129,
       "falsePositive": 4,
       "precision": 0.9995,
       "falseEdgeRate": 0.00049,
       "oracleInRepoSites": 11222,
-      "coveredInRepoSites": 8117,
-      "recall": 0.7233,
+      "coveredInRepoSites": 8119,
+      "recall": 0.7235,
       "falseEdgesWithCorrectTarget": 3,
       "falseByCause": [
         {

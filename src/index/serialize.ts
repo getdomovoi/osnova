@@ -41,7 +41,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.38.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.39.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -84,6 +84,7 @@ interface SerializedSymbol {
   readonly signature: string;
   readonly shadowed?: true | undefined;
   readonly primary?: true | undefined;
+  readonly access?: "private" | "package" | undefined;
   readonly partial?: string | undefined;
   readonly supertypes?: number | undefined;
   readonly interfaces?: readonly SymbolBinding[] | undefined;
@@ -178,6 +179,7 @@ export function serializeSections(
         signature: symbol.signature,
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.primary === undefined ? {} : { primary: symbol.primary }),
+        ...(symbol.access === undefined ? {} : { access: symbol.access }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
         ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
         ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
@@ -373,6 +375,7 @@ function deserializeBody(
       }
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
       if (symbol.primary !== undefined && (symbol.primary !== true || !["class", "struct"].includes(symbol.kind))) throw new Error("osnova: corrupt primary constructor metadata");
+      if (symbol.access !== undefined && (!(symbol.access === "private" || symbol.access === "package") || !["class", "interface", "enum"].includes(symbol.kind))) throw new Error("osnova: corrupt member-type access metadata");
       if (symbol.supertypes !== undefined && (!Number.isSafeInteger(symbol.supertypes) || symbol.supertypes < 1)) throw new Error("osnova: corrupt supertype count");
       if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[^\s`]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
@@ -413,6 +416,7 @@ function deserializeBody(
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.primary === undefined ? {} : { primary: symbol.primary }),
+        ...(symbol.access === undefined ? {} : { access: symbol.access }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
         ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
         ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),

@@ -108,6 +108,11 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, primary: true });
   }
 
+  markAccess(access: "private" | "package"): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, access });
+  }
+
   markPartial(identity: string): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, partial: identity });
