@@ -49,6 +49,7 @@ export const javaAdapter: LanguageAdapter = {
                 ? "enum"
                 : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          if (childOfType(node, "super_interfaces") !== null) out.markInterfaces();
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();

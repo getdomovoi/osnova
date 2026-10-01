@@ -316,3 +316,18 @@ describe("C# partial parts are one type only within one namespace and arity", ()
     expect(index.files.get("G.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("N.M`1");
   });
 });
+
+describe("a Java @Override that may implement an interface method", () => {
+  it("does not hide a superclass overload of the same arity", async () => {
+    await write({
+      "Base.java": "public class Base {\n  public void put(int x) {}\n}\n",
+      "I.java": "public interface I {\n  void put(String x);\n}\n",
+      "Child.java": "public class Child extends Base implements I {\n  @Override public void put(String x) {}\n  public void put(String x, String y) {}\n}\n",
+      "Use.java": "public class Use {\n  public void run(Child child) { child.put(1); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const call = choiceAt(index, "Use.java", 2, "put");
+    expect(call.overload).not.toEqual({ line: 2 });
+    expect(call.overload).toEqual({ candidates: [2], elsewhere: [{ file: "Base.java", line: 2 }] });
+  });
+});

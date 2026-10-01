@@ -80,6 +80,7 @@ interface SerializedSymbol {
   readonly signature: string;
   readonly shadowed?: true | undefined;
   readonly partial?: string | undefined;
+  readonly interfaces?: true | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -171,6 +172,7 @@ export function serializeSections(
         signature: symbol.signature,
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
+        ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
@@ -362,6 +364,7 @@ function deserializeBody(
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
+      if (symbol.interfaces !== undefined && symbol.interfaces !== true) throw new Error("osnova: corrupt interfaces metadata");
       if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[\w.]*`\d+$/.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
       if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
@@ -398,6 +401,7 @@ function deserializeBody(
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
+        ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
