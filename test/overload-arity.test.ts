@@ -224,3 +224,19 @@ describe("warp answers name the overload a call binds", () => {
     expect(toJson).toEqual([[4, 3], [5, 4], [7, 5], [12, 3], [12, 5]]);
   });
 });
+
+describe("warp answers for overloads found in a base class", () => {
+  const base = ["class Base {", "  void ping() { }", "  void pong(String s) { }", "}"].join("\n");
+  const sub = ["class Sub extends Base {", "  void ping(int a) { }", "  void pong(int a) { }", "}"].join("\n");
+  const caller = ["class Run {", "  void go(Sub s) {", "    s.ping();", "    s.pong(1);", "  }", "}"].join("\n");
+
+  it("says where a moved edge came from and lists candidates in other files", async () => {
+    await write({ "src/Base.java": base, "src/Sub.java": sub, "src/Run.java": caller });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "src/Run.java", 3, "ping").toSymbol).toBe("src/Base.java#Base.ping");
+    const ping = formatCallersDetailed(callersDetailed(index, "src/Base.java#Base.ping"));
+    expect(ping).toContain("overload: line 2, chosen by argument count 0; moved from src/Sub.java#Sub.ping");
+    const pong = formatCallersDetailed(callersDetailed(index, "src/Sub.java#Sub.pong"));
+    expect(pong).toContain("overload: not determined; argument count 1 fits lines 3, src/Base.java:3");
+  });
+});

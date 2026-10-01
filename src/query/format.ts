@@ -366,9 +366,10 @@ function routeDetail(edge: OsnovaEdge): string[] {
 function overloadDetail(edge: OsnovaEdge): string[] {
   const overload = edge.overload;
   if (overload === undefined || edge.arguments === undefined) return [];
-  if ("line" in overload) return [`overload: line ${overload.line}, chosen by argument count ${edge.arguments}`];
-  return overload.candidates.length === 0 ? [`overload: no declaration takes argument count ${edge.arguments}`]
-    : [`overload: not determined; argument count ${edge.arguments} fits lines ${overload.candidates.join(", ")}`];
+  if ("line" in overload) return [`overload: line ${overload.line}, chosen by argument count ${edge.arguments}${overload.from === undefined ? "" : `; moved from ${overload.from}`}`];
+  const fits = [...overload.candidates.map(String), ...(overload.elsewhere ?? []).map((declaration) => `${declaration.file}:${declaration.line}`)];
+  return fits.length === 0 ? [`overload: no declaration takes argument count ${edge.arguments}`]
+    : [`overload: not determined; argument count ${edge.arguments} fits lines ${fits.join(", ")}`];
 }
 
 function edgeDetail(hit: CallerEvidenceHit): string[] {
