@@ -242,17 +242,41 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Types.cs", 4)).toMatchObject({ toSymbol: "Types.cs#C.C", overload: { line: 2 } });
   });
 
-  it("does not take a Java local class declared after the creation", async () => {
-    await write({ "Use.java": "class T { T() {} }\nclass Use {\n  void use() {\n    new T();\n    class T { T() {} }\n  }\n}\n" });
+  it("leaves a Java name unresolved when a local class of that name is declared in an enclosing method", async () => {
+    await write({ "Use.java": "class T { T() {} }\nclass Use {\n  void use() {\n    new T();\n    class T { T() {} }\n    new T();\n  }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(creationAt(index, "Use.java", 4)).toMatchObject({ toSymbol: "Use.java#T.T" });
+    expect(creationAt(index, "Use.java", 4)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Use.java", 6)).toMatchObject({ toSymbol: undefined });
   });
 
-  it("takes a Java local class declared earlier in the creation's block, and only there", async () => {
-    await write({ "Use.java": "class T { T() {} }\nclass Use {\n  void use() {\n    class T { T() {} }\n    new T();\n  }\n  void other() {\n    {\n      class T { T() {} }\n    }\n    new T();\n  }\n}\n" });
+  it("indexes two Java local classes that share a qualified name without naming either", async () => {
+    await write({ "Use.java": "class Use {\n  void use() {\n    {\n      class T { T() {} }\n      new T();\n    }\n    {\n      class T { T() {} }\n    }\n  }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(creationAt(index, "Use.java", 5)).toMatchObject({ toSymbol: "Use.java#Use.use.T.T" });
-    expect(creationAt(index, "Use.java", 11)).toMatchObject({ toSymbol: "Use.java#T.T" });
+    expect(creationAt(index, "Use.java", 5)).toMatchObject({ toSymbol: undefined });
+    expect(await loadIndex(workspace, { cacheDir })).not.toBeUndefined();
+  });
+
+  it("returns no member type past the C# base walk's budget", async () => {
+    const source = ["class T { public T() {} }", "class B0 { public class T { public T() {} } }",
+      ...Array.from({ length: 34 }, (_, i) => `class B${i + 1} : B${i} {}`), "class Use : B34 { void Run() { new T(); } }"].join("\n");
+    await write({ "Types.cs": `${source}\n` });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 37)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("does not read a C# alias from a string, equal to a full rebuild after editing it", async () => {
+    await write({
+      "Holder.cs": "class Holder {\n  void Run() {\n    var s = $\"{@\"using Y = P.T;\"}\";\n  }\n}\n",
+      "Box.cs": "namespace P { public class T { public T() {} } }\n",
+      "Use.cs": "class X { public X() {} }\nclass Use { void Run() { new X(); } }\n",
+    });
+    const before = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(before, "Use.cs", 2)).toMatchObject({ toSymbol: "Use.cs#X.X" });
+    await write({ "Holder.cs": "class Holder {\n  void Run() {\n    var s = $\"{@\"using X = P.T;\"}\";\n  }\n}\n" });
+    const updated = await applyChanges(before, workspace, ["Holder.cs"]);
+    const fresh = await buildIndex(workspace, { cacheDir: path.join(temporary, "fresh-cache") });
+    expect(serializeArtifact(updated).equals(serializeArtifact(fresh))).toBe(true);
+    expect(creationAt(updated, "Use.cs", 2)).toMatchObject({ toSymbol: "Use.cs#X.X" });
   });
 
   it("finds a C# nested type declared in another part of an enclosing partial type", async () => {
