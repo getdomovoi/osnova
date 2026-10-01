@@ -175,7 +175,7 @@ ${view.main}
     <nav class="foot-links" aria-label="Project">
       ${footLinks.join("\n      ")}
     </nav>
-    <p class="foot-note">Apache-2.0, by getdomovoi. This site sets no cookies and runs no analytics. It loads fonts from Google Fonts and asks the npm registry for the latest version number.</p>
+    <p class="foot-note">Apache-2.0, by getdomovoi. This site sets no cookies. It counts visits with Cloudflare Web Analytics, which uses no cookies or local storage and does not fingerprint visitors. It loads fonts from Google Fonts and asks the npm registry for the latest version number.</p>
   </div>
   <div class="foot-plinth" aria-hidden="true"></div>
 </footer>
