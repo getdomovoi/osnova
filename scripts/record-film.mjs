@@ -68,27 +68,35 @@ try {
   if (!rect) throw new Error(`no .film-frame on ${url}`);
 
   const frames = [];
-  listeners.push(async (msg) => {
-    if (msg.method !== "Page.screencastFrame") return;
+  // A frame that cannot be saved ends the recording through the awaited flow below, so finally still stops the browser.
+  let failure;
+  listeners.push((msg) => {
+    if (msg.method !== "Page.screencastFrame" || failure) return;
     const { data, metadata, sessionId } = msg.params;
     send("Page.screencastFrameAck", { sessionId }).catch(() => {});
     const file = path.join(outDir, "frames", `${String(frames.length).padStart(5, "0")}.png`);
-    frames.push({ file, ts: metadata.timestamp });
-    fs.writeFileSync(file, Buffer.from(data, "base64"));
+    try {
+      fs.writeFileSync(file, Buffer.from(data, "base64"));
+      frames.push({ file, ts: metadata.timestamp });
+    } catch (error) {
+      failure = error;
+    }
   });
   await send("Page.startScreencast", { format: "png", everyNthFrame: 1, maxWidth: Math.round(width * dsf), maxHeight: Math.round(width * 0.62 * dsf) });
   await sleep(400);
   await evaluate("document.querySelector('[data-film-chips] .chip').click(), true");
   const t0 = Date.now();
   let finished = false;
-  while (!finished && Date.now() - t0 < 60000) {
+  while (!finished && !failure && Date.now() - t0 < 60000) {
     await sleep(250);
     finished = await evaluate("document.querySelector('[data-film-toggle]').textContent === 'Replay'");
   }
+  if (failure) throw failure;
   if (!finished) throw new Error("the film did not finish within 60 s");
   await sleep(2500);
   await send("Page.stopScreencast");
   await sleep(300);
+  if (failure) throw failure;
 
   const lines = [];
   for (let i = 0; i < frames.length; i++) {
