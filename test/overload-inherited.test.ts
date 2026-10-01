@@ -125,7 +125,7 @@ describe("Java overloads declared in a superclass", () => {
     await write(java);
     const index = await buildIndex(workspace, { cacheDir });
     const ranges = index.files.get("src/Obj.java")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
-    expect(ranges).toEqual([[3, { min: 1, max: 1, types: ["String"] }], [4, { min: 1, max: 1, overrides: true, types: ["String"] }],
+    expect(ranges).toEqual([[3, { min: 1, max: 1, types: ["java.lang.String"] }], [4, { min: 1, max: 1, overrides: true, types: ["java.lang.String"] }],
       [5, { min: 0, max: 0, overrides: true, types: [] }], [6, { min: 0, max: 0, access: "private", types: [] }], [7, { min: 0, max: 0, access: "package", types: [] }]]);
   });
 });

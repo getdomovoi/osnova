@@ -53,7 +53,8 @@ export interface OsnovaSymbol {
   readonly signature: string;
   readonly lineCount: number;
   readonly shadowed?: true | undefined;
-  // A C# type written `partial`, as its namespace and generic arity (`N.M`1`): the other partial declarations
+  // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
+  // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.
   readonly partial?: string | undefined;
   readonly exportedNames?: readonly string[] | undefined;

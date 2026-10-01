@@ -220,7 +220,7 @@ function validateRoute(value: unknown): RouteInfo {
 }
 
 // `from` names the method a moved edge resolved to first: `<indexed file>#<member path>` with no empty
-// segment, and, when the file cards are at hand (loading), a symbol that file declares.
+// segment, and, when the file cards are at hand (loading), a method that file declares.
 function validFrom(from: unknown, known: ReadonlySet<string>, declares?: (qualifiedName: string) => boolean): from is string {
   if (typeof from !== "string") return false;
   const hash = from.indexOf("#");
@@ -265,7 +265,7 @@ export function deserializeEdges(bytes: Buffer, paths: readonly string[], files:
   const routeTable = header.routes.map((entry) => validateRoute(entry));
   const knownPaths = new Set(paths);
   const declares = (qualifiedName: string): boolean =>
-    files.get(qualifiedName.slice(0, qualifiedName.indexOf("#")))?.symbols.some((symbol) => symbol.qualifiedName === qualifiedName) ?? false;
+    files.get(qualifiedName.slice(0, qualifiedName.indexOf("#")))?.symbols.some((symbol) => symbol.qualifiedName === qualifiedName && symbol.kind === "method") ?? false;
   const overloadTable = header.overloads.map((entry) => validateOverload(entry, knownPaths, declares));
   const out: OsnovaEdge[] = [];
   for (let i = 1; i < lines.length; i += 1) {

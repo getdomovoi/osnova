@@ -16,20 +16,90 @@ function accessOf(method: Node): ParameterRange["access"] {
   return method.parent?.type === "interface_body" || method.parent?.type === "annotation_type_body" ? undefined : "package";
 }
 
-function parameterRange(list: Node, method: Node): ParameterRange {
+const PRIMITIVES = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"]);
+const JAVA_LANG = new Set(["Object", "String", "CharSequence", "Number", "Integer", "Long", "Short", "Byte", "Character", "Boolean",
+  "Float", "Double", "Void", "Class", "Enum", "Record", "Iterable", "Comparable", "Runnable", "Throwable", "Exception",
+  "RuntimeException", "Error", "StringBuilder", "StringBuffer", "Thread", "Cloneable", "AutoCloseable", "Appendable", "Readable",
+  "Math", "System", "Process", "ClassLoader", "ThreadLocal", "Iterable", "Override", "Deprecated", "FunctionalInterface",
+  "IllegalArgumentException", "IllegalStateException", "NullPointerException", "UnsupportedOperationException",
+  "IndexOutOfBoundsException", "ClassCastException", "ArithmeticException", "InterruptedException", "CloneNotSupportedException"]);
+
+// What a written type name can be proved to mean from the file alone.
+interface TypeScope {
+  readonly packageName: string;
+  readonly imports: ReadonlyMap<string, string>;
+  readonly open: boolean;
+  readonly unproven: ReadonlySet<string>;
+}
+
+function typeScopeOf(root: Node): TypeScope {
+  let packageName = "";
+  const imports = new Map<string, string>();
+  const unproven = new Set<string>();
+  let open = false;
+  for (const child of childrenOf(root)) {
+    if (child.type === "package_declaration") packageName = childrenOf(child).find((part) => part.type === "scoped_identifier" || part.type === "identifier")?.text ?? "";
+    if (child.type !== "import_declaration") continue;
+    const path = childrenOf(child).find((part) => part.type === "scoped_identifier" || part.type === "identifier")?.text ?? "";
+    const isStatic = child.children.some((part) => part?.type === "static");
+    if (childOfType(child, "asterisk") !== null) open = true;
+    else if (isStatic) unproven.add(path.slice(path.lastIndexOf(".") + 1));
+    else imports.set(path.slice(path.lastIndexOf(".") + 1), path);
+  }
+  // A type declared inside another type of this file can share a simple name with a type elsewhere.
+  const walk = (node: Node, depth: number): void => {
+    for (const child of childrenOf(node)) {
+      const declares = /^(?:class|interface|enum|record|annotation_type)_declaration$/.test(child.type);
+      if (declares && depth > 0) unproven.add(child.childForFieldName("name")?.text ?? "");
+      walk(child, declares ? depth + 1 : depth);
+    }
+  };
+  walk(root, 0);
+  return { packageName, imports, open, unproven };
+}
+
+const typeParametersOf = (node: Node): string[] => childrenOf(childOfType(node, "type_parameters") ?? node)
+  .filter((child) => child.type === "type_parameter").map((child) => childrenOf(child).find((part) => part.type === "type_identifier" || part.type === "identifier")?.text ?? "");
+
+// A parameter type with every name replaced by the name it provably means: primitives as written, a
+// single-type import or java.lang by its full name, a package-qualified name as written, and any other
+// simple name by this file's package. A type variable, a nested type of this file, or a name a wildcard or
+// static import could supply proves nothing, and then the whole list is left unrecorded.
+function canonicalType(written: string, scope: TypeScope, typeVariables: ReadonlySet<string>): string | undefined {
+  const text = written.replace(/@[\w.$]+(?:\s*\([^)]*\))?/g, "").replace(/\s+/g, "");
+  let proven = true;
+  const canonical = text.replace(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g, (name) => {
+    if (PRIMITIVES.has(name) || name === "extends" || name === "super") return name;
+    const [first = "", ...rest] = name.split(".");
+    const tail = rest.length > 0 ? `.${rest.join(".")}` : "";
+    if (typeVariables.has(first) || scope.unproven.has(first)) { proven = false; return name; }
+    const imported = scope.imports.get(first);
+    if (imported !== undefined) return `${imported}${tail}`;
+    if (rest.length > 0 && /^[a-z]/.test(first)) return name;
+    if (JAVA_LANG.has(first)) return `java.lang.${name}`;
+    if (scope.open) { proven = false; return name; }
+    return scope.packageName.length > 0 ? `${scope.packageName}.${name}` : name;
+  });
+  return proven ? canonical : undefined;
+}
+
+function parameterRange(list: Node, method: Node, scope: TypeScope, typeVariables: ReadonlySet<string>): ParameterRange {
   const overrides = annotatedOverride(method);
   const access = accessOf(method);
   let count = 0;
   let varargs = false;
-  const types: string[] = [];
+  const types: (string | undefined)[] = [];
   for (const child of childrenOf(list)) {
     if (child.type === "formal_parameter") count += 1;
     else if (child.type === "spread_parameter") varargs = true;
     else continue;
     const type = child.childForFieldName("type") ?? childrenOf(child).find((part) => part.type !== "modifiers" && part.type !== "variable_declarator" && part.type !== "identifier");
-    types.push(`${(type?.text ?? "").replace(/\s+/g, "")}${child.type === "spread_parameter" ? "..." : ""}`);
+    const dimensions = child.childForFieldName("dimensions")?.text ?? "";
+    const canonical = canonicalType(type?.text ?? "", scope, typeVariables);
+    types.push(canonical === undefined ? undefined : `${canonical}${dimensions.replace(/\s+/g, "")}${child.type === "spread_parameter" ? "..." : ""}`);
   }
-  return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), types };
+  const proven = types.every((type): type is string => type !== undefined);
+  return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(proven ? { types } : {}) };
 }
 
 export const javaAdapter: LanguageAdapter = {
@@ -37,6 +107,9 @@ export const javaAdapter: LanguageAdapter = {
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
     const bindings = collectTypedBindings(tree.rootNode, javaSpec);
+    const scope = typeScopeOf(tree.rootNode);
+    const typeVariables: string[][] = [];
+    const inScope = (): ReadonlySet<string> => new Set(typeVariables.flat());
 
     const visit = (node: Node): void => {
       switch (node.type) {
@@ -54,7 +127,9 @@ export const javaAdapter: LanguageAdapter = {
                 : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           out.push(nameNode.text);
+          typeVariables.push(typeParametersOf(node));
           for (const child of childrenOf(node)) visit(child);
+          typeVariables.pop();
           out.pop();
           return;
         }
@@ -68,10 +143,12 @@ export const javaAdapter: LanguageAdapter = {
           if (nameNode !== null) {
             out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             const parameters = node.childForFieldName("parameters");
-            if (parameters !== null) out.setParameters(parameterRange(parameters, node));
+            typeVariables.push(typeParametersOf(node));
+            if (parameters !== null) out.setParameters(parameterRange(parameters, node, scope, inScope()));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
+            typeVariables.pop();
           }
           return;
         }
