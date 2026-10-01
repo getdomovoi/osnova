@@ -51,7 +51,7 @@ Every truth script writes the same truth-file format, so `score.mjs` and `osnova
 }
 ```
 
-Paths are relative to the checkout root with `/` separators. `line` is the 1-based line of the call. Osnova records the first line of the call expression, which is the callee name's line except in a call that spans lines before its name, such as a method chain written one call per line. `targetStartLine` and `targetEndLine` are the 1-based span of the definition the edge points to. There is one entry per resolved call edge; unresolved calls are left out.
+Paths are relative to the checkout root with `/` separators. `line` is the 1-based line of the call. Osnova records the first line of the call expression, which is the callee name's line except in a call that spans lines before its name, such as a method chain written one call per line. `targetStartLine` and `targetEndLine` are the 1-based span of the definition the edge points to. There is one entry per resolved call edge; unresolved calls are left out. A call edge whose argument count fits several overloads of its target, or none, names no declaration, so `osnova-sites.mjs` leaves it out and counts it in `overloadUndetermined`; an edge whose count names one overload claims that overload's span.
 
 ## Reproducing the recorded numbers
 

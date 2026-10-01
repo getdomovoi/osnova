@@ -66,7 +66,21 @@ export interface OsnovaSymbol {
   readonly elementTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly values?: ReturnBinding | undefined;
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly parameters?: ParameterRange | undefined;
 }
+
+// How many arguments a method's parameter list accepts. `max` is absent when a varargs or `params`
+// parameter takes any number more; `extension` marks a C# extension method, whose first argument
+// may be written as the receiver instead.
+export interface ParameterRange {
+  readonly min: number;
+  readonly max?: number | undefined;
+  readonly extension?: true | undefined;
+}
+
+// The declaration of an overloaded name that a call's argument count selects: `line` when exactly one
+// declaration accepts the count, otherwise every declaration that does (empty when none does).
+export type OverloadChoice = { readonly line: number } | { readonly candidates: readonly number[] };
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
 export type ReceiverMode = "instance" | "class";
@@ -139,6 +153,8 @@ export interface OsnovaEdge {
   readonly evidence?: EdgeEvidence | undefined;
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
+  readonly arguments?: number | undefined;
+  readonly overload?: OverloadChoice | undefined;
 }
 
 export interface FileCard {

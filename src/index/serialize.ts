@@ -18,6 +18,7 @@ import type {
   RouteSite,
   SymbolDegree,
   OsnovaSymbol,
+  ParameterRange,
 } from "../types.js";
 import { indexFormatVersion } from "../types.js";
 import { membersOf, validOwner } from "./edgeStore.js";
@@ -40,7 +41,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.30.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.31.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -50,6 +51,12 @@ const symbolKinds = membersOf<SymbolKind>({
 const memberKinds = membersOf<MemberKind>({ instance: true, static: true, class: true, property: true, unknown: true });
 
 class ExtractionVersionError extends Error {}
+
+function validParameters(value: unknown): boolean {
+  const range = value as Partial<ParameterRange> | null;
+  return typeof range === "object" && range !== null && nonnegativeInteger(range.min) &&
+    (range.max === undefined || (nonnegativeInteger(range.max) && range.max >= range.min)) && (range.extension === undefined || range.extension === true);
+}
 
 class ArtifactVersionError extends Error {
   constructor(readonly version: unknown) {
@@ -84,6 +91,7 @@ interface SerializedSymbol {
   readonly elementTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly values?: ReturnBinding | undefined;
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly parameters?: ParameterRange | undefined;
 }
 
 interface SerializedFile {
@@ -173,6 +181,7 @@ export function serializeSections(
         ...(symbol.elementTypes === undefined ? {} : { elementTypes: symbol.elementTypes }),
         ...(symbol.values === undefined ? {} : { values: symbol.values }),
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
+        ...(symbol.parameters === undefined ? {} : { parameters: symbol.parameters }),
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
@@ -363,6 +372,7 @@ function deserializeBody(
       if (symbol.unwrapped !== undefined && !validReturn(symbol.unwrapped)) throw new Error("osnova: corrupt return metadata");
       if (symbol.elements !== undefined && !validReturn(symbol.elements)) throw new Error("osnova: corrupt return metadata");
       if (symbol.values !== undefined && !validReturn(symbol.values)) throw new Error("osnova: corrupt return metadata");
+      if (symbol.parameters !== undefined && !validParameters(symbol.parameters)) throw new Error("osnova: corrupt parameter metadata");
       if (symbol.valueTypes !== undefined && (typeof symbol.valueTypes !== "object" || symbol.valueTypes === null || Array.isArray(symbol.valueTypes) || !Object.values(symbol.valueTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.elementTypes !== undefined && (typeof symbol.elementTypes !== "object" || symbol.elementTypes === null || Array.isArray(symbol.elementTypes) || !Object.values(symbol.elementTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.returnTuple !== undefined && (!Array.isArray(symbol.returnTuple) || !symbol.returnTuple.every((item: unknown) => item === null || validReturn(item)))) throw new Error("osnova: corrupt return metadata");
@@ -396,6 +406,7 @@ function deserializeBody(
         ...(symbol.elementTypes === undefined ? {} : { elementTypes: symbol.elementTypes }),
         ...(symbol.values === undefined ? {} : { values: symbol.values }),
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
+        ...(symbol.parameters === undefined ? {} : { parameters: symbol.parameters }),
       };
     });
     symbols.forEach((symbol: OsnovaSymbol, i: number) => { degrees.set(symbol.qualifiedName, { incoming: file.d[2 * i]!, outgoing: file.d[2 * i + 1]! }); });
