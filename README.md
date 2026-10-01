@@ -143,7 +143,7 @@ One global install serves every repository and every client: one entry in each c
 | Client | How to wire | What it adds |
 | --- | --- | --- |
 | Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
-| Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova`, with no global install; updates follow the marketplace |
+| Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova@<version>`, pinned to the plugin's release, with no global install; updates follow the marketplace |
 | Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently; step by step in [Osnova with Codex](docs/codex.md) |
 | Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message |
 | OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin that appends starting points to each message; the tool guidance comes from the MCP instructions |

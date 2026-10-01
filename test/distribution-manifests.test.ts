@@ -40,12 +40,49 @@ describe("distribution manifests", () => {
     expect(validate(stale)).toBe(false);
   });
 
-  it("wire the plugin hooks exactly as osnova setup would", () => {
-    expect(read<unknown>("integrations/claude-code/hooks/hooks.json")).toEqual(hookSettingsObject(["npx", "-y", "@getdomovoi/osnova"], "claude-code"));
+  // The plugin directory blocks an npx launcher without an exact version, so the plugin runs the release it ships with.
+  const launcher = () => `@getdomovoi/osnova@${pkg.version}`;
+
+  it("wire the plugin hooks exactly as osnova setup would, pinned to this release", () => {
+    expect(read<unknown>("integrations/claude-code/hooks/hooks.json")).toEqual(hookSettingsObject(["npx", "-y", launcher()], "claude-code"));
   });
 
-  it("serve the plugin MCP entry through the same package", () => {
-    expect(read<Mcp>("integrations/claude-code/.mcp.json").mcpServers.osnova).toEqual({ command: "npx", args: ["-y", "@getdomovoi/osnova", "mcp"] });
+  it("serve the plugin MCP entry through the same pinned package", () => {
+    expect(read<Mcp>("integrations/claude-code/.mcp.json").mcpServers.osnova).toEqual({ command: "npx", args: ["-y", launcher(), "mcp"] });
     expect(read<Marketplace>(".claude-plugin/marketplace.json").plugins[0].source).toBe("./integrations/claude-code");
+  });
+
+  it("ship the plugin README the directory lists, describing what the plugin runs", () => {
+    const readme = readFileSync(path.join(root, "integrations/claude-code/README.md"), "utf8");
+    const prose = readme.replace(/```[\s\S]*?```/g, "");
+    expect(prose.split(/\s+/).filter(Boolean).length).toBeGreaterThanOrEqual(40);
+    expect(readme).toContain(launcher());
+    for (const hook of ["SessionStart", "UserPromptSubmit", "Stop"]) expect(readme).toContain(hook);
+  });
+
+  it("name the listing links in plugin.json, so the directory does not guess them from README prose", () => {
+    const plugin = read<Record<string, unknown>>("integrations/claude-code/.claude-plugin/plugin.json");
+    expect(plugin).toMatchObject({
+      homepage: "https://getosnova.dev",
+      documentationUrl: "https://github.com/getdomovoi/osnova/blob/main/docs/reference.md",
+      supportUrl: "https://github.com/getdomovoi/osnova/issues",
+      privacyPolicyUrl: "https://getosnova.dev/privacy/",
+    });
+    expect(readFileSync(path.join(root, "integrations/claude-code/README.md"), "utf8")).not.toMatch(/https:\/\/[^\s)]+[.,;:](\s|$)/m);
+  });
+
+  it("ship the square PNG icon the directory lists: 512 to 2048 px and under 2 MB", () => {
+    const icon = readFileSync(path.join(root, "integrations/claude-code/.claude-plugin/icon.png"));
+    expect(icon.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    const [width, height] = [icon.readUInt32BE(16), icon.readUInt32BE(20)];
+    expect(width).toBe(height);
+    expect(width).toBeGreaterThanOrEqual(512);
+    expect(width).toBeLessThanOrEqual(2048);
+    expect(icon.length).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it("allow no dependency build script, which the directory treats as unscanned install code", () => {
+    const workspace = readFileSync(path.join(root, "pnpm-workspace.yaml"), "utf8");
+    expect(workspace).not.toMatch(/^\s+\S+:\s*true\s*$/m);
   });
 });

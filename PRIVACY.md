@@ -14,7 +14,7 @@ One cache directory per repository: the structural index, the source-text sideca
 
 Nothing. Indexing and every query run offline. Osnova collects no usage data, no telemetry, no crash reports, and phones home to no server. The one command that opens a network connection is `osnova update-check`, which you run yourself; it asks the npm registry for the latest version number and sends nothing but that request.
 
-The Claude Code plugin runs its commands as `npx -y @getdomovoi/osnova`, so the first use fetches the package from the npm registry; that is npm's request, not Osnova's, and it happens once per machine.
+The Claude Code plugin runs its commands as `npx -y @getdomovoi/osnova@<version>`, pinned to the release the plugin ships with, so the first use of each version fetches the package from the npm registry; that is npm's request, not Osnova's.
 
 Optional LSP enrichment, when you enable it, runs a language server executable that you supply and approve on each use. What that server does with your code is governed by its own policy; Osnova never launches one from its own stored configuration. The one other way to run a language server is to name it on the command line that starts the MCP server (`osnova mcp --lsp-server <path>`); an MCP client that keeps that command in its configuration starts the server with every session, and removing the flag stops it.
 
