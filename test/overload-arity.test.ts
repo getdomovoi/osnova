@@ -102,8 +102,10 @@ describe("Java overloads chosen by argument count", () => {
     const index = await buildIndex(workspace, { cacheDir });
     const ranges = index.files.get("src/Gson.java")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
     expect(ranges).toEqual([
-      [3, { min: 1, max: 1 }], [4, { min: 2, max: 2 }], [5, { min: 3, max: 3 }], [6, { min: 2, max: 2 }], [7, { min: 2, max: 2 }],
-      [8, { min: 0 }], [9, { min: 2, max: 2 }], [10, { min: 1, max: 1 }],
+      [3, { min: 1, max: 1, types: ["Object"] }], [4, { min: 2, max: 2, types: ["Object", "Appendable"] }],
+      [5, { min: 3, max: 3, types: ["Object", "Appendable", "int"] }], [6, { min: 2, max: 2, types: ["String", "Class<T>"] }],
+      [7, { min: 2, max: 2, types: ["String", "java.lang.reflect.Type"] }], [8, { min: 0, types: ["String..."] }],
+      [9, { min: 2, max: 2, types: ["int", "String"] }], [10, { min: 1, max: 1, types: ["int"] }],
     ]);
   });
 });
@@ -329,5 +331,18 @@ describe("a Java @Override that may implement an interface method", () => {
     const call = choiceAt(index, "Use.java", 2, "put");
     expect(call.overload).not.toEqual({ line: 2 });
     expect(call.overload).toEqual({ candidates: [2], elsewhere: [{ file: "Base.java", line: 2 }] });
+  });
+});
+
+describe("a Java @Override hides the base declaration with the same written parameter types", () => {
+  it("still chooses the override when it repeats the base signature in a class that implements an interface", async () => {
+    await write({
+      "Base.java": "public class Base {\n  public void put(String x) {}\n  public void put(String x, int n) {}\n}\n",
+      "I.java": "public interface I {\n  void run();\n}\n",
+      "Child.java": "public class Child extends Base implements I {\n  @Override public void put(String s) {}\n  public void run() {}\n}\n",
+      "Use.java": "public class Use {\n  public void go(Child child) { child.put(\"a\"); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "Use.java", 2, "put")).toEqual({ toSymbol: "Child.java#Child.put", arguments: 1, overload: undefined });
   });
 });

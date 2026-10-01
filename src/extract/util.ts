@@ -103,11 +103,6 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, parameters });
   }
 
-  markInterfaces(): void {
-    const last = this.definitions.pop();
-    if (last !== undefined) this.definitions.push({ ...last, interfaces: true });
-  }
-
   markPartial(identity: string): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, partial: identity });

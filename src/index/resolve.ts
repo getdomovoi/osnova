@@ -578,9 +578,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // and so on. A base declaration the holder cannot call (private, or package-private in another Java
   // package) is left out. Interfaces add nothing to a class's overloads here: C# does not inherit their
   // members into a class, and Java's default methods are left out. `complete` is false when a declared
-  // base cannot be identified, so declarations further up may be missing. `interfaces` is true when a
-  // type in the walk declares an interface it implements.
-  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean; interfaces: boolean };
+  // base cannot be identified, so declarations further up may be missing.
+  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean };
   const levelCache = new Map<string, OverloadLevels>();
   const overloadLevelsOf = (holder: OsnovaSymbol, member: string): OverloadLevels => {
     const key = `${holder.qualifiedName}\u0000${member}`;
@@ -592,17 +591,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   };
   const walkLevels = (holder: OsnovaSymbol, member: string): OverloadLevels => {
     const levels: OsnovaSymbol[][] = [];
-    let interfaces = false;
     const visited = new Set<string>();
     const home = javaPackageOf(files.get(holder.file));
     let current: OsnovaSymbol | undefined = holder;
     let complete = true;
     while (current !== undefined) {
-      if (visited.has(typeKey(current)) || levels.length > 8) return { levels, complete: false, interfaces };
+      if (visited.has(typeKey(current)) || levels.length > 8) return { levels, complete: false };
       visited.add(typeKey(current));
       const { parts, complete: whole } = partsOf(current);
       complete &&= whole;
-      if (parts.some((part) => declarationsOf(part).some((declaration) => declaration.interfaces === true))) interfaces = true;
       const seen = new Set<string>();
       const inherited = levels.length > 0;
       levels.push(parts.flatMap((part) => {
@@ -616,17 +613,18 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       for (const part of parts) {
         for (const binding of part.heritage ?? []) {
           const base = baseOf(part, binding);
-          if (base === undefined) return { levels, complete: false, interfaces };
-          if (base.kind === "interface" && current.kind !== "interface") { interfaces = true; continue; }
+          if (base === undefined) return { levels, complete: false };
+          if (base.kind === "interface" && current.kind !== "interface") continue;
           bases.set(typeKey(base), base);
         }
       }
-      if (bases.size > 1) return { levels, complete: false, interfaces };
+      if (bases.size > 1) return { levels, complete: false };
       current = [...bases.values()][0];
     }
-    return { levels, complete, interfaces };
+    return { levels, complete };
   };
-  // An override hides one base declaration with the same parameter range (see overridesHide). When a level holds more
+  // An override hides one base declaration with the same parameter range (and, in Java, the same written
+  // parameter types). When a level holds more
   // declarations of that range than overrides above it, which ones stay is unknown, so all are listed.
   const chooseOverload = (edge: OsnovaEdge): OsnovaEdge => {
     const local = withOverload(edge, declaredAs);
@@ -639,14 +637,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       : edge.toSymbol.slice(0, edge.toSymbol.lastIndexOf("."));
     const holder = declaredAs(holderName.slice(0, holderName.indexOf("#")), holderName).find(isHolder);
     if (holder === undefined) return local;
-    const { levels, complete, interfaces } = overloadLevelsOf(holder, own[0]!.name);
-    // Java's @Override also marks an interface method's implementation, so once the walk meets an
-    // interface an override no longer says which base declaration it replaces; it hides none. C#'s
-    // `override` applies to class members only.
-    const overridesHide = !(language === "java" && interfaces);
+    const { levels, complete } = overloadLevelsOf(holder, own[0]!.name);
     if (levels.some((level) => level.some((symbol) => symbol.parameters === undefined))) return local;
     const count = edge.arguments;
-    const keyOf = (range: ParameterRange): string => `${range.min}:${range.max ?? ""}:${range.extension === true ? "e" : ""}`;
+    // Java overrides a method by its parameter types, and @Override also marks an interface method's
+    // implementation, so a Java override hides only a base declaration written with the same types.
+    const keyOf = (range: ParameterRange): string => `${range.min}:${range.max ?? ""}:${range.extension === true ? "e" : ""}:${range.types?.join(",") ?? ""}`;
     const pending = new Map<string, number>();
     const listed: OsnovaSymbol[] = [];
     let slots = 0;
@@ -658,7 +654,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         groups.set(key, [...(groups.get(key) ?? []), symbol]);
       }
       for (const [key, group] of groups) {
-        const hidden = overridesHide ? Math.min(pending.get(key) ?? 0, group.length) : 0;
+        const hidden = Math.min(pending.get(key) ?? 0, group.length);
         slots += group.length - hidden;
         if (hidden < group.length) listed.push(...group);
         // Every override in the group, hidden or not, still hides one declaration further up.

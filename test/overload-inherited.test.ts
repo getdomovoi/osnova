@@ -105,7 +105,7 @@ describe("Java overloads declared in a superclass", () => {
     const index = await buildIndex(workspace, { cacheDir });
     expect(choiceAt(index, "src/Use.java", 6, "get")).toMatchObject({
       toSymbol: "src/Obj.java#Obj.get",
-      overload: { candidates: [4], elsewhere: [{ file: "src/Element.java", line: 4 }, { file: "src/Element.java", line: 5 }] },
+      overload: { candidates: [4], elsewhere: [{ file: "src/Element.java", line: 4 }] },
     });
   });
 
@@ -125,8 +125,8 @@ describe("Java overloads declared in a superclass", () => {
     await write(java);
     const index = await buildIndex(workspace, { cacheDir });
     const ranges = index.files.get("src/Obj.java")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
-    expect(ranges).toEqual([[3, { min: 1, max: 1 }], [4, { min: 1, max: 1, overrides: true }], [5, { min: 0, max: 0, overrides: true }],
-      [6, { min: 0, max: 0, access: "private" }], [7, { min: 0, max: 0, access: "package" }]]);
+    expect(ranges).toEqual([[3, { min: 1, max: 1, types: ["String"] }], [4, { min: 1, max: 1, overrides: true, types: ["String"] }],
+      [5, { min: 0, max: 0, overrides: true, types: [] }], [6, { min: 0, max: 0, access: "private", types: [] }], [7, { min: 0, max: 0, access: "package", types: [] }]]);
   });
 });
 

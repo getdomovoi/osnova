@@ -21,11 +21,15 @@ function parameterRange(list: Node, method: Node): ParameterRange {
   const access = accessOf(method);
   let count = 0;
   let varargs = false;
+  const types: string[] = [];
   for (const child of childrenOf(list)) {
     if (child.type === "formal_parameter") count += 1;
     else if (child.type === "spread_parameter") varargs = true;
+    else continue;
+    const type = child.childForFieldName("type") ?? childrenOf(child).find((part) => part.type !== "modifiers" && part.type !== "variable_declarator" && part.type !== "identifier");
+    types.push(`${(type?.text ?? "").replace(/\s+/g, "")}${child.type === "spread_parameter" ? "..." : ""}`);
   }
-  return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }) };
+  return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), types };
 }
 
 export const javaAdapter: LanguageAdapter = {
@@ -49,7 +53,6 @@ export const javaAdapter: LanguageAdapter = {
                 ? "enum"
                 : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
-          if (childOfType(node, "super_interfaces") !== null) out.markInterfaces();
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();

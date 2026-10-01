@@ -130,7 +130,6 @@ export async function extractCard(
       lineCount: Math.max(1, def.span.endLine - def.span.startLine + 1),
       ...(def.shadowed === undefined ? {} : { shadowed: def.shadowed }),
       ...(def.partial === undefined ? {} : { partial: def.partial }),
-      ...(def.interfaces === undefined ? {} : { interfaces: def.interfaces }),
       ...(def.exportedNames === undefined ? {} : { exportedNames: def.exportedNames }),
       ...(def.memberKind === undefined ? {} : { memberKind: def.memberKind }),
       ...(def.heritage === undefined ? {} : { heritage: def.heritage }),

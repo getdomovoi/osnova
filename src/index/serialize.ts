@@ -56,7 +56,8 @@ function validParameters(value: unknown): boolean {
   const range = value as Partial<ParameterRange> | null;
   return typeof range === "object" && range !== null && nonnegativeInteger(range.min) &&
     (range.max === undefined || (nonnegativeInteger(range.max) && range.max >= range.min)) && (range.extension === undefined || range.extension === true) &&
-    (range.overrides === undefined || range.overrides === true) && (range.access === undefined || range.access === "private" || range.access === "package");
+    (range.overrides === undefined || range.overrides === true) && (range.access === undefined || range.access === "private" || range.access === "package") &&
+    (range.types === undefined || (Array.isArray(range.types) && range.types.every((type) => typeof type === "string")));
 }
 
 class ArtifactVersionError extends Error {
@@ -80,7 +81,6 @@ interface SerializedSymbol {
   readonly signature: string;
   readonly shadowed?: true | undefined;
   readonly partial?: string | undefined;
-  readonly interfaces?: true | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -172,7 +172,6 @@ export function serializeSections(
         signature: symbol.signature,
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
-        ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
@@ -364,7 +363,6 @@ function deserializeBody(
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
-      if (symbol.interfaces !== undefined && symbol.interfaces !== true) throw new Error("osnova: corrupt interfaces metadata");
       if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[\w.]*`\d+$/.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
       if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
@@ -401,7 +399,6 @@ function deserializeBody(
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
-        ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
