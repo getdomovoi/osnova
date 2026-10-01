@@ -1,7 +1,18 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, childOfType, childrenOf } from "./util.js";
+import { Extractor, argumentCount, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, javaSpec } from "./typed-bindings.js";
+
+function parameterRange(list: Node): ParameterRange {
+  let count = 0;
+  let varargs = false;
+  for (const child of childrenOf(list)) {
+    if (child.type === "formal_parameter") count += 1;
+    else if (child.type === "spread_parameter") varargs = true;
+  }
+  return varargs ? { min: count } : { min: count, max: count };
+}
 
 export const javaAdapter: LanguageAdapter = {
   language: "java",
@@ -38,6 +49,8 @@ export const javaAdapter: LanguageAdapter = {
           }
           if (nameNode !== null) {
             out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
+            const parameters = node.childForFieldName("parameters");
+            if (parameters !== null) out.setParameters(parameterRange(parameters));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -61,7 +74,7 @@ export const javaAdapter: LanguageAdapter = {
         }
         case "method_invocation": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(node, node));
+          if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(node, node), undefined, argumentCount(node.childForFieldName("arguments")));
           for (const child of childrenOf(node)) visit(child);
           return;
         }

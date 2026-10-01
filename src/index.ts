@@ -51,6 +51,8 @@ export type {
   IndexDiagnostic,
   IndexHealthReport,
   OsnovaSymbol,
+  OverloadChoice,
+  ParameterRange,
   ProgressEvent,
   SkeletonEntry,
   SkeletonResult,

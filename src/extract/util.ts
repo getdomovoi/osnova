@@ -1,7 +1,7 @@
 import type { Node, Tree } from "web-tree-sitter";
 import { makeSpan, makeSignature } from "./adapter.js";
 import type { RawDefinition, RawEdge } from "./adapter.js";
-import type { Callee, EdgeBinding, EdgeKind, MemberKind, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
+import type { Callee, EdgeBinding, EdgeKind, MemberKind, ParameterRange, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
 
 export type VisitResult = boolean | void;
 
@@ -98,7 +98,12 @@ export class Extractor {
     this.definitions.push(def);
   }
 
-  addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo): void {
+  setParameters(parameters: ParameterRange): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, parameters });
+  }
+
+  addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number): void {
     const name = toName.trim();
     if (name.length === 0 || name.length > 300) return;
     const edge: RawEdge = {
@@ -108,9 +113,17 @@ export class Extractor {
       enclosing: this.enclosing,
       ...(binding === undefined ? {} : { binding }),
       ...(route === undefined ? {} : { route }),
+      ...(args === undefined ? {} : { arguments: args }),
     };
     this.edges.push(edge);
   }
+}
+
+const COMMENT_TYPES = new Set(["comment", "line_comment", "block_comment"]);
+
+// The number of arguments written in a call's argument list, comments aside.
+export function argumentCount(list: Node | null): number | undefined {
+  return list === null ? undefined : childrenOf(list).filter((child) => child.isNamed && !COMMENT_TYPES.has(child.type)).length;
 }
 
 export function lastIdentifier(node: Node): string | null {

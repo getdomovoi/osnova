@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ReceiverBasis, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
+import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ParameterRange, ReceiverBasis, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
 import { qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { collectLockfiles, externalLabel } from "./external.js";
@@ -585,6 +585,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
               evidence: { source: "syntax", resolution: { status: "unresolved", reason: "shadowed-declaration" } },
               ...(raw.route === undefined ? {} : { route: raw.route }),
+              ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
             });
             continue;
           }
@@ -897,6 +898,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           evidence: { source: "syntax", resolution },
           ...(resolved === undefined ? {} : { toSymbol: resolved.qualifiedName, toFile: resolved.file }),
           ...(raw.route === undefined ? {} : { route: raw.route }),
+          ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
         });
         continue;
       }
@@ -927,9 +929,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // the family defines is a builtin or a standard-library name: external, like an unbound global.
         : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
           : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : imported.length > 0 ? "imported-file-name" : "unique-name" };
+      const args = raw.arguments === undefined ? {} : { arguments: raw.arguments };
       edges.push(
         resolved === undefined
-          ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution } }
+          ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution }, ...args }
           : {
               kind: raw.kind,
               fromFile,
@@ -939,9 +942,29 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               toSymbol: resolved.qualifiedName,
               toFile: resolved.file,
               evidence: { source: "syntax", resolution },
+              ...args,
             },
       );
     }
   }
-  return edges;
+  return edges.map((edge) => withOverload(edge, declaredAs));
+}
+
+function accepts(range: ParameterRange, count: number): boolean {
+  const fits = (n: number): boolean => n >= range.min && (range.max === undefined || n <= range.max);
+  return fits(count) || (range.extension === true && fits(count + 1));
+}
+
+// The index keeps one symbol per qualified name, so every overload of a method shares the edge's target.
+// The call's argument count names the declaration it binds when exactly one accepts that many.
+function withOverload(edge: OsnovaEdge, declaredAs: (file: string, qualifiedName: string) => readonly OsnovaSymbol[]): OsnovaEdge {
+  const ranges = edge.kind !== "calls" || edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined ? []
+    : declaredAs(edge.toFile, edge.toSymbol).flatMap((symbol) => symbol.parameters === undefined ? [] : [{ line: symbol.span.startLine, range: symbol.parameters }]);
+  const count = edge.arguments ?? 0;
+  const lines = ranges.filter((entry) => accepts(entry.range, count)).map((entry) => entry.line).sort((a, b) => a - b);
+  const overload = ranges.length === 0 || (ranges.length === 1 && lines.length === 1) ? undefined
+    : lines.length === 1 ? { line: lines[0]! } : { candidates: lines };
+  if (overload === undefined && edge.overload === undefined) return edge;
+  const { overload: _previous, ...rest } = edge;
+  return overload === undefined ? rest : { ...rest, overload };
 }

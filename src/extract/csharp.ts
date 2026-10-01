@@ -1,9 +1,25 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, childOfType, childrenOf } from "./util.js";
+import { Extractor, argumentCount, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// This grammar writes `params int[] rest` as a bare `params` token in the list, not as a parameter.
+function parameterRange(list: Node): ParameterRange {
+  let required = 0;
+  let optional = 0;
+  const variadic = list.children.some((child) => child?.type === "params");
+  let extension = false;
+  for (const child of childrenOf(list)) {
+    if (child.type !== "parameter") continue;
+    if (required + optional === 0 && childrenOf(child).some((part) => part.type === "parameter_modifier" && part.text === "this")) extension = true;
+    if (childOfType(child, "equals_value_clause") !== null) optional += 1;
+    else required += 1;
+  }
+  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}) };
+}
 
 export const csharpAdapter: LanguageAdapter = {
   language: "c_sharp",
@@ -39,6 +55,8 @@ export const csharpAdapter: LanguageAdapter = {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null && IDENTIFIER_RE.test(nameNode.text)) {
             out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
+            const parameters = node.childForFieldName("parameters");
+            if (parameters !== null) out.setParameters(parameterRange(parameters));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -65,12 +83,13 @@ export const csharpAdapter: LanguageAdapter = {
         }
         case "invocation_expression": {
           const fn = node.childForFieldName("function");
+          const args = argumentCount(node.childForFieldName("arguments"));
           if (fn !== null) {
             if (fn.type === "identifier") {
-              out.addEdge("calls", fn.text, node);
+              out.addEdge("calls", fn.text, node, undefined, undefined, args);
             } else if (fn.type === "member_access_expression") {
               const nameNode = fn.childForFieldName("name");
-              if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(fn, node));
+              if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(fn, node), undefined, args);
             }
           }
           for (const child of childrenOf(node)) visit(child);

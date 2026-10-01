@@ -2,6 +2,18 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+The extraction version moves to `structural-9.31` and the edge section format to 12, so the first run after upgrading rebuilds the cache once.
+
+### Added
+
+- Java and C# call edges name the overload they bind when the written argument count selects one. Methods record their parameter range (`OsnovaSymbol.parameters`), call edges their argument count (`OsnovaEdge.arguments`), and `OsnovaEdge.overload` holds `{ line }` for the one declaration that accepts the count or `{ candidates }` when none or several do. The edge keeps its method target either way, so callers are unchanged. Scored against javac and Roslyn on the pinned gson and humanizer checkouts, false call edges fell from 2045 to 9 on gson and from 617 to 55 on humanizer, and in-repo sites covered moved from 55.1% to 54.3% and from 58.0% to 58.5%; the other four oracle corpora score the same. `benchmarks/oracle/osnova-sites.mjs` claims the chosen overload's span and counts edges with no chosen overload in `overloadUndetermined` instead of claiming one.
+
+### Fixed
+
+- Two calls to one method on one line with different argument counts are two edges; they were merged into one.
+
 ## 0.11.0 (2026-09-30)
 
 ### Breaking
