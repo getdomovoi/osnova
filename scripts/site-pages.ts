@@ -15,7 +15,7 @@ interface PageSource {
 
 const SOURCES: readonly PageSource[] = [
   { file: "CHANGELOG.md", slug: "changelog", title: "Changelog", description: "Every osnova release: what was added, changed, fixed and broken, with what was measured." },
-  { file: "PRIVACY.md", slug: "privacy", title: "Privacy", description: "Osnova runs on your machine. What it reads, what it writes, and what it sends: nothing." },
+  { file: "PRIVACY.md", slug: "privacy", title: "Privacy", description: "Osnova runs on your machine. What it reads, what it writes, and what it sends: nothing unless you run osnova update-check." },
   { file: "SECURITY.md", slug: "security", title: "Security", description: "Supported versions, what osnova may touch, and how to report a vulnerability." },
 ];
 

@@ -146,7 +146,7 @@
         <p class="cap">and builds a symbol and <span class="kw">call graph</span>.</p>
         <div class="vis vis-weave">
           <svg class="weave" viewBox="0 0 1000 360" preserveAspectRatio="xMidYMid meet" data-weave></svg>
-          <p class="weave-note cue" data-at="3500">The calls <span class="mono">refreshWorkspace</span> makes in osnova 0.11.0, one weft per calling line.</p>
+          <p class="weave-note cue" data-at="3500">Eleven of the calls <span class="mono">refreshWorkspace</span> makes in osnova 0.11.0, one weft per calling line.</p>
         </div>
       </div>
 
@@ -223,7 +223,7 @@
       <ul class="facts">
         <li>Twenty languages</li>
         <li>Ten tools over MCP and CLI</li>
-        <li>No telemetry, no network</li>
+        <li>No telemetry, runs offline</li>
         <li>Apache-2.0</li>
       </ul>
     </div>
@@ -232,7 +232,7 @@
       <li>Osnova is a Slavic word. It means base or foundation, and on a loom, the warp: the threads held taut so the cloth can be woven on them.</li>
       <li>Osnova reads your repository. Its own source at 0.11.0 is 397 files, 7,069 symbols and 31,453 edges.</li>
       <li>With tree-sitter, each file becomes a syntax tree, and declarations and calls become symbols and edges.</li>
-      <li>It builds a symbol and call graph. The function refreshWorkspace calls 11 named functions, each tied to the line that calls it.</li>
+      <li>It builds a symbol and call graph. Eleven of the functions refreshWorkspace calls are shown, each tied to the line that calls it.</li>
       <li>Your agent asks who calls refreshWorkspace, through the osnova_warp tool.</li>
       <li>It gets exact file and line back, with the evidence for each caller, and unresolved calls listed apart.</li>
       <li>Same commit, same answer: two fresh builds produce byte-identical index files and identical output.</li>
@@ -255,7 +255,7 @@
 
 <section class="install wrap" id="install" aria-labelledby="install-title">
   <h2 id="install-title" data-words>Install with your agent</h2>
-  <p class="section-lede">Paste one prompt into the agent you already use. It installs osnova, shows you the config change, and writes nothing until you approve. You need Node.js 22.13 or newer.</p>
+  <p class="section-lede">Paste one prompt into the agent you already use. It installs osnova, shows you the change to your agent config, and applies it only after you approve. You need Node.js 22.13 or newer.</p>
 
   <div class="tabs" role="tablist" aria-label="Choose your agent" data-tabs>
     <button type="button" role="tab" id="tab-claude" aria-controls="panel-claude" aria-selected="true">Claude Code</button>
