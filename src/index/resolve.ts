@@ -566,19 +566,41 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     return { parts: [...parts.values()].flatMap((part) => declarationsOf(part)), complete };
   };
-  // A Java supertype written as a simple name without an import names a type of an enclosing type or
-  // of the same package (a same-file top-level type is one of those); a same-named type of another
-  // package is not evidence, since the compiler may bind an unindexed type of this package.
+  // A Java supertype written as a simple name without an import names a member type that an enclosing
+  // type declares or inherits (innermost first), else a top-level type of the same package; a same-named
+  // type of another package is not evidence, since the compiler may bind an unindexed type of this
+  // package. An enclosing type whose supertypes cannot all be followed leaves the name unknown.
   const javaLocalBaseOf = (part: OsnovaSymbol, name: string): OsnovaSymbol | undefined => {
     const enclosing = localOfQualifiedName(part.qualifiedName).split(".").slice(0, -1);
     for (let depth = enclosing.length; depth > 0; depth -= 1) {
-      const nested = declaredAs(part.file, qualifiedNameOf(part.file, [...enclosing.slice(0, depth), name].join("."))).find(isHolder);
-      if (nested !== undefined) return nested;
+      const outer = declaredAs(part.file, qualifiedNameOf(part.file, enclosing.slice(0, depth).join("."))).find(isHolder);
+      if (outer === undefined) return undefined;
+      const member = javaMemberTypeOf(outer, name, new Set());
+      if (member === null) return undefined;
+      if (member !== undefined) return member;
     }
     const home = javaPackageOf(files.get(part.file));
     const holders = (symbolsByName.get(name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "java" &&
       !localOfQualifiedName(symbol.qualifiedName).includes(".") && javaPackageOf(files.get(symbol.file)) === home);
     return new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1 ? holders[0] : undefined;
+  };
+  // The member type `name` that a Java type declares or inherits: undefined when it has none, null when a
+  // supertype cannot be followed (or is an enum, whose java.lang.Enum declares member types).
+  const javaMemberTypeOf = (type: OsnovaSymbol, name: string, seen: Set<string>): OsnovaSymbol | null | undefined => {
+    if (seen.has(type.qualifiedName) || seen.size > 32) return null;
+    seen.add(type.qualifiedName);
+    const own = declaredAs(type.file, `${type.qualifiedName}.${name}`).find(isHolder);
+    if (own !== undefined) return own;
+    if (type.kind === "enum") return null;
+    const followed = [...(type.heritage ?? []), ...(type.interfaces ?? [])];
+    if (followed.length !== (type.supertypes ?? 0)) return null;
+    for (const binding of followed) {
+      const base = baseOf(type, binding);
+      if (base === undefined) return null;
+      const member = javaMemberTypeOf(base, name, seen);
+      if (member !== undefined) return member;
+    }
+    return undefined;
   };
   const baseOf = (part: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol | undefined => {
     if (base.kind === "local" && files.get(part.file)?.language === "java") return javaLocalBaseOf(part, base.name);
