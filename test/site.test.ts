@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCli } from "../src/cli/cli.js";
 import { renderSitePages } from "../scripts/site-pages.js";
+import { agentHarnesses, harnessFolder, planFamily, type AgentHarness, type SetupFamily } from "../src/diagnostics/setup-apply.js";
 
 const root = path.join(import.meta.dirname, "..");
 const page = fs.readFileSync(path.join(root, "site", "public", "index.html"), "utf8");
@@ -24,13 +25,41 @@ function shownCommands(): string[] {
   return [...found].filter((line) => line.length > 0).sort();
 }
 
-let home: string;
-beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-site-home-"));
-});
+// Each command runs in its own home where every harness counts as installed, so `setup agents --only x` has work to do.
+const homes: string[] = [];
+function harnessHome(): string {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-site-home-"));
+  for (const harness of agentHarnesses) fs.mkdirSync(harnessFolder(harness, home), { recursive: true });
+  homes.push(home);
+  return home;
+}
 afterEach(() => {
-  fs.rmSync(home, { recursive: true, force: true });
+  for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
 });
+
+function filesUnder(dir: string): string[] {
+  return fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(dir, path.join(entry.parentPath, entry.name)))
+    .sort();
+}
+
+async function cli(args: string[]): Promise<{ code: number; errors: string[] }> {
+  const errors: string[] = [];
+  const code = await runCli(args, { stdout: () => {}, stderr: (text) => errors.push(text) });
+  return { code, errors };
+}
+
+// What still differs from a full install of the command's family, after the command ran.
+async function pendingChanges(args: string[], home: string): Promise<string[]> {
+  const family = args[1] as SetupFamily;
+  const onlyAt = args.indexOf("--only");
+  const only = onlyAt === -1 ? undefined : (args[onlyAt + 1] ?? "").split(",") as AgentHarness[];
+  const plan = await planFamily(family, { home, only });
+  return plan.changes.filter((change) => change.action !== "unchanged").map((change) => `${change.kind} ${change.action}`);
+}
+
+const setupLines = () => shownCommands().filter((line) => line.startsWith("osnova setup "));
 
 describe("marketing site install commands", () => {
   it("shows the setup commands for every client family", () => {
@@ -46,14 +75,41 @@ describe("marketing site install commands", () => {
     ]));
   });
 
-  it("previews every setup command it shows without error", async () => {
-    const setup = shownCommands().filter((line) => line.startsWith("osnova setup "));
-    expect(setup.length).toBeGreaterThan(0);
-    for (const line of setup) {
-      const args = line.split(/\s+/).slice(1).filter((arg) => arg !== "--apply");
-      const errors: string[] = [];
-      const code = await runCli([...args, "--home", home], { stdout: () => {}, stderr: (text) => errors.push(text) });
-      expect({ line, code, errors }).toEqual({ line, code: 0, errors: [] });
+  it("previews without writing, as the prompts promise", async () => {
+    const previews = setupLines().filter((line) => !line.includes("--apply"));
+    expect(previews.length).toBeGreaterThan(0);
+    for (const line of previews) {
+      const args = line.split(/\s+/).slice(1);
+      const home = harnessHome();
+      const before = filesUnder(home);
+      expect({ line, ...(await cli([...args, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
+      expect({ line, files: filesUnder(home) }).toEqual({ line, files: before });
+      expect({ line, pending: (await pendingChanges(args, home)).length > 0 }).toEqual({ line, pending: true });
+    }
+  });
+
+  it("applies every shown setup command completely", async () => {
+    const applies = setupLines().filter((line) => line.includes("--apply") && !line.includes("--uninstall"));
+    expect(applies.length).toBeGreaterThan(0);
+    for (const line of applies) {
+      const args = line.split(/\s+/).slice(1);
+      const home = harnessHome();
+      expect({ line, ...(await cli([...args, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
+      expect({ line, pending: await pendingChanges(args, home) }).toEqual({ line, pending: [] });
+    }
+  });
+
+  it("removes what each shown uninstall command names", async () => {
+    const removals = setupLines().filter((line) => line.includes("--uninstall"));
+    expect(removals.length).toBeGreaterThan(0);
+    for (const line of removals) {
+      const args = line.split(/\s+/).slice(1);
+      const home = harnessHome();
+      const install = args.filter((arg) => arg !== "--uninstall");
+      expect({ line, ...(await cli([...install, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
+      expect({ line, pending: await pendingChanges(args, home) }).toEqual({ line, pending: [] });
+      expect({ line, ...(await cli([...args, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
+      expect({ line, removed: (await pendingChanges(args, home)).length > 0 }).toEqual({ line, removed: true });
     }
   });
 
