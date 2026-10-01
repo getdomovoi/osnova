@@ -169,3 +169,22 @@ describe("marketing site document pages", () => {
     expect(pages["changelog/index.html"]).toContain('href="#v0-11-0"');
   });
 });
+
+describe("marketing site crawl files", () => {
+  const publicDir = path.join(root, "site", "public");
+  const read = (name: string) => (fs.existsSync(path.join(publicDir, name)) ? fs.readFileSync(path.join(publicDir, name), "utf8") : "");
+
+  it("lists every page in the sitemap, and nothing else", () => {
+    const pages = fs.readdirSync(publicDir, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith("index.html"))
+      .map((file) => path.dirname(file).split(path.sep).join("/"))
+      .map((dir) => (dir === "." ? "https://getosnova.dev/" : `https://getosnova.dev/${dir}/`))
+      .sort();
+    const listed = [...read("sitemap.xml").matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]).sort();
+    expect(listed).toEqual(pages);
+  });
+
+  it("points crawlers at the sitemap", () => {
+    expect(read("robots.txt")).toContain("Sitemap: https://getosnova.dev/sitemap.xml");
+  });
+});
