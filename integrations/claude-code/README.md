@@ -4,6 +4,8 @@ Osnova indexes your repository with tree-sitter into a symbol and call graph and
 
 Website: https://getosnova.dev. Source, documentation and benchmarks: https://github.com/getdomovoi/osnova.
 
+This plugin is maintained in `integrations/claude-code` of https://github.com/getdomovoi/osnova and copied to https://github.com/getdomovoi/osnova-claude-plugin on every change, so open issues and pull requests in getdomovoi/osnova.
+
 ## What the plugin adds
 
 - **MCP server** `osnova`: ten tools (`osnova_footing`, `osnova_ground`, `osnova_thread`, `osnova_outline`, `osnova_warp`, `osnova_groundwork`, `osnova_settle`, `osnova_plumb`, `osnova_tests`, `osnova_unreferenced`) for symbol search, callers and callees, diff impact, claim checks, test discovery and unreferenced-code candidates.
