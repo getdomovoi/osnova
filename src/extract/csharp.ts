@@ -43,7 +43,8 @@ export const csharpAdapter: LanguageAdapter = {
         case "interface_declaration":
         case "struct_declaration":
         case "enum_declaration":
-        case "record_declaration": {
+        case "record_declaration":
+        case "record_struct_declaration": {
           const nameNode = node.childForFieldName("name");
           if (nameNode === null || !IDENTIFIER_RE.test(nameNode.text)) return;
           const kind =
@@ -51,10 +52,10 @@ export const csharpAdapter: LanguageAdapter = {
               ? "interface"
               : node.type === "enum_declaration"
                 ? "enum"
-                : node.type === "struct_declaration"
+                : node.type === "struct_declaration" || node.type === "record_struct_declaration"
                   ? "struct"
                   : "class";
-          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial();
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);

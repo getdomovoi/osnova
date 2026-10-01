@@ -923,7 +923,7 @@ export const csharpSpec: TypedSpec = {
     .map((constraint) => constraint.childForFieldName("type") ?? childrenOf(constraint).find((child) => child.isNamed) ?? null)
     .filter((node): node is Node => node !== null),
   scopeNodes: ["block", "for_statement", "for_each_statement", "if_statement", "try_statement", "catch_clause", "using_statement"],
-  classNodes: ["class_declaration", "struct_declaration", "record_declaration", "interface_declaration"],
+  classNodes: ["class_declaration", "struct_declaration", "record_declaration", "record_struct_declaration", "interface_declaration"],
   thisNodes: ["this_expression"],
   isStatic: modifiersStatic,
   parameter: (node) => {
