@@ -43,7 +43,7 @@ export const csharpAdapter: LanguageAdapter = {
         case "namespace_declaration":
         case "file_scoped_namespace_declaration": {
           const name = node.childForFieldName("name");
-          if (name !== null) namespaces.push(name.text.replace(/\s+/g, ""));
+          if (name !== null) namespaces.push(name.text.replace(/\s+/g, "").replace(/(^|\.)@/g, "$1"));
           for (const child of childrenOf(node)) visit(child);
           if (name !== null) namespaces.pop();
           return;

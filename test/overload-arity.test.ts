@@ -346,3 +346,19 @@ describe("a Java @Override hides the base declaration with the same written para
     expect(choiceAt(index, "Use.java", 2, "put")).toEqual({ toSymbol: "Child.java#Child.put", arguments: 1, overload: undefined });
   });
 });
+
+describe("partial identity in the cache", () => {
+  it("loads a partial type whose namespace is escaped or not ASCII", async () => {
+    await write({
+      "A.cs": "namespace @class {\n partial class Box {\n  public void Put() {}\n }\n}\n",
+      "B.cs": "namespace Ünïcode.Ü {\n partial class Box<T> {\n  public void Put() {}\n }\n}\n",
+    });
+    const built = await buildIndex(workspace, { cacheDir });
+    const loaded = await loadIndex(workspace, { cacheDir });
+    expect(loaded).not.toBeNull();
+    expect(built.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class`0");
+    expect(loaded?.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class`0");
+    expect(loaded?.files.get("B.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("Ünïcode.Ü`1");
+    expect(loaded?.files.get("B.cs")?.diagnostics ?? []).toEqual([]);
+  });
+});
