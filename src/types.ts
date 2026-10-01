@@ -53,6 +53,15 @@ export interface OsnovaSymbol {
   readonly signature: string;
   readonly lineCount: number;
   readonly shadowed?: true | undefined;
+  // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
+  // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
+  // of the same local name with the same value, in other files, are parts of it.
+  readonly partial?: string | undefined;
+  // A Java type: how many supertypes its declaration writes (superclass and interfaces), when any, and
+  // the written interfaces that name a local or imported type. `heritage` holds only the superclass, and
+  // only when it names a local or imported type.
+  readonly supertypes?: number | undefined;
+  readonly interfaces?: readonly SymbolBinding[] | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -66,6 +75,40 @@ export interface OsnovaSymbol {
   readonly elementTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly values?: ReturnBinding | undefined;
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
+  readonly parameters?: ParameterRange | undefined;
+}
+
+// How many arguments a method's parameter list accepts. `max` is absent when a varargs or `params`
+// parameter takes any number more; `extension` marks a C# extension method, whose first argument
+// may be written as the receiver instead. `overrides` marks a declaration written `override` (C#) or
+// annotated `@Override` (Java): it takes the place of a base declaration rather than adding an overload.
+// `access` is `private` for a method a derived type cannot call (C#: written without an access
+// modifier in a class or struct) and `package` for a Java method without one, which a derived type in
+// another package cannot call.
+export interface ParameterRange {
+  readonly min: number;
+  readonly max?: number | undefined;
+  readonly extension?: true | undefined;
+  readonly overrides?: true | undefined;
+  readonly access?: "private" | "package" | undefined;
+  // Java: each parameter's type as written, whitespace removed (a varargs type ends in `...`).
+  readonly types?: readonly string[] | undefined;
+  // Java: the simple names `types` read from the file's scope, sorted; another file can shadow them.
+  readonly names?: readonly string[] | undefined;
+}
+
+// The declaration of an overloaded name that a call's argument count selects: `line` when exactly one
+// declaration accepts the count, otherwise every declaration that does (empty when none does). The count
+// is also checked against declarations in declared base classes and other partial declarations of the
+// type: `from` names the method the call resolved to when the one accepting declaration lies there and
+// the edge moved to it, and `elsewhere` lists the accepting declarations there when it did not move.
+export type OverloadChoice =
+  | { readonly line: number; readonly from?: string | undefined }
+  | { readonly candidates: readonly number[]; readonly elsewhere?: readonly OverloadDeclaration[] | undefined };
+
+export interface OverloadDeclaration {
+  readonly file: string;
+  readonly line: number;
 }
 
 export type MemberKind = "instance" | "static" | "class" | "property" | "unknown";
@@ -139,6 +182,8 @@ export interface OsnovaEdge {
   readonly evidence?: EdgeEvidence | undefined;
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
+  readonly arguments?: number | undefined;
+  readonly overload?: OverloadChoice | undefined;
 }
 
 export interface FileCard {

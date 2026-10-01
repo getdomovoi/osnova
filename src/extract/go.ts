@@ -94,16 +94,16 @@ export const goAdapter: LanguageAdapter = {
           const fn = node.childForFieldName("function");
           if (fn !== null) {
             if (fn.type === "identifier") {
-              if (!GO_TYPE_NAMES.has(fn.text)) out.addEdge("calls", fn.text, node);
+              if (!GO_TYPE_NAMES.has(fn.text)) out.addEdge("calls", fn.text, fn);
             } else if (fn.type === "selector_expression") {
               const field = fn.childForFieldName("field");
               if (field !== null && !GO_TYPE_NAMES.has(field.text)) {
-                out.addEdge("calls", field.text, node, bindings.at(fn, node));
+                out.addEdge("calls", field.text, field, bindings.at(fn, node));
               }
             } else if (fn.type === "parenthesized_expression") {
               const inner = childrenOf(fn)[0];
               if (inner !== undefined && inner.type === "identifier" && !GO_TYPE_NAMES.has(inner.text)) {
-                out.addEdge("calls", inner.text, node);
+                out.addEdge("calls", inner.text, inner);
               }
             }
           }

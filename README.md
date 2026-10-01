@@ -86,7 +86,18 @@ A call site counts as resolved when the index ties it to one definition through 
 
 Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 
-Resolved is not the same as right, so the call edges are also scored against a type checker. Every call site in two pinned checkouts was sent to the language's own checker for the callee's declarations, and each osnova edge was marked true when the symbol it names contains that declaration and false when it does not. Measured at 0.8.0: on click (160 files, pyright 1.1.414) 2883 edges were decided and 0 are false, and osnova covers 90.4% of the call sites the checker resolves inside the repository. On zod (702 files, TypeScript 5.9.3) 21276 edges were decided and 4 are false, a false-edge rate of 0.02%, with 76.9% of in-repo sites covered. The four false edges are listed by site in [`benchmarks/results/type-checker-oracle-2026-09-21.json`](benchmarks/results/type-checker-oracle-2026-09-21.json) with the method and its limits. The scripts that produce these numbers are in [`benchmarks/oracle/`](benchmarks/oracle/README.md), and they reproduce every count at 0.10.0.
+Resolved is not the same as right, so the call edges are also scored against each language's type checker or compiler. Every call site in six pinned checkouts was sent to the checker for the callee's declarations, and each osnova edge was marked true when the definition it names contains that declaration and false when it does not. Measured on the current development branch (0.11.0 plus the unreleased changes listed in the changelog):
+
+| Corpus | Checker | Decided edges | False | False-edge rate | In-repo sites covered |
+| --- | --- | ---: | ---: | ---: | ---: |
+| click | pyright 1.1.414 | 2883 | 0 | 0% | 90.4% |
+| zod | TypeScript 5.9.3 | 21593 | 4 | 0.02% | 78.2% |
+| cobra | go/types, Go 1.27.1 | 1980 | 0 | 0% | 87.5% |
+| ripgrep | rust-analyzer 1.98.1 | 6066 | 29 | 0.48% | 85.8% |
+| humanizer | Roslyn 5.9.0 | 7363 | 3 | 0.04% | 62.2% |
+| gson | javac 27 | 6330 | 9 | 0.14% | 56.2% |
+
+Java and C# overloads share one symbol in the index, so a call edge names the overload it binds only when the written argument count fits exactly one declaration of the type, its `partial` parts and its declared base classes; when it fits several or none, the edge keeps the method and names no declaration, and the oracle leaves it out of both rates (2141 edges on gson, 602 on humanizer). 0.11.0 named the last overload declared for every call, recorded a call at the first line of its call expression, and lost the rest of a C# file after a primary constructor or a raw string; it measured gson 2045 false edges (24.75%), humanizer 617 (8.25%) and ripgrep 112 (2.06%). Of the 29 left on ripgrep, 11 are functions declared once per `#[cfg]` branch, 6 are a test module's function named like its parent's, and 5 are calls to a local closure or parameter named like a function elsewhere. A call whose target has one declaration that fits keeps it even when a base type is outside the index, where an unseen base overload could be the one the compiler binds; this limit is kept because withdrawing those edges cost 10 recall points on humanizer for one fewer false edge. Every false edge is classified by cause in [`benchmarks/results/type-checker-oracle-2026-09-30.json`](benchmarks/results/type-checker-oracle-2026-09-30.json) with the method and its limits. The scripts that produce these numbers are in [`benchmarks/oracle/`](benchmarks/oracle/README.md).
 
 ## Grep versus the graph
 

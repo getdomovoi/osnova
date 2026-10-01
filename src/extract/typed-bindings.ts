@@ -1,6 +1,6 @@
 import type { Node } from "web-tree-sitter";
 import type { Callee, EdgeBinding, MemberKind, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
-import { childrenOf } from "./util.js";
+import { childOfType, childrenOf } from "./util.js";
 
 // Receiver identity for languages with declared types and no lexical binding collector of their
 // own. A name is bound to a type name by a typed parameter, a typed local, a constructor literal or
@@ -25,6 +25,9 @@ export interface TypedSpec {
   readonly thisNodes?: readonly string[] | undefined;
   readonly isStatic?: ((fn: Node) => boolean) | undefined;
   readonly bases?: ((classNode: Node) => readonly string[]) | undefined;
+  readonly interfaces?: ((classNode: Node) => readonly string[]) | undefined;
+  // A written base name that already names its type in full, such as a package-qualified Java name.
+  readonly qualifiedBase?: ((written: string) => SymbolBinding | undefined) | undefined;
   readonly innerType?: ((type: Node) => Node | null) | undefined;
   // A declared type parameter and its bounds (`T: Runner`, `T extends Runner`, `[T Runner]`); a where or
   // constraints clause on the declaring node adds bounds by name.
@@ -57,6 +60,7 @@ interface Scope { readonly parent: Scope | null; readonly names: Map<string, Dec
 export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
   heritage: (classNode: Node) => SymbolBinding[];
+  interfaces: (classNode: Node) => SymbolBinding[];
   returns: (fn: Node) => ReturnBinding | undefined;
   returnTuple: (fn: Node) => (ReturnBinding | null)[] | undefined;
   memberKind: (fn: Node) => MemberKind | undefined;
@@ -429,6 +433,18 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     }
     return Object.keys(out).length === 0 ? undefined : out;
   };
+  // A written base or interface name as a local or imported type; any other name is left out.
+  const ownersOf = (names: readonly string[], classNode: Node): SymbolBinding[] => {
+    const out: SymbolBinding[] = [];
+    for (const name of names) {
+      const qualified = spec.qualifiedBase?.(name);
+      if (qualified !== undefined) { out.push(qualified); continue; }
+      const owner = ownerForType(name, undefined, classNode);
+      if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out.push(owner);
+    }
+    return out;
+  };
+
   return {
     at(fn, site) {
       if (fn === null) return undefined;
@@ -493,14 +509,8 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       }
       return Object.keys(out).length === 0 ? undefined : out;
     },
-    heritage: (classNode) => {
-      const out: SymbolBinding[] = [];
-      for (const base of spec.bases?.(classNode) ?? []) {
-        const owner = ownerForType(base, undefined, classNode);
-        if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out.push(owner);
-      }
-      return out;
-    },
+    heritage: (classNode) => ownersOf(spec.bases?.(classNode) ?? [], classNode),
+    interfaces: (classNode) => ownersOf(spec.interfaces?.(classNode) ?? [], classNode),
   };
 }
 
@@ -789,6 +799,14 @@ export const rustSpec: TypedSpec = {
 
 const modifiersStatic = (node: Node): boolean => childrenOf(node).some((child) => { const type = child.type; return (type === "modifiers" && /\bstatic\b/.test(child.text)) || (type === "modifier" && child.text === "static"); });
 
+// A written Java type without its type arguments: `Base`, `q.Base`, or `q.Base` for `q.Base<T>`.
+function javaTypeName(type: Node): string | undefined {
+  if (type.type === "type_identifier" || type.type === "scoped_type_identifier") return type.text.replace(/\s+/g, "");
+  if (type.type !== "generic_type") return undefined;
+  const base = childrenOf(type).find((child) => child.type === "type_identifier" || child.type === "scoped_type_identifier");
+  return base === undefined ? undefined : base.text.replace(/\s+/g, "");
+}
+
 export const javaSpec: TypedSpec = {
   functionNodes: ["method_declaration", "constructor_declaration", "lambda_expression"],
   contents: (type) => {
@@ -856,10 +874,22 @@ export const javaSpec: TypedSpec = {
   },
   bases: (classNode) => {
     const superclass = classNode.childForFieldName("superclass");
-    const type = superclass === null ? null : childrenOf(superclass).find((child) => child.type === "type_identifier" || child.type === "generic_type") ?? null;
-    const name = type === null ? undefined : type.type === "type_identifier" ? type.text : childrenOf(type).find((child) => child.type === "type_identifier")?.text;
+    const type = superclass === null ? undefined : childrenOf(superclass).find((child) => child.type === "type_identifier" || child.type === "scoped_type_identifier" || child.type === "generic_type");
+    const name = type === undefined ? undefined : javaTypeName(type);
     return name === undefined ? [] : [name];
   },
+  // Each interface written in an `implements` or interface `extends` clause, without type arguments.
+  interfaces: (classNode) => childrenOf(classNode)
+    .filter((child) => child.type === "super_interfaces" || child.type === "extends_interfaces")
+    .flatMap((clause) => childrenOf(childOfType(clause, "type_list") ?? clause))
+    .flatMap((type) => {
+      const name = javaTypeName(type);
+      return name === undefined ? [] : [name];
+    }),
+  // `q.Base` names the type an `import q.Base;` would; a name whose first segment is a type (`Outer.Inner`)
+  // is left out.
+  qualifiedBase: (written) => /^[a-z_$][\w$]*(?:\.[a-z_$][\w$]*)*\.[A-Z_$][\w$]*$/u.test(written)
+    ? { kind: "import", source: written, importedName: written.slice(written.lastIndexOf(".") + 1) } : undefined,
   imports: (node, nodeType) => {
     if (nodeType !== "import_declaration") return [];
     const path = childrenOf(node).find((child) => child.type === "scoped_identifier");
@@ -923,7 +953,7 @@ export const csharpSpec: TypedSpec = {
     .map((constraint) => constraint.childForFieldName("type") ?? childrenOf(constraint).find((child) => child.isNamed) ?? null)
     .filter((node): node is Node => node !== null),
   scopeNodes: ["block", "for_statement", "for_each_statement", "if_statement", "try_statement", "catch_clause", "using_statement"],
-  classNodes: ["class_declaration", "struct_declaration", "record_declaration", "interface_declaration"],
+  classNodes: ["class_declaration", "struct_declaration", "record_declaration", "record_struct_declaration", "interface_declaration"],
   thisNodes: ["this_expression"],
   isStatic: modifiersStatic,
   parameter: (node) => {
