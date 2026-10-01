@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "2fc6ca44b92a17fc86fa59c4e7dd49e5a3d566d6",
+    "commit": "3d611c1f24b33eedd9b35664a8b76f781f6ed91c",
     "version": "0.11.0",
-    "unreleased": "Java and C# overload choice by argument count, including base and partial types; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
+    "unreleased": "Java and C# overload choice by argument count, including base and partial types and constructors; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
   },
   "machine": "macOS, Darwin 25.6.0 on arm64 (Apple silicon), Node.js 26.10.0; times are wall clock on that machine",
   "method": {
@@ -198,25 +198,18 @@
         "external": 12202,
         "noVerdict": 0
       },
-      "claimedEdges": 6332,
-      "decided": 6330,
-      "undecided": 2,
-      "truePositive": 6321,
-      "falsePositive": 9,
-      "precision": 0.9986,
-      "falseEdgeRate": 0.00142,
+      "claimedEdges": 8144,
+      "decided": 8141,
+      "undecided": 3,
+      "truePositive": 8137,
+      "falsePositive": 4,
+      "precision": 0.9995,
+      "falseEdgeRate": 0.00049,
       "oracleInRepoSites": 11222,
-      "coveredInRepoSites": 6311,
-      "recall": 0.5624,
+      "coveredInRepoSites": 8127,
+      "recall": 0.7242,
       "falseEdgesWithCorrectTarget": 3,
       "falseByCause": [
-        {
-          "cause": "constructor call resolved to a same-named constant",
-          "count": 5,
-          "wrong": "osnova",
-          "detail": "new URL(...) and new URI(...) name the static fields TypeAdapters.URL and TypeAdapters.URI instead of the JDK classes",
-          "example": "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:718 URL"
-        },
         {
           "cause": "receiver typed by its initializer, not its declared type",
           "count": 1,
@@ -241,7 +234,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
         "determinism": "three runs byte-identical"
       },
-      "overloadUndetermined": 2141,
+      "overloadUndetermined": 2558,
       "previous": {
         "osnova": {
           "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
@@ -417,16 +410,16 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 7660,
-      "decided": 7363,
-      "undecided": 297,
-      "truePositive": 7360,
+      "claimedEdges": 7804,
+      "decided": 7494,
+      "undecided": 310,
+      "truePositive": 7491,
       "falsePositive": 3,
       "precision": 0.9996,
-      "falseEdgeRate": 0.00041,
+      "falseEdgeRate": 0.0004,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 7358,
-      "recall": 0.6222,
+      "coveredInRepoSites": 7489,
+      "recall": 0.6333,
       "falseByCause": [
         {
           "cause": "local function in top-level statements",
@@ -452,7 +445,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (617 to 642)",
         "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
       },
-      "overloadUndetermined": 602,
+      "overloadUndetermined": 661,
       "falseEdgesWithCorrectTarget": 1,
       "previous": {
         "osnova": {
