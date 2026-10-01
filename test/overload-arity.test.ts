@@ -286,7 +286,7 @@ describe("stored provenance of a moved overload edge", () => {
     const moved = index.edges.find((edge) => edge.overload !== undefined && "from" in edge.overload && edge.overload.from !== undefined);
     expect(moved?.overload).toEqual({ line: 2, from: "src/Sub.java#Sub.ping" });
     expect(deserializeEdges(serializeEdges(index.edges, paths).bytes, paths, index.files)).toEqual(index.edges);
-    for (const from of ["not-indexed.java#No.Such", "src/Sub.java#", "#Sub.ping", "src/Sub.java#Sub..ping", "src/Sub.java#Sub.nothing"]) {
+    for (const from of ["not-indexed.java#No.Such", "src/Sub.java#", "#Sub.ping", "src/Sub.java#Sub..ping", "src/Sub.java#Sub.nothing", "src/Sub.java#Sub"]) {
       const tampered = index.edges.map((edge) => edge === moved ? { ...edge, overload: { line: 2, from } } : edge);
       const store = () => deserializeEdges(serializeEdges(tampered, paths).bytes, paths, index.files);
       expect(store, from).toThrow(/corrupt overload metadata/);
