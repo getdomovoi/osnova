@@ -2,7 +2,9 @@
 
 Osnova indexes your repository with tree-sitter into a symbol and call graph and serves it to Claude Code. Ask who calls a function and get its indexed callers with exact file and line, plus the evidence behind each edge. A call it cannot resolve from the written source, such as a dynamic dispatch, is reported as unresolved with its same-name candidates instead of guessed. Same input, same output, byte for byte. Twenty languages, no embeddings and no telemetry.
 
-Website: https://getosnova.dev. Source, documentation and benchmarks: https://github.com/getdomovoi/osnova.
+Website: [getosnova.dev](https://getosnova.dev). Source, documentation and benchmarks: [getdomovoi/osnova](https://github.com/getdomovoi/osnova).
+
+This plugin is maintained in `integrations/claude-code` of [getdomovoi/osnova](https://github.com/getdomovoi/osnova) and copied to [getdomovoi/osnova-claude-plugin](https://github.com/getdomovoi/osnova-claude-plugin) on every change, so open [issues](https://github.com/getdomovoi/osnova/issues) and pull requests in getdomovoi/osnova.
 
 ## What the plugin adds
 
@@ -16,7 +18,7 @@ Website: https://getosnova.dev. Source, documentation and benchmarks: https://gi
 
 Every command runs `npx -y @getdomovoi/osnova@0.11.0`, pinned to the release this plugin version ships with. The first run fetches that package from the npm registry; that is npm's request, made once per version, and later runs use the npm cache.
 
-Osnova itself makes no network connection. It reads the repository and writes only to its cache directory: the index and per-session hook state under your user cache directory, or `OSNOVA_CACHE_DIR` when set. It writes nothing inside your repository. The privacy statement is at https://getosnova.dev/privacy/.
+Osnova itself makes no network connection. It reads the repository and writes only to its cache directory: the index and per-session hook state under your user cache directory, or `OSNOVA_CACHE_DIR` when set. It writes nothing inside your repository. The privacy statement is at [getosnova.dev/privacy](https://getosnova.dev/privacy/).
 
 ## Requirements
 

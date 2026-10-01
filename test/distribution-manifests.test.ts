@@ -59,4 +59,30 @@ describe("distribution manifests", () => {
     expect(readme).toContain(launcher());
     for (const hook of ["SessionStart", "UserPromptSubmit", "Stop"]) expect(readme).toContain(hook);
   });
+
+  it("name the listing links in plugin.json, so the directory does not guess them from README prose", () => {
+    const plugin = read<Record<string, unknown>>("integrations/claude-code/.claude-plugin/plugin.json");
+    expect(plugin).toMatchObject({
+      homepage: "https://getosnova.dev",
+      documentationUrl: "https://github.com/getdomovoi/osnova/blob/main/docs/reference.md",
+      supportUrl: "https://github.com/getdomovoi/osnova/issues",
+      privacyPolicyUrl: "https://getosnova.dev/privacy/",
+    });
+    expect(readFileSync(path.join(root, "integrations/claude-code/README.md"), "utf8")).not.toMatch(/https:\/\/[^\s)]+[.,;:](\s|$)/m);
+  });
+
+  it("ship the square PNG icon the directory lists: 512 to 2048 px and under 2 MB", () => {
+    const icon = readFileSync(path.join(root, "integrations/claude-code/.claude-plugin/icon.png"));
+    expect(icon.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    const [width, height] = [icon.readUInt32BE(16), icon.readUInt32BE(20)];
+    expect(width).toBe(height);
+    expect(width).toBeGreaterThanOrEqual(512);
+    expect(width).toBeLessThanOrEqual(2048);
+    expect(icon.length).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it("allow no dependency build script, which the directory treats as unscanned install code", () => {
+    const workspace = readFileSync(path.join(root, "pnpm-workspace.yaml"), "utf8");
+    expect(workspace).not.toMatch(/^\s+\S+:\s*true\s*$/m);
+  });
 });
