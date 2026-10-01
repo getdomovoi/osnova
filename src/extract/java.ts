@@ -61,12 +61,14 @@ function typeScopeOf(root: Node): TypeScope {
 const typeParametersOf = (node: Node): string[] => childrenOf(childOfType(node, "type_parameters") ?? node)
   .filter((child) => child.type === "type_parameter").map((child) => childrenOf(child).find((part) => part.type === "type_identifier" || part.type === "identifier")?.text ?? "");
 
-// A parameter type with every name replaced by the name it provably means: primitives as written, a
-// single-type import or java.lang by its full name, a package-qualified name as written, and any other
-// simple name by this file's package. A type variable, a nested type of this file, or a name a wildcard or
-// static import could supply proves nothing, and then the whole list is left unrecorded.
-function canonicalType(written: string, scope: TypeScope, typeVariables: ReadonlySet<string>): string | undefined {
-  const text = written.replace(/@[\w.$]+(?:\s*\([^)]*\))?/g, "").replace(/\s+/g, "");
+// A parameter type with every name replaced by the name it would mean from this file alone: primitives as
+// written, a single-type import or java.lang by its full name, a package-qualified name as written, and any
+// other simple name by this file's package. A type variable, a nested type of this file, or a name a wildcard
+// or static import could supply proves nothing, and then the whole list is left unrecorded. `names` lists the
+// simple names read from this file's scope; another file can still shadow them (an inherited nested type, or
+// a same-package type over java.lang), so the resolver checks them before it compares types.
+function canonicalType(written: string, scope: TypeScope, typeVariables: ReadonlySet<string>, names: Set<string>): string | undefined {
+  const text = written.replace(/@[\w.$]+(?:\s*\([^)]*\))?/g, " ").replace(/\s*\.\s*/g, ".");
   let proven = true;
   const canonical = text.replace(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g, (name) => {
     if (PRIMITIVES.has(name) || name === "extends" || name === "super") return name;
@@ -74,12 +76,13 @@ function canonicalType(written: string, scope: TypeScope, typeVariables: Readonl
     const tail = rest.length > 0 ? `.${rest.join(".")}` : "";
     if (typeVariables.has(first) || scope.unproven.has(first)) { proven = false; return name; }
     const imported = scope.imports.get(first);
-    if (imported !== undefined) return `${imported}${tail}`;
+    if (imported !== undefined) { names.add(first); return `${imported}${tail}`; }
     if (rest.length > 0 && /^[a-z]/.test(first)) return name;
-    if (JAVA_LANG.has(first)) return `java.lang.${name}`;
+    if (JAVA_LANG.has(first)) { names.add(first); return `java.lang.${name}`; }
     if (scope.open) { proven = false; return name; }
+    names.add(first);
     return scope.packageName.length > 0 ? `${scope.packageName}.${name}` : name;
-  });
+  }).replace(/\s+/g, "");
   return proven ? canonical : undefined;
 }
 
@@ -89,17 +92,19 @@ function parameterRange(list: Node, method: Node, scope: TypeScope, typeVariable
   let count = 0;
   let varargs = false;
   const types: (string | undefined)[] = [];
+  const names = new Set<string>();
   for (const child of childrenOf(list)) {
     if (child.type === "formal_parameter") count += 1;
     else if (child.type === "spread_parameter") varargs = true;
     else continue;
     const type = child.childForFieldName("type") ?? childrenOf(child).find((part) => part.type !== "modifiers" && part.type !== "variable_declarator" && part.type !== "identifier");
     const dimensions = child.childForFieldName("dimensions")?.text ?? "";
-    const canonical = canonicalType(type?.text ?? "", scope, typeVariables);
+    const canonical = canonicalType(type?.text ?? "", scope, typeVariables, names);
     types.push(canonical === undefined ? undefined : `${canonical}${dimensions.replace(/\s+/g, "")}${child.type === "spread_parameter" ? "..." : ""}`);
   }
   const proven = types.every((type): type is string => type !== undefined);
-  return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(proven ? { types } : {}) };
+  return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }),
+    ...(proven ? { types, ...(names.size > 0 ? { names: [...names].sort() } : {}) } : {}) };
 }
 
 export const javaAdapter: LanguageAdapter = {
@@ -126,6 +131,10 @@ export const javaAdapter: LanguageAdapter = {
                 ? "enum"
                 : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          const supertypes = (node.childForFieldName("superclass") === null ? 0 : 1) + childrenOf(node)
+            .filter((child) => child.type === "super_interfaces" || child.type === "extends_interfaces")
+            .reduce((total, clause) => total + childrenOf(childOfType(clause, "type_list") ?? clause).length, 0);
+          if (supertypes > 0) out.markSupertypes(supertypes, bindings.interfaces(node));
           out.push(nameNode.text);
           typeVariables.push(typeParametersOf(node));
           for (const child of childrenOf(node)) visit(child);

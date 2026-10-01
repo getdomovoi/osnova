@@ -108,6 +108,11 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, partial: identity });
   }
 
+  markSupertypes(count: number, interfaces: readonly SymbolBinding[]): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, supertypes: count, ...(interfaces.length > 0 ? { interfaces } : {}) });
+  }
+
   // The edge sits at the line `node` starts on. A call passes its callee name token, so a call written on its own
   // line of a multi-line chain is not reported at the line where the chain's receiver starts.
   addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number): void {

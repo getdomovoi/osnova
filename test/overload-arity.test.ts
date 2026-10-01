@@ -5,6 +5,7 @@ import path from "node:path";
 import { applyChanges, buildIndex, callersDetailed, loadIndex, serializeArtifact } from "../src/index.js";
 import { formatCallersDetailed } from "../src/query/format.js";
 import { deserializeEdges, serializeEdges } from "../src/index/edgeStore.js";
+import { deserializeArtifact } from "../src/index/serialize.js";
 
 let temporary: string;
 let workspace: string;
@@ -102,10 +103,10 @@ describe("Java overloads chosen by argument count", () => {
     const index = await buildIndex(workspace, { cacheDir });
     const ranges = index.files.get("src/Gson.java")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
     expect(ranges).toEqual([
-      [3, { min: 1, max: 1, types: ["java.lang.Object"] }], [4, { min: 2, max: 2, types: ["java.lang.Object", "java.lang.Appendable"] }],
-      [5, { min: 3, max: 3, types: ["java.lang.Object", "java.lang.Appendable", "int"] }], [6, { min: 2, max: 2 }],
-      [7, { min: 2, max: 2, types: ["java.lang.String", "java.lang.reflect.Type"] }], [8, { min: 0, types: ["java.lang.String..."] }],
-      [9, { min: 2, max: 2, types: ["int", "java.lang.String"] }], [10, { min: 1, max: 1, types: ["int"] }],
+      [3, { min: 1, max: 1, types: ["java.lang.Object"], names: ["Object"] }], [4, { min: 2, max: 2, types: ["java.lang.Object", "java.lang.Appendable"], names: ["Appendable", "Object"] }],
+      [5, { min: 3, max: 3, types: ["java.lang.Object", "java.lang.Appendable", "int"], names: ["Appendable", "Object"] }], [6, { min: 2, max: 2 }],
+      [7, { min: 2, max: 2, types: ["java.lang.String", "java.lang.reflect.Type"], names: ["String"] }], [8, { min: 0, types: ["java.lang.String..."], names: ["String"] }],
+      [9, { min: 2, max: 2, types: ["int", "java.lang.String"], names: ["String"] }], [10, { min: 1, max: 1, types: ["int"] }],
     ]);
   });
 });
@@ -426,5 +427,107 @@ describe("Java written types prove an override only when they name the same type
     const index = await buildIndex(workspace, { cacheDir });
     expect(choiceAt(index, "p/Use.java", 3, "put")).toEqual({ toSymbol: "p/Child.java#Child.put", arguments: 1, overload: undefined });
     expect(index.files.get("p/Child.java")?.symbols.find((symbol) => symbol.span.startLine === 3)?.parameters?.types).toEqual(["p.Item"]);
+  });
+});
+
+describe("a Java simple type name proves nothing that another file can shadow", () => {
+  it("does not let a same-package class pass as the java.lang type of the same name", async () => {
+    await write({
+      "q/Base.java": "package q;\npublic class Base {\n  public void put(java.lang.String x) {}\n}\n",
+      "p/String.java": "package p;\npublic class String {}\n",
+      "p/I.java": "package p;\npublic interface I {\n  void put(String x);\n}\n",
+      "p/Child.java": "package p;\nimport q.Base;\npublic class Child extends Base implements I {\n  @Override public void put(String x) {}\n  public void put(String x, String y) {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child, java.lang.String x) { child.put(x); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put").overload).toEqual({ candidates: [4], elsewhere: [{ file: "q/Base.java", line: 3 }] });
+  });
+
+  it("does not let an inherited nested type pass as the package type of the same name", async () => {
+    await write({
+      "q/Base.java": "package q;\npublic class Base {\n  public static class Nested {}\n  public void put(p.Nested x) {}\n}\n",
+      "p/Nested.java": "package p;\npublic class Nested {}\n",
+      "p/I.java": "package p;\nimport q.Base;\npublic interface I {\n  void put(Base.Nested x);\n}\n",
+      "p/Child.java": "package p;\nimport q.Base;\npublic class Child extends Base implements I {\n  @Override public void put(Nested x) {}\n  public void put(Nested x, int y) {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child, p.Nested x) { child.put(x); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put").overload).toEqual({ candidates: [4], elsewhere: [{ file: "q/Base.java", line: 4 }] });
+  });
+
+  it("reads a wildcard bound written with spaces as the same type as its qualified form", async () => {
+    await write({
+      "a/Item.java": "package a;\npublic class Item {}\n",
+      "q/Base.java": "package q;\npublic class Base {\n  public void put(java.util.List<? extends a.Item> x) {}\n}\n",
+      "p/Child.java": "package p;\nimport q.Base;\nimport java.util.List;\nimport a.Item;\npublic class Child extends Base {\n  @Override public void put(List<? extends Item> x) {}\n  public void put(List<Item> x, int y) {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child, java.util.List<? extends a.Item> x) { child.put(x); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put")).toEqual({ toSymbol: "p/Child.java#Child.put", arguments: 1, overload: { line: 6 } });
+  });
+});
+
+describe("what a Java simple name proof follows", () => {
+  const item = "package p;\npublic class Item {}\n";
+  const base = "package p;\npublic class Base {\n  public void put(Item x) {}\n}\n";
+  const use = "package p;\npublic class Use {\n  public void run(Child child, p.Item x) { child.put(x); }\n}\n";
+
+  it("counts a nested type of an implemented interface as shadowing the name", async () => {
+    await write({
+      "p/Item.java": item, "p/Base.java": base, "p/Use.java": use,
+      "p/Mark.java": "package p;\npublic interface Mark {\n  class Item {}\n  void put(Mark.Item x);\n}\n",
+      "p/Child.java": "package p;\npublic class Child extends Base implements Mark {\n  @Override public void put(Item x) {}\n  public void put(Item x, int y) {}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put").overload).toEqual({ candidates: [3], elsewhere: [{ file: "p/Base.java", line: 3 }] });
+  });
+
+  it("leaves the name unproven when a written interface names no indexed type", async () => {
+    await write({
+      "p/Item.java": item, "p/Base.java": base, "p/Use.java": use,
+      "q/Mark.java": "package q;\npublic interface Mark {\n  class Item {}\n  void put(Mark.Item x);\n}\n",
+      "p/Child.java": "package p;\npublic class Child extends Base implements q.Mark {\n  @Override public void put(Item x) {}\n  public void put(Item x, int y) {}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put").overload).toEqual({ candidates: [3], elsewhere: [{ file: "p/Base.java", line: 3 }] });
+  });
+
+  it("re-chooses when a shadowing type is added to the package, equal to a full rebuild", async () => {
+    await write({
+      "q/Base.java": "package q;\npublic class Base {\n  public void put(java.lang.String x) {}\n}\n",
+      "p/I.java": "package p;\npublic interface I {\n  void put(String x);\n}\n",
+      "p/Child.java": "package p;\nimport q.Base;\npublic class Child extends Base implements I {\n  @Override public void put(String x) {}\n  public void put(String x, String y) {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child, java.lang.String x) { child.put(x); }\n}\n",
+    });
+    const before = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(before, "p/Use.java", 3, "put").overload).toEqual({ line: 4 });
+    await write({ "p/String.java": "package p;\npublic class String {}\n" });
+    const updated = await applyChanges(before, workspace, ["p/String.java"]);
+    const fresh = await buildIndex(workspace, { cacheDir: path.join(temporary, "fresh-cache") });
+    expect(updated.edges).toEqual(fresh.edges);
+    expect(serializeArtifact(updated).equals(serializeArtifact(fresh))).toBe(true);
+    expect(choiceAt(updated, "p/Use.java", 3, "put").overload).toEqual({ candidates: [4], elsewhere: [{ file: "q/Base.java", line: 3 }] });
+  });
+
+  it("refuses corrupted names, supertype counts and interface bindings on load", async () => {
+    await write({ "C.java": "public class C extends B implements I {\n  public void put(String x) {}\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    type Stored = { files: { symbols: { supertypes?: unknown; interfaces?: unknown; parameters?: { types?: unknown; names?: unknown } }[] }[] };
+    const corrupt = (change: (symbols: Stored["files"][number]["symbols"]) => void): string => {
+      const data = JSON.parse(serializeArtifact(index).toString()) as Stored;
+      change(data.files[0]!.symbols);
+      return JSON.stringify(data);
+    };
+    expect(() => deserializeArtifact(corrupt(() => undefined), undefined)).not.toThrow(/corrupt/);
+    for (const change of [
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[1]!.parameters!.names = ["String", "Item"]; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[1]!.parameters!.names = ["a b"]; },
+      (symbols: Stored["files"][number]["symbols"]) => { delete symbols[1]!.parameters!.types; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[0]!.supertypes = 0; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[0]!.supertypes = 1.5; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[0]!.interfaces = [{ kind: "member", name: "I" }]; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[0]!.interfaces = [{ kind: "local", name: "I" }, { kind: "local", name: "J" }, { kind: "local", name: "K" }]; },
+      (symbols: Stored["files"][number]["symbols"]) => { delete symbols[0]!.supertypes; },
+    ]) expect(() => deserializeArtifact(corrupt(change), undefined)).toThrow(/corrupt/);
   });
 });

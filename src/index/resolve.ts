@@ -623,6 +623,55 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     return { levels, complete };
   };
+  // A simple name a Java parameter type read from its file's scope can still mean another type: a nested
+  // type that the declaring type or an enclosing type inherits shadows it, and a type of the same package
+  // shadows a java.lang name. The names are proven only when every supertype up each of those chains is
+  // indexed and declares no nested type of that name, and no type of the package takes a java.lang name the
+  // types rely on. An enum (java.lang.Enum declares a nested type), or any written supertype that names no
+  // indexed type (a qualified or external name), leaves them unproven.
+  const namesProof = new Map<OsnovaSymbol, boolean>();
+  const javaNamesProven = (method: OsnovaSymbol): boolean => {
+    const names = method.parameters?.names;
+    if (names === undefined) return true;
+    const known = namesProof.get(method);
+    if (known !== undefined) return known;
+    const proven = proveJavaNames(method, names);
+    namesProof.set(method, proven);
+    return proven;
+  };
+  const proveJavaNames = (method: OsnovaSymbol, names: readonly string[]): boolean => {
+    const home = javaPackageOf(files.get(method.file));
+    const types = method.parameters?.types ?? [];
+    for (const name of names) {
+      const relied = types.some((type) => type.split(/[^\w$.]+/).includes(`java.lang.${name}`) ||
+        type.split(/[^\w$.]+/).some((part) => part.startsWith(`java.lang.${name}.`)));
+      if (relied && (symbolsByName.get(name) ?? []).some((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "java" &&
+        !localOfQualifiedName(symbol.qualifiedName).includes(".") && javaPackageOf(files.get(symbol.file)) === home)) return false;
+    }
+    const enclosing = localOfQualifiedName(method.qualifiedName).split(".").slice(0, -1);
+    const pending: OsnovaSymbol[] = [];
+    for (let depth = 1; depth <= enclosing.length; depth += 1) {
+      const holder = declaredAs(method.file, qualifiedNameOf(method.file, enclosing.slice(0, depth).join("."))).find(isHolder);
+      if (holder === undefined) return false;
+      pending.push(holder);
+    }
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const type = pending.pop()!;
+      if (seen.has(type.qualifiedName)) continue;
+      seen.add(type.qualifiedName);
+      if (seen.size > 32 || type.kind === "enum" || files.get(type.file)?.language !== "java") return false;
+      if (names.some((name) => declaredAs(type.file, `${type.qualifiedName}.${name}`).some(isHolder))) return false;
+      const followed = [...(type.heritage ?? []), ...(type.interfaces ?? [])];
+      if (followed.length !== (type.supertypes ?? 0)) return false;
+      for (const binding of followed) {
+        const base = baseOf(type, binding);
+        if (base === undefined) return false;
+        pending.push(base);
+      }
+    }
+    return true;
+  };
   // An override hides one base declaration with the same parameter range (and, in Java, the same written
   // parameter types). When a level holds more
   // declarations of that range than overrides above it, which ones stay is unknown, so all are listed.
@@ -645,7 +694,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     // A Java declaration whose written types prove nothing gets a key of its own, so it hides nothing.
     const keyOf = (symbol: OsnovaSymbol): string => {
       const range = symbol.parameters!;
-      const types = language !== "java" ? "" : range.types === undefined ? `?${symbol.file}:${symbol.span.startLine}` : range.types.join(",");
+      const types = language !== "java" ? "" : range.types === undefined || !javaNamesProven(symbol) ? `?${symbol.file}:${symbol.span.startLine}` : range.types.join(",");
       return `${range.min}:${range.max ?? ""}:${range.extension === true ? "e" : ""}:${types}`;
     };
     const pending = new Map<string, number>();

@@ -9,6 +9,8 @@ export interface RawDefinition {
   readonly parent: string;
   readonly shadowed?: true | undefined;
   readonly partial?: string | undefined;
+  readonly supertypes?: number | undefined;
+  readonly interfaces?: readonly SymbolBinding[] | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
