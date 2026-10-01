@@ -560,6 +560,17 @@ describe("a Java supertype the walk follows is the type the compiler binds", () 
     expect(choiceAt(index, "Child.cs", 4, "Put").overload).toEqual({ candidates: [2] });
   });
 
+  it("takes a nested base that an enclosing type inherits over a same-package type of that name", async () => {
+    await write({
+      "q/Grand.java": "package q;\npublic class Grand {\n  public static class Base {\n    public void put(int x) {}\n  }\n}\n",
+      "p/Base.java": "package p;\npublic class Base {\n  public void put(String x) {}\n}\n",
+      "p/I.java": "package p;\npublic interface I {\n  void put(String x);\n}\n",
+      "p/Outer.java": "package p;\nimport q.Grand;\npublic class Outer extends Grand {\n  public class Inner extends Base implements I {\n    @Override public void put(String x) {}\n    public void put(String x, String y) {}\n    public void run() { put(1); }\n  }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Outer.java", 7, "put")).toEqual({ toSymbol: "p/Outer.java#Outer.Inner.put", arguments: 1, overload: { candidates: [5], elsewhere: [{ file: "q/Grand.java", line: 4 }] } });
+  });
+
   it("follows a superclass written as a qualified name", async () => {
     await write({
       "q/Base.java": "package q;\npublic class Base {\n  public void put(int x) {}\n}\n",
