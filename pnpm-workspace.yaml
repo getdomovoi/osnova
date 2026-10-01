@@ -1,4 +1,6 @@
+# esbuild runs from its prebuilt platform package, so its install script stays off. The Claude plugin directory
+# rejects a repository whose workspace allows a build script, since that lets an install run unscanned code.
 allowBuilds:
-  esbuild: true
+  esbuild: false
 overrides:
   esbuild: ^0.28.1
