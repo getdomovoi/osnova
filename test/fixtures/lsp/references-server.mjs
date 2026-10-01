@@ -1,8 +1,10 @@
 // A minimal language server for tests: it answers textDocument/references with the locations listed in a JSON file
-// and appends one line to a log for every launch ("launch <pid>") and every opened file ("open <file>") and every shutdown request ("shutdown").
+// and appends one line to a log for every launch ("launch <pid>"), every opened file ("open <file>"), every references
+// request ("references <file>:<line>") and every shutdown request ("shutdown").
 // usage: node references-server.mjs <responses.json> <launch.log>
-// responses.json: { "delayMs"?: number, "initDelayMs"?: number, "ignoreShutdown"?: boolean, "exitOnReferences"?: boolean, "grow"?: boolean, "locations": [{ "file", "line", "character" }] }
+// responses.json: { "delayMs"?: number, "initDelayMs"?: number, "ignoreShutdown"?: boolean, "exitOnReferences"?: boolean, "grow"?: boolean, "locations": [{ "file", "line", "character" }], "byPosition"?: { "<file>:<line>": [{ "file", "line", "character" }] } }
 // With grow, the n-th request gets only the first n locations, as a server still loading its projects would answer.
+// byPosition answers a request at that queried file and zero-based line with its own list instead of locations.
 // (file relative to the workspace, line and character zero-based)
 import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -28,9 +30,12 @@ function handle(message) {
     appendFileSync(launchLog, `open ${path.relative(root, fileURLToPath(message.params.textDocument.uri)).split(path.sep).join("/")}\n`);
   } else if (message.method === "textDocument/references") {
     const responses = JSON.parse(readFileSync(responsesFile, "utf8"));
+    const queried = `${path.relative(root, fileURLToPath(message.params.textDocument.uri)).split(path.sep).join("/")}:${message.params.position.line}`;
+    appendFileSync(launchLog, `references ${queried}\n`);
     if (responses.exitOnReferences) process.exit(1);
     requests += 1;
-    const listed = responses.grow ? responses.locations.slice(0, requests) : responses.locations;
+    const all = responses.byPosition?.[queried] ?? responses.locations;
+    const listed = responses.grow ? all.slice(0, requests) : all;
     const result = listed.map((l) => ({ uri: pathToFileURL(path.join(root, l.file)).href, range: { start: { line: l.line, character: l.character }, end: { line: l.line, character: l.character + 1 } } }));
     setTimeout(() => send({ id: message.id, result }), responses.delayMs ?? 0);
   } else if (message.method === "shutdown") {
