@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "a5b666729e9006e194914c6c8701562a90ad10cc",
+    "commit": "2fc6ca44b92a17fc86fa59c4e7dd49e5a3d566d6",
     "version": "0.11.0",
     "unreleased": "Java and C# overload choice by argument count, including base and partial types; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
   },
@@ -496,6 +496,7 @@
     "Line tolerance of one absorbs multi-line call formatting and could mask a wrong target declared on an adjacent line.",
     "Each oracle sees one build configuration: cobra for darwin and windows, ripgrep for the host target with default features, gson on the classpath at JDK 27's language level, humanizer for net10.0 with .NET SDK 10.0.401 rather than the SDK 11 preview its global.json names. Code compiled only in other configurations is not enumerated.",
     "Recall counts osnova call edges only; import, reference, extends and routes edges are not scored here. Claimed edges in files the oracle does not compile (other languages in the checkout, uncompiled projects) are undecided.",
-    "The ripgrep checkout carries an untracked .osnovaignore excluding HomebrewFormula/, a symlink to pkg/brew; it changes no Rust file."
+    "The ripgrep checkout carries an untracked .osnovaignore excluding HomebrewFormula/, a symlink to pkg/brew; it changes no Rust file.",
+    "A Java or C# call whose target has a single declaration that accepts the argument count keeps that declaration even when a base type of the class is outside the index (an external class, or a partial part that did not parse), although an unseen base overload may be the one the compiler binds. Withdrawing those edges cost 10 recall points on humanizer and 1 on gson for one fewer false edge (gson LinkedTreeMapTest.java:215), so they are kept and scored as claims."
   ]
 }
