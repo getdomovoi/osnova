@@ -40,6 +40,7 @@
 <p>All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.</p>
 <nav class="doc-toc" aria-label="Changelog sections">
 <ul>
+<li><a href="#unreleased" title="Unreleased">Unreleased</a></li>
 <li><a href="#v0-11-0" title="0.11.0 (2026-09-30)">0.11.0</a></li>
 <li><a href="#v0-10-0" title="0.10.0 (2026-09-28)">0.10.0</a></li>
 <li><a href="#v0-9-0" title="0.9.0 (2026-09-26)">0.9.0</a></li>
@@ -56,6 +57,13 @@
 <li><a href="#v0-2-0" title="0.2.0">0.2.0</a></li>
 </ul>
 </nav>
+<h2 id="unreleased">Unreleased</h2>
+<h3 id="unreleased-added">Added</h3>
+<ul>
+<li>With <code>osnova mcp --lsp-server</code>, <code>osnova_plumb</code> checks a callers claim against the language server's <code>textDocument/references</code> too, in a section after the unchanged verdicts: how many claims the server confirms, by the graph's verdict for each, the claims it confirms that the graph called name-only or no-call, and the sites the claim left out that the graph does not list as missing. Only a location on the claimed line itself confirms a claim; a neighbouring one, such as an import, is listed where the server put it. The section has its own 1,024-code-unit budget with an exact count of lines it leaves out, and server locations never change a verdict or become graph edges.</li>
+<li>With <code>osnova mcp --lsp-server</code>, <code>osnova_settle</code> asks the language server for references to the changed symbols and lists, in a section after the unchanged impact answer, those not inside a listed dependent or a changed symbol. It asks about at most 8 symbols per call, most graph dependents first, under one request timeout for the whole call that also bounds the wait behind other requests and any server start-up, and counts exactly the symbols it did not ask about (over the cap, past the deadline, after a failure) and the lines its 1,024-code-unit budget leaves out.</li>
+<li>With <code>osnova mcp --lsp-server</code>, <code>osnova_tests</code> given <code>symbols</code> adds a third, separately labelled tier after the unchanged two: test files where the language server finds references to the symbol that neither graph tier holds, with their lines, and counts of the server's other locations (outside test files, in resolved-edge files, in import-only files). It shares settle's cap of 8 symbols and one request timeout per call, with the same exact counts and 1,024-code-unit budget.</li>
+</ul>
 <h2 id="v0-11-0">0.11.0 (2026-09-30)</h2>
 <h3 id="v0-11-0-breaking">Breaking</h3>
 <ul>
