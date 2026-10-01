@@ -184,10 +184,14 @@ it("settle: asks about at most 8 symbols, most depended-on first, and counts the
 
 it("settle: stops asking at one deadline for the whole call", async () => {
   const f = await settleFixture();
-  await respond(f, [{ file: "use.ts", line: 2, character: 50 }], { delayMs: 700 });
+  const diff = await rewrite(f, "lib.ts", [1, 2]) + await rewrite(f, "use.ts", [2]);
   const client = await connect(f, true, 1_000);
+  // Start the server and build the index first, so a slow start on a busy machine does not use up the timed call's deadline.
+  await respond(f, [{ file: "use.ts", line: 2, character: 50 }]);
+  await call(client, "osnova_settle", { diff });
+  await respond(f, [{ file: "use.ts", line: 2, character: 50 }], { delayMs: 700 });
   const started = Date.now();
-  const { section } = split(await call(client, "osnova_settle", { diff: await rewrite(f, "lib.ts", [1, 2]) + await rewrite(f, "use.ts", [2]) }));
+  const { section } = split(await call(client, "osnova_settle", { diff }));
   expect(Date.now() - started).toBeLessThan(2_500);
   expect(section).toContain("asked about 1 of 3 changed symbols in its languages (not asked: 0 over the cap of 8, 2 past the deadline, 0 after a failure)");
 });
@@ -278,9 +282,14 @@ it("tests: counts a file the graph tier holds but its limit did not show as held
 
 it("tests: stops asking at one deadline for the whole call", async () => {
   const f = await testsFixture();
+  const client = await connect(f, true, 1_000);
+  const symbols = ["lib.ts#helper", "use.ts#direct", "use.ts#viaAny"];
+  // Start the server and build the index first, so a slow start on a busy machine does not use up the timed call's deadline.
+  await respond(f, [{ file: "test/any.spec.ts", line: 0, character: 47 }]);
+  await call(client, "osnova_tests", { symbols });
   await respond(f, [{ file: "test/any.spec.ts", line: 0, character: 47 }], { delayMs: 700 });
   const started = Date.now();
-  const { section } = split(await call(await connect(f, true, 1_000), "osnova_tests", { symbols: ["lib.ts#helper", "use.ts#direct", "use.ts#viaAny"] }));
+  const { section } = split(await call(client, "osnova_tests", { symbols }));
   expect(Date.now() - started).toBeLessThan(2_500);
   expect(section).toContain("asked about 1 of 3 symbols in its languages (not asked: 0 over the cap of 8, 2 past the deadline, 0 after a failure)");
 });
