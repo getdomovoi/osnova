@@ -4,7 +4,7 @@
   "osnova": {
     "commit": "a5518308f459a90b18be5f8436288e5ee42f6213",
     "version": "0.11.0",
-    "unreleased": "Java and C# overload choice by argument count, including base and partial types and constructors; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
+    "unreleased": "Java and C# overload choice by argument count, including base and partial types and Java constructors; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
   },
   "machine": "macOS, Darwin 25.6.0 on arm64 (Apple silicon), Node.js 26.10.0; times are wall clock on that machine",
   "method": {
@@ -410,16 +410,16 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 7751,
-      "decided": 7456,
-      "undecided": 295,
-      "truePositive": 7453,
+      "claimedEdges": 7660,
+      "decided": 7363,
+      "undecided": 297,
+      "truePositive": 7360,
       "falsePositive": 3,
       "precision": 0.9996,
-      "falseEdgeRate": 0.0004,
+      "falseEdgeRate": 0.00041,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 7451,
-      "recall": 0.6301,
+      "coveredInRepoSites": 7358,
+      "recall": 0.6222,
       "falseByCause": [
         {
           "cause": "local function in top-level statements",
@@ -445,7 +445,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (617 to 642)",
         "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
       },
-      "overloadUndetermined": 645,
+      "overloadUndetermined": 602,
       "falseEdgesWithCorrectTarget": 1,
       "previous": {
         "osnova": {

@@ -549,13 +549,6 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // One C# type: the parts of a partial type share its local name and namespace-and-arity identity;
   // any other type is its own declaration.
   const partialIdentity = (symbol: OsnovaSymbol): string | undefined => declarationsOf(symbol).find((part) => part.partial !== undefined)?.partial;
-  // Declarations under one qualified name in one file are one type only when there is one, or all are parts of a
-  // partial type with one namespace-and-arity identity: `A.T` and `B.T`, or `T` and `T<U>`, share the name.
-  const singleType = (holder: OsnovaSymbol): boolean => {
-    const declarations = declarationsOf(holder);
-    const identities = new Set(declarations.map((part) => part.partial));
-    return declarations.length === 1 || (identities.size === 1 && !identities.has(undefined));
-  };
   const typeKey = (symbol: OsnovaSymbol): string => {
     const identity = partialIdentity(symbol);
     return identity === undefined ? symbol.qualifiedName : `${localOfQualifiedName(symbol.qualifiedName)}\u0000${identity}`;
@@ -564,17 +557,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const parts = new Map<string, OsnovaSymbol>([[holder.file, holder]]);
     let complete = true;
     if (files.get(holder.file)?.language === "c_sharp" && partialIdentity(holder) !== undefined) {
-      if (!parsedCleanly(holder.file) || !singleType(holder)) return { parts: declarationsOf(holder), complete: false };
-      const identity = partialIdentity(holder);
+      if (!parsedCleanly(holder.file)) return { parts: declarationsOf(holder), complete: false };
       for (const symbol of symbolsByName.get(holder.name) ?? []) {
-        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || symbol.partial === undefined || parts.has(symbol.file) ||
-          localOfQualifiedName(symbol.qualifiedName) !== localOfQualifiedName(holder.qualifiedName)) continue;
-        // Another file that declares the name with mixed identities may hold a part the index cannot single out.
-        if (!singleType(symbol)) {
-          if (declarationsOf(symbol).some((part) => part.partial === identity)) complete = false;
-          continue;
-        }
-        if (typeKey(symbol) !== typeKey(holder)) continue;
+        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || symbol.partial === undefined || parts.has(symbol.file) || typeKey(symbol) !== typeKey(holder)) continue;
         if (parsedCleanly(symbol.file)) parts.set(symbol.file, symbol);
         else complete = false;
       }
@@ -693,75 +678,6 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (outer.status !== "resolved") return outer;
     const inner = declaredAs(outer.type.file, `${outer.type.qualifiedName}.${rest.join(".")}`).find(isHolder);
     return inner === undefined ? unknownType : { ...outer, type: inner };
-  };
-  // C# binds a type name through its using directives and namespaces, which the index does not follow. A name
-  // any C# file declares as a `using` alias stays unresolved, since an alias can be global or scoped to a
-  // namespace. A simple name is a member type an enclosing type declares or an indexed base type declares,
-  // innermost first, or else a top-level type by the tiers a call takes. A dotted name resolves its first segment
-  // that way and then the member types it declares, so a namespace-qualified creation stays unresolved.
-  // An alias directive's imports edge carries the alias name and its `=` (`X =`); a change to it changes the
-  // file's imports, which re-resolves every file on an incremental update.
-  let csharpAliases: Set<string> | undefined;
-  const csharpAliasNames = (): Set<string> => {
-    if (csharpAliases !== undefined) return csharpAliases;
-    csharpAliases = new Set();
-    for (const [file, raws] of rawEdges) {
-      if (files.get(file)?.language !== "c_sharp") continue;
-      for (const raw of raws) {
-        const alias = raw.kind === "imports" ? /^@?([\p{L}_][\p{L}\p{N}_]*)\s*=$/u.exec(raw.toName) : null;
-        if (alias !== null) csharpAliases.add(alias[1]!);
-      }
-    }
-    return csharpAliases;
-  };
-  // A member type declared in any part of a C# type, or in an indexed base; null when a part that did not parse
-  // cleanly may hold it.
-  const csharpDeclaredMember = (type: OsnovaSymbol, path: string): OsnovaSymbol | null | undefined => {
-    const { parts, complete } = partsOf(type);
-    const found = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${path}`)).find(isHolder);
-    return found ?? (complete ? undefined : null);
-  };
-  const csharpMemberTypeOf = (type: OsnovaSymbol, name: string, seen: Set<string>): OsnovaSymbol | null | undefined => {
-    if (seen.size > 32) return null;
-    if (seen.has(typeKey(type))) return undefined;
-    seen.add(typeKey(type));
-    const own = csharpDeclaredMember(type, name);
-    if (own !== undefined) return own;
-    for (const part of partsOf(type).parts) {
-      for (const binding of part.heritage ?? []) {
-        const base = baseOf(part, binding);
-        // A class or struct inherits member types from its base class only, not from interfaces it implements.
-        if (base !== undefined && base.kind === "interface" && type.kind !== "interface") continue;
-        const member = base === undefined ? undefined : csharpMemberTypeOf(base, name, seen);
-        if (member !== undefined) return member;
-      }
-    }
-    return undefined;
-  };
-  const csharpSimpleType = (card: FileCard, fromSymbol: string, name: string, importTargets: readonly string[]): CreatedType => {
-    const enclosing = fromSymbol.includes("#") ? localOfQualifiedName(fromSymbol).split(".") : [];
-    for (let depth = enclosing.length; depth > 0; depth -= 1) {
-      const holder = declaredAs(card.path, qualifiedNameOf(card.path, enclosing.slice(0, depth).join("."))).find(isHolder);
-      const member = holder === undefined ? undefined : csharpMemberTypeOf(holder, name, new Set());
-      if (member === null) return unknownType;
-      if (member !== undefined) return { status: "resolved", type: member, method: member.file === card.path ? "same-file-name" : "lexical-definition" };
-    }
-    const types = (symbolsByName.get(name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "c_sharp" &&
-      localOfQualifiedName(symbol.qualifiedName) === name);
-    const sameFile = types.filter((symbol) => symbol.file === card.path);
-    const imported = types.filter((symbol) => importTargets.includes(symbol.file));
-    // The parts of one partial type are one type, named by the part in the creating file or else the first.
-    const onePartial = (found: OsnovaSymbol[]): OsnovaSymbol[] => new Set(found.map(typeKey)).size === 1
-      ? [found.find((symbol) => symbol.file === card.path) ?? [...found].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))[0]!] : found;
-    return oneType(onePartial(sameFile), "same-file-name") ?? oneType(onePartial(imported), "imported-file-name") ?? oneType(onePartial(types), "lexical-definition") ?? externalType;
-  };
-  const csharpCreatedType = (card: FileCard, fromSymbol: string, written: string, importTargets: readonly string[]): CreatedType => {
-    const [first, ...rest] = written.split(".");
-    if (csharpAliasNames().has(first!)) return unknownType;
-    const outer = csharpSimpleType(card, fromSymbol, first!, importTargets);
-    if (rest.length === 0 || outer.status !== "resolved") return rest.length === 0 ? outer : unknownType;
-    const inner = csharpDeclaredMember(outer.type, rest.join("."));
-    return inner === undefined || inner === null ? unknownType : { ...outer, type: inner };
   };
   // What `new T(...)` runs: an instance constructor of T written in any part of the type, or T itself when it
   // declares none, declares a primary or canonical constructor, or the creation makes an anonymous subclass.
@@ -1371,11 +1287,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         });
         continue;
       }
-      if (raw.constructs !== undefined && (card.language === "java" || card.language === "c_sharp")) {
-        const found = card.language === "java" ? javaCreatedType(card, fromSymbol, raw.toName) : csharpCreatedType(card, fromSymbol, raw.toName, importTargets);
-        // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
-        // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart.
-        const typeFound: CreatedType = found.status === "resolved" && !singleType(found.type) ? unknownType : found;
+      if (raw.constructs !== undefined && card.language === "java") {
+        const found = javaCreatedType(card, fromSymbol, raw.toName);
+        // Two types declared under one qualified name in one file (local classes in different blocks of a method) are
+        // not one type, and the index cannot tell them apart.
+        const typeFound: CreatedType = found.status === "resolved" && declarationsOf(found.type).length !== 1 ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
         const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
         const evidence = { source: "syntax" as const, resolution: typeFound.status === "resolved" ? { status: "resolved" as const, method: typeFound.method } : typeFound };
