@@ -36,7 +36,7 @@ function parameterRange(list: Node, method: Node, constructor = false): Paramete
 function hasPrimaryConstructor(type: Node, name: Node): boolean {
   if (childOfType(type, "parameter_list") !== null) return true;
   const after = childOfType(type, "type_parameter_list") ?? name;
-  return /^\s*\(/.test(type.text.slice(after.endIndex - type.startIndex));
+  return /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*\(/.test(type.text.slice(after.endIndex - type.startIndex));
 }
 
 export const csharpAdapter: LanguageAdapter = {

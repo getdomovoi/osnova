@@ -159,7 +159,7 @@ describe("a creation names only an instance constructor of the type it names", (
     });
     const index = await buildIndex(workspace, { cacheDir });
     expect(creationAt(index, "T.cs", 4)).toMatchObject({ toSymbol: "T.cs#T", overload: undefined });
-    expect(creationAt(index, "U.cs", 5)).toMatchObject({ toSymbol: "U.cs#U.U", overload: undefined });
+    expect(creationAt(index, "U.cs", 5)).toMatchObject({ toSymbol: "U.cs#U.U", overload: { line: 3 } });
   });
 
   it("follows a Java package-qualified name instead of a same-named type in the file", async () => {
@@ -228,6 +228,88 @@ describe("a creation names only an instance constructor of the type it names", (
     await write({ "T.cs": "class T {\n  public T() {}\n  public T(int x) {}\n  public int Init { get; set; }\n  static void Use() {\n    new T { Init = 1 };\n  }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });
     expect(creationAt(index, "T.cs", 6)).toMatchObject({ toSymbol: "T.cs#T.T", arguments: 0, overload: { line: 2 } });
+  });
+});
+
+describe("a creation claims a declaration only where the compiler's binding is proven", () => {
+  it("keeps the chosen constructor's line when an excluded declaration shares its name", async () => {
+    await write({
+      "T.java": "class T {\n  T() {}\n  void T() {}\n  static void use() { new T(); }\n}\n",
+      "Types.cs": "class C {\n  public C(int x = 0) {}\n  static C() {}\n  public static void Use() { new C(); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "T.java", 4)).toMatchObject({ toSymbol: "T.java#T.T", overload: { line: 2 } });
+    expect(creationAt(index, "Types.cs", 4)).toMatchObject({ toSymbol: "Types.cs#C.C", overload: { line: 2 } });
+  });
+
+  it("does not take a Java local class declared after the creation", async () => {
+    await write({ "Use.java": "class T { T() {} }\nclass Use {\n  void use() {\n    new T();\n    class T { T() {} }\n  }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.java", 4)).toMatchObject({ toSymbol: "Use.java#T.T" });
+  });
+
+  it("takes a Java local class declared earlier in the creation's block, and only there", async () => {
+    await write({ "Use.java": "class T { T() {} }\nclass Use {\n  void use() {\n    class T { T() {} }\n    new T();\n  }\n  void other() {\n    {\n      class T { T() {} }\n    }\n    new T();\n  }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.java", 5)).toMatchObject({ toSymbol: "Use.java#Use.use.T.T" });
+    expect(creationAt(index, "Use.java", 11)).toMatchObject({ toSymbol: "Use.java#T.T" });
+  });
+
+  it("finds a C# nested type declared in another part of an enclosing partial type", async () => {
+    await write({
+      "A.cs": "public partial class Gen {\n  void Run() { new Mapping(1); new Gen.Mapping(2); }\n}\n",
+      "B.cs": "public partial class Gen {\n  public sealed class Mapping { public Mapping(int x) {} }\n}\n",
+      "Use.cs": "class Use { void Run() { new Gen.Mapping(3); } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const found = index.edges.filter((edge) => edge.kind === "calls" && edge.constructs !== undefined).map((edge) => [edge.fromFile, edge.toName, edge.toSymbol]);
+    expect(found).toEqual([["A.cs", "Gen.Mapping", "B.cs#Gen.Mapping.Mapping"], ["A.cs", "Mapping", "B.cs#Gen.Mapping.Mapping"], ["Use.cs", "Gen.Mapping", "B.cs#Gen.Mapping.Mapping"]]);
+  });
+
+  it("reads Java imports as declarations, not lines", async () => {
+    await write({
+      "q/T.java": "package q; public class T { public T() {} }\n",
+      "r/T.java": "package r; public class T { public T() {} }\n",
+      "p/T.java": "package p; public class T { public T() {} }\n",
+      "p/Use.java": "package p;\nimport q.T;\n/*\nimport r.T;\n*/\nclass Use {\n  void use() { new T(); }\n}\n",
+      "p/Same.java": "package p; import q.T;\nclass Same {\n  void use() { new T(); }\n}\n",
+      "p/Static.java": "package p;\nimport static q.Outer.T;\nclass Static {\n  void use() { new T(); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "p/Use.java", 7)).toMatchObject({ toSymbol: "q/T.java#T.T" });
+    expect(creationAt(index, "p/Same.java", 3)).toMatchObject({ toSymbol: "q/T.java#T.T" });
+    expect(creationAt(index, "p/Static.java", 4)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("leaves a C# creation unresolved when any file declares an alias of that name", async () => {
+    await write({
+      "Alias.cs": "global using X = P.T;\n",
+      "Box.cs": "namespace P { public class T { public T() {} } }\n",
+      "Other.cs": "namespace Q { public class X { public X() {} } }\n",
+      "Use.cs": "class Use { void Run() { new X(); } }\n",
+      "Inner.cs": "namespace R { using Y = P.T;\nclass Use { void Run() { new Y(); } } }\n",
+      "Y.cs": "namespace S { public class Y { public Y() {} } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Inner.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("resolves a dotted C# name from its first segment, not by suffix", async () => {
+    await write({
+      "Box.cs": "namespace P { public class Box { public Box(int x) {} } }\n",
+      "Other.cs": "class Other {\n  public class P {\n    public class Box { public Box(int x) {} }\n  }\n  void Run() { new P.Box(1); }\n}\n",
+      "Use.cs": "class Use { void Run() { new P.Box(1); } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Other.cs", 5)).toMatchObject({ toSymbol: "Other.cs#Other.P.Box.Box" });
+  });
+
+  it("finds a C# primary constructor behind a comment", async () => {
+    await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 3)).toMatchObject({ toSymbol: "Types.cs#C", overload: undefined });
   });
 });
 
