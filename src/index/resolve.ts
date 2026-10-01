@@ -642,7 +642,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const count = edge.arguments;
     // Java overrides a method by its parameter types, and @Override also marks an interface method's
     // implementation, so a Java override hides only a base declaration written with the same types.
-    const keyOf = (range: ParameterRange): string => `${range.min}:${range.max ?? ""}:${range.extension === true ? "e" : ""}:${range.types?.join(",") ?? ""}`;
+    // A Java declaration whose written types prove nothing gets a key of its own, so it hides nothing.
+    const keyOf = (symbol: OsnovaSymbol): string => {
+      const range = symbol.parameters!;
+      const types = language !== "java" ? "" : range.types === undefined ? `?${symbol.file}:${symbol.span.startLine}` : range.types.join(",");
+      return `${range.min}:${range.max ?? ""}:${range.extension === true ? "e" : ""}:${types}`;
+    };
     const pending = new Map<string, number>();
     const listed: OsnovaSymbol[] = [];
     let slots = 0;
@@ -650,7 +655,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const groups = new Map<string, OsnovaSymbol[]>();
       for (const symbol of level) {
         if (!accepts(symbol.parameters!, count)) continue;
-        const key = keyOf(symbol.parameters!);
+        const key = keyOf(symbol);
         groups.set(key, [...(groups.get(key) ?? []), symbol]);
       }
       for (const [key, group] of groups) {

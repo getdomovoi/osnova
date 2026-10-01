@@ -102,10 +102,10 @@ describe("Java overloads chosen by argument count", () => {
     const index = await buildIndex(workspace, { cacheDir });
     const ranges = index.files.get("src/Gson.java")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
     expect(ranges).toEqual([
-      [3, { min: 1, max: 1, types: ["Object"] }], [4, { min: 2, max: 2, types: ["Object", "Appendable"] }],
-      [5, { min: 3, max: 3, types: ["Object", "Appendable", "int"] }], [6, { min: 2, max: 2, types: ["String", "Class<T>"] }],
-      [7, { min: 2, max: 2, types: ["String", "java.lang.reflect.Type"] }], [8, { min: 0, types: ["String..."] }],
-      [9, { min: 2, max: 2, types: ["int", "String"] }], [10, { min: 1, max: 1, types: ["int"] }],
+      [3, { min: 1, max: 1, types: ["java.lang.Object"] }], [4, { min: 2, max: 2, types: ["java.lang.Object", "java.lang.Appendable"] }],
+      [5, { min: 3, max: 3, types: ["java.lang.Object", "java.lang.Appendable", "int"] }], [6, { min: 2, max: 2 }],
+      [7, { min: 2, max: 2, types: ["java.lang.String", "java.lang.reflect.Type"] }], [8, { min: 0, types: ["java.lang.String..."] }],
+      [9, { min: 2, max: 2, types: ["int", "java.lang.String"] }], [10, { min: 1, max: 1, types: ["int"] }],
     ]);
   });
 });
@@ -377,5 +377,54 @@ describe("nested C# partial types", () => {
     expect(index.files.get("B.cs")?.symbols.find((symbol) => symbol.qualifiedName === "B.cs#Outer.Inner")?.partial).toBe("N`2.0");
     const loaded = await loadIndex(workspace, { cacheDir });
     expect(loaded?.files.get("A.cs")?.symbols.find((symbol) => symbol.qualifiedName === "A.cs#Outer.Inner")?.partial).toBe("N`1.0");
+  });
+});
+
+describe("Java written types prove an override only when they name the same type", () => {
+  const iface = "public interface I {\n  void put(String x);\n}\n";
+  const use = (arg: string) => `public class Use {\n  public void run(Child child) { child.put(${arg}); }\n}\n`;
+  const child = (param: string) => `public class Child extends Base implements I {\n  @Override public void put(${param}) {}\n  public void put(String x, String y) {}\n}\n`;
+
+  it("counts array dimensions written after the parameter name", async () => {
+    await write({ "Base.java": "public class Base {\n  public void put(String x[]) {}\n}\n", "I.java": iface, "Child.java": child("String x"), "Use.java": use("new String[]{\"x\"}") });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "Use.java", 2, "put").overload).toEqual({ candidates: [2], elsewhere: [{ file: "Base.java", line: 2 }] });
+  });
+
+  it("keeps simple names imported from different packages apart", async () => {
+    await write({
+      "a/Item.java": "package a; public class Item {}\n", "b/Item.java": "package b; public class Item {}\n",
+      "Base.java": "import a.Item;\npublic class Base {\n  public void put(Item x) {}\n}\n",
+      "I.java": "import b.Item;\npublic interface I {\n  void put(Item x);\n}\n",
+      "Child.java": "import b.Item;\npublic class Child extends Base implements I {\n  @Override public void put(Item x) {}\n  public void put(Item x, Item y) {}\n}\n",
+      "Use.java": "public class Use {\n  public void run(Child child, a.Item item) { child.put(item); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "Use.java", 2, "put").overload).toEqual({ candidates: [3], elsewhere: [{ file: "Base.java", line: 3 }] });
+  });
+
+  it("proves nothing from a type variable", async () => {
+    await write({
+      "Base.java": "public class Base<T extends CharSequence> {\n  public void put(T x) {}\n}\n",
+      "I.java": "public interface I<T extends Number> {\n  void put(T x);\n}\n",
+      "Child.java": "public class Child<T extends Number> extends Base<String> implements I<T> {\n  @Override public void put(T x) {}\n  public void put(T x, T y) {}\n}\n",
+      "Use.java": "public class Use {\n  public void run(Child<Integer> child) { child.put(\"x\"); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "Use.java", 2, "put").overload).toEqual({ candidates: [2], elsewhere: [{ file: "Base.java", line: 2 }] });
+    expect(index.files.get("Child.java")?.symbols.find((symbol) => symbol.span.startLine === 2)?.parameters?.types).toBeUndefined();
+  });
+
+  it("still lets a same-package override hide the base method it repeats", async () => {
+    await write({
+      "p/Item.java": "package p; public class Item {}\n",
+      "p/Base.java": "package p;\npublic class Base {\n  public void put(Item x) {}\n  public void put(Item x, String y) {}\n}\n",
+      "p/I.java": "package p;\npublic interface I {\n  void run();\n}\n",
+      "p/Child.java": "package p;\npublic class Child extends Base implements I {\n  @Override public void put(Item item) {}\n  public void run() {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void go(Child child, Item item) { child.put(item); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put")).toEqual({ toSymbol: "p/Child.java#Child.put", arguments: 1, overload: undefined });
+    expect(index.files.get("p/Child.java")?.symbols.find((symbol) => symbol.span.startLine === 3)?.parameters?.types).toEqual(["p.Item"]);
   });
 });
