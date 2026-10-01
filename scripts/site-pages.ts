@@ -138,9 +138,8 @@ function page(source: PageSource, rendered: Rendered, version: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(source.title)}, osnova</title>
 <meta name="description" content="${escapeHtml(source.description)}">
-<meta name="color-scheme" content="dark light">
-<meta name="theme-color" content="#0D0E0F" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#F5F3EF" media="(prefers-color-scheme: light)">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0D0E0F">
 <link rel="canonical" href="https://getosnova.dev/${source.slug}/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">

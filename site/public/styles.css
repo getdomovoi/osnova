@@ -1,4 +1,4 @@
-/* Tokens follow assets/brand/README.md (brand identity v1). Dark is the default. */
+/* Tokens follow assets/brand/README.md (brand identity v1). The site is dark for every visitor, by request. */
 :root {
   --bg: #0D0E0F;
   --surface: #141517;
@@ -26,20 +26,6 @@
   --font-mono: "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
   --gutter: clamp(16px, 4vw, 40px);
   color-scheme: dark;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #F5F3EF;
-    --surface: #FFFFFF;
-    --line: #DEDAD2;
-    --ink: #17181A;
-    --muted: #5C5A56;
-    --brass: #8A5F16;
-    --slate: #2E5F66;
-    --on-brass: #FFFFFF;
-    color-scheme: light;
-  }
 }
 
 *, *::before, *::after { box-sizing: border-box; }

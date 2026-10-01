@@ -188,3 +188,17 @@ describe("marketing site crawl files", () => {
     expect(read("robots.txt")).toContain("Sitemap: https://getosnova.dev/sitemap.xml");
   });
 });
+
+describe("marketing site theme", () => {
+  const publicDir = path.join(root, "site", "public");
+  const pages = fs.readdirSync(publicDir, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".html"));
+
+  it("renders dark whatever the visitor's system theme", () => {
+    expect(fs.readFileSync(path.join(publicDir, "styles.css"), "utf8")).not.toMatch(/prefers-color-scheme/);
+    for (const file of pages) {
+      const html = fs.readFileSync(path.join(publicDir, file), "utf8");
+      expect(html, file).toContain('<meta name="color-scheme" content="dark">');
+      expect(html, file).not.toMatch(/prefers-color-scheme: light/);
+    }
+  });
+});
