@@ -16,7 +16,7 @@ import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { LspReferenceSession, type LspServerLaunch } from "../enrichment/session.js";
-import { formatLspReferences } from "./lsp-section.js";
+import { formatLspPlumb, formatLspReferences, formatLspSettle, formatLspTests, settleTargets } from "./lsp-section.js";
 import { renderMapCard } from "../query/mapCard.js";
 import { taskContext, warmTaskContext } from "../query/task-context.js";
 import { warmQueryContext } from "../query/context.js";
@@ -249,7 +249,7 @@ export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
   readonly prewarm?: boolean;
-  /** A language server whose references osnova_warp adds, in their own section, to a callers answer. */
+  /** A language server whose references osnova_warp, osnova_plumb, osnova_settle and osnova_tests add to their answers, each in its own section. */
   readonly lsp?: LspServerLaunch;
 }
 
@@ -470,7 +470,11 @@ export function createOsnovaMcpServer(
             result = measured(() => impact(base.index, index, { diff: computed.trim().length === 0 ? undefined : computed, maxDepth, diffPathPrefix }));
           }
           const available = maximumMcpSettleCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${boundText(formatImpact(result), available)}`);
+          // The server's references to the changed symbols get their own section after the unchanged impact answer.
+          const targets = lspSession === undefined ? [] : settleTargets(index, result, (language) => lspSession.handles(language));
+          const lsp = lspSession !== undefined && targets.length > 0
+            ? `\n${formatLspSettle(index, result, await lspSession.referencesEach(index, indexGeneration(index), targets), targets.length)}` : "";
+          return textResult(`${prefix}\n${boundText(formatImpact(result), available)}${lsp}`);
         }
         case "osnova_plumb": {
           const symbol = requireString(args, "symbol");
@@ -480,7 +484,10 @@ export function createOsnovaMcpServer(
           if (direction !== undefined && direction !== "in" && direction !== "out") throw new Error(`direction must be "in" or "out", got ${JSON.stringify(direction)}`);
           const result = plumb(index, symbol, parseClaims(sites), { direction, depth: optionalNumber(args, "depth") });
           const available = maximumMcpPlumbCodeUnits - prefix.length - 1;
-          return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}`);
+          // Server references are direct callers, so only a callers claim gets them, in a section after the unchanged verdicts.
+          const lsp = lspSession !== undefined && result.direction === "in" && lspSession.handles(index.files.get(result.target.file)?.language ?? "")
+            ? `\n${formatLspPlumb(index, result, await lspSession.references(index, indexGeneration(index), result.target))}` : "";
+          return textResult(`${prefix}\n${boundText(formatPlumb(result, symbol), available)}${lsp}`);
         }
         case "osnova_tests": {
           const symbols = optionalStringArray(args, "symbols");
@@ -489,8 +496,13 @@ export function createOsnovaMcpServer(
           const limit = optionalNumber(args, "limit");
           const includeImportOnly = optionalBoolean(args, "includeImportOnly");
           const available = maximumMcpTestsCodeUnits - prefix.length - 1;
-          const text = symbols !== undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit }));
-          return textResult(`${prefix}\n${boundText(text, available)}`);
+          if (symbols === undefined) return textResult(`${prefix}\n${boundText(formatSymbolsUnderTest(symbolsUnderTest(index, file!, { limit })), available)}`);
+          const result = testsFor(index, symbols, { limit, includeImportOnly });
+          // Server references in test files neither graph tier holds form a third tier, in a section after the unchanged answer.
+          const targets = lspSession === undefined ? [] : result.symbols.map((item) => item.symbol).filter((symbol) => lspSession.handles(index.files.get(symbol.file)?.language ?? ""));
+          const lsp = lspSession !== undefined && targets.length > 0
+            ? `\n${formatLspTests(index, result, await lspSession.referencesEach(index, indexGeneration(index), targets), targets.length)}` : "";
+          return textResult(`${prefix}\n${boundText(formatTestsFor(result), available)}${lsp}`);
         }
         case "osnova_unreferenced": {
           const kinds = optionalStringArray(args, "kinds");

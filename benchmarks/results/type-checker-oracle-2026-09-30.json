@@ -1,0 +1,502 @@
+{
+  "schemaVersion": 1,
+  "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
+  "osnova": {
+    "commit": "2fc6ca44b92a17fc86fa59c4e7dd49e5a3d566d6",
+    "version": "0.11.0",
+    "unreleased": "Java and C# overload choice by argument count, including base and partial types; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
+  },
+  "machine": "macOS, Darwin 25.6.0 on arm64 (Apple silicon), Node.js 26.10.0; times are wall clock on that machine",
+  "method": {
+    "unit": "call site: (caller file, 1-based line of the callee name, callee name)",
+    "oracle": "For every call expression in the checkout the language's own type checker or compiler is asked for the callee's declarations. A site is in-repo when at least one declaration is inside the checkout, external when every declaration is outside it (standard library, packages, generated code), and undecided when the checker returns nothing.",
+    "trueEdge": "the oracle resolved the site inside the checkout and the symbol span osnova names contains one of the oracle's declaration lines in the same file",
+    "falseEdge": "the oracle decided the site and the symbol span osnova names contains none of the oracle's declarations, including an in-repo target where the checker says the callee is external",
+    "undecidedEdge": "the oracle has no verdict for the site, or did not enumerate it; excluded from both rates",
+    "lineTolerance": 1,
+    "falseEdgeRate": "falsePositive / decided",
+    "recall": "distinct in-repo oracle sites covered by at least one true osnova edge / distinct in-repo oracle sites",
+    "python": "every ast.Call callee identifier in every .py file, sent to pyright-langserver textDocument/definition (benchmarks/oracle/sites-python.py, truth-python.mjs)",
+    "typescript": "every CallExpression and NewExpression in one ts.Program over every .ts and .tsx file, resolved with checker.getSymbolAtLocation and getAliasedSymbol (truth-typescript.mjs)",
+    "go": "every ast.CallExpr whose callee is a name or a selector (generic instantiation stripped), resolved with types.Info.Uses after golang.org/x/tools/go/packages loads ./... with tests (truth-go/)",
+    "java": "every MethodInvocationTree and NewClassTree, resolved with Trees.getElement after JavacTask.analyze (the constructor; the named type for an anonymous class), declaration line from the element's tree (TruthJava.java)",
+    "rust": "every tree-sitter call_expression whose callee is a name, a path, a method field or a turbofish, sent to rust-analyzer textDocument/definition once the server is quiescent (sites-rust.mjs, truth-rust.mjs)",
+    "csharp": "every InvocationExpressionSyntax and ObjectCreationExpressionSyntax with a named callee, bound with SemanticModel.GetSymbolInfo in compilations replayed from a real build's csc arguments with source-generator output (truth-csharp/)"
+  },
+  "corpora": [
+    {
+      "corpus": "click-v1",
+      "repository": "https://github.com/pallets/click",
+      "revision": "6aabf099bfdd4c1e75fe8d0e0d4241372b988ab1",
+      "tree": "014c6c60967424c964e69a4517b1a310b38d9c54",
+      "oracle": "pyright",
+      "oracleVersion": "1.1.414",
+      "toolchain": "pyright 1.1.414 from npm, Python 3 ast for call sites",
+      "scope": "every .py file outside hidden folders (90 parsed)",
+      "oracleSites": {
+        "enumerated": 6622,
+        "inRepo": 3208,
+        "external": 2061,
+        "noVerdict": 1353
+      },
+      "claimedEdges": 2903,
+      "decided": 2883,
+      "undecided": 20,
+      "truePositive": 2883,
+      "falsePositive": 0,
+      "precision": 1,
+      "falseEdgeRate": 0,
+      "oracleInRepoSites": 3190,
+      "coveredInRepoSites": 2883,
+      "recall": 0.9038,
+      "falseByCause": [],
+      "runSeconds": {
+        "oracle": 15.4,
+        "osnovaSites": 0.87
+      },
+      "validation": {
+        "reproduced": "the 2026-09-21 counts reproduce exactly; truth-python.mjs moved onto the shared LSP client and its output is byte-identical to the previous script's"
+      },
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 2903,
+        "decided": 2883,
+        "falsePositive": 0,
+        "falseEdgeRate": 0,
+        "recall": 0.9038,
+        "falseByCause": []
+      },
+      "falseEdgesWithCorrectTarget": 0
+    },
+    {
+      "corpus": "zod-v1",
+      "repository": "https://github.com/colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "tree": "918dc5e8871c6d1326ff8ea651587fb7deaaec6f",
+      "oracle": "typescript",
+      "oracleVersion": "5.9.3",
+      "toolchain": "typescript 5.9.3 from npm, benchmarks/oracle/zod-paths.json",
+      "scope": "every .ts, .tsx, .mts and .cts file outside node_modules and hidden folders, one ts.Program",
+      "oracleSites": {
+        "enumerated": 54165,
+        "inRepo": 28185,
+        "external": 5723,
+        "noVerdict": 20257
+      },
+      "claimedEdges": 21628,
+      "decided": 21593,
+      "undecided": 35,
+      "truePositive": 21589,
+      "falsePositive": 4,
+      "precision": 0.9998,
+      "falseEdgeRate": 0.00019,
+      "oracleInRepoSites": 27558,
+      "coveredInRepoSites": 21549,
+      "recall": 0.782,
+      "falseByCause": [
+        {
+          "cause": "unchanged from the 2026-09-21 record",
+          "count": 4,
+          "wrong": "osnova",
+          "detail": "the same four sites as recorded on 2026-09-21: three receiver hints name another class's member and one re-export binding names another export",
+          "example": "packages/zod/src/v3/types.ts:3917 create, packages/zod/src/v3/types.ts:3954 create, packages/zod/src/v4/classic/tests/optin-ladder.test.ts:83 string, packages/zod/src/v4/core/tests/locales/tg.test.ts:81 min"
+        }
+      ],
+      "runSeconds": {
+        "oracle": 3.8,
+        "osnovaSites": 3.25
+      },
+      "validation": {
+        "reproduced": "the 2026-09-21 counts reproduce exactly"
+      },
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 21630,
+        "decided": 21276,
+        "falsePositive": 4,
+        "falseEdgeRate": 0.00019,
+        "recall": 0.7693,
+        "falseByCause": [
+          {
+            "cause": "unchanged from the 2026-09-21 record",
+            "count": 4
+          }
+        ]
+      },
+      "falseEdgesWithCorrectTarget": 0
+    },
+    {
+      "corpus": "cobra-v1",
+      "repository": "https://github.com/spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "tree": "5a3b2c8e9af4c74e607a0a55e7910c1edb5d266f",
+      "oracle": "go/types",
+      "oracleVersion": "go1.27.1, golang.org/x/tools v0.50.0",
+      "toolchain": "Go 1.27.1, go/packages from golang.org/x/tools v0.50.0 (pinned in benchmarks/oracle/truth-go/go.sum), module cache under a scratch GOMODCACHE",
+      "scope": "all 7 packages with tests, loaded for GOOS=darwin and again for GOOS=windows; 36 of 36 .go files enumerated, 0 type errors",
+      "oracleSites": {
+        "enumerated": 4438,
+        "inRepo": 2267,
+        "external": 2141,
+        "noVerdict": 30
+      },
+      "claimedEdges": 1980,
+      "decided": 1980,
+      "undecided": 0,
+      "truePositive": 1980,
+      "falsePositive": 0,
+      "precision": 1,
+      "falseEdgeRate": 0,
+      "oracleInRepoSites": 2253,
+      "coveredInRepoSites": 1972,
+      "recall": 0.8753,
+      "falseByCause": [],
+      "runSeconds": {
+        "oracle": 1.2,
+        "osnovaSites": 0.7
+      },
+      "validation": {
+        "spotCheck": "20 of 20 random decided sites agree with the source",
+        "corruption": "25 corrupted target spans gave exactly 25 more false edges (0 to 25)",
+        "determinism": "two runs byte-identical (sha256 cf3c27e22018fa33aed305b1c93cb4f934f362ce4e1044ef8cd970c22d1f0eb6)"
+      },
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 1980,
+        "decided": 1980,
+        "falsePositive": 0,
+        "falseEdgeRate": 0,
+        "recall": 0.8753,
+        "falseByCause": []
+      },
+      "falseEdgesWithCorrectTarget": 0
+    },
+    {
+      "corpus": "gson-v1",
+      "repository": "https://github.com/google/gson",
+      "revision": "854c8255b625cf1e13c701a83ea9ccb4caaa576a",
+      "tree": "aba443ba941f8a8c00b98ca91f1268ab58ebf88a",
+      "oracle": "javac",
+      "oracleVersion": "27 (OpenJDK 27, Homebrew build)",
+      "toolchain": "javac Compiler Tree API from JDK 27; test classpaths from Maven 3.9.16 dependency:build-classpath run in a copy of the checkout; proto test classes from protobuf-maven-plugin 5.1.8 generate-test in that copy",
+      "scope": "main and test sources of all 7 Maven modules (261 files, module-info.java excluded, compiled on the classpath), one javac task per module, 0 compile errors; implicit super() calls and enum constant creations (1,177) are compiler-inserted and not listed",
+      "oracleSites": {
+        "enumerated": 23540,
+        "inRepo": 11338,
+        "external": 12202,
+        "noVerdict": 0
+      },
+      "claimedEdges": 6332,
+      "decided": 6330,
+      "undecided": 2,
+      "truePositive": 6321,
+      "falsePositive": 9,
+      "precision": 0.9986,
+      "falseEdgeRate": 0.00142,
+      "oracleInRepoSites": 11222,
+      "coveredInRepoSites": 6311,
+      "recall": 0.5624,
+      "falseEdgesWithCorrectTarget": 3,
+      "falseByCause": [
+        {
+          "cause": "constructor call resolved to a same-named constant",
+          "count": 5,
+          "wrong": "osnova",
+          "detail": "new URL(...) and new URI(...) name the static fields TypeAdapters.URL and TypeAdapters.URI instead of the JDK classes",
+          "example": "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:718 URL"
+        },
+        {
+          "cause": "receiver typed by its initializer, not its declared type",
+          "count": 1,
+          "wrong": "osnova",
+          "detail": "Map<String, Integer> map = new LinkedTreeMap<>(); map.put(...) names LinkedTreeMap.put; javac binds java.util.Map.put",
+          "example": "gson/src/test/java/com/google/gson/internal/LinkedTreeMapTest.java:215 put"
+        },
+        {
+          "cause": "same-name collision in the unit key",
+          "count": 3,
+          "wrong": "neither",
+          "detail": "two calls with the same name on one line or adjacent lines share one (file, line, name) key; osnova names the checker's declaration for the other call",
+          "example": "gson/src/test/java/com/google/gson/functional/StructTypeAdapterTest.java:104 get"
+        }
+      ],
+      "runSeconds": {
+        "oracle": 3.2,
+        "osnovaSites": 1.91
+      },
+      "validation": {
+        "spotCheck": "20 of 20 random decided sites agree with the source",
+        "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
+        "determinism": "three runs byte-identical"
+      },
+      "overloadUndetermined": 2141,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 8473,
+        "decided": 8261,
+        "falsePositive": 2045,
+        "falseEdgeRate": 0.24755,
+        "recall": 0.5506,
+        "falseByCause": [
+          {
+            "cause": "overload collapse",
+            "count": 2026
+          },
+          {
+            "cause": "same-name collision in the unit key",
+            "count": 9
+          },
+          {
+            "cause": "constructor call resolved to a same-named constant",
+            "count": 5
+          },
+          {
+            "cause": "enum constant body named instead of the interface method",
+            "count": 2
+          },
+          {
+            "cause": "overload declared in a superclass",
+            "count": 1
+          },
+          {
+            "cause": "receiver typed by its initializer, not its declared type",
+            "count": 1
+          },
+          {
+            "cause": "method inherited from an external superclass",
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep-v1",
+      "repository": "https://github.com/BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "tree": "856ed9162d23416ee7dc5f4389975b54ca062f60",
+      "oracle": "rust-analyzer",
+      "oracleVersion": "1.98.1 (48a229ce 2026-09-01)",
+      "toolchain": "rust-analyzer 1.98.1 from the stable toolchain, rust-src 1.98.1 (sha256 5c846ebcebcc7e2e0777a4cdaa12051691593f16a7e94edbae5e6241cc62d98c) as the sysroot source, cargo fetch --locked into a scratch CARGO_HOME, build scripts and proc macros enabled with a scratch target directory",
+      "scope": "all 110 .rs files; host target aarch64-apple-darwin and default features; calls inside macro invocations are token trees to the grammar and are not listed",
+      "oracleSites": {
+        "enumerated": 13534,
+        "inRepo": 7052,
+        "external": 6320,
+        "noVerdict": 162
+      },
+      "claimedEdges": 6121,
+      "decided": 6066,
+      "undecided": 55,
+      "truePositive": 6037,
+      "falsePositive": 29,
+      "precision": 0.9952,
+      "falseEdgeRate": 0.00478,
+      "oracleInRepoSites": 7028,
+      "coveredInRepoSites": 6032,
+      "recall": 0.8583,
+      "falseEdgesWithCorrectTarget": 2,
+      "falseByCause": [
+        {
+          "cause": "line-anchor collision",
+          "count": 2,
+          "wrong": "neither",
+          "detail": "two calls named new share one line, RefCell::new(CounterWriter::new(wtr)); osnova's CounterWriter::new edge is right and the key carries RefCell::new's external verdict",
+          "example": "crates/printer/src/standard.rs:130 new"
+        },
+        {
+          "cause": "cfg variants collapse",
+          "count": 11,
+          "wrong": "osnova",
+          "detail": "a function declared once per #[cfg] branch (unix, windows, other) is one record; osnova names a variant that is not active on the host build",
+          "example": "crates/ignore/src/walk.rs:1469 device_num"
+        },
+        {
+          "cause": "inline test module function collapses with its parent",
+          "count": 6,
+          "wrong": "osnova",
+          "detail": "fn check in ban.rs and fn check in its mod tests share one record, so calls to the parent function (and super::check) name the test helper",
+          "example": "crates/regex/src/ban.rs:39 check"
+        },
+        {
+          "cause": "local binding called",
+          "count": 5,
+          "wrong": "osnova",
+          "detail": "a closure, parameter or pattern binding is called and resolved by unique or same-file name to an unrelated function",
+          "example": "crates/core/flags/hiargs.rs:1063 add"
+        },
+        {
+          "cause": "function-local use of an external function",
+          "count": 4,
+          "wrong": "osnova",
+          "detail": "use std::os::unix::fs::symlink inside a function body is not read, so symlink(...) names an in-repo function of that name",
+          "example": "crates/ignore/src/walk.rs:2217 symlink"
+        },
+        {
+          "cause": "external trait implementation",
+          "count": 1,
+          "wrong": "osnova",
+          "detail": "Box::<dyn Error>::from(...) names the in-repo impl From<NoError> for io::Error through an imported file",
+          "example": "crates/searcher/src/sink.rs:58 from"
+        }
+      ],
+      "runSeconds": {
+        "oracle": 9.7,
+        "osnovaSites": 1.43
+      },
+      "validation": {
+        "spotCheck": "20 of 20 random decided sites agree with the source",
+        "corruption": "25 corrupted target spans gave exactly 25 more false edges (112 to 137)",
+        "determinism": "two site listings and two truth runs byte-identical"
+      },
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 6121,
+        "decided": 5435,
+        "falsePositive": 112,
+        "falseEdgeRate": 0.02061,
+        "recall": 0.7563,
+        "falseByCause": [
+          {
+            "cause": "line-anchor collision",
+            "count": 85
+          },
+          {
+            "cause": "cfg variants collapse",
+            "count": 11
+          },
+          {
+            "cause": "inline test module function collapses with its parent",
+            "count": 6
+          },
+          {
+            "cause": "local binding called",
+            "count": 5
+          },
+          {
+            "cause": "function-local use of an external function",
+            "count": 4
+          },
+          {
+            "cause": "external trait implementation",
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "humanizer-v1",
+      "repository": "https://github.com/Humanizr/Humanizer",
+      "revision": "ffc2b77c0f30d2fb176875841424379319d0ae9b",
+      "tree": "dea394c739c2b5e7ef4735535096bcd9b7cc312b",
+      "oracle": "roslyn",
+      "oracleVersion": "Microsoft.CodeAnalysis.CSharp 5.9.0",
+      "toolchain": "Roslyn 5.9.0 (pinned in benchmarks/oracle/truth-csharp/packages.lock.json) replaying csc arguments captured from a .NET SDK 10.0.401 build of a copy of the checkout (138 s for all nine entry projects)",
+      "scope": "the 14 compilations of the solution's projects plus tools/locale-probe-net48, net10.0 where a project multi-targets (the copy drops net11.0 and global.json, since the pinned SDK 11 preview is not installed), source-generator output included; 563 of 733 .cs files; not compiled: website/ documentation examples (162 files, their build needs an external HumanizerProject or HumanizerPackageVersion input), tests/fixtures (5) and three file-based tool scripts; 144 claimed edges sit in .mjs, .ts and .tsx files and are undecided by construction",
+      "oracleSites": {
+        "enumerated": 26328,
+        "inRepo": 11883,
+        "external": 14017,
+        "noVerdict": 428
+      },
+      "claimedEdges": 7660,
+      "decided": 7363,
+      "undecided": 297,
+      "truePositive": 7360,
+      "falsePositive": 3,
+      "precision": 0.9996,
+      "falseEdgeRate": 0.00041,
+      "oracleInRepoSites": 11825,
+      "coveredInRepoSites": 7358,
+      "recall": 0.6222,
+      "falseByCause": [
+        {
+          "cause": "local function in top-level statements",
+          "count": 2,
+          "wrong": "osnova",
+          "detail": "StripComment is a local function of a file-based program's top-level statements, which the index does not record, so the call names a same-named method in another file by unique name",
+          "example": "tools/Humanizer.UnicodeDataGenerator/Program.cs:247 StripComment"
+        },
+        {
+          "cause": "same-name collision in the unit key",
+          "count": 1,
+          "wrong": "neither",
+          "detail": "input.ToString(formatProvider) and input.ToString(format, formatProvider) share one line; osnova names ByteSize.ToString(string, IFormatProvider) at 505 for the two-argument call, which is right, and the key carries the one-argument call's verdict",
+          "example": "src/Humanizer/Bytes/ByteSizeExtensions.cs:455 ToString"
+        }
+      ],
+      "runSeconds": {
+        "oracle": 9.7,
+        "osnovaSites": 5.74
+      },
+      "validation": {
+        "spotCheck": "20 of 20 random decided sites agree with the source",
+        "corruption": "25 corrupted target spans gave exactly 25 more false edges (617 to 642)",
+        "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
+      },
+      "overloadUndetermined": 602,
+      "falseEdgesWithCorrectTarget": 1,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 7798,
+        "decided": 7476,
+        "falsePositive": 617,
+        "falseEdgeRate": 0.08253,
+        "recall": 0.58,
+        "falseByCause": [
+          {
+            "cause": "overload collapse",
+            "count": 466
+          },
+          {
+            "cause": "overload declared in a base type or another partial file",
+            "count": 113
+          },
+          {
+            "cause": "callee missing from the index after a parse error",
+            "count": 36
+          },
+          {
+            "cause": "local function in top-level statements",
+            "count": 1
+          },
+          {
+            "cause": "static-imported external method",
+            "count": 1
+          }
+        ]
+      }
+    }
+  ],
+  "limitations": [
+    "The checker's own resolution is the reference; where it returns nothing the site is undecided and counts in neither rate. Dynamic dispatch the checker cannot see is invisible to both sides.",
+    "A checker names one declaration, the static one. Where a language has overloads (Java, C#), osnova keeps one symbol per qualified name and records which declaration a call binds only when the written argument count selects exactly one among the declarations of the resolved type, its written-partial parts and its declared base classes; an edge whose count fits several or none names the method but no declaration, is counted in overloadUndetermined and is not claimed. Rust cfg variants of one function still collapse to one record.",
+    "The unit key is (file, line, name). Two calls of the same name on one line share a verdict; falseEdgesWithCorrectTarget counts the false edges where osnova's target is the checker's declaration for the other call. Osnova records a call at the line of the callee name, the line the oracle uses; 0.11.0 recorded the first line of the call expression, which in a chain written one call per line could be lines above the name.",
+    "Line tolerance of one absorbs multi-line call formatting and could mask a wrong target declared on an adjacent line.",
+    "Each oracle sees one build configuration: cobra for darwin and windows, ripgrep for the host target with default features, gson on the classpath at JDK 27's language level, humanizer for net10.0 with .NET SDK 10.0.401 rather than the SDK 11 preview its global.json names. Code compiled only in other configurations is not enumerated.",
+    "Recall counts osnova call edges only; import, reference, extends and routes edges are not scored here. Claimed edges in files the oracle does not compile (other languages in the checkout, uncompiled projects) are undecided.",
+    "The ripgrep checkout carries an untracked .osnovaignore excluding HomebrewFormula/, a symlink to pkg/brew; it changes no Rust file.",
+    "A Java or C# call whose target has a single declaration that accepts the argument count keeps that declaration even when a base type of the class is outside the index (an external class, or a partial part that did not parse), although an unseen base overload may be the one the compiler binds. Withdrawing those edges cost 10 recall points on humanizer and 1 on gson for one fewer false edge (gson LinkedTreeMapTest.java:215), so they are kept and scored as claims."
+  ]
+}

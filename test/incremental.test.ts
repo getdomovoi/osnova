@@ -263,4 +263,27 @@ describe("partial re-resolution", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("matches a full rebuild when a call chain is split across lines", async () => {
+    const dir = copyFixture();
+    try {
+      const file = path.join(dir, "src/chain.ts");
+      const head = 'import { compute, pad } from "./util";\nexport function chained(): string {\n';
+      fs.writeFileSync(file, `${head}  return pad(String(compute(1)), 2).trim().trim();\n}\n`);
+      const index = await buildIndex(dir);
+      const calls = (built: OsnovaIndex): string[] => built.edges.filter((edge) => edge.fromFile === "src/chain.ts" && edge.kind === "calls").map((edge) => `${edge.toName}:${edge.line}`);
+      expect(calls(index)).toEqual(["String:3", "compute:3", "pad:3", "trim:3", "trim:3"]);
+
+      fs.writeFileSync(file, `${head}  return pad(\n    String(compute(1)), 2)\n    .trim()\n    .trim();\n}\n`);
+      const report = await freshness(index, dir);
+      expect(report.changed).toEqual(["src/chain.ts"]);
+      const refreshed = await applyChanges(index, dir, report.changed);
+      const full = await buildIndex(dir);
+      expect(edgeLines(refreshed)).toBe(edgeLines(full));
+      expect(serializeArtifact(refreshed).equals(serializeArtifact(full))).toBe(true);
+      expect(calls(refreshed)).toEqual(["pad:3", "String:4", "compute:4", "trim:5", "trim:6"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

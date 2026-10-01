@@ -1,5 +1,5 @@
 import type { Node, Tree } from "web-tree-sitter";
-import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier } from "./util.js";
+import { Extractor, childOfType, childrenOf, childrenOfType, lastIdentifier, lastIdentifierNode } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import { FIELD_NODES, FUNCTION_VALUE_NODES, collectBindings, memberKindOf } from "./bindings.js";
 import { decoratorMethod, frameworkOfImport, frameworkOfReceiver, isMount, routeInfo, routeMethod } from "./routes.js";
@@ -60,27 +60,20 @@ function declarationName(node: Node): string | null {
   return nameNode !== null ? nameNode.text : null;
 }
 
-function callTarget(node: Node): string | null {
+// The callee name token of a call or `new` expression: the identifier, the member's property, or the type name.
+function callTarget(node: Node): Node | null {
   const fn = node.childForFieldName("function");
   if (fn === null) return null;
-  const type = fn.type;
-  if (type === "identifier") return fn.text;
-  if (type === "member_expression") {
-    const prop = fn.childForFieldName("property");
-    return prop !== null ? prop.text : null;
-  }
-  return lastIdentifier(fn);
+  if (fn.type === "identifier") return fn;
+  if (fn.type === "member_expression") return fn.childForFieldName("property");
+  return lastIdentifierNode(fn);
 }
 
-function newTarget(node: Node): string | null {
+function newTarget(node: Node): Node | null {
   const ctor = node.childForFieldName("constructor");
   if (ctor === null) return null;
-  const type = ctor.type;
-  if (type === "identifier") return ctor.text;
-  if (type === "member_expression") {
-    const prop = ctor.childForFieldName("property");
-    return prop !== null ? prop.text : null;
-  }
+  if (ctor.type === "identifier") return ctor;
+  if (ctor.type === "member_expression") return ctor.childForFieldName("property");
   return null;
 }
 
@@ -261,8 +254,8 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         case "decorator": {
           const inner = childrenOf(node)[0];
           if (inner !== undefined) {
-            const name = inner.type === "identifier" ? inner.text : lastIdentifier(inner);
-            if (name !== null) ex.out.addEdge("references", name, node);
+            const name = inner.type === "identifier" ? inner : lastIdentifierNode(inner);
+            if (name !== null) ex.out.addEdge("references", name.text, name);
             if (inner.type === "call_expression") {
               // A decorator is a sibling of what it decorates: the next non-decorator node in a class body,
               // or the declaration of the export statement it precedes.
@@ -318,7 +311,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
           }
           const target = callTarget(node);
           const callee = bindings.at(fn, node);
-          if (target !== null) ex.out.addEdge("calls", target, node, callee);
+          if (target !== null) ex.out.addEdge("calls", target.text, target, callee);
           const framework = frameworkOfReceiver(callee);
           if (framework !== undefined && fn !== null && fn.type === "member_expression") {
             const member = fn.childForFieldName("property")?.text ?? "";
@@ -337,7 +330,7 @@ export function makeTsLikeAdapter(language: "typescript" | "tsx" | "javascript")
         }
         case "new_expression": {
           const target = newTarget(node);
-          if (target !== null) ex.out.addEdge("calls", target, node, bindings.at(node.childForFieldName("constructor"), node));
+          if (target !== null) ex.out.addEdge("calls", target.text, target, bindings.at(node.childForFieldName("constructor"), node));
           for (const child of childrenOf(node)) visit(child);
           return;
         }

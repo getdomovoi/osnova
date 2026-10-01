@@ -179,7 +179,7 @@ function jsonOutput(value: unknown, label: string): string {
 
 const lspLanguageNames: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
 
-// The language server for osnova_warp is named on the command line that starts the MCP server, never read from
+// The language server for the MCP tools is named on the command line that starts the MCP server, never read from
 // stored configuration. Returns an error message for an incomplete or unsafe launch.
 function mcpLspLaunch(values: { "lsp-server"?: string | undefined; "lsp-arg"?: string[] | undefined; "lsp-languages"?: string | undefined; "lsp-timeout-ms"?: string | undefined }): LspServerLaunch | string | undefined {
   const server = values["lsp-server"];

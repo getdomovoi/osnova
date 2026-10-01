@@ -149,8 +149,17 @@ describe("marketing site install commands", () => {
 describe("marketing site document pages", () => {
   const pages = renderSitePages(root);
 
-  it("renders the changelog, privacy and security pages", () => {
-    expect(Object.keys(pages).sort()).toEqual(["changelog/index.html", "privacy/index.html", "security/index.html"]);
+  it("renders the changelog, privacy and security pages, and the not-found page", () => {
+    expect(Object.keys(pages).sort()).toEqual(["404.html", "changelog/index.html", "privacy/index.html", "security/index.html"]);
+  });
+
+  it("serves a not-found page that search engines skip and that leads back to every page", () => {
+    const notFound = pages["404.html"] ?? "";
+    expect(notFound).toContain('<meta name="robots" content="noindex">');
+    expect(notFound).not.toContain('rel="canonical"');
+    expect(notFound).toContain('<header class="bar">');
+    expect(notFound).toContain('<footer class="foot"');
+    for (const href of ["/", "/changelog/", "/privacy/", "/security/"]) expect(notFound).toContain(`<a href="${href}">`);
   });
 
   it("matches the committed pages, so a changed source document fails until the pages are rebuilt", () => {
@@ -167,5 +176,38 @@ describe("marketing site document pages", () => {
     expect(pages["changelog/index.html"]).toContain('<h3 id="v0-11-0-breaking">Breaking</h3>');
     expect(pages["changelog/index.html"]).toContain("<code>--instructions &lt;file&gt;</code>");
     expect(pages["changelog/index.html"]).toContain('href="#v0-11-0"');
+  });
+});
+
+describe("marketing site crawl files", () => {
+  const publicDir = path.join(root, "site", "public");
+  const read = (name: string) => (fs.existsSync(path.join(publicDir, name)) ? fs.readFileSync(path.join(publicDir, name), "utf8") : "");
+
+  it("lists every page in the sitemap, and nothing else", () => {
+    const pages = fs.readdirSync(publicDir, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith("index.html"))
+      .map((file) => path.dirname(file).split(path.sep).join("/"))
+      .map((dir) => (dir === "." ? "https://getosnova.dev/" : `https://getosnova.dev/${dir}/`))
+      .sort();
+    const listed = [...read("sitemap.xml").matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]).sort();
+    expect(listed).toEqual(pages);
+  });
+
+  it("points crawlers at the sitemap", () => {
+    expect(read("robots.txt")).toContain("Sitemap: https://getosnova.dev/sitemap.xml");
+  });
+});
+
+describe("marketing site theme", () => {
+  const publicDir = path.join(root, "site", "public");
+  const pages = fs.readdirSync(publicDir, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".html"));
+
+  it("renders dark whatever the visitor's system theme", () => {
+    expect(fs.readFileSync(path.join(publicDir, "styles.css"), "utf8")).not.toMatch(/prefers-color-scheme/);
+    for (const file of pages) {
+      const html = fs.readFileSync(path.join(publicDir, file), "utf8");
+      expect(html, file).toContain('<meta name="color-scheme" content="dark">');
+      expect(html, file).not.toMatch(/prefers-color-scheme: light/);
+    }
   });
 });

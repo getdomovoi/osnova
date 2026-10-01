@@ -24,6 +24,24 @@ export type LspReferencesAnswer =
 // languages, within the same file and byte limits as the enrichment sidecar.
 export const lspSessionDefaults = Object.freeze({ requestTimeoutMs: 10_000, maxLocations: 4_096, maxOpenFiles: 4_096, maxOpenBytes: 67_108_864, settleIntervalMs: 200, settleAttempts: 25 });
 
+// A tool that asks about several symbols in one call asks about this many at most, all under one request timeout.
+export const lspSymbolsPerCall = 8;
+
+export interface LspSymbolAnswers {
+  readonly answers: readonly { readonly symbol: OsnovaSymbol; readonly answer: LspReferencesAnswer }[];
+  readonly overCap: number;
+  readonly pastDeadline: number;
+  readonly afterFailure: number;
+}
+
+// One request in the session's queue. A caller with a deadline stops waiting at it; a request not sent by then is
+// marked abandoned and skipped when its turn comes, leaving the server and the other requests untouched.
+interface Turn { readonly until: number | undefined; sent: boolean; abandoned: boolean }
+
+// What a turn hands its caller, and what the queue waits for before the next turn: the shutdown of a session the
+// turn ended. An answer of undefined means the request was not sent before the caller's deadline.
+interface Ran { readonly answer: LspReferencesAnswer | undefined; readonly release?: Promise<void> | undefined }
+
 function errorCode(error: unknown): string {
   return error instanceof Error && /^[a-z0-9-]{1,64}$/.test(error.message) ? error.message : "request-failed";
 }
@@ -69,10 +87,52 @@ export class LspReferenceSession {
     return this.launch.languages.includes(language as LanguageId);
   }
 
-  references(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol): Promise<LspReferencesAnswer> {
-    const run = this.queue.then(() => this.run(index, generation, symbol));
-    this.queue = run.catch(() => undefined);
-    return run;
+  references(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol, until?: number): Promise<LspReferencesAnswer> {
+    return this.enqueue(index, generation, symbol, until).then((answer) => answer ?? { status: "unavailable", code: "deadline" });
+  }
+
+  // With a deadline, the caller's wait ends at it however long the requests ahead take. Without one, the request's
+  // timeout starts when its turn comes, after any start-up.
+  private enqueue(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol, until: number | undefined): Promise<LspReferencesAnswer | undefined> {
+    const turn: Turn = { until, sent: false, abandoned: false };
+    const ran = this.queue.then(() => this.run(index, generation, symbol, turn));
+    this.queue = ran.then((result) => result.release, () => undefined);
+    const answer = ran.then((result) => result.answer);
+    if (until === undefined) return answer;
+    let timer: NodeJS.Timeout | undefined;
+    // A request already sent is bounded by the deadline itself, so its answer, or its cancellation, is awaited.
+    const expired = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => { if (!turn.sent) { turn.abandoned = true; resolve(undefined); } }, Math.max(0, until - Date.now()));
+    });
+    return Promise.race([answer, expired]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * References for up to `cap` symbols, in the order given, under one deadline for the whole call. A symbol left when
+   * the deadline has passed, or after a failed request, is counted rather than asked, so one call never restarts a
+   * failing server more than once.
+   *
+   * The deadline starts when the call does and bounds everything the call waits for: the requests queued ahead of it,
+   * the shutdown of a server from an older generation, the start-up of a new one, and its own requests. Start-up and
+   * shutdown are not cut short at the deadline: a start-up runs to the initialize timeout, so the next call finds the
+   * server running, and a shutdown runs to the shutdown limits, holding the queue but not this caller. A symbol whose
+   * references request was not sent before the deadline is counted past the deadline, not as an answer.
+   */
+  async referencesEach(index: OsnovaIndex, generation: string, symbols: readonly OsnovaSymbol[], cap: number = lspSymbolsPerCall): Promise<LspSymbolAnswers> {
+    const deadline = Date.now() + (this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs);
+    const answers: { symbol: OsnovaSymbol; answer: LspReferencesAnswer }[] = [];
+    let pastDeadline = 0;
+    let afterFailure = 0;
+    let failed = false;
+    for (const symbol of symbols.slice(0, cap)) {
+      if (Date.now() >= deadline) { pastDeadline += 1; continue; }
+      if (failed) { afterFailure += 1; continue; }
+      const answer = await this.enqueue(index, generation, symbol, deadline);
+      if (answer === undefined) { pastDeadline += 1; continue; }
+      answers.push({ symbol, answer });
+      if (answer.status === "unavailable" && answer.code !== "name-not-found") failed = true;
+    }
+    return { answers, overCap: Math.max(0, symbols.length - cap), pastDeadline, afterFailure };
   }
 
   async close(): Promise<void> {
@@ -128,19 +188,25 @@ export class LspReferenceSession {
     this.opened.add(card.path);
   }
 
-  private async run(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol): Promise<LspReferencesAnswer> {
-    if (this.closed) return { status: "unavailable", code: "client-closed" };
+  private async run(index: OsnovaIndex, generation: string, symbol: OsnovaSymbol, turn: Turn): Promise<Ran> {
+    const { until } = turn;
+    if (this.closed) return { answer: { status: "unavailable", code: "client-closed" } };
+    if (turn.abandoned || (until !== undefined && Date.now() >= until)) return { answer: undefined };
     const card = index.files.get(symbol.file);
-    if (card === undefined || !this.handles(card.language)) return { status: "unavailable", code: "no-server" };
+    if (card === undefined || !this.handles(card.language)) return { answer: { status: "unavailable", code: "no-server" } };
     const position = namePosition(card.text, symbol);
-    if (position === undefined) return { status: "unavailable", code: "name-not-found" };
+    if (position === undefined) return { answer: { status: "unavailable", code: "name-not-found" } };
     try {
       const client = this.client !== undefined && this.generation === generation ? this.client : await this.start(index, generation);
-      if (this.capabilities.referencesProvider !== true && !isRecord(this.capabilities.referencesProvider)) return { status: "unavailable", code: "method-unavailable" };
+      // A deadline that passed during start-up leaves the request unsent rather than sent only to be cancelled, which
+      // would end the session for the requests behind it.
+      if (turn.abandoned || (until !== undefined && Date.now() >= until)) { turn.abandoned = true; return { answer: undefined }; }
+      if (this.capabilities.referencesProvider !== true && !isRecord(this.capabilities.referencesProvider)) return { answer: { status: "unavailable", code: "method-unavailable" } };
+      turn.sent = true;
       const uri = pathToFileURL(sourcePath(index.root, card.path)).href;
       if (!this.opened.has(card.path)) this.open(client, index, card.path);
-      const timeout = this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs;
-      const deadline = Date.now() + timeout;
+      // A caller asking about several symbols passes its own deadline, shared by all of them.
+      const deadline = until ?? Date.now() + (this.launch.requestTimeoutMs ?? lspSessionDefaults.requestTimeoutMs);
       const ask = async (signal?: AbortSignal) => serverLocations(await client.request("textDocument/references", { textDocument: { uri }, position, context: { includeDeclaration: true } }, signal), index, lspSessionDefaults.maxLocations);
       const same = (a: ReturnType<typeof serverLocations>, b: ReturnType<typeof serverLocations>): boolean => a.partial === b.partial && JSON.stringify(a.locations) === JSON.stringify(b.locations);
       // Every request after the first runs against the one deadline, so a slow server cannot hold the answer past it.
@@ -148,7 +214,7 @@ export class LspReferenceSession {
         try { return await ask(AbortSignal.timeout(Math.max(1, deadline - Date.now()))); }
         catch (error) { if (error instanceof Error && error.message === "cancelled") return undefined; throw error; }
       };
-      let parsed = await ask(AbortSignal.timeout(timeout));
+      let parsed = await ask(AbortSignal.timeout(Math.max(1, deadline - Date.now())));
       let loading = false;
       if (this.settled) {
         const again = await bounded();
@@ -167,11 +233,12 @@ export class LspReferenceSession {
           if (agreed) { loading = false; this.settled = true; break; }
         }
       }
-      return { status: parsed.partial ? "partial" : "complete", locations: parsed.locations, queried: position, filesGiven: this.opened.size, filesEligible: this.filesEligible, loading };
+      return { answer: { status: parsed.partial ? "partial" : "complete", locations: parsed.locations, queried: position, filesGiven: this.opened.size, filesEligible: this.filesEligible, loading } };
     } catch (error) {
-      // Any failure ends this session; the next request starts a new one.
-      await this.stop().catch(() => undefined);
-      return { status: "unavailable", code: errorCode(error) };
+      // Any failure ends this session; the next request starts a new one once the shutdown ends, but this caller has
+      // its answer at once.
+      const release = this.stop().catch(() => undefined);
+      return { answer: { status: "unavailable", code: until !== undefined && Date.now() >= until && errorCode(error) === "cancelled" ? "deadline" : errorCode(error) }, release };
     }
   }
 }

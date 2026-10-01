@@ -13,6 +13,7 @@ export interface RawEdgeItem {
   readonly enclosing: string;
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
+  readonly arguments?: number | undefined;
 }
 
 export function qualifiedNameOf(file: string, local: string): string {
@@ -184,7 +185,8 @@ function compareEdges(a: OsnovaEdge, b: OsnovaEdge): number {
     compareStr(a.toSymbol ?? "", b.toSymbol ?? "") ||
     compareStr(a.toFile ?? "", b.toFile ?? "") ||
     compareStr(a.fromSymbol, b.fromSymbol) ||
-    compareStr(canonical(a.binding ?? null), canonical(b.binding ?? null))
+    compareStr(canonical(a.binding ?? null), canonical(b.binding ?? null)) ||
+    (a.arguments ?? -1) - (b.arguments ?? -1)
   );
 }
 
@@ -201,7 +203,8 @@ function dedupeEdges(sorted: OsnovaEdge[]): OsnovaEdge[] {
       prev.line === edge.line &&
       prev.toSymbol === edge.toSymbol &&
       prev.toFile === edge.toFile &&
-      canonical(prev.binding ?? null) === canonical(edge.binding ?? null)
+      canonical(prev.binding ?? null) === canonical(edge.binding ?? null) &&
+      prev.arguments === edge.arguments
     ) {
       continue;
     }
