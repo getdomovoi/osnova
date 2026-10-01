@@ -369,20 +369,13 @@ function setupTabs() {
   };
   window.addEventListener("resize", placeInk);
   const select = (tab, focus) => {
-    const changed = current !== null && current !== tab;
     current = tab;
     for (const other of tabs) {
       const selected = other === tab;
       other.setAttribute("aria-selected", String(selected));
       other.tabIndex = selected ? 0 : -1;
       const panel = document.getElementById(other.getAttribute("aria-controls") ?? "");
-      if (!panel) continue;
-      panel.hidden = !selected;
-      if (selected && changed) {
-        panel.classList.remove("enter");
-        void panel.offsetWidth;
-        panel.classList.add("enter");
-      }
+      if (panel) panel.hidden = !selected;
     }
     placeInk();
     if (!focus) return;
