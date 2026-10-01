@@ -1,4 +1,4 @@
-import type { EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OverloadChoice, ReceiverBasis, ReceiverMode, RouteInfo } from "../types.js";
+import type { EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OverloadChoice, OverloadDeclaration, ReceiverBasis, ReceiverMode, RouteInfo } from "../types.js";
 import { sha256Hex } from "./scan.js";
 
 // The position in this list is the stored encoding of an edge's kind, so the order is written down
@@ -115,10 +115,11 @@ function intern<T>(values: readonly (T | undefined)[]): { table: T[]; ids: numbe
 
 export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly string[]): EdgeLayout {
   const pathIndex = new Map(paths.map((p, i) => [p, i]));
+  const knownPaths = new Set(paths);
   const evidence = intern(edges.map((edge) => edge.evidence ?? { source: "unknown" as const }));
   const bindings = intern(edges.map((edge) => edge.binding));
   const routes = intern(edges.map((edge) => (edge.route === undefined ? undefined : validateRoute(edge.route))));
-  const overloads = intern(edges.map((edge) => (edge.overload === undefined ? undefined : validateOverload(edge.overload))));
+  const overloads = intern(edges.map((edge) => (edge.overload === undefined ? undefined : validateOverload(edge.overload, knownPaths))));
   const header: EdgeHeader = { formatVersion: 12, count: edges.length, evidence: evidence.table, bindings: bindings.table, routes: routes.table, overloads: overloads.table };
   const lines = [JSON.stringify(header)];
   for (const [i, edge] of edges.entries()) {
@@ -218,12 +219,26 @@ function validateRoute(value: unknown): RouteInfo {
   return route.path === undefined ? { method: route.method } : { method: route.method, path: route.path };
 }
 
-function validateOverload(value: unknown): OverloadChoice {
-  const choice = value as { line?: unknown; candidates?: unknown } | null;
+function validateOverload(value: unknown, known: ReadonlySet<string>): OverloadChoice {
+  const choice = value as { line?: unknown; from?: unknown; candidates?: unknown; elsewhere?: unknown } | null;
+  const line = (item: unknown): item is number => integerIn(item, 1, Number.MAX_SAFE_INTEGER);
   if (typeof choice === "object" && choice !== null) {
-    if (Object.keys(choice).length === 1 && integerIn(choice.line, 1, Number.MAX_SAFE_INTEGER)) return { line: choice.line as number };
-    if (Object.keys(choice).length === 1 && Array.isArray(choice.candidates) &&
-      choice.candidates.every((line, i, all) => integerIn(line, 1, Number.MAX_SAFE_INTEGER) && (i === 0 || (line as number) > (all[i - 1] as number)))) return { candidates: choice.candidates as number[] };
+    const keys = Object.keys(choice).sort().join(",");
+    if ((keys === "line" || keys === "from,line") && line(choice.line) && (choice.from === undefined || (typeof choice.from === "string" && choice.from.includes("#")))) {
+      return choice.from === undefined ? { line: choice.line } : { line: choice.line, from: choice.from };
+    }
+    if ((keys === "candidates" || keys === "candidates,elsewhere") && Array.isArray(choice.candidates) &&
+      choice.candidates.every((item, i, all) => line(item) && (i === 0 || item > (all[i - 1] as number)))) {
+      if (choice.elsewhere === undefined) return { candidates: choice.candidates as number[] };
+      const elsewhere = choice.elsewhere as unknown[];
+      const site = (item: unknown): item is OverloadDeclaration => typeof item === "object" && item !== null && Object.keys(item).sort().join(",") === "file,line" &&
+        typeof (item as OverloadDeclaration).file === "string" && known.has((item as OverloadDeclaration).file) && line((item as OverloadDeclaration).line);
+      if (Array.isArray(elsewhere) && elsewhere.length > 0 && elsewhere.every((item, i) => {
+        if (!site(item)) return false;
+        const previous = elsewhere[i - 1] as OverloadDeclaration | undefined;
+        return previous === undefined || previous.file < item.file || (previous.file === item.file && previous.line < item.line);
+      })) return { candidates: choice.candidates as number[], elsewhere: elsewhere as OverloadDeclaration[] };
+    }
   }
   throw new Error("osnova: corrupt overload metadata");
 }
@@ -238,7 +253,8 @@ export function deserializeEdges(bytes: Buffer, paths: readonly string[], files:
   const evidenceTable = header.evidence.map((entry) => validateEvidence(entry));
   const bindingTable = header.bindings.map((entry) => validateBinding(entry));
   const routeTable = header.routes.map((entry) => validateRoute(entry));
-  const overloadTable = header.overloads.map((entry) => validateOverload(entry));
+  const knownPaths = new Set(paths);
+  const overloadTable = header.overloads.map((entry) => validateOverload(entry, knownPaths));
   const out: OsnovaEdge[] = [];
   for (let i = 1; i < lines.length; i += 1) {
     const tuple = JSON.parse(lines[i]!) as unknown;
