@@ -508,7 +508,7 @@ td:last-child { color: var(--brass); }
   .steps::after { content: ""; position: absolute; top: -3px; left: 0; width: 3px; height: 7px; margin-left: -1px; background: var(--brass); opacity: 0; pointer-events: none; }
   .js .steps.in::after { animation: pulse-x 1700ms var(--ease-io) 200ms both; }
 
-  .js .tabs::before { transition: transform 600ms var(--ease-io), width 600ms var(--ease-io); }
+  .js .tabs::before { transition: transform 220ms var(--ease), width 220ms var(--ease); }
 
   .js .tool-group .gd { stroke-dasharray: 1; stroke-dashoffset: 1; }
   .js .tool-group .gf, .js .tool-group .gs { opacity: 0; }
@@ -539,3 +539,6 @@ td:last-child { color: var(--brass); }
 @media (max-width: 760px) {
   .hero-head .hero-actions { width: 100%; }
 }
+
+/* The tab strip scrolls sideways, which clips an outline drawn outside the tab. */
+.tabs [role="tab"]:focus-visible { outline-offset: -3px; }
