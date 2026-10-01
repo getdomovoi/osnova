@@ -40,12 +40,23 @@ describe("distribution manifests", () => {
     expect(validate(stale)).toBe(false);
   });
 
-  it("wire the plugin hooks exactly as osnova setup would", () => {
-    expect(read<unknown>("integrations/claude-code/hooks/hooks.json")).toEqual(hookSettingsObject(["npx", "-y", "@getdomovoi/osnova"], "claude-code"));
+  // The plugin directory blocks an npx launcher without an exact version, so the plugin runs the release it ships with.
+  const launcher = () => `@getdomovoi/osnova@${pkg.version}`;
+
+  it("wire the plugin hooks exactly as osnova setup would, pinned to this release", () => {
+    expect(read<unknown>("integrations/claude-code/hooks/hooks.json")).toEqual(hookSettingsObject(["npx", "-y", launcher()], "claude-code"));
   });
 
-  it("serve the plugin MCP entry through the same package", () => {
-    expect(read<Mcp>("integrations/claude-code/.mcp.json").mcpServers.osnova).toEqual({ command: "npx", args: ["-y", "@getdomovoi/osnova", "mcp"] });
+  it("serve the plugin MCP entry through the same pinned package", () => {
+    expect(read<Mcp>("integrations/claude-code/.mcp.json").mcpServers.osnova).toEqual({ command: "npx", args: ["-y", launcher(), "mcp"] });
     expect(read<Marketplace>(".claude-plugin/marketplace.json").plugins[0].source).toBe("./integrations/claude-code");
+  });
+
+  it("ship the plugin README the directory lists, describing what the plugin runs", () => {
+    const readme = readFileSync(path.join(root, "integrations/claude-code/README.md"), "utf8");
+    const prose = readme.replace(/```[\s\S]*?```/g, "");
+    expect(prose.split(/\s+/).filter(Boolean).length).toBeGreaterThanOrEqual(40);
+    expect(readme).toContain(launcher());
+    for (const hook of ["SessionStart", "UserPromptSubmit", "Stop"]) expect(readme).toContain(hook);
   });
 });

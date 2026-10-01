@@ -14,6 +14,10 @@ The extraction version moves to `structural-9.34` and the edge section format to
 - With `osnova mcp --lsp-server`, `osnova_settle` asks the language server for references to the changed symbols and lists, in a section after the unchanged impact answer, those not inside a listed dependent or a changed symbol. It asks about at most 8 symbols per call, most graph dependents first, under one request timeout for the whole call that also bounds the wait behind other requests and any server start-up, and counts exactly the symbols it did not ask about (over the cap, past the deadline, after a failure) and the lines its 1,024-code-unit budget leaves out.
 - With `osnova mcp --lsp-server`, `osnova_tests` given `symbols` adds a third, separately labelled tier after the unchanged two: test files where the language server finds references to the symbol that neither graph tier holds, with their lines, and counts of the server's other locations (outside test files, in resolved-edge files, in import-only files). It shares settle's cap of 8 symbols and one request timeout per call, with the same exact counts and 1,024-code-unit budget.
 
+### Changed
+
+- The Claude Code plugin pins its launcher to the release it ships with: `.mcp.json` and the three hooks run `npx -y @getdomovoi/osnova@<version>` instead of the unpinned package, because the Claude plugin directory rejects an unpinned `npx` launcher. The plugin folder gains a `README.md` that the directory shows as the listing and that states what the plugin runs, fetches and writes. `test/distribution-manifests.test.ts` requires the launchers and that README to name the package version, so a release bump updates all of them.
+
 ### Fixed
 
 - Two calls to one method on one line with different argument counts are two edges; they were merged into one.
