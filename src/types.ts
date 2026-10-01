@@ -57,6 +57,11 @@ export interface OsnovaSymbol {
   // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.
   readonly partial?: string | undefined;
+  // A Java type: how many supertypes its declaration writes (superclass and interfaces), when any, and
+  // the written interfaces that name a local or imported type. `heritage` holds only the superclass, and
+  // only when it names a local or imported type.
+  readonly supertypes?: number | undefined;
+  readonly interfaces?: readonly SymbolBinding[] | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -88,6 +93,8 @@ export interface ParameterRange {
   readonly access?: "private" | "package" | undefined;
   // Java: each parameter's type as written, whitespace removed (a varargs type ends in `...`).
   readonly types?: readonly string[] | undefined;
+  // Java: the simple names `types` read from the file's scope, sorted; another file can shadow them.
+  readonly names?: readonly string[] | undefined;
 }
 
 // The declaration of an overloaded name that a call's argument count selects: `line` when exactly one

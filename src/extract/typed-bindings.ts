@@ -1,6 +1,6 @@
 import type { Node } from "web-tree-sitter";
 import type { Callee, EdgeBinding, MemberKind, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
-import { childrenOf } from "./util.js";
+import { childOfType, childrenOf } from "./util.js";
 
 // Receiver identity for languages with declared types and no lexical binding collector of their
 // own. A name is bound to a type name by a typed parameter, a typed local, a constructor literal or
@@ -25,6 +25,7 @@ export interface TypedSpec {
   readonly thisNodes?: readonly string[] | undefined;
   readonly isStatic?: ((fn: Node) => boolean) | undefined;
   readonly bases?: ((classNode: Node) => readonly string[]) | undefined;
+  readonly interfaces?: ((classNode: Node) => readonly string[]) | undefined;
   readonly innerType?: ((type: Node) => Node | null) | undefined;
   // A declared type parameter and its bounds (`T: Runner`, `T extends Runner`, `[T Runner]`); a where or
   // constraints clause on the declaring node adds bounds by name.
@@ -57,6 +58,7 @@ interface Scope { readonly parent: Scope | null; readonly names: Map<string, Dec
 export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
   heritage: (classNode: Node) => SymbolBinding[];
+  interfaces: (classNode: Node) => SymbolBinding[];
   returns: (fn: Node) => ReturnBinding | undefined;
   returnTuple: (fn: Node) => (ReturnBinding | null)[] | undefined;
   memberKind: (fn: Node) => MemberKind | undefined;
@@ -429,6 +431,16 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
     }
     return Object.keys(out).length === 0 ? undefined : out;
   };
+  // A written base or interface name as a local or imported type; any other name is left out.
+  const ownersOf = (names: readonly string[], classNode: Node): SymbolBinding[] => {
+    const out: SymbolBinding[] = [];
+    for (const name of names) {
+      const owner = ownerForType(name, undefined, classNode);
+      if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out.push(owner);
+    }
+    return out;
+  };
+
   return {
     at(fn, site) {
       if (fn === null) return undefined;
@@ -493,14 +505,8 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       }
       return Object.keys(out).length === 0 ? undefined : out;
     },
-    heritage: (classNode) => {
-      const out: SymbolBinding[] = [];
-      for (const base of spec.bases?.(classNode) ?? []) {
-        const owner = ownerForType(base, undefined, classNode);
-        if (owner !== undefined && (owner.kind === "local" || owner.kind === "import")) out.push(owner);
-      }
-      return out;
-    },
+    heritage: (classNode) => ownersOf(spec.bases?.(classNode) ?? [], classNode),
+    interfaces: (classNode) => ownersOf(spec.interfaces?.(classNode) ?? [], classNode),
   };
 }
 
@@ -860,6 +866,15 @@ export const javaSpec: TypedSpec = {
     const name = type === null ? undefined : type.type === "type_identifier" ? type.text : childrenOf(type).find((child) => child.type === "type_identifier")?.text;
     return name === undefined ? [] : [name];
   },
+  // Each interface written in an `implements` or interface `extends` clause by its simple name; a
+  // qualified name is left out.
+  interfaces: (classNode) => childrenOf(classNode)
+    .filter((child) => child.type === "super_interfaces" || child.type === "extends_interfaces")
+    .flatMap((clause) => childrenOf(childOfType(clause, "type_list") ?? clause))
+    .flatMap((type) => {
+      const name = type.type === "type_identifier" ? type.text : type.type === "generic_type" ? childrenOf(type).find((child) => child.type === "type_identifier")?.text : undefined;
+      return name === undefined ? [] : [name];
+    }),
   imports: (node, nodeType) => {
     if (nodeType !== "import_declaration") return [];
     const path = childrenOf(node).find((child) => child.type === "scoped_identifier");

@@ -41,7 +41,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.32.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.33.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -57,7 +57,9 @@ function validParameters(value: unknown): boolean {
   return typeof range === "object" && range !== null && nonnegativeInteger(range.min) &&
     (range.max === undefined || (nonnegativeInteger(range.max) && range.max >= range.min)) && (range.extension === undefined || range.extension === true) &&
     (range.overrides === undefined || range.overrides === true) && (range.access === undefined || range.access === "private" || range.access === "package") &&
-    (range.types === undefined || (Array.isArray(range.types) && range.types.every((type) => typeof type === "string")));
+    (range.types === undefined || (Array.isArray(range.types) && range.types.every((type) => typeof type === "string"))) &&
+    (range.names === undefined || (range.types !== undefined && Array.isArray(range.names) && range.names.length > 0 &&
+      range.names.every((name, at) => typeof name === "string" && /^[A-Za-z_$][\w$]*$/u.test(name) && (at === 0 || range.names![at - 1]! < name))));
 }
 
 class ArtifactVersionError extends Error {
@@ -81,6 +83,8 @@ interface SerializedSymbol {
   readonly signature: string;
   readonly shadowed?: true | undefined;
   readonly partial?: string | undefined;
+  readonly supertypes?: number | undefined;
+  readonly interfaces?: readonly SymbolBinding[] | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
@@ -172,6 +176,8 @@ export function serializeSections(
         signature: symbol.signature,
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
+        ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
+        ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
@@ -363,13 +369,17 @@ function deserializeBody(
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
+      if (symbol.supertypes !== undefined && (!Number.isSafeInteger(symbol.supertypes) || symbol.supertypes < 1)) throw new Error("osnova: corrupt supertype count");
       if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[^\s`]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
-      if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
+      const validBinding = (item: unknown): boolean => typeof item === "object" && item !== null &&
         (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||
-          ((item as { kind?: unknown }).kind === "import" && typeof (item as { source?: unknown }).source === "string" && typeof (item as { importedName?: unknown }).importedName === "string"))))) {
+          ((item as { kind?: unknown }).kind === "import" && typeof (item as { source?: unknown }).source === "string" && typeof (item as { importedName?: unknown }).importedName === "string"));
+      if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every(validBinding))) {
         throw new Error("osnova: corrupt heritage metadata");
       }
+      if (symbol.interfaces !== undefined && (symbol.supertypes === undefined || !Array.isArray(symbol.interfaces) || symbol.interfaces.length === 0 ||
+        symbol.interfaces.length > symbol.supertypes || !symbol.interfaces.every(validBinding))) throw new Error("osnova: corrupt interface metadata");
       if (symbol.fields !== undefined && (!Array.isArray(symbol.fields) || !symbol.fields.every((item: unknown) => typeof item === "string"))) throw new Error("osnova: corrupt field metadata");
       const validCallee = (item: unknown): boolean => { const value = item as { kind?: unknown; member?: unknown; mode?: unknown; owner?: unknown }; if (typeof value !== "object" || value === null) return false; if (value.kind === "local" || value.kind === "import") return validOwner(value); return value.kind === "method" && typeof value.member === "string" && (value.mode === undefined || value.mode === "instance" || value.mode === "class") && validOwner(value.owner); };
       const validReturn = (item: unknown): boolean => { const value = item as { kind?: unknown; name?: unknown; source?: unknown; importedName?: unknown }; return typeof value === "object" && value !== null && (value.kind === "this" || (value.kind === "local" && typeof value.name === "string") || (value.kind === "import" && typeof value.source === "string" && typeof value.importedName === "string")); };
@@ -399,6 +409,8 @@ function deserializeBody(
         lineCount: Math.max(1, span.endLine - span.startLine + 1),
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
+        ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
+        ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
         ...(symbol.exportedNames === undefined ? {} : { exportedNames: symbol.exportedNames }),
         ...(symbol.memberKind === undefined ? {} : { memberKind: symbol.memberKind }),
         ...(symbol.heritage === undefined ? {} : { heritage: symbol.heritage }),
