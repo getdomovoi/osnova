@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "e94fff8fc04d1350f99d061bd19361ffc614172d",
+    "commit": "283803c28c764800d336eb62bbb3dfbc59467433",
     "version": "0.11.0",
     "unreleased": "Java and C# overload choice by argument count, including base and partial types and constructors; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
   },
