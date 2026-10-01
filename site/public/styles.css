@@ -101,7 +101,7 @@ h3 { font-size: 1.125rem; font-weight: 500; letter-spacing: -0.01em; line-height
 
 /* Hero */
 /* The film is the hero: the headline row and the film share one width, sized so the frame and its controls fit the first screen. */
-.hero { --film-w: min(100%, calc((100svh - 300px) * 16 / 9)); padding-block: clamp(24px, 3.5vw, 40px) clamp(56px, 8vw, 96px); }
+.hero { --film-w: min(100%, max(36rem, calc((100svh - 300px) * 16 / 9))); padding-block: clamp(24px, 3.5vw, 40px) clamp(56px, 8vw, 96px); }
 .hero-head { width: var(--film-w); margin: 0 auto 20px; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; }
 .hero .film-stage { width: var(--film-w); margin-inline: auto; }
 .hero h1 {
@@ -564,3 +564,7 @@ td:last-child { color: var(--brass); }
 .doc .doc-source { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 0.875rem; color: var(--muted); }
 .foot-links a[aria-current="page"] { color: var(--ink); }
 .doc-toc + h2 { margin-top: 36px; padding-top: 0; border-top: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
