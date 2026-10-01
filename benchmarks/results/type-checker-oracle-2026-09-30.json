@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "d7bebed21036fae5572db2b7b2c42eab298e1ba4",
+    "commit": "854c5819a1bcc3052c61e94257b96b949e8b18ad",
     "version": "0.11.0",
-    "unreleased": "Java and C# overload choice by argument count (OsnovaEdge.overload)"
+    "unreleased": "Java and C# overload choice by argument count, including base and partial types; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
   },
   "machine": "macOS, Darwin 25.6.0 on arm64 (Apple silicon), Node.js 26.10.0; times are wall clock on that machine",
   "method": {
@@ -57,7 +57,20 @@
       "validation": {
         "reproduced": "the 2026-09-21 counts reproduce exactly; truth-python.mjs moved onto the shared LSP client and its output is byte-identical to the previous script's"
       },
-      "overloadUndetermined": 0
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 2903,
+        "decided": 2883,
+        "falsePositive": 0,
+        "falseEdgeRate": 0,
+        "recall": 0.9038,
+        "falseByCause": []
+      },
+      "falseEdgesWithCorrectTarget": 0
     },
     {
       "corpus": "zod-v1",
@@ -74,16 +87,16 @@
         "external": 5723,
         "noVerdict": 20257
       },
-      "claimedEdges": 21630,
-      "decided": 21276,
-      "undecided": 354,
-      "truePositive": 21272,
+      "claimedEdges": 21628,
+      "decided": 21593,
+      "undecided": 35,
+      "truePositive": 21589,
       "falsePositive": 4,
       "precision": 0.9998,
       "falseEdgeRate": 0.00019,
       "oracleInRepoSites": 27558,
-      "coveredInRepoSites": 21199,
-      "recall": 0.7693,
+      "coveredInRepoSites": 21549,
+      "recall": 0.782,
       "falseByCause": [
         {
           "cause": "unchanged from the 2026-09-21 record",
@@ -100,7 +113,25 @@
       "validation": {
         "reproduced": "the 2026-09-21 counts reproduce exactly"
       },
-      "overloadUndetermined": 0
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 21630,
+        "decided": 21276,
+        "falsePositive": 4,
+        "falseEdgeRate": 0.00019,
+        "recall": 0.7693,
+        "falseByCause": [
+          {
+            "cause": "unchanged from the 2026-09-21 record",
+            "count": 4
+          }
+        ]
+      },
+      "falseEdgesWithCorrectTarget": 0
     },
     {
       "corpus": "cobra-v1",
@@ -137,7 +168,20 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (0 to 25)",
         "determinism": "two runs byte-identical (sha256 cf3c27e22018fa33aed305b1c93cb4f934f362ce4e1044ef8cd970c22d1f0eb6)"
       },
-      "overloadUndetermined": 0
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 1980,
+        "decided": 1980,
+        "falsePositive": 0,
+        "falseEdgeRate": 0,
+        "recall": 0.8753,
+        "falseByCause": []
+      },
+      "falseEdgesWithCorrectTarget": 0
     },
     {
       "corpus": "gson-v1",
@@ -154,16 +198,16 @@
         "external": 12202,
         "noVerdict": 0
       },
-      "claimedEdges": 6348,
-      "decided": 6137,
-      "undecided": 211,
-      "truePositive": 6128,
+      "claimedEdges": 6349,
+      "decided": 6347,
+      "undecided": 2,
+      "truePositive": 6338,
       "falsePositive": 9,
-      "precision": 0.9985,
-      "falseEdgeRate": 0.00147,
+      "precision": 0.9986,
+      "falseEdgeRate": 0.00142,
       "oracleInRepoSites": 11222,
-      "coveredInRepoSites": 6091,
-      "recall": 0.5428,
+      "coveredInRepoSites": 6328,
+      "recall": 0.5639,
       "falseEdgesWithCorrectTarget": 3,
       "falseByCause": [
         {
@@ -197,7 +241,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
         "determinism": "three runs byte-identical"
       },
-      "overloadUndetermined": 2125,
+      "overloadUndetermined": 2124,
       "previous": {
         "osnova": {
           "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
@@ -256,23 +300,23 @@
         "noVerdict": 162
       },
       "claimedEdges": 6121,
-      "decided": 5435,
-      "undecided": 686,
-      "truePositive": 5323,
-      "falsePositive": 112,
-      "precision": 0.9794,
-      "falseEdgeRate": 0.02061,
+      "decided": 6066,
+      "undecided": 55,
+      "truePositive": 6037,
+      "falsePositive": 29,
+      "precision": 0.9952,
+      "falseEdgeRate": 0.00478,
       "oracleInRepoSites": 7028,
-      "coveredInRepoSites": 5315,
-      "recall": 0.7563,
-      "falseEdgesWithCorrectTarget": 85,
+      "coveredInRepoSites": 6032,
+      "recall": 0.8583,
+      "falseEdgesWithCorrectTarget": 2,
       "falseByCause": [
         {
           "cause": "line-anchor collision",
-          "count": 85,
+          "count": 2,
           "wrong": "neither",
-          "detail": "osnova records a call at the first line of its call expression, which in a multi-line method chain is the chain's first line; the one-line tolerance then matched a different call of the same name (the printer's build() beside the searcher's build()); re-anchored to the callee-name line every one of these edges is true",
-          "example": "crates/printer/src/standard.rs:1899 build"
+          "detail": "two calls named new share one line, RefCell::new(CounterWriter::new(wtr)); osnova's CounterWriter::new edge is right and the key carries RefCell::new's external verdict",
+          "example": "crates/printer/src/standard.rs:130 new"
         },
         {
           "cause": "cfg variants collapse",
@@ -319,7 +363,44 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (112 to 137)",
         "determinism": "two site listings and two truth runs byte-identical"
       },
-      "overloadUndetermined": 0
+      "overloadUndetermined": 0,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 6121,
+        "decided": 5435,
+        "falsePositive": 112,
+        "falseEdgeRate": 0.02061,
+        "recall": 0.7563,
+        "falseByCause": [
+          {
+            "cause": "line-anchor collision",
+            "count": 85
+          },
+          {
+            "cause": "cfg variants collapse",
+            "count": 11
+          },
+          {
+            "cause": "inline test module function collapses with its parent",
+            "count": 6
+          },
+          {
+            "cause": "local binding called",
+            "count": 5
+          },
+          {
+            "cause": "function-local use of an external function",
+            "count": 4
+          },
+          {
+            "cause": "external trait implementation",
+            "count": 1
+          }
+        ]
+      }
     },
     {
       "corpus": "humanizer-v1",
@@ -336,30 +417,23 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 7264,
-      "decided": 6976,
-      "undecided": 288,
-      "truePositive": 6921,
-      "falsePositive": 55,
-      "precision": 0.9921,
-      "falseEdgeRate": 0.00788,
+      "claimedEdges": 7748,
+      "decided": 7451,
+      "undecided": 297,
+      "truePositive": 7448,
+      "falsePositive": 3,
+      "precision": 0.9996,
+      "falseEdgeRate": 0.0004,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 6919,
-      "recall": 0.5851,
+      "coveredInRepoSites": 7446,
+      "recall": 0.6297,
       "falseByCause": [
         {
-          "cause": "callee missing from the index after a parse error",
-          "count": 33,
+          "cause": "local function in top-level statements",
+          "count": 2,
           "wrong": "osnova",
-          "detail": "the pinned tree-sitter C# grammar fails on some C# 12 primary constructors and on two whole test files, so the callee declared there is not indexed and a same-named method elsewhere is named",
-          "example": "src/Humanizer/Inflections/InflectionEngine.cs:875 FoldSimpleCase"
-        },
-        {
-          "cause": "overload declared in a base type or another partial file",
-          "count": 21,
-          "wrong": "osnova",
-          "detail": "only the declarations of the resolved type in its own file are counted, so a call binding an overload declared in another partial file or a base type names the wrong declaration",
-          "example": "src/Humanizer.SourceGenerators/Common/NumberToWordsProfileCatalogInput.cs:70 RequiresCulture"
+          "detail": "StripComment is a local function of a file-based program's top-level statements, which the index does not record, so the call names a same-named method in another file by unique name",
+          "example": "tools/Humanizer.UnicodeDataGenerator/Program.cs:247 StripComment"
         },
         {
           "cause": "same-name collision in the unit key",
@@ -378,7 +452,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (617 to 642)",
         "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
       },
-      "overloadUndetermined": 538,
+      "overloadUndetermined": 514,
       "falseEdgesWithCorrectTarget": 1,
       "previous": {
         "osnova": {
@@ -417,8 +491,8 @@
   ],
   "limitations": [
     "The checker's own resolution is the reference; where it returns nothing the site is undecided and counts in neither rate. Dynamic dispatch the checker cannot see is invisible to both sides.",
-    "A checker names one declaration, the static one. Where a language has overloads (Java, C#), osnova keeps one symbol per qualified name and records which declaration a call binds only when the written argument count selects exactly one among the resolved type's declarations in its file; an edge whose count fits several or none names the method but no declaration, is counted in overloadUndetermined and is not claimed. Overloads declared in a base type or another partial file are not consulted. Rust cfg variants of one function still collapse to one record.",
-    "The unit key is (file, line, name). Two calls of the same name on one line share a verdict, and osnova records a call at the first line of its call expression, which in a multi-line method chain can be lines above the callee name; such a claim is undecided, or, when another call of that name sits within the one-line tolerance, scored against that call. falseEdgesWithCorrectTarget counts the false edges where re-anchoring shows osnova's target is the checker's.",
+    "A checker names one declaration, the static one. Where a language has overloads (Java, C#), osnova keeps one symbol per qualified name and records which declaration a call binds only when the written argument count selects exactly one among the declarations of the resolved type, its written-partial parts and its declared base classes; an edge whose count fits several or none names the method but no declaration, is counted in overloadUndetermined and is not claimed. Rust cfg variants of one function still collapse to one record.",
+    "The unit key is (file, line, name). Two calls of the same name on one line share a verdict; falseEdgesWithCorrectTarget counts the false edges where osnova's target is the checker's declaration for the other call. Osnova records a call at the line of the callee name, the line the oracle uses; 0.11.0 recorded the first line of the call expression, which in a chain written one call per line could be lines above the name.",
     "Line tolerance of one absorbs multi-line call formatting and could mask a wrong target declared on an adjacent line.",
     "Each oracle sees one build configuration: cobra for darwin and windows, ripgrep for the host target with default features, gson on the classpath at JDK 27's language level, humanizer for net10.0 with .NET SDK 10.0.401 rather than the SDK 11 preview its global.json names. Code compiled only in other configurations is not enumerated.",
     "Recall counts osnova call edges only; import, reference, extends and routes edges are not scored here. Claimed edges in files the oracle does not compile (other languages in the checkout, uncompiled projects) are undecided.",
