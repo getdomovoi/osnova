@@ -2,8 +2,9 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
-    "version": "0.11.0"
+    "commit": "d7bebed21036fae5572db2b7b2c42eab298e1ba4",
+    "version": "0.11.0",
+    "unreleased": "Java and C# overload choice by argument count (OsnovaEdge.overload)"
   },
   "machine": "macOS, Darwin 25.6.0 on arm64 (Apple silicon), Node.js 26.10.0; times are wall clock on that machine",
   "method": {
@@ -55,7 +56,8 @@
       },
       "validation": {
         "reproduced": "the 2026-09-21 counts reproduce exactly; truth-python.mjs moved onto the shared LSP client and its output is byte-identical to the previous script's"
-      }
+      },
+      "overloadUndetermined": 0
     },
     {
       "corpus": "zod-v1",
@@ -97,7 +99,8 @@
       },
       "validation": {
         "reproduced": "the 2026-09-21 counts reproduce exactly"
-      }
+      },
+      "overloadUndetermined": 0
     },
     {
       "corpus": "cobra-v1",
@@ -133,7 +136,8 @@
         "spotCheck": "20 of 20 random decided sites agree with the source",
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (0 to 25)",
         "determinism": "two runs byte-identical (sha256 cf3c27e22018fa33aed305b1c93cb4f934f362ce4e1044ef8cd970c22d1f0eb6)"
-      }
+      },
+      "overloadUndetermined": 0
     },
     {
       "corpus": "gson-v1",
@@ -150,52 +154,24 @@
         "external": 12202,
         "noVerdict": 0
       },
-      "claimedEdges": 8473,
-      "decided": 8261,
-      "undecided": 212,
-      "truePositive": 6216,
-      "falsePositive": 2045,
-      "precision": 0.7525,
-      "falseEdgeRate": 0.24755,
+      "claimedEdges": 6348,
+      "decided": 6137,
+      "undecided": 211,
+      "truePositive": 6128,
+      "falsePositive": 9,
+      "precision": 0.9985,
+      "falseEdgeRate": 0.00147,
       "oracleInRepoSites": 11222,
-      "coveredInRepoSites": 6179,
-      "recall": 0.5506,
-      "falseEdgesWithCorrectTarget": 9,
+      "coveredInRepoSites": 6091,
+      "recall": 0.5428,
+      "falseEdgesWithCorrectTarget": 3,
       "falseByCause": [
-        {
-          "cause": "overload collapse",
-          "count": 2026,
-          "wrong": "osnova",
-          "detail": "osnova keeps one record per qualified name, the last overload declared, so a call to any other overload of the same method in the same class names that record's span; 10 of 10 sampled edges checked by hand",
-          "example": "gson/src/test/java/com/google/gson/functional/FieldExclusionTest.java:68 toJson -> osnova Gson.toJson (751-778), javac Gson.java:565 toJson(Object)"
-        },
-        {
-          "cause": "same-name collision in the unit key",
-          "count": 9,
-          "wrong": "neither",
-          "detail": "two calls with the same name on one line share one (file, line, name) key; osnova's edge is correct for the other call",
-          "example": "gson/src/test/java/com/google/gson/internal/ConstructorConstructorTest.java:58 get (constructorConstructor.get(TypeToken.get(...)))"
-        },
         {
           "cause": "constructor call resolved to a same-named constant",
           "count": 5,
           "wrong": "osnova",
           "detail": "new URL(...) and new URI(...) name the static fields TypeAdapters.URL and TypeAdapters.URI instead of the JDK classes",
           "example": "gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java:718 URL"
-        },
-        {
-          "cause": "enum constant body named instead of the interface method",
-          "count": 2,
-          "wrong": "osnova",
-          "detail": "policy.translateName(field) on a FieldNamingPolicy names one constant's override; javac binds FieldNamingStrategy.translateName",
-          "example": "gson/src/test/java/com/google/gson/FieldNamingPolicyTest.java:105 translateName"
-        },
-        {
-          "cause": "overload declared in a superclass",
-          "count": 1,
-          "wrong": "osnova",
-          "detail": "JsonObject.getAsJsonObject(String) named for a no-argument call that binds to JsonElement.getAsJsonObject()",
-          "example": "gson/src/test/java/com/google/gson/functional/InheritanceTest.java:82 getAsJsonObject"
         },
         {
           "cause": "receiver typed by its initializer, not its declared type",
@@ -205,11 +181,11 @@
           "example": "gson/src/test/java/com/google/gson/internal/LinkedTreeMapTest.java:215 put"
         },
         {
-          "cause": "method inherited from an external superclass",
-          "count": 1,
-          "wrong": "osnova",
-          "detail": "value(...) inherited from TestParameterValuesProvider names JsonWriter.value through an imported file",
-          "example": "proto/src/test/java/com/google/gson/protobuf/functional/LegacyProtoTypeAdapterFactoryTest.java:454 value"
+          "cause": "same-name collision in the unit key",
+          "count": 3,
+          "wrong": "neither",
+          "detail": "two calls with the same name on one line or adjacent lines share one (file, line, name) key; osnova names the checker's declaration for the other call",
+          "example": "gson/src/test/java/com/google/gson/functional/StructTypeAdapterTest.java:104 get"
         }
       ],
       "runSeconds": {
@@ -220,6 +196,48 @@
         "spotCheck": "20 of 20 random decided sites agree with the source",
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
         "determinism": "three runs byte-identical"
+      },
+      "overloadUndetermined": 2125,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 8473,
+        "decided": 8261,
+        "falsePositive": 2045,
+        "falseEdgeRate": 0.24755,
+        "recall": 0.5506,
+        "falseByCause": [
+          {
+            "cause": "overload collapse",
+            "count": 2026
+          },
+          {
+            "cause": "same-name collision in the unit key",
+            "count": 9
+          },
+          {
+            "cause": "constructor call resolved to a same-named constant",
+            "count": 5
+          },
+          {
+            "cause": "enum constant body named instead of the interface method",
+            "count": 2
+          },
+          {
+            "cause": "overload declared in a superclass",
+            "count": 1
+          },
+          {
+            "cause": "receiver typed by its initializer, not its declared type",
+            "count": 1
+          },
+          {
+            "cause": "method inherited from an external superclass",
+            "count": 1
+          }
+        ]
       }
     },
     {
@@ -300,7 +318,8 @@
         "spotCheck": "20 of 20 random decided sites agree with the source",
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (112 to 137)",
         "determinism": "two site listings and two truth runs byte-identical"
-      }
+      },
+      "overloadUndetermined": 0
     },
     {
       "corpus": "humanizer-v1",
@@ -317,51 +336,37 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 7798,
-      "decided": 7476,
-      "undecided": 322,
-      "truePositive": 6859,
-      "falsePositive": 617,
-      "precision": 0.9175,
-      "falseEdgeRate": 0.08253,
+      "claimedEdges": 7264,
+      "decided": 6976,
+      "undecided": 288,
+      "truePositive": 6921,
+      "falsePositive": 55,
+      "precision": 0.9921,
+      "falseEdgeRate": 0.00788,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 6859,
-      "recall": 0.58,
+      "coveredInRepoSites": 6919,
+      "recall": 0.5851,
       "falseByCause": [
         {
-          "cause": "overload collapse",
-          "count": 466,
-          "wrong": "osnova",
-          "detail": "one record per qualified name: a call to another overload in the same type names the last overload's span; 10 of 10 sampled edges checked by hand",
-          "example": "src/Humanizer/Bytes/ByteRate.cs:127 Humanize"
-        },
-        {
-          "cause": "overload declared in a base type or another partial file",
-          "count": 113,
-          "wrong": "osnova",
-          "detail": "the receiver's class has an override of a different overload, osnova names it, and Roslyn binds the base class overload (111: Convert and ConvertToOrdinal in GenderedNumberToWordsConverter, Convert in DefaultOrdinalizer, TryGetInt32Value); 2 are overloads in another file of the same partial class",
-          "example": "tests/Humanizer.Tests/CoverageGapTests.cs:1154 Convert"
-        },
-        {
           "cause": "callee missing from the index after a parse error",
-          "count": 36,
+          "count": 33,
           "wrong": "osnova",
-          "detail": "the pinned tree-sitter C# grammar fails on some C# 12 primary constructors (readonly struct S(...), nested classes with primary constructors) and on two whole test files; the definitions inside the error region are not indexed, so a unique-name fallback names a same-named method elsewhere",
+          "detail": "the pinned tree-sitter C# grammar fails on some C# 12 primary constructors and on two whole test files, so the callee declared there is not indexed and a same-named method elsewhere is named",
           "example": "src/Humanizer/Inflections/InflectionEngine.cs:875 FoldSimpleCase"
         },
         {
-          "cause": "local function in top-level statements",
-          "count": 1,
+          "cause": "overload declared in a base type or another partial file",
+          "count": 21,
           "wrong": "osnova",
-          "detail": "FindRepositoryRoot is a local function of a top-level program, not indexed, and the call names a test helper of the same name",
-          "example": "tools/Humanizer.UnicodeDataGenerator/Program.cs:19 FindRepositoryRoot"
+          "detail": "only the declarations of the resolved type in its own file are counted, so a call binding an overload declared in another partial file or a base type names the wrong declaration",
+          "example": "src/Humanizer.SourceGenerators/Common/NumberToWordsProfileCatalogInput.cs:70 RequiresCulture"
         },
         {
-          "cause": "static-imported external method",
+          "cause": "same-name collision in the unit key",
           "count": 1,
-          "wrong": "osnova",
-          "detail": "Verify(...) from a using static of the Verify package names an in-repo test helper by unique name",
-          "example": "tests/Humanizer.Tests/ApiApprover/PublicApiApprovalTest.cs:10 Verify"
+          "wrong": "neither",
+          "detail": "input.ToString(formatProvider) and input.ToString(format, formatProvider) share one line; osnova names ByteSize.ToString(string, IFormatProvider) at 505 for the two-argument call, which is right, and the key carries the one-argument call's verdict",
+          "example": "src/Humanizer/Bytes/ByteSizeExtensions.cs:455 ToString"
         }
       ],
       "runSeconds": {
@@ -372,12 +377,47 @@
         "spotCheck": "20 of 20 random decided sites agree with the source",
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (617 to 642)",
         "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
+      },
+      "overloadUndetermined": 538,
+      "falseEdgesWithCorrectTarget": 1,
+      "previous": {
+        "osnova": {
+          "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
+          "version": "0.11.0"
+        },
+        "claimedEdges": 7798,
+        "decided": 7476,
+        "falsePositive": 617,
+        "falseEdgeRate": 0.08253,
+        "recall": 0.58,
+        "falseByCause": [
+          {
+            "cause": "overload collapse",
+            "count": 466
+          },
+          {
+            "cause": "overload declared in a base type or another partial file",
+            "count": 113
+          },
+          {
+            "cause": "callee missing from the index after a parse error",
+            "count": 36
+          },
+          {
+            "cause": "local function in top-level statements",
+            "count": 1
+          },
+          {
+            "cause": "static-imported external method",
+            "count": 1
+          }
+        ]
       }
     }
   ],
   "limitations": [
     "The checker's own resolution is the reference; where it returns nothing the site is undecided and counts in neither rate. Dynamic dispatch the checker cannot see is invisible to both sides.",
-    "A checker names one declaration, the static one. Where a language has overloads (Java, C#) or conditional compilation (Rust cfg), a call binds one overload or one variant, and osnova, which keeps one record per qualified name, names the last one declared. Those edges name the right member of the right type and still count false; falseByCause separates them.",
+    "A checker names one declaration, the static one. Where a language has overloads (Java, C#), osnova keeps one symbol per qualified name and records which declaration a call binds only when the written argument count selects exactly one among the resolved type's declarations in its file; an edge whose count fits several or none names the method but no declaration, is counted in overloadUndetermined and is not claimed. Overloads declared in a base type or another partial file are not consulted. Rust cfg variants of one function still collapse to one record.",
     "The unit key is (file, line, name). Two calls of the same name on one line share a verdict, and osnova records a call at the first line of its call expression, which in a multi-line method chain can be lines above the callee name; such a claim is undecided, or, when another call of that name sits within the one-line tolerance, scored against that call. falseEdgesWithCorrectTarget counts the false edges where re-anchoring shows osnova's target is the checker's.",
     "Line tolerance of one absorbs multi-line call formatting and could mask a wrong target declared on an adjacent line.",
     "Each oracle sees one build configuration: cobra for darwin and windows, ripgrep for the host target with default features, gson on the classpath at JDK 27's language level, humanizer for net10.0 with .NET SDK 10.0.401 rather than the SDK 11 preview its global.json names. Code compiled only in other configurations is not enumerated.",
