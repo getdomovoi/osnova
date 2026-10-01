@@ -7,7 +7,17 @@ import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // This grammar writes `params int[] rest` as a bare `params` token in the list, not as a parameter.
-function parameterRange(list: Node): ParameterRange {
+// A method a derived type cannot call: written `private`, or without an access modifier outside an interface.
+function accessOf(method: Node): ParameterRange["access"] {
+  const modifiers = new Set(childrenOf(method).filter((child) => child.type === "modifier").map((child) => child.text));
+  if (modifiers.has("private") && !modifiers.has("protected")) return "private";
+  if (["public", "protected", "internal", "private"].some((name) => modifiers.has(name))) return undefined;
+  return method.parent?.parent?.type === "interface_declaration" ? undefined : "private";
+}
+
+function parameterRange(list: Node, method: Node): ParameterRange {
+  const overrides = childrenOf(method).some((child) => child.type === "modifier" && child.text === "override");
+  const access = accessOf(method);
   let required = 0;
   let optional = 0;
   const variadic = list.children.some((child) => child?.type === "params");
@@ -18,7 +28,7 @@ function parameterRange(list: Node): ParameterRange {
     if (childOfType(child, "equals_value_clause") !== null) optional += 1;
     else required += 1;
   }
-  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}) };
+  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }) };
 }
 
 export const csharpAdapter: LanguageAdapter = {
@@ -45,6 +55,7 @@ export const csharpAdapter: LanguageAdapter = {
                   ? "struct"
                   : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial();
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
@@ -56,7 +67,7 @@ export const csharpAdapter: LanguageAdapter = {
           if (nameNode !== null && IDENTIFIER_RE.test(nameNode.text)) {
             out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             const parameters = node.childForFieldName("parameters");
-            if (parameters !== null) out.setParameters(parameterRange(parameters));
+            if (parameters !== null) out.setParameters(parameterRange(parameters, node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();

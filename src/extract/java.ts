@@ -4,14 +4,28 @@ import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, javaSpec } from "./typed-bindings.js";
 
-function parameterRange(list: Node): ParameterRange {
+// `@Override` is optional in Java, so a declaration without it counts as a further overload.
+const annotatedOverride = (method: Node): boolean => childrenOf(childOfType(method, "modifiers") ?? method).some((child) =>
+  child.type === "marker_annotation" && /^(?:java\.lang\.)?Override$/.test(child.childForFieldName("name")?.text ?? ""));
+
+// A method a derived type cannot call (`private`), or only from the same package (no access modifier, outside an interface).
+function accessOf(method: Node): ParameterRange["access"] {
+  const words = new Set((childOfType(method, "modifiers")?.text ?? "").split(/\W+/));
+  if (words.has("private")) return "private";
+  if (words.has("public") || words.has("protected")) return undefined;
+  return method.parent?.type === "interface_body" || method.parent?.type === "annotation_type_body" ? undefined : "package";
+}
+
+function parameterRange(list: Node, method: Node): ParameterRange {
+  const overrides = annotatedOverride(method);
+  const access = accessOf(method);
   let count = 0;
   let varargs = false;
   for (const child of childrenOf(list)) {
     if (child.type === "formal_parameter") count += 1;
     else if (child.type === "spread_parameter") varargs = true;
   }
-  return varargs ? { min: count } : { min: count, max: count };
+  return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }) };
 }
 
 export const javaAdapter: LanguageAdapter = {
@@ -50,7 +64,7 @@ export const javaAdapter: LanguageAdapter = {
           if (nameNode !== null) {
             out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             const parameters = node.childForFieldName("parameters");
-            if (parameters !== null) out.setParameters(parameterRange(parameters));
+            if (parameters !== null) out.setParameters(parameterRange(parameters, node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();

@@ -103,6 +103,11 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, parameters });
   }
 
+  markPartial(): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, partial: true });
+  }
+
   addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number): void {
     const name = toName.trim();
     if (name.length === 0 || name.length > 300) return;
