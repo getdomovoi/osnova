@@ -12,14 +12,12 @@ function nameField(node: Node): string | null {
   return nameNode !== null ? nameNode.text : null;
 }
 
-function callTarget(node: Node): string | null {
+// The callee name token of a call: the identifier or the attribute name.
+function callTarget(node: Node): Node | null {
   const fn = node.childForFieldName("function");
   if (fn === null) return null;
-  if (fn.type === "identifier") return fn.text;
-  if (fn.type === "attribute") {
-    const attr = fn.childForFieldName("attribute");
-    return attr !== null ? attr.text : null;
-  }
+  if (fn.type === "identifier") return fn;
+  if (fn.type === "attribute") return fn.childForFieldName("attribute");
   return null;
 }
 
@@ -90,9 +88,10 @@ export const pythonAdapter: LanguageAdapter = {
               const inner = childrenOf(deco)[0];
               if (inner === undefined) continue;
               if (inner.type === "call") {
-                const target = callTarget(inner);
+                const targetNode = callTarget(inner);
+                const target = targetNode?.text ?? null;
                 const callee = bindings.at(inner.childForFieldName("function"), inner);
-                if (target !== null) out.addEdge("calls", target, inner, callee);
+                if (targetNode !== null) out.addEdge("calls", targetNode.text, targetNode, callee);
                 const framework = frameworkOfReceiver(callee);
                 const method = framework === undefined || target === null || isMount(framework, target) ? undefined : routeMethod(framework, target);
                 const defName = nameField(defNode);
@@ -152,9 +151,10 @@ export const pythonAdapter: LanguageAdapter = {
           return;
         }
         case "call": {
-          const target = callTarget(node);
+          const targetNode = callTarget(node);
+          const target = targetNode?.text ?? null;
           const callee = bindings.at(node.childForFieldName("function"), node);
-          if (target !== null) out.addEdge("calls", target, node, callee);
+          if (targetNode !== null) out.addEdge("calls", targetNode.text, targetNode, callee);
           const framework = frameworkOfReceiver(callee);
           if (framework !== undefined && target !== null && isMount(framework, target)) {
             const argList = node.childForFieldName("arguments");

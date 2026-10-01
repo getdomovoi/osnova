@@ -66,6 +66,24 @@ describe("sites-python.py", () => {
   });
 });
 
+describe("sites-rust.mjs", () => {
+  it("places each call at its callee name in UTF-16 columns and skips calls inside macros and through expressions", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-oracle-rs-"));
+    const out = path.join(root, "..", `${path.basename(root)}-sites.json`);
+    try {
+      fs.writeFileSync(path.join(root, "m.rs"), "fn main() {\n    let é = 1; foo(é);\n    a::b::<u8>(x.m(), \"😀\".len());\n    (f)(); println!(\"{}\", g());\n}\n");
+      execFileSync(process.execPath, [path.join(__dirname, "../benchmarks/oracle/sites-rust.mjs"), root, out]);
+      const { sites } = JSON.parse(fs.readFileSync(out, "utf8"));
+      expect(sites).toEqual([
+        { file: "m.rs", line: 2, character: 15, name: "foo" },
+        { file: "m.rs", line: 3, character: 7, name: "b" },
+        { file: "m.rs", line: 3, character: 17, name: "m" },
+        { file: "m.rs", line: 3, character: 27, name: "len" },
+      ]);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(out, { force: true }); }
+  });
+});
+
 describe("claimedSites", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-oracle-ws-"));
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-oracle-cache-"));
@@ -79,5 +97,28 @@ describe("claimedSites", () => {
     expect(sites).toEqual([
       { callerFile: "main.ts", line: 4, calleeName: "add", targetFile: "lib.ts", targetName: "add", targetStartLine: 1, targetEndLine: 3, basis: "import-binding" },
     ]);
+  }, 60_000);
+
+  it("claims the overload a call's argument count names, and no declaration when it names none", async () => {
+    const java = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-oracle-java-"));
+    try {
+      fs.writeFileSync(path.join(java, "Box.java"), [
+        "class Box {",
+        "  void put(int a) { }",
+        "  void put(int a, int b) { }",
+        "  void put(String a, String b) { }",
+        "  void run() {",
+        "    put(1);",
+        "    put(1, 2);",
+        "  }",
+        "}",
+      ].join("\n"));
+      const index = await buildIndex(java, { cacheDir });
+      const { sites, overloadUndetermined } = claimedSites(index);
+      expect(sites).toEqual([
+        { callerFile: "Box.java", line: 6, calleeName: "put", targetFile: "Box.java", targetName: "put", targetStartLine: 2, targetEndLine: 2, basis: "same-file-name" },
+      ]);
+      expect(overloadUndetermined).toBe(1);
+    } finally { fs.rmSync(java, { recursive: true, force: true }); }
   }, 60_000);
 });

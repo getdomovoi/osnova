@@ -1,9 +1,35 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, childOfType, childrenOf } from "./util.js";
+import { Extractor, argumentCount, childOfType, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
+import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// This grammar writes `params int[] rest` as a bare `params` token in the list, not as a parameter.
+// A method a derived type cannot call: written `private`, or without an access modifier outside an interface.
+function accessOf(method: Node): ParameterRange["access"] {
+  const modifiers = new Set(childrenOf(method).filter((child) => child.type === "modifier").map((child) => child.text));
+  if (modifiers.has("private") && !modifiers.has("protected")) return "private";
+  if (["public", "protected", "internal", "private"].some((name) => modifiers.has(name))) return undefined;
+  return method.parent?.parent?.type === "interface_declaration" ? undefined : "private";
+}
+
+function parameterRange(list: Node, method: Node): ParameterRange {
+  const overrides = childrenOf(method).some((child) => child.type === "modifier" && child.text === "override");
+  const access = accessOf(method);
+  let required = 0;
+  let optional = 0;
+  const variadic = list.children.some((child) => child?.type === "params");
+  let extension = false;
+  for (const child of childrenOf(list)) {
+    if (child.type !== "parameter") continue;
+    if (required + optional === 0 && childrenOf(child).some((part) => part.type === "parameter_modifier" && part.text === "this")) extension = true;
+    if (childOfType(child, "equals_value_clause") !== null) optional += 1;
+    else required += 1;
+  }
+  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }) };
+}
 
 export const csharpAdapter: LanguageAdapter = {
   language: "c_sharp",
@@ -11,13 +37,26 @@ export const csharpAdapter: LanguageAdapter = {
     const out = new Extractor();
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
+    const namespaces: string[] = [];
+    // The generic arity of each enclosing type, outermost first: `Outer<T>.Inner` and `Outer<T, U>.Inner`
+    // are different types with the same local name.
+    const arities: number[] = [];
     const visit = (node: Node): void => {
       switch (node.type) {
+        case "namespace_declaration":
+        case "file_scoped_namespace_declaration": {
+          const name = node.childForFieldName("name");
+          if (name !== null) namespaces.push(name.text.replace(/\s+/g, "").replace(/(^|\.)@/g, "$1"));
+          for (const child of childrenOf(node)) visit(child);
+          if (name !== null) namespaces.pop();
+          return;
+        }
         case "class_declaration":
         case "interface_declaration":
         case "struct_declaration":
         case "enum_declaration":
-        case "record_declaration": {
+        case "record_declaration":
+        case "record_struct_declaration": {
           const nameNode = node.childForFieldName("name");
           if (nameNode === null || !IDENTIFIER_RE.test(nameNode.text)) return;
           const kind =
@@ -25,13 +64,16 @@ export const csharpAdapter: LanguageAdapter = {
               ? "interface"
               : node.type === "enum_declaration"
                 ? "enum"
-                : node.type === "struct_declaration"
+                : node.type === "struct_declaration" || node.type === "record_struct_declaration"
                   ? "struct"
                   : "class";
-          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          arities.push(childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length);
+          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
+          arities.pop();
           return;
         }
         case "method_declaration":
@@ -39,6 +81,8 @@ export const csharpAdapter: LanguageAdapter = {
           const nameNode = node.childForFieldName("name");
           if (nameNode !== null && IDENTIFIER_RE.test(nameNode.text)) {
             out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
+            const parameters = node.childForFieldName("parameters");
+            if (parameters !== null) out.setParameters(parameterRange(parameters, node));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -65,12 +109,13 @@ export const csharpAdapter: LanguageAdapter = {
         }
         case "invocation_expression": {
           const fn = node.childForFieldName("function");
+          const args = argumentCount(node.childForFieldName("arguments"));
           if (fn !== null) {
             if (fn.type === "identifier") {
-              out.addEdge("calls", fn.text, node);
+              out.addEdge("calls", fn.text, fn, undefined, undefined, args);
             } else if (fn.type === "member_access_expression") {
               const nameNode = fn.childForFieldName("name");
-              if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(fn, node));
+              if (nameNode !== null) out.addEdge("calls", nameNode.text, nameNode, bindings.at(fn, node), undefined, args);
             }
           }
           for (const child of childrenOf(node)) visit(child);
@@ -78,7 +123,7 @@ export const csharpAdapter: LanguageAdapter = {
         }
         case "object_creation_expression": {
           const typeNode = node.childForFieldName("type");
-          if (typeNode !== null) out.addEdge("calls", typeNode.text, node);
+          if (typeNode !== null) out.addEdge("calls", typeNode.text, typeNode);
           for (const child of childrenOf(node)) visit(child);
           return;
         }

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -833,5 +833,131 @@ describe("python decorator factory calls", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("call edge lines", () => {
+  const files: Record<string, string> = {
+    "chain.ts": [
+      "export async function run(builder: any) {",
+      "  const x = builder",
+      "    .alpha()",
+      "    .beta();",
+      "  const y = (await builder)",
+      "    ?.gamma?.();",
+      "  const z = (builder as any)",
+      "    .delta();",
+      "  outer(",
+      "    inner());",
+      "  builder",
+      "    .add()",
+      "    .add();",
+      "  return new",
+      "    Widget(x, y, z);",
+      "}",
+      "export function wrapTwice(builder: any) {",
+      "  return builder",
+      "    .wrap(builder.wrap());",
+      "}",
+      "",
+    ].join("\n"),
+    "chain.py": [
+      "def run(builder):",
+      "    x = (builder",
+      "         .alpha()",
+      "         .beta())",
+      "    return outer(",
+      "        inner(x))",
+      "",
+    ].join("\n"),
+    "Chain.java": [
+      "class Chain {",
+      "  void run(Builder builder) {",
+      "    Object x = builder",
+      "        .alpha()",
+      "        .beta();",
+      "    Object y = new",
+      "        Widget();",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    "Chain.cs": [
+      "class Chain {",
+      "  void Run(Builder builder) {",
+      "    var x = builder",
+      "        .Alpha()",
+      "        .Beta();",
+      "    var y = new",
+      "        Widget();",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    "chain.rs": [
+      "fn run(builder: Builder) {",
+      "    let x = builder",
+      "        .alpha()",
+      "        .beta();",
+      "    let y = Widget::new()",
+      "        .gamma();",
+      "}",
+      "",
+    ].join("\n"),
+    "chain.go": [
+      "package main",
+      "",
+      "func run(builder Builder) {",
+      "\tx := builder.",
+      "\t\tAlpha().",
+      "\t\tBeta()",
+      "\t_ = x",
+      "}",
+      "",
+    ].join("\n"),
+    "chain.kt": [
+      "fun run(builder: Builder) {",
+      "    val x = builder",
+      "        .alpha()",
+      "        .beta()",
+      "}",
+      "",
+    ].join("\n"),
+  };
+
+  function callLines(built: OsnovaIndex, file: string): string[] {
+    return built.edges.filter((e) => e.kind === "calls" && e.fromFile === file).map((e) => `${e.toName}:${e.line}`).sort();
+  }
+
+  let built: OsnovaIndex;
+  let dir: string;
+  beforeAll(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-call-line-"));
+    for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+    built = await buildIndex(dir);
+  });
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it("parses every sample cleanly", () => {
+    expect(built.diagnostics ?? []).toEqual([]);
+  });
+
+  it.each([
+    ["chain.ts", ["Widget:15", "add:12", "add:13", "alpha:3", "beta:4", "delta:8", "gamma:6", "inner:10", "outer:9", "wrap:19"]],
+    ["chain.py", ["alpha:3", "beta:4", "inner:6", "outer:5"]],
+    ["Chain.java", ["Widget:7", "alpha:4", "beta:5"]],
+    ["Chain.cs", ["Alpha:4", "Beta:5", "Widget:7"]],
+    ["chain.rs", ["alpha:3", "beta:4", "gamma:6", "new:5"]],
+    ["chain.go", ["Alpha:5", "Beta:6"]],
+    ["chain.kt", ["alpha:3", "beta:4"]],
+  ])("records each call in %s at the line of its callee name", (file, expected) => {
+    expect(callLines(built, file)).toEqual(expected);
+  });
+
+  // The graph stores no column: two calls whose names share a line, with one name, target and binding, are one
+  // edge, as they are when the whole call sits on one line. Here the outer `.wrap` moved onto the inner call's line.
+  it("keeps one edge for same-name calls whose names share a line", () => {
+    const wraps = built.edges.filter((e) => e.kind === "calls" && e.toName === "wrap");
+    expect(wraps.map((e) => `${e.fromSymbol}:${e.line}`)).toEqual(["chain.ts#wrapTwice:19"]);
   });
 });

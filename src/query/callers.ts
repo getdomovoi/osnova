@@ -90,7 +90,7 @@ export function callersDetailed(
   return {
     status: "found", scope: "indexed-graph", direction, depth, target, reach: reachCounter(index)(target, { depth: 2 }),
     hits: hits.filter((hit) => hit.resolved).map((hit) => direction === "out"
-      ? { ...hit, line: hit.symbol?.span.startLine ?? null } : hit), unresolved,
+      ? { ...hit, line: hit.edge.overload !== undefined && "line" in hit.edge.overload ? hit.edge.overload.line : hit.symbol?.span.startLine ?? null } : hit), unresolved,
   };
 }
 

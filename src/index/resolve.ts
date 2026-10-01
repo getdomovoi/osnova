@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ReceiverBasis, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
-import { qualifiedNameOf } from "./indexImpl.js";
+import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ParameterRange, ReceiverBasis, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
+import { localOfQualifiedName, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { collectLockfiles, externalLabel } from "./external.js";
 import type { Lockfiles } from "./external.js";
@@ -19,6 +19,19 @@ const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
 // Builtin type names a receiver annotation or literal can carry: never a holder the index could define.
 const BUILTIN_TYPES = new Set(["string", "number", "boolean", "bigint", "symbol", "Array", "Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Object", "Function", "str", "list", "dict", "set", "tuple", "int", "float", "bool", "bytes"]);
 const goPackages = new WeakMap<FileCard, string>();
+const javaPackages = new WeakMap<FileCard, string>();
+export function parsedWithoutErrors(card: FileCard | undefined): boolean {
+  return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors");
+}
+
+export function javaPackageOf(card: FileCard | undefined): string {
+  if (card === undefined) return "";
+  const cached = javaPackages.get(card);
+  if (cached !== undefined) return cached;
+  const name = card.language === "java" ? card.text.match(/^\s*package\s+([\w.]+)\s*;/m)?.[1] ?? "" : "";
+  javaPackages.set(card, name);
+  return name;
+}
 // The package clause separates an external _test package from the production package in one directory.
 function goPackageOf(card: FileCard): string {
   const cached = goPackages.get(card);
@@ -526,10 +539,242 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
     symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
 
+  // Java and C# overload sets reach past the target's file. A C# type written `partial` has its other
+  // `partial` declarations of the same local name, namespace and generic arity in other C# files as parts.
+  // A base written without an import is the single type of that name in the language, as a receiver
+  // annotation is.
+  // A file the grammar could not parse cleanly may attribute a nested type's members to its outer type,
+  // so a partial type with such a file is not merged.
+  const parsedCleanly = (file: string): boolean => parsedWithoutErrors(files.get(file));
+  // One C# type: the parts of a partial type share its local name and namespace-and-arity identity;
+  // any other type is its own declaration.
+  const partialIdentity = (symbol: OsnovaSymbol): string | undefined => declarationsOf(symbol).find((part) => part.partial !== undefined)?.partial;
+  const typeKey = (symbol: OsnovaSymbol): string => {
+    const identity = partialIdentity(symbol);
+    return identity === undefined ? symbol.qualifiedName : `${localOfQualifiedName(symbol.qualifiedName)}\u0000${identity}`;
+  };
+  const partsOf = (holder: OsnovaSymbol): { parts: OsnovaSymbol[]; complete: boolean } => {
+    const parts = new Map<string, OsnovaSymbol>([[holder.file, holder]]);
+    let complete = true;
+    if (files.get(holder.file)?.language === "c_sharp" && partialIdentity(holder) !== undefined) {
+      if (!parsedCleanly(holder.file)) return { parts: declarationsOf(holder), complete: false };
+      for (const symbol of symbolsByName.get(holder.name) ?? []) {
+        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || symbol.partial === undefined || parts.has(symbol.file) || typeKey(symbol) !== typeKey(holder)) continue;
+        if (parsedCleanly(symbol.file)) parts.set(symbol.file, symbol);
+        else complete = false;
+      }
+    }
+    return { parts: [...parts.values()].flatMap((part) => declarationsOf(part)), complete };
+  };
+  // A Java supertype written as a simple name without an import names a member type that an enclosing
+  // type declares or inherits (innermost first), else a top-level type of the same package; a same-named
+  // type of another package is not evidence, since the compiler may bind an unindexed type of this
+  // package. An enclosing type whose supertypes cannot all be followed leaves the name unknown.
+  const javaLocalBaseOf = (part: OsnovaSymbol, name: string): OsnovaSymbol | undefined => {
+    const enclosing = localOfQualifiedName(part.qualifiedName).split(".").slice(0, -1);
+    for (let depth = enclosing.length; depth > 0; depth -= 1) {
+      const outer = declaredAs(part.file, qualifiedNameOf(part.file, enclosing.slice(0, depth).join("."))).find(isHolder);
+      if (outer === undefined) return undefined;
+      const member = javaMemberTypeOf(outer, name, new Set());
+      if (member === null) return undefined;
+      if (member !== undefined) return member;
+    }
+    const home = javaPackageOf(files.get(part.file));
+    const holders = (symbolsByName.get(name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "java" &&
+      !localOfQualifiedName(symbol.qualifiedName).includes(".") && javaPackageOf(files.get(symbol.file)) === home);
+    return new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1 ? holders[0] : undefined;
+  };
+  // The member type `name` that a Java type declares or inherits: undefined when it has none, null when a
+  // supertype cannot be followed (or is an enum, whose java.lang.Enum declares member types).
+  const javaMemberTypeOf = (type: OsnovaSymbol, name: string, seen: Set<string>): OsnovaSymbol | null | undefined => {
+    if (seen.has(type.qualifiedName) || seen.size > 32) return null;
+    seen.add(type.qualifiedName);
+    const own = declaredAs(type.file, `${type.qualifiedName}.${name}`).find(isHolder);
+    if (own !== undefined) return own;
+    if (type.kind === "enum") return null;
+    const followed = [...(type.heritage ?? []), ...(type.interfaces ?? [])];
+    if (followed.length !== (type.supertypes ?? 0)) return null;
+    for (const binding of followed) {
+      const base = baseOf(type, binding);
+      if (base === undefined) return null;
+      const member = javaMemberTypeOf(base, name, seen);
+      if (member !== undefined) return member;
+    }
+    return undefined;
+  };
+  const baseOf = (part: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol | undefined => {
+    if (base.kind === "local" && files.get(part.file)?.language === "java") return javaLocalBaseOf(part, base.name);
+    const found = basesOf(part, base)?.[0];
+    if (found !== undefined || base.kind !== "local") return found;
+    const language = files.get(part.file)?.language;
+    if (language !== "java" && language !== "c_sharp") return undefined;
+    const holders = (symbolsByName.get(base.name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === language);
+    return new Set(holders.map((symbol) => language === "c_sharp" ? typeKey(symbol) : symbol.qualifiedName)).size === 1 ? holders[0] : undefined;
+  };
+  // The declarations named `member` level by level: the holder's parts, then its declared base class,
+  // and so on. A base declaration the holder cannot call (private, or package-private in another Java
+  // package) is left out. Interfaces add nothing to a class's overloads here: C# does not inherit their
+  // members into a class, and Java's default methods are left out. `complete` is false when a declared
+  // base cannot be identified, so declarations further up may be missing.
+  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean };
+  const levelCache = new Map<string, OverloadLevels>();
+  const overloadLevelsOf = (holder: OsnovaSymbol, member: string): OverloadLevels => {
+    const key = `${holder.qualifiedName}\u0000${member}`;
+    const cached = levelCache.get(key);
+    if (cached !== undefined) return cached;
+    const found = walkLevels(holder, member);
+    levelCache.set(key, found);
+    return found;
+  };
+  const walkLevels = (holder: OsnovaSymbol, member: string): OverloadLevels => {
+    const levels: OsnovaSymbol[][] = [];
+    const visited = new Set<string>();
+    const home = javaPackageOf(files.get(holder.file));
+    let current: OsnovaSymbol | undefined = holder;
+    let complete = true;
+    while (current !== undefined) {
+      if (visited.has(typeKey(current)) || levels.length > 8) return { levels, complete: false };
+      visited.add(typeKey(current));
+      const { parts, complete: whole } = partsOf(current);
+      complete &&= whole;
+      const seen = new Set<string>();
+      const inherited = levels.length > 0;
+      levels.push(parts.flatMap((part) => {
+        const name = `${part.qualifiedName}.${member}`;
+        if (seen.has(name)) return [];
+        seen.add(name);
+        return declaredAs(part.file, name).filter((symbol) => symbol.kind === "method" && !(inherited &&
+          (symbol.parameters?.access === "private" || (symbol.parameters?.access === "package" && javaPackageOf(files.get(symbol.file)) !== home))));
+      }));
+      const bases = new Map<string, OsnovaSymbol>();
+      for (const part of parts) {
+        for (const binding of part.heritage ?? []) {
+          const base = baseOf(part, binding);
+          if (base === undefined) return { levels, complete: false };
+          if (base.kind === "interface" && current.kind !== "interface") continue;
+          bases.set(typeKey(base), base);
+        }
+      }
+      if (bases.size > 1) return { levels, complete: false };
+      current = [...bases.values()][0];
+    }
+    return { levels, complete };
+  };
+  // A simple name a Java parameter type read from its file's scope can still mean another type: a nested
+  // type that the declaring type or an enclosing type inherits shadows it, and a type of the same package
+  // shadows a java.lang name. The names are proven only when every supertype up each of those chains is
+  // indexed and declares no nested type of that name, and no type of the package takes a java.lang name the
+  // types rely on. An enum (java.lang.Enum declares a nested type), or any written supertype that names no
+  // indexed type (a qualified or external name), leaves them unproven.
+  const namesProof = new Map<OsnovaSymbol, boolean>();
+  const javaNamesProven = (method: OsnovaSymbol): boolean => {
+    const names = method.parameters?.names;
+    if (names === undefined) return true;
+    const known = namesProof.get(method);
+    if (known !== undefined) return known;
+    const proven = proveJavaNames(method, names);
+    namesProof.set(method, proven);
+    return proven;
+  };
+  const proveJavaNames = (method: OsnovaSymbol, names: readonly string[]): boolean => {
+    const home = javaPackageOf(files.get(method.file));
+    const types = method.parameters?.types ?? [];
+    for (const name of names) {
+      const relied = types.some((type) => type.split(/[^\w$.]+/).includes(`java.lang.${name}`) ||
+        type.split(/[^\w$.]+/).some((part) => part.startsWith(`java.lang.${name}.`)));
+      if (relied && (symbolsByName.get(name) ?? []).some((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "java" &&
+        !localOfQualifiedName(symbol.qualifiedName).includes(".") && javaPackageOf(files.get(symbol.file)) === home)) return false;
+    }
+    const enclosing = localOfQualifiedName(method.qualifiedName).split(".").slice(0, -1);
+    const pending: OsnovaSymbol[] = [];
+    for (let depth = 1; depth <= enclosing.length; depth += 1) {
+      const holder = declaredAs(method.file, qualifiedNameOf(method.file, enclosing.slice(0, depth).join("."))).find(isHolder);
+      if (holder === undefined) return false;
+      pending.push(holder);
+    }
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const type = pending.pop()!;
+      if (seen.has(type.qualifiedName)) continue;
+      seen.add(type.qualifiedName);
+      if (seen.size > 32 || type.kind === "enum" || files.get(type.file)?.language !== "java") return false;
+      if (names.some((name) => declaredAs(type.file, `${type.qualifiedName}.${name}`).some(isHolder))) return false;
+      const followed = [...(type.heritage ?? []), ...(type.interfaces ?? [])];
+      if (followed.length !== (type.supertypes ?? 0)) return false;
+      for (const binding of followed) {
+        const base = baseOf(type, binding);
+        if (base === undefined) return false;
+        pending.push(base);
+      }
+    }
+    return true;
+  };
+  // An override hides one base declaration with the same parameter range (and, in Java, the same written
+  // parameter types). When a level holds more
+  // declarations of that range than overrides above it, which ones stay is unknown, so all are listed.
+  const chooseOverload = (edge: OsnovaEdge): OsnovaEdge => {
+    const local = withOverload(edge, declaredAs);
+    if (edge.kind !== "calls" || edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined) return local;
+    const language = files.get(edge.toFile)?.language;
+    const own = declaredAs(edge.toFile, edge.toSymbol);
+    if ((language !== "java" && language !== "c_sharp") || own.length === 0) return local;
+    const resolution = edge.evidence?.source === "syntax" ? edge.evidence.resolution : undefined;
+    const holderName = resolution?.status === "resolved" && resolution.method === "receiver-hint" ? resolution.receiver.classSymbol
+      : edge.toSymbol.slice(0, edge.toSymbol.lastIndexOf("."));
+    const holder = declaredAs(holderName.slice(0, holderName.indexOf("#")), holderName).find(isHolder);
+    if (holder === undefined) return local;
+    const { levels, complete } = overloadLevelsOf(holder, own[0]!.name);
+    if (levels.some((level) => level.some((symbol) => symbol.parameters === undefined))) return local;
+    const count = edge.arguments;
+    // Java overrides a method by its parameter types, and @Override also marks an interface method's
+    // implementation, so a Java override hides only a base declaration written with the same types.
+    // A Java declaration whose written types prove nothing gets a key of its own, so it hides nothing.
+    const keyOf = (symbol: OsnovaSymbol): string => {
+      const range = symbol.parameters!;
+      const types = language !== "java" ? "" : range.types === undefined || !javaNamesProven(symbol) ? `?${symbol.file}:${symbol.span.startLine}` : range.types.join(",");
+      return `${range.min}:${range.max ?? ""}:${range.extension === true ? "e" : ""}:${types}`;
+    };
+    const pending = new Map<string, number>();
+    const listed: OsnovaSymbol[] = [];
+    let slots = 0;
+    for (const level of levels) {
+      const groups = new Map<string, OsnovaSymbol[]>();
+      for (const symbol of level) {
+        if (!accepts(symbol.parameters!, count)) continue;
+        const key = keyOf(symbol);
+        groups.set(key, [...(groups.get(key) ?? []), symbol]);
+      }
+      for (const [key, group] of groups) {
+        const hidden = Math.min(pending.get(key) ?? 0, group.length);
+        slots += group.length - hidden;
+        if (hidden < group.length) listed.push(...group);
+        // Every override in the group, hidden or not, still hides one declaration further up.
+        pending.set(key, (pending.get(key) ?? 0) - hidden + group.filter((symbol) => symbol.parameters!.overrides === true).length);
+      }
+    }
+    const isOwn = (symbol: OsnovaSymbol): boolean => symbol.file === edge.toFile && symbol.qualifiedName === edge.toSymbol;
+    const elsewhere = listed.filter((symbol) => !isOwn(symbol));
+    // Declarations above an unidentified base can only add choices: two found already are enough to refuse,
+    // and one found is not proven the only one, so a line chosen in the target's file is withdrawn.
+    if (!complete && slots < 2) return local.overload !== undefined && "line" in local.overload ? { ...local, overload: { candidates: [local.overload.line] } } : local;
+    if (elsewhere.length === 0) return local;
+    const { overload: _previous, ...rest } = edge;
+    if (slots === 1 && listed.length === 1) {
+      const chosen = listed[0]!;
+      return { ...rest, toSymbol: chosen.qualifiedName, toFile: chosen.file, overload: { line: chosen.span.startLine, from: edge.toSymbol } };
+    }
+    const candidates = listed.filter(isOwn).map((symbol) => symbol.span.startLine).sort((a, b) => a - b);
+    const sites = elsewhere.map((symbol) => ({ file: symbol.file, line: symbol.span.startLine }))
+      .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line));
+    return { ...rest, overload: { candidates, elsewhere: sites } };
+  };
+
   const edges: OsnovaEdge[] = [];
+  // A reused edge was chosen against the same declarations (any change to them re-resolves every file).
+  const reused = new Set<OsnovaEdge>();
   for (const fromFile of [...rawEdges.keys()].sort()) {
     if (reusable !== undefined && reuse !== undefined && !reuse.resolve.has(fromFile)) {
-      for (const edge of reusable.get(fromFile) ?? []) edges.push(edge);
+      for (const edge of reusable.get(fromFile) ?? []) { edges.push(edge); reused.add(edge); }
       continue;
     }
     const raws = rawEdges.get(fromFile);
@@ -585,6 +830,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
               evidence: { source: "syntax", resolution: { status: "unresolved", reason: "shadowed-declaration" } },
               ...(raw.route === undefined ? {} : { route: raw.route }),
+              ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
             });
             continue;
           }
@@ -897,6 +1143,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           evidence: { source: "syntax", resolution },
           ...(resolved === undefined ? {} : { toSymbol: resolved.qualifiedName, toFile: resolved.file }),
           ...(raw.route === undefined ? {} : { route: raw.route }),
+          ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
         });
         continue;
       }
@@ -927,9 +1174,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // the family defines is a builtin or a standard-library name: external, like an unbound global.
         : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
           : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : imported.length > 0 ? "imported-file-name" : "unique-name" };
+      const args = raw.arguments === undefined ? {} : { arguments: raw.arguments };
       edges.push(
         resolved === undefined
-          ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution } }
+          ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution }, ...args }
           : {
               kind: raw.kind,
               fromFile,
@@ -939,9 +1187,29 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               toSymbol: resolved.qualifiedName,
               toFile: resolved.file,
               evidence: { source: "syntax", resolution },
+              ...args,
             },
       );
     }
   }
-  return edges;
+  return edges.map((edge) => reused.has(edge) ? edge : chooseOverload(edge));
+}
+
+function accepts(range: ParameterRange, count: number): boolean {
+  const fits = (n: number): boolean => n >= range.min && (range.max === undefined || n <= range.max);
+  return fits(count) || (range.extension === true && fits(count + 1));
+}
+
+// The index keeps one symbol per qualified name, so every overload of a method shares the edge's target.
+// The call's argument count names the declaration it binds when exactly one accepts that many.
+function withOverload(edge: OsnovaEdge, declaredAs: (file: string, qualifiedName: string) => readonly OsnovaSymbol[]): OsnovaEdge {
+  const ranges = edge.kind !== "calls" || edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined ? []
+    : declaredAs(edge.toFile, edge.toSymbol).flatMap((symbol) => symbol.parameters === undefined ? [] : [{ line: symbol.span.startLine, range: symbol.parameters }]);
+  const count = edge.arguments ?? 0;
+  const lines = ranges.filter((entry) => accepts(entry.range, count)).map((entry) => entry.line).sort((a, b) => a - b);
+  const overload = ranges.length === 0 || (ranges.length === 1 && lines.length === 1) ? undefined
+    : lines.length === 1 ? { line: lines[0]! } : { candidates: lines };
+  if (overload === undefined && edge.overload === undefined) return edge;
+  const { overload: _previous, ...rest } = edge;
+  return overload === undefined ? rest : { ...rest, overload };
 }

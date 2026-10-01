@@ -89,8 +89,9 @@ function bounded(first: string, groups: readonly { title: string; entries: reado
 }
 
 // Places each location on the first tier holding its line. A location on a line a tier lists matches that line,
-// however many calls the line holds. A call split across two lines may instead match a neighbouring line of a tier
-// that allows it, but only a line no location matched exactly, and each such line once, so an import next to a listed
+// however many calls the line holds. An edge anchored one line from the name (a decorator route above its method, a
+// registration whose handler sits on the next line) may instead match a neighbouring line of a tier that allows it,
+// but only a line no location matched exactly, and each such line once, so an import next to a listed
 // call is not mistaken for that call. Only tiers of graph call lines allow it: a claimed line may hold no call at all.
 // Tiers are tried in order, exactly first and then by neighbour.
 interface Tier { readonly lines: ReadonlySet<string>; readonly nearby: boolean }
@@ -131,7 +132,8 @@ function sites(index: OsnovaIndex, target: OsnovaSymbol, answer: Answered): { de
 /**
  * The server's references to the target, sorted against the graph answer above it: the declaration, callers the graph
  * already resolved, unresolved leads the server confirms, and locations the graph does not hold. Server locations stay
- * in this section and never become graph edges. A call line may sit one line from the identifier the server reports.
+ * in this section and never become graph edges. A call edge sits on the callee name's line, where the server reports it;
+ * an edge anchored elsewhere, such as a decorator route above its method, may sit one line from the reported name.
  */
 export function formatLspReferences(index: OsnovaIndex, result: Found, answer: LspReferencesAnswer, budget = maximumLspSectionCodeUnits): string {
   if (answer.status === "unavailable") return unavailable(answer.code);
