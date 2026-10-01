@@ -83,6 +83,7 @@
     "perf": "pnpm build && node scripts/perf.mjs",
     "benchmark": "tsx scripts/bench/cli.ts",
     "check:package": "node scripts/check-package.mjs",
+    "site:pages": "tsx scripts/site-pages.ts",
     "test:package": "pnpm build && node scripts/package-smoke.mjs",
     "test:install": "pnpm build && node scripts/clean-install-smoke.mjs",
     "prepublishOnly": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
