@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="OracleWriteCscArgs" AfterTargets="CoreCompile" Condition="'@(CscCommandLineArgs)' != ''">
+    <WriteLinesToFile File="$([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(IntermediateOutputPath), 'oracle-csc.txt'))" Lines="$(MSBuildProjectDirectory);$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(CompilerGeneratedFilesOutputPath)))));@(CscCommandLineArgs)" Overwrite="true" />
+  </Target>
+</Project>
