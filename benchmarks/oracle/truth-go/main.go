@@ -101,7 +101,7 @@ func main() {
 			Mode:  packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 			Dir:   root,
 			Tests: true,
-			Env:   append(os.Environ(), "GOOS="+target, "CGO_ENABLED=0"),
+			Env:   append(os.Environ(), "GOOS="+target, "CGO_ENABLED=0", "GOFLAGS=-mod=readonly"),
 		}
 		pkgs, err := packages.Load(cfg, "./...")
 		check(err)

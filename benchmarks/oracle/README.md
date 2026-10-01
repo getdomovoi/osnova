@@ -62,7 +62,7 @@ node benchmarks/oracle/osnova-sites.mjs --workspace <checkout> --output <corpus>
 node benchmarks/oracle/score.mjs --oracle <corpus>-truth.json --sites <corpus>-osnova.json
 ```
 
-The truth files come from the steps below. None of them writes into the checkout; the steps that need a build run it in a copy.
+The truth files come from the steps below. The steps that need a build run it in a copy, and the Go oracle loads packages with `-mod=readonly`. One step runs project code against the checkout itself: rust-analyzer runs the crate's build scripts and procedural macros, which send their build output to `--target-dir` but can write anywhere they choose. ripgrep's build script only runs `git rev-parse` and prints cargo directives, and its checkout was unchanged after the recorded run; on another crate, run the Rust step in a copy.
 
 ```sh
 # Python (click): pyright 1.1.414 from npm
