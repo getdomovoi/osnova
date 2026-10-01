@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyChanges, buildIndex, loadIndex } from "../src/index.js";
+import { applyChanges, buildIndex, callersDetailed, loadIndex } from "../src/index.js";
+import { formatCallersDetailed } from "../src/query/format.js";
 import { deserializeEdges, serializeEdges } from "../src/index/edgeStore.js";
 
 let temporary: string;
@@ -197,3 +198,29 @@ describe("stored overload metadata", () => {
   });
 });
 
+
+describe("warp answers name the overload a call binds", () => {
+  it("adds the chosen, undetermined or impossible overload under each caller", async () => {
+    await write({ "src/Gson.java": gson, "src/Use.java": use });
+    const index = await buildIndex(workspace, { cacheDir });
+    const toJson = formatCallersDetailed(callersDetailed(index, "src/Gson.java#Gson.toJson"));
+    expect(toJson).toContain("4,12: overload: line 3, chosen by argument count 1");
+    expect(toJson).toContain("12: overload: line 5, chosen by argument count 3");
+    expect(toJson).toContain("5: overload: line 4, chosen by argument count 2");
+    expect(toJson).toContain("7: overload: no declaration takes argument count 0");
+    const fromJson = formatCallersDetailed(callersDetailed(index, "src/Gson.java#Gson.fromJson"));
+    expect(fromJson).toContain("overload: not determined; argument count 2 fits lines 6, 7");
+    const one = formatCallersDetailed(callersDetailed(index, "src/Gson.java#Gson.one"));
+    expect(one).toContain("10: overload: no declaration takes argument count 2");
+    expect(one).not.toMatch(/11: overload/);
+  });
+
+  it("gives a callee the chosen overload's line", async () => {
+    await write({ "src/Gson.java": gson, "src/Use.java": use });
+    const index = await buildIndex(workspace, { cacheDir });
+    const result = callersDetailed(index, "src/Use.java#Use.run", { direction: "out" });
+    expect(result.status).toBe("found");
+    const toJson = result.status === "found" ? result.hits.filter((hit) => hit.qualifiedName === "src/Gson.java#Gson.toJson").map((hit) => [hit.edge.line, hit.line]) : [];
+    expect(toJson).toEqual([[4, 3], [5, 4], [7, 5], [12, 3], [12, 5]]);
+  });
+});
