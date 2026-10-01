@@ -33,7 +33,7 @@
     "kilo",
     "pi"
   ],
-  "homepage": "https://github.com/getdomovoi/osnova#readme",
+  "homepage": "https://getosnova.dev",
   "engines": {
     "node": ">=22.13.0"
   },
