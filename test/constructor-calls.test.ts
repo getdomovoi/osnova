@@ -210,6 +210,26 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creations).toContainEqual(["q/Near.java", 3, "V", "q/Base.java#Base.V.V"]);
   });
 
+  it("reads member-type access from modifier tokens, not annotation or comment text", async () => {
+    await write({
+      "Types.java": "@interface Note { String value(); }\nclass Root {\n  @Note(\"private\") public static class T { public T() {} }\n  public /* private */ static class U { public U() {} }\n}\nclass C extends Root { void use() { new T(); new U(); } }\nclass T { T() {} }\nclass U { U() {} }\n",
+      "q/Root.java": "package q;\npublic class Root {\n  @Note(\"public\") static class V { V() {} }\n}\n",
+      "p/C.java": "package p;\nimport q.Root;\nclass C extends Root { void use() { new V(); } }\nclass V { V() {} }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.constructs !== undefined).map((edge) => [edge.fromFile, edge.line, edge.toName, edge.toSymbol]);
+    expect(creations).toContainEqual(["Types.java", 6, "T", "Types.java#Root.T.T"]);
+    expect(creations).toContainEqual(["Types.java", 6, "U", "Types.java#Root.U.U"]);
+    expect(creations).toContainEqual(["p/C.java", 3, "V", "p/C.java#V.V"]);
+  });
+
+  it("resolves a base through an annotated public member type", async () => {
+    await write({ "Types.java": "@interface Note { String value(); }\nclass Root {\n  @Note(\"private\") public static class Base { public void ping(int x) {} }\n}\nclass Outer extends Root {\n  static class Child extends Base { void use() { this.ping(1); } }\n}\nclass Base { public void ping(int x) {} }\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    const ping = index.edges.filter((edge) => edge.kind === "calls" && edge.toName === "ping" && edge.line === 6);
+    expect(ping.map((edge) => edge.toSymbol)).toEqual(["Types.java#Root.Base.ping"]);
+  });
+
   it("reads Java imports as declarations, not lines", async () => {
     await write({
       "q/T.java": "package q; public class T { public T() {} }\n",

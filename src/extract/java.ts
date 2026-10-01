@@ -9,8 +9,14 @@ const annotatedOverride = (method: Node): boolean => childrenOf(childOfType(meth
   child.type === "marker_annotation" && /^(?:java\.lang\.)?Override$/.test(child.childForFieldName("name")?.text ?? ""));
 
 // A method a derived type cannot call (`private`), or only from the same package (no access modifier, outside an interface).
+// The modifiers are read as keyword tokens, so an annotation argument or a comment that spells one does not count.
 function accessOf(method: Node): ParameterRange["access"] {
-  const words = new Set((childOfType(method, "modifiers")?.text ?? "").split(/\W+/));
+  const modifiers = childOfType(method, "modifiers");
+  const words = new Set<string>();
+  for (let index = 0; index < (modifiers?.childCount ?? 0); index += 1) {
+    const token = modifiers!.child(index);
+    if (token !== null && !token.isNamed) words.add(token.type);
+  }
   if (words.has("private")) return "private";
   if (words.has("public") || words.has("protected")) return undefined;
   return method.parent?.type === "interface_body" || method.parent?.type === "annotation_type_body" ? undefined : "package";
