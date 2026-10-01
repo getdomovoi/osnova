@@ -149,8 +149,17 @@ describe("marketing site install commands", () => {
 describe("marketing site document pages", () => {
   const pages = renderSitePages(root);
 
-  it("renders the changelog, privacy and security pages", () => {
-    expect(Object.keys(pages).sort()).toEqual(["changelog/index.html", "privacy/index.html", "security/index.html"]);
+  it("renders the changelog, privacy and security pages, and the not-found page", () => {
+    expect(Object.keys(pages).sort()).toEqual(["404.html", "changelog/index.html", "privacy/index.html", "security/index.html"]);
+  });
+
+  it("serves a not-found page that search engines skip and that leads back to every page", () => {
+    const notFound = pages["404.html"] ?? "";
+    expect(notFound).toContain('<meta name="robots" content="noindex">');
+    expect(notFound).not.toContain('rel="canonical"');
+    expect(notFound).toContain('<header class="bar">');
+    expect(notFound).toContain('<footer class="foot"');
+    for (const href of ["/", "/changelog/", "/privacy/", "/security/"]) expect(notFound).toContain(`<a href="${href}">`);
   });
 
   it("matches the committed pages, so a changed source document fails until the pages are rebuilt", () => {

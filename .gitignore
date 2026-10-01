@@ -7,3 +7,4 @@ coverage/
 .tmp-coverage-cache/
 /docs/superpowers/
 /.superpowers/
+.wrangler/
