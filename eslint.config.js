@@ -28,6 +28,13 @@ export default tseslint.config(
     languageOptions: { globals: { process: "readonly", setTimeout: "readonly", clearTimeout: "readonly", Buffer: "readonly" } },
   },
   {
+    files: ["site/**/*.js"],
+    languageOptions: {
+      sourceType: "script",
+      globals: { window: "readonly", document: "readonly", navigator: "readonly", fetch: "readonly", Element: "readonly", Node: "readonly", IntersectionObserver: "readonly" },
+    },
+  },
+  {
     files: ["scripts/**/*.mjs", "benchmarks/oracle/*.mjs"],
     languageOptions: {
       globals: {
