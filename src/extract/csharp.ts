@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, argumentCount, childOfType, childrenOf } from "./util.js";
+import { Extractor, argumentCount, childOfType, childrenOf, withoutTypeArguments } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
@@ -122,8 +122,9 @@ export const csharpAdapter: LanguageAdapter = {
           return;
         }
         case "object_creation_expression": {
+          // `new Box<string>(1)` names Box.
           const typeNode = node.childForFieldName("type");
-          if (typeNode !== null) out.addEdge("calls", typeNode.text, typeNode);
+          if (typeNode !== null) out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, argumentCount(node.childForFieldName("arguments")), "instance");
           for (const child of childrenOf(node)) visit(child);
           return;
         }

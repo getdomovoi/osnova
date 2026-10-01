@@ -183,8 +183,13 @@ export interface OsnovaEdge {
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
   readonly arguments?: number | undefined;
+  // A Java or C# object creation: `instance` for `new T(...)`, which runs a constructor of T, and `anonymous`
+  // for `new T(...) { ... }`, which creates an anonymous subclass of T.
+  readonly constructs?: Construction | undefined;
   readonly overload?: OverloadChoice | undefined;
 }
+
+export type Construction = "instance" | "anonymous";
 
 export interface FileCard {
   readonly path: string;

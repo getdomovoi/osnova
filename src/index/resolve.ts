@@ -714,7 +714,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // declarations of that range than overrides above it, which ones stay is unknown, so all are listed.
   const chooseOverload = (edge: OsnovaEdge): OsnovaEdge => {
     const local = withOverload(edge, declaredAs);
-    if (edge.kind !== "calls" || edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined) return local;
+    // Constructors are not inherited, so a creation chooses among the type's own constructors only.
+    if (edge.kind !== "calls" || edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined || edge.constructs !== undefined) return local;
     const language = files.get(edge.toFile)?.language;
     const own = declaredAs(edge.toFile, edge.toSymbol);
     if ((language !== "java" && language !== "c_sharp") || own.length === 0) return local;
@@ -831,6 +832,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               evidence: { source: "syntax", resolution: { status: "unresolved", reason: "shadowed-declaration" } },
               ...(raw.route === undefined ? {} : { route: raw.route }),
               ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
+              ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }),
             });
             continue;
           }
@@ -1144,6 +1146,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           ...(resolved === undefined ? {} : { toSymbol: resolved.qualifiedName, toFile: resolved.file }),
           ...(raw.route === undefined ? {} : { route: raw.route }),
           ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
+          ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }),
         });
         continue;
       }
@@ -1160,21 +1163,28 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         return false;
       };
+      // An object creation names a type, never the constructor that shares its name, so only types are candidates.
+      const creation = raw.constructs !== undefined && (card.language === "java" || card.language === "c_sharp");
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
         languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)));
+        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)) &&
+        (!creation || isHolder(symbol)));
       const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
       const preferred = sameFile.length > 0 ? sameFile : imported.length > 0 ? imported : candidates;
       const names = [...new Set(preferred.map((symbol) => symbol.qualifiedName))].sort();
-      const resolved = names.length === 1 ? preferred[0] : undefined;
+      const type = names.length === 1 ? preferred[0] : undefined;
+      // `new T(...)` runs one of T's own constructors when T declares any; an anonymous subclass, or a type
+      // without a written constructor, is named by the type itself.
+      const constructors = type === undefined || raw.constructs !== "instance" ? [] : declaredAs(type.file, `${type.qualifiedName}.${type.name}`).filter((symbol) => symbol.kind === "method");
+      const resolved = creation && constructors.length > 0 ? constructors[0] : type;
       const resolution: EdgeResolution = names.length > 1
         ? { status: "ambiguous", candidates: names }
         // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of
         // the family defines is a builtin or a standard-library name: external, like an unbound global.
         : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
           : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : imported.length > 0 ? "imported-file-name" : "unique-name" };
-      const args = raw.arguments === undefined ? {} : { arguments: raw.arguments };
+      const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }) };
       edges.push(
         resolved === undefined
           ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution }, ...args }

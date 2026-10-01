@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, argumentCount, childOfType, childrenOf } from "./util.js";
+import { Extractor, argumentCount, childOfType, childrenOf, withoutTypeArguments } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, javaSpec } from "./typed-bindings.js";
@@ -188,9 +188,11 @@ export const javaAdapter: LanguageAdapter = {
           return;
         }
         case "object_creation_expression": {
+          // `new Box<>(1)` names Box; a class body after the arguments makes an anonymous subclass.
           const typeNode = node.childForFieldName("type");
           if (typeNode !== null) {
-            out.addEdge("calls", typeNode.text, typeNode);
+            const anonymous = childOfType(node, "class_body") !== null;
+            out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, argumentCount(node.childForFieldName("arguments")), anonymous ? "anonymous" : "instance");
           }
           for (const child of childrenOf(node)) visit(child);
           return;

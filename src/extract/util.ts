@@ -1,7 +1,7 @@
 import type { Node, Tree } from "web-tree-sitter";
 import { makeSpan, makeSignature } from "./adapter.js";
 import type { RawDefinition, RawEdge } from "./adapter.js";
-import type { Callee, EdgeBinding, EdgeKind, MemberKind, ParameterRange, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
+import type { Callee, Construction, EdgeBinding, EdgeKind, MemberKind, ParameterRange, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
 
 export type VisitResult = boolean | void;
 
@@ -115,7 +115,7 @@ export class Extractor {
 
   // The edge sits at the line `node` starts on. A call passes its callee name token, so a call written on its own
   // line of a multi-line chain is not reported at the line where the chain's receiver starts.
-  addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number): void {
+  addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number, constructs?: Construction): void {
     const name = toName.trim();
     if (name.length === 0 || name.length > 300) return;
     const edge: RawEdge = {
@@ -126,12 +126,25 @@ export class Extractor {
       ...(binding === undefined ? {} : { binding }),
       ...(route === undefined ? {} : { route }),
       ...(args === undefined ? {} : { arguments: args }),
+      ...(constructs === undefined ? {} : { constructs }),
     };
     this.edges.push(edge);
   }
 }
 
 const COMMENT_TYPES = new Set(["comment", "line_comment", "block_comment"]);
+
+// A written type name without its type arguments and whitespace: `Map.Entry<K, V>` is `Map.Entry`.
+export function withoutTypeArguments(written: string): string {
+  let out = "";
+  let depth = 0;
+  for (const c of written) {
+    if (c === "<") depth += 1;
+    else if (c === ">") depth -= 1;
+    else if (depth === 0 && !/\s/.test(c)) out += c;
+  }
+  return out;
+}
 
 // The number of arguments written in a call's argument list, comments aside.
 export function argumentCount(list: Node | null): number | undefined {

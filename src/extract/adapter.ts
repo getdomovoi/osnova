@@ -1,5 +1,5 @@
 import type { Tree } from "web-tree-sitter";
-import type { Callee, EdgeBinding, EdgeKind, MemberKind, ParameterRange, ReExport, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
+import type { Callee, Construction, EdgeBinding, EdgeKind, MemberKind, ParameterRange, ReExport, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
 
 export interface RawDefinition {
   readonly name: string;
@@ -35,6 +35,7 @@ export interface RawEdge {
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
   readonly arguments?: number | undefined;
+  readonly constructs?: Construction | undefined;
 }
 
 export interface AdapterOutput {
