@@ -74,19 +74,19 @@ export const javaAdapter: LanguageAdapter = {
         }
         case "method_invocation": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(node, node), undefined, argumentCount(node.childForFieldName("arguments")));
+          if (nameNode !== null) out.addEdge("calls", nameNode.text, nameNode, bindings.at(node, node), undefined, argumentCount(node.childForFieldName("arguments")));
           for (const child of childrenOf(node)) visit(child);
           return;
         }
         case "explicit_constructor_invocation": {
-          out.addEdge("calls", node.text.trimStart().startsWith("super") ? "super" : "this", node);
+          out.addEdge("calls", node.text.trimStart().startsWith("super") ? "super" : "this", node.childForFieldName("constructor") ?? node);
           for (const child of childrenOf(node)) visit(child);
           return;
         }
         case "object_creation_expression": {
           const typeNode = node.childForFieldName("type");
           if (typeNode !== null) {
-            out.addEdge("calls", typeNode.text, node);
+            out.addEdge("calls", typeNode.text, typeNode);
           }
           for (const child of childrenOf(node)) visit(child);
           return;

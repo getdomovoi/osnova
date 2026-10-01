@@ -13,6 +13,7 @@ The extraction version moves to `structural-9.31` and the edge section format to
 ### Fixed
 
 - Two calls to one method on one line with different argument counts are two edges; they were merged into one.
+- A call edge sits at the line of the callee name in every language: the called identifier, member, attribute, field or selector name, or the type named by `new`. It sat at the first line of the call expression, so in a chain written one call per line every call reported the line where the receiver starts, and every `file:line` printed for such a call (warp, plumb, tests) pointed at that line. Two chained calls of one name, target and binding on different lines are now two edges; two whose names now share a line are one, as on any single line (2 of 21,630 zod edges). Rescored against the type checkers, ripgrep false call edges fell from 112 to 29 and in-repo sites covered rose from 75.6% to 85.8%; covered sites rose on zod (76.9% to 78.2%), gson (54.3% to 56.4%) and humanizer (58.5% to 58.6%), click and cobra score the same, and no corpus gained a false edge.
 
 ## 0.11.0 (2026-09-30)
 

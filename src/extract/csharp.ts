@@ -86,10 +86,10 @@ export const csharpAdapter: LanguageAdapter = {
           const args = argumentCount(node.childForFieldName("arguments"));
           if (fn !== null) {
             if (fn.type === "identifier") {
-              out.addEdge("calls", fn.text, node, undefined, undefined, args);
+              out.addEdge("calls", fn.text, fn, undefined, undefined, args);
             } else if (fn.type === "member_access_expression") {
               const nameNode = fn.childForFieldName("name");
-              if (nameNode !== null) out.addEdge("calls", nameNode.text, node, bindings.at(fn, node), undefined, args);
+              if (nameNode !== null) out.addEdge("calls", nameNode.text, nameNode, bindings.at(fn, node), undefined, args);
             }
           }
           for (const child of childrenOf(node)) visit(child);
@@ -97,7 +97,7 @@ export const csharpAdapter: LanguageAdapter = {
         }
         case "object_creation_expression": {
           const typeNode = node.childForFieldName("type");
-          if (typeNode !== null) out.addEdge("calls", typeNode.text, node);
+          if (typeNode !== null) out.addEdge("calls", typeNode.text, typeNode);
           for (const child of childrenOf(node)) visit(child);
           return;
         }
