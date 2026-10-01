@@ -1,0 +1,94 @@
+name: site
+# getosnova.dev: check every change that can alter the site, deploy from main only.
+# The site's install prompts are tested against the CLI source and its document pages are built
+# from CHANGELOG.md, PRIVACY.md and SECURITY.md, so those paths trigger it too.
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "scripts/site-pages.ts"
+      - "test/site.test.ts"
+      - "CHANGELOG.md"
+      - "PRIVACY.md"
+      - "SECURITY.md"
+      - "src/cli/**"
+      - ".claude-plugin/marketplace.json"
+      - "package.json"
+      - ".github/workflows/site.yml"
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "scripts/site-pages.ts"
+      - "test/site.test.ts"
+      - "CHANGELOG.md"
+      - "PRIVACY.md"
+      - "SECURITY.md"
+      - "src/cli/**"
+      - ".claude-plugin/marketplace.json"
+      - "package.json"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  WRANGLER_VERSION: 4.145.0
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  check:
+    name: site check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec eslint site scripts/site-pages.ts test/site.test.ts
+      # Fails when an install prompt names a command the CLI rejects or a document page is stale.
+      - run: pnpm exec vitest run test/site.test.ts
+      - name: wrangler dry run
+        working-directory: site
+        run: npx --yes "wrangler@${WRANGLER_VERSION}" deploy --dry-run
+
+  deploy:
+    name: site deploy
+    needs: check
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://getosnova.dev
+    concurrency:
+      group: site-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: wrangler deploy
+        working-directory: site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes "wrangler@${WRANGLER_VERSION}" deploy
+      - name: smoke test
+        run: |
+          for path in / /changelog/ /privacy/ /security/; do
+            for _ in 1 2 3 4 5; do
+              if curl -fsS --max-time 20 -o /dev/null "https://getosnova.dev${path}"; then
+                echo "ok ${path}"
+                continue 2
+              fi
+              sleep 6
+            done
+            echo "::error::https://getosnova.dev${path} did not answer 200 after deploy"
+            exit 1
+          done
