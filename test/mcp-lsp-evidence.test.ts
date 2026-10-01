@@ -6,6 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { createOsnovaMcpServer, type OsnovaMcpOptions } from "../src/mcp/server.js";
+import { LspReferenceSession } from "../src/enrichment/session.js";
+import { buildIndex, indexGeneration } from "../src/index.js";
 
 const serverScript = path.join(import.meta.dirname, "fixtures/lsp/references-server.mjs");
 const temporaries: string[] = [];
@@ -188,6 +190,28 @@ it("settle: stops asking at one deadline for the whole call", async () => {
   const { section } = split(await call(client, "osnova_settle", { diff: await rewrite(f, "lib.ts", [1, 2]) + await rewrite(f, "use.ts", [2]) }));
   expect(Date.now() - started).toBeLessThan(2_500);
   expect(section).toContain("asked about 1 of 3 changed symbols in its languages (not asked: 0 over the cap of 8, 2 past the deadline, 0 after a failure)");
+});
+
+it("settle and tests: one deadline bounds the wait behind earlier requests, and a symbol never sent counts as not asked", async () => {
+  const f = await fixture();
+  const index = await buildIndex(f.workspace, { cacheDir: f.cacheDir });
+  const generation = indexGeneration(index);
+  const helper = index.symbols.get("lib.ts#helper")!;
+  const direct = index.symbols.get("use.ts#direct")!;
+  const session = new LspReferenceSession(f.workspace, { executable: process.execPath, args: [serverScript, f.responses, f.launches], languages: ["typescript"], requestTimeoutMs: 500 }, f.cacheDir);
+  closers.push(() => session.close());
+  expect((await session.references(index, generation, helper)).status).toBe("complete");
+  await respond(f, [{ file: "use.ts", line: 1, character: 42 }], { delayMs: 400 });
+  const earlier = [session.references(index, generation, helper), session.references(index, generation, helper), session.references(index, generation, helper)];
+  const started = Date.now();
+  const asked = await session.referencesEach(index, generation, [direct]);
+  expect(Date.now() - started).toBeLessThan(1_000);
+  expect(asked).toEqual({ answers: [], overCap: 0, pastDeadline: 1, afterFailure: 0 });
+  // The requests ahead of it, and the one after it, are answered by the same server; the skipped one was never sent.
+  expect((await Promise.all(earlier)).map((answer) => answer.status)).toEqual(["complete", "complete", "complete"]);
+  expect((await session.references(index, generation, helper)).status).toBe("complete");
+  expect(await logged(f, "launch ")).toHaveLength(1);
+  expect(await logged(f, "references ")).not.toContain("use.ts:1");
 });
 
 it("settle: stops asking after a server failure and keeps the impact answer", async () => {
