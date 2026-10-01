@@ -211,3 +211,23 @@ describe("marketing site theme", () => {
     }
   });
 });
+
+describe("marketing site analytics", () => {
+  const publicDir = path.join(root, "site", "public");
+  const pages = fs.readdirSync(publicDir, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".html"));
+  const policy = fs.readFileSync(path.join(publicDir, "_headers"), "utf8").match(/Content-Security-Policy: (.+)/)?.[1] ?? "";
+  const directive = (name: string) => policy.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name} `)) ?? "";
+
+  it("tells every visitor that Cloudflare Web Analytics counts visits", () => {
+    for (const file of pages) {
+      const html = fs.readFileSync(path.join(publicDir, file), "utf8");
+      expect(html, file).not.toMatch(/runs no analytics/);
+      expect(html, file).toContain("Cloudflare Web Analytics");
+    }
+  });
+
+  it("lets the Cloudflare beacon load and report to this site", () => {
+    expect(directive("script-src")).toContain("https://static.cloudflareinsights.com");
+    expect(directive("connect-src")).toContain("'self'");
+  });
+});
