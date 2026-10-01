@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { applyChanges, buildIndex, loadIndex, serializeArtifact } from "../src/index.js";
 import { deserializeEdges, edgeKinds, serializeEdges } from "../src/index/edgeStore.js";
+import { deserializeArtifact } from "../src/index/serialize.js";
 
 let temporary: string;
 let workspace: string;
@@ -138,8 +139,95 @@ describe("C# object creation", () => {
     await write({ "P/Box.cs": csharpBox, "Q/Use.cs": csharpUse });
     const index = await buildIndex(workspace, { cacheDir });
     expect(creationAt(index, "Q/Use.cs", 5)).toEqual({ toName: "Box", toSymbol: "P/Box.cs#Box.Box", constructs: "instance", arguments: 1, overload: { line: 3 }, status: "resolved" });
-    expect(creationAt(index, "Q/Use.cs", 6)).toMatchObject({ toName: "P.Box", toSymbol: "P/Box.cs#Box.Box", constructs: "instance", arguments: 2, overload: { line: 4 } });
+    // A namespace-qualified name could name a type the index cannot place by namespace, so it stays unresolved.
+    expect(creationAt(index, "Q/Use.cs", 6)).toMatchObject({ toName: "P.Box", toSymbol: undefined, constructs: "instance", arguments: 2 });
     expect(creationAt(index, "Q/Use.cs", 7)).toMatchObject({ toName: "Plain", toSymbol: "P/Box.cs#Plain", constructs: "instance", arguments: 0, overload: undefined });
+  });
+});
+
+describe("a creation names only an instance constructor of the type it names", () => {
+  it("does not take a Java method named like its class for a constructor", async () => {
+    await write({ "T.java": "class T {\n  void T() {}\n  static void use() {\n    new T();\n  }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "T.java", 4)).toMatchObject({ toSymbol: "T.java#T", overload: undefined });
+  });
+
+  it("does not take a C# static constructor for an instance constructor", async () => {
+    await write({
+      "T.cs": "class T {\n  static T() {}\n  static void Use() {\n    new T();\n  }\n}\n",
+      "U.cs": "class U {\n  static U() {}\n  public U(int x = 0) {}\n  static void Use() {\n    new U();\n  }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "T.cs", 4)).toMatchObject({ toSymbol: "T.cs#T", overload: undefined });
+    expect(creationAt(index, "U.cs", 5)).toMatchObject({ toSymbol: "U.cs#U.U", overload: undefined });
+  });
+
+  it("follows a Java package-qualified name instead of a same-named type in the file", async () => {
+    await write({
+      "a/b/T.java": "package a.b;\npublic class T {\n  public T(int x) {}\n}\n",
+      "Use.java": "class T {\n  T(int x) {}\n}\nclass Use {\n  void use() {\n    new a.b.T(1);\n  }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.java", 6)).toMatchObject({ toName: "a.b.T", toSymbol: "a/b/T.java#T.T" });
+  });
+
+  it("resolves a Java simple name as javac scopes it: import, then package, then a wildcard import", async () => {
+    await write({
+      "p2/URL.java": "package p2;\npublic class URL {\n  public URL(String s) {}\n}\n",
+      "p3/Item.java": "package p3;\npublic class Item {\n  public Item(int x) {}\n}\n",
+      "p/Local.java": "package p;\nclass Local {\n  Local(int x) {}\n}\n",
+      "p/Use.java": "package p;\nimport java.net.URL;\nimport p3.*;\nclass Use {\n  void use() throws Exception {\n    new URL(\"x\");\n    new Local(1);\n    new Item(2);\n  }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "p/Use.java", 6)).toMatchObject({ toName: "URL", toSymbol: undefined });
+    expect(creationAt(index, "p/Use.java", 7)).toMatchObject({ toSymbol: "p/Local.java#Local.Local" });
+    expect(creationAt(index, "p/Use.java", 8)).toMatchObject({ toSymbol: "p3/Item.java#Item.Item" });
+  });
+
+  it("leaves a creation through a C# using alias unresolved", async () => {
+    await write({
+      "Box.cs": "namespace P { public class T { public T(int x) {} } }\n",
+      "Other.cs": "namespace Q { public class X { public X(int x) {} } }\n",
+      "Use.cs": "using X = P.T;\nclass Use { void Run() {\n  new X(1);\n} }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toName: "X", toSymbol: undefined });
+  });
+
+  it("names the type when it declares a primary or canonical constructor", async () => {
+    await write({
+      "Types.cs": "record R(int X) {\n  public R(string text) : this(0) {}\n}\nclass C(int x) {\n  public C(string s) : this(0) {}\n}\nclass Test {\n  void Run() {\n    new R(1);\n    new C(1);\n  }\n}\n",
+      "R.java": "record R(int x) {\n  R(String text) { this(0); }\n  static void use() {\n    new R(1);\n  }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 9)).toMatchObject({ toSymbol: "Types.cs#R", overload: undefined });
+    expect(creationAt(index, "Types.cs", 10)).toMatchObject({ toSymbol: "Types.cs#C", overload: undefined });
+    expect(creationAt(index, "R.java", 4)).toMatchObject({ toSymbol: "R.java#R", overload: undefined });
+  });
+
+  it("counts the constructors of every part of a C# partial type", async () => {
+    await write({
+      "A.cs": "namespace P {\n  public partial class T {\n    public T(string s) {}\n    public static void Run() {\n      new T(1);\n    }\n  }\n}\n",
+      "B.cs": "namespace P { public partial class T { public T(int x) {} } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    // Both parts' constructors take one argument, so the creation names neither.
+    expect(creationAt(index, "A.cs", 5)).toMatchObject({ toSymbol: "A.cs#T.T", overload: { candidates: [3], elsewhere: [{ file: "B.cs", line: 1 }] } });
+  });
+
+  it("moves a creation to the one constructor that takes the count when it lies in another part", async () => {
+    await write({
+      "A.cs": "namespace P {\n  public partial class T {\n    public T(string s) {}\n    public static void Run() {\n      new T(1, 2);\n    }\n  }\n}\n",
+      "B.cs": "namespace P { public partial class T { public T(int x, int y) {} } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "A.cs", 5)).toMatchObject({ toSymbol: "B.cs#T.T", overload: { line: 1, from: "A.cs#T.T" } });
+  });
+
+  it("counts no arguments for a C# object initializer without parentheses", async () => {
+    await write({ "T.cs": "class T {\n  public T() {}\n  public T(int x) {}\n  public int Init { get; set; }\n  static void Use() {\n    new T { Init = 1 };\n  }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "T.cs", 6)).toMatchObject({ toSymbol: "T.cs#T.T", arguments: 0, overload: { line: 2 } });
   });
 });
 
@@ -162,6 +250,34 @@ describe("object creation across the cache and incremental updates", () => {
     expect(updated.edges).toEqual(fresh.edges);
     // The one constructor takes the count, so the edge carries no line, as for any single declaration.
     expect(creationAt(updated, "q/Use.java", 10)).toMatchObject({ toSymbol: "p/Plain.java#Plain.Plain", constructs: "instance", overload: undefined });
+  });
+
+  it("re-resolves a creation when a type is added to the package, equal to a full rebuild", async () => {
+    await write({ "p/Use.java": "package p;\nclass Use {\n  void use() {\n    new Later(1);\n  }\n}\n" });
+    const before = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(before, "p/Use.java", 4)).toMatchObject({ toSymbol: undefined });
+    await write({ "p/Later.java": "package p;\nclass Later {\n  Later(int x) {}\n}\n" });
+    const updated = await applyChanges(before, workspace, ["p/Later.java"]);
+    const fresh = await buildIndex(workspace, { cacheDir: path.join(temporary, "fresh-cache") });
+    expect(serializeArtifact(updated).equals(serializeArtifact(fresh))).toBe(true);
+    expect(creationAt(updated, "p/Use.java", 4)).toMatchObject({ toSymbol: "p/Later.java#Later.Later" });
+  });
+
+  it("refuses corrupted constructor and primary constructor metadata on load", async () => {
+    await write({ "R.java": "record R(int x) {\n  R(String s) { this(0); }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    type Stored = { files: { symbols: { kind: string; primary?: unknown; parameters?: { constructs?: unknown } }[] }[] };
+    const corrupt = (change: (symbols: Stored["files"][number]["symbols"]) => void): string => {
+      const data = JSON.parse(serializeArtifact(index).toString()) as Stored;
+      change(data.files[0]!.symbols);
+      return JSON.stringify(data);
+    };
+    expect(() => deserializeArtifact(corrupt((symbols) => { expect(symbols[0]!.primary).toBe(true); expect(symbols[1]!.parameters!.constructs).toBe(true); }), undefined)).not.toThrow(/corrupt/);
+    for (const change of [
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[0]!.primary = false; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[1]!.primary = true; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols[1]!.parameters!.constructs = 1; },
+    ]) expect(() => deserializeArtifact(corrupt(change), undefined)).toThrow(/corrupt/);
   });
 
   it("refuses a stored construction marker on a non-call edge or with another value", async () => {

@@ -8,6 +8,7 @@ export interface RawDefinition {
   readonly signature: string;
   readonly parent: string;
   readonly shadowed?: true | undefined;
+  readonly primary?: true | undefined;
   readonly partial?: string | undefined;
   readonly supertypes?: number | undefined;
   readonly interfaces?: readonly SymbolBinding[] | undefined;

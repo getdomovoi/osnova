@@ -53,6 +53,8 @@ export interface OsnovaSymbol {
   readonly signature: string;
   readonly lineCount: number;
   readonly shadowed?: true | undefined;
+  // A Java record or a C# type with a primary constructor: a constructor is written on the type's declaration.
+  readonly primary?: true | undefined;
   // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
   // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.
@@ -91,6 +93,8 @@ export interface ParameterRange {
   readonly extension?: true | undefined;
   readonly overrides?: true | undefined;
   readonly access?: "private" | "package" | undefined;
+  // An instance constructor (not a C# static constructor, nor a Java method named like its class).
+  readonly constructs?: true | undefined;
   // Java: each parameter's type as written, whitespace removed (a varargs type ends in `...`).
   readonly types?: readonly string[] | undefined;
   // Java: the simple names `types` read from the file's scope, sorted; another file can shadow them.

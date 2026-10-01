@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Callee, CardLanguage, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ParameterRange, ReceiverBasis, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
+import type { Callee, CardLanguage, Construction, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OsnovaSymbol, ParameterRange, ReceiverBasis, ReceiverMode, ReceiverOwner, ReturnBinding, SymbolBinding } from "../types.js";
 import { localOfQualifiedName, qualifiedNameOf } from "./indexImpl.js";
 import type { RawEdgeItem } from "./indexImpl.js";
 import { collectLockfiles, externalLabel } from "./external.js";
@@ -584,6 +584,119 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       !localOfQualifiedName(symbol.qualifiedName).includes(".") && javaPackageOf(files.get(symbol.file)) === home);
     return new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1 ? holders[0] : undefined;
   };
+  // A type an object creation names, found the way the compiler scopes the written name, or why not.
+  type CreatedType = { readonly status: "resolved"; readonly type: OsnovaSymbol; readonly method: "same-file-name" | "imported-file-name" | "lexical-definition" }
+    | { readonly status: "ambiguous"; readonly candidates: readonly string[] }
+    | { readonly status: "unresolved"; readonly reason: "no-matching-symbol" | "unbound-global" };
+  const unknownType: CreatedType = { status: "unresolved", reason: "no-matching-symbol" };
+  const externalType: CreatedType = { status: "unresolved", reason: "unbound-global" };
+  const oneType = (types: readonly OsnovaSymbol[], method: "same-file-name" | "imported-file-name" | "lexical-definition"): CreatedType | undefined => {
+    const names = [...new Set(types.map((symbol) => symbol.qualifiedName))].sort();
+    return names.length === 0 ? undefined : names.length === 1 ? { status: "resolved", type: types[0]!, method } : { status: "ambiguous", candidates: names };
+  };
+  // The Java top-level or nested type `path` (`Outer.Inner`) declared in package `pkg`.
+  const javaTypesIn = (pkg: string, path: string): OsnovaSymbol[] =>
+    (symbolsByName.get(path.slice(path.lastIndexOf(".") + 1)) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "java" &&
+      localOfQualifiedName(symbol.qualifiedName) === path && javaPackageOf(files.get(symbol.file)) === pkg);
+  // `a.b.Outer.Inner` as its package `a.b` and type path `Outer.Inner`: the package is the lower-case prefix.
+  const javaSplit = (written: string): { pkg: string; path: string } | undefined => {
+    const parts = written.split(".");
+    const first = parts.findIndex((part) => /^[A-Z_$]/.test(part));
+    return first < 0 ? undefined : { pkg: parts.slice(0, first).join("."), path: parts.slice(first).join(".") };
+  };
+  const javaImportCache = new Map<FileCard, { single: Map<string, string>; onDemand: string[] }>();
+  const javaImportsOf = (card: FileCard): { single: Map<string, string>; onDemand: string[] } => {
+    const cached = javaImportCache.get(card);
+    if (cached !== undefined) return cached;
+    const single = new Map<string, string>();
+    const onDemand: string[] = [];
+    for (const match of card.text.matchAll(/^\s*import\s+(static\s+)?([\w$.]+?)(\s*\.\s*\*)?\s*;/gm)) {
+      if (match[1] !== undefined) continue;
+      if (match[3] !== undefined) onDemand.push(match[2]!);
+      else single.set(match[2]!.slice(match[2]!.lastIndexOf(".") + 1), match[2]!);
+    }
+    const found = { single, onDemand };
+    javaImportCache.set(card, found);
+    return found;
+  };
+  // A Java simple type name in scope at the creation: a member type of an enclosing type (declared or inherited)
+  // or a local class, a top-level type of the file, a single-type import, the package, then the on-demand
+  // imports. A name none of them supplies is a java.lang or library type.
+  const javaSimpleType = (card: FileCard, fromSymbol: string, name: string): CreatedType => {
+    const enclosing = fromSymbol.includes("#") ? localOfQualifiedName(fromSymbol).split(".") : [];
+    for (let depth = enclosing.length; depth > 0; depth -= 1) {
+      const scope = enclosing.slice(0, depth).join(".");
+      const local = declaredAs(card.path, qualifiedNameOf(card.path, `${scope}.${name}`)).find(isHolder);
+      if (local !== undefined) return { status: "resolved", type: local, method: "same-file-name" };
+      const holder = declaredAs(card.path, qualifiedNameOf(card.path, scope)).find(isHolder);
+      if (holder === undefined) continue;
+      const member = javaMemberTypeOf(holder, name, new Set());
+      if (member === null) return unknownType;
+      if (member !== undefined) return { status: "resolved", type: member, method: member.file === card.path ? "same-file-name" : "lexical-definition" };
+    }
+    const top = declaredAs(card.path, qualifiedNameOf(card.path, name)).find(isHolder);
+    if (top !== undefined) return { status: "resolved", type: top, method: "same-file-name" };
+    const imports = javaImportsOf(card);
+    const imported = imports.single.get(name);
+    if (imported !== undefined) {
+      const split = javaSplit(imported);
+      return (split === undefined ? undefined : oneType(javaTypesIn(split.pkg, split.path), "imported-file-name")) ?? externalType;
+    }
+    const inPackage = oneType(javaTypesIn(javaPackageOf(card), name), "lexical-definition");
+    if (inPackage !== undefined) return inPackage;
+    const onDemand = imports.onDemand.flatMap((path) => {
+      const split = javaSplit(`${path}.${name}`);
+      return split === undefined ? [] : javaTypesIn(split.pkg, split.path);
+    });
+    return oneType(onDemand, "imported-file-name") ?? externalType;
+  };
+  const javaCreatedType = (card: FileCard, fromSymbol: string, written: string): CreatedType => {
+    if (!written.includes(".")) return javaSimpleType(card, fromSymbol, written);
+    const split = javaSplit(written);
+    if (split === undefined) return unknownType;
+    if (split.pkg.length > 0) return oneType(javaTypesIn(split.pkg, split.path), "imported-file-name") ?? externalType;
+    // `Outer.Inner`: the outer type as a simple name, then a member type it declares.
+    const [outerName, ...rest] = split.path.split(".");
+    const outer = javaSimpleType(card, fromSymbol, outerName!);
+    if (outer.status !== "resolved") return outer;
+    const inner = declaredAs(outer.type.file, `${outer.type.qualifiedName}.${rest.join(".")}`).find(isHolder);
+    return inner === undefined ? unknownType : { ...outer, type: inner };
+  };
+  // C# binds a type name through its using directives and namespaces, which the index does not follow: a
+  // simple name takes the type tiers a call takes, a `using` alias of the name stays unresolved, and a dotted
+  // name must name a nested type (`Outer.Inner`), since a namespace prefix cannot be checked.
+  const csharpAliasCache = new Map<FileCard, Set<string>>();
+  const csharpAliasesOf = (card: FileCard): Set<string> => {
+    const cached = csharpAliasCache.get(card);
+    if (cached !== undefined) return cached;
+    const aliases = new Set([...card.text.matchAll(/^\s*(?:global\s+)?using\s+(?:static\s+)?(@?[\p{L}_][\p{L}\p{N}_]*)\s*=/gmu)].map((match) => match[1]!.replace(/^@/, "")));
+    csharpAliasCache.set(card, aliases);
+    return aliases;
+  };
+  const csharpCreatedType = (card: FileCard, fromFile: string, written: string, importTargets: readonly string[]): CreatedType => {
+    const parts = written.split(".");
+    if (csharpAliasesOf(card).has(parts[0]!)) return unknownType;
+    const path = parts.join(".");
+    const types = (symbolsByName.get(parts[parts.length - 1]!) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "c_sharp" &&
+      (parts.length === 1 || localOfQualifiedName(symbol.qualifiedName) === path || localOfQualifiedName(symbol.qualifiedName).endsWith(`.${path}`)));
+    const sameFile = types.filter((symbol) => symbol.file === fromFile);
+    const imported = types.filter((symbol) => importTargets.includes(symbol.file));
+    return oneType(sameFile, "same-file-name") ?? oneType(imported, "imported-file-name") ?? oneType(types, "lexical-definition") ?? (parts.length === 1 ? externalType : unknownType);
+  };
+  // What `new T(...)` runs: an instance constructor of T written in any part of the type, or T itself when it
+  // declares none, declares a primary or canonical constructor, or the creation makes an anonymous subclass.
+  const constructorsOf = (type: OsnovaSymbol): { constructors: OsnovaSymbol[]; primary: boolean; complete: boolean } => {
+    const { parts, complete } = partsOf(type);
+    const constructors = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${type.name}`))
+      .filter((symbol) => symbol.kind === "method" && symbol.parameters?.constructs === true);
+    return { constructors, primary: parts.some((part) => part.primary === true), complete };
+  };
+  const constructedBy = (type: OsnovaSymbol, construction: Construction): OsnovaSymbol => {
+    if (construction !== "instance") return type;
+    const { constructors, primary } = constructorsOf(type);
+    if (primary || constructors.length === 0) return type;
+    return constructors.find((symbol) => symbol.file === type.file) ?? constructors[0]!;
+  };
   // The member type `name` that a Java type declares or inherits: undefined when it has none, null when a
   // supertype cannot be followed (or is an enum, whose java.lang.Enum declares member types).
   const javaMemberTypeOf = (type: OsnovaSymbol, name: string, seen: Set<string>): OsnovaSymbol | null | undefined => {
@@ -712,10 +825,36 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // An override hides one base declaration with the same parameter range (and, in Java, the same written
   // parameter types). When a level holds more
   // declarations of that range than overrides above it, which ones stay is unknown, so all are listed.
+  // A creation chooses among the instance constructors of every part of its type, never a base type's, since
+  // constructors are not inherited. One that alone takes the argument count is named (the edge moves to it when it
+  // lies in another part); otherwise the accepting ones are listed, and a part that did not parse cleanly leaves
+  // even one accepting constructor unproven.
+  const chooseConstructor = (edge: OsnovaEdge): OsnovaEdge => {
+    const { overload: _previous, ...rest } = edge;
+    if (edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined) return rest;
+    const targets = declaredAs(edge.toFile, edge.toSymbol);
+    if (targets.some(isHolder)) return rest;
+    const holderName = edge.toSymbol.slice(0, edge.toSymbol.lastIndexOf("."));
+    const holder = declaredAs(edge.toFile, holderName).find(isHolder);
+    if (holder === undefined) return rest;
+    const { constructors, complete } = constructorsOf(holder);
+    const count = edge.arguments;
+    const accepting = constructors.filter((symbol) => accepts(symbol.parameters!, count));
+    const isOwn = (symbol: OsnovaSymbol): boolean => symbol.file === edge.toFile && symbol.qualifiedName === edge.toSymbol;
+    if (complete && accepting.length === 1) {
+      const chosen = accepting[0]!;
+      if (!isOwn(chosen)) return { ...rest, toSymbol: chosen.qualifiedName, toFile: chosen.file, overload: { line: chosen.span.startLine, from: edge.toSymbol } };
+      return constructors.filter(isOwn).length > 1 ? { ...rest, overload: { line: chosen.span.startLine } } : rest;
+    }
+    const candidates = accepting.filter(isOwn).map((symbol) => symbol.span.startLine).sort((a, b) => a - b);
+    const elsewhere = accepting.filter((symbol) => !isOwn(symbol)).map((symbol) => ({ file: symbol.file, line: symbol.span.startLine }))
+      .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line));
+    return { ...rest, overload: { candidates, ...(elsewhere.length > 0 ? { elsewhere } : {}) } };
+  };
   const chooseOverload = (edge: OsnovaEdge): OsnovaEdge => {
+    if (edge.constructs !== undefined) return chooseConstructor(edge);
     const local = withOverload(edge, declaredAs);
-    // Constructors are not inherited, so a creation chooses among the type's own constructors only.
-    if (edge.kind !== "calls" || edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined || edge.constructs !== undefined) return local;
+    if (edge.kind !== "calls" || edge.arguments === undefined || edge.toFile === undefined || edge.toSymbol === undefined) return local;
     const language = files.get(edge.toFile)?.language;
     const own = declaredAs(edge.toFile, edge.toSymbol);
     if ((language !== "java" && language !== "c_sharp") || own.length === 0) return local;
@@ -1150,6 +1289,16 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         });
         continue;
       }
+      if (raw.constructs !== undefined && (card.language === "java" || card.language === "c_sharp")) {
+        const found = card.language === "java" ? javaCreatedType(card, fromSymbol, raw.toName) : csharpCreatedType(card, fromFile, raw.toName, importTargets);
+        const target = found.status === "resolved" ? constructedBy(found.type, raw.constructs) : undefined;
+        const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
+        const evidence = { source: "syntax" as const, resolution: found.status === "resolved" ? { status: "resolved" as const, method: found.method } : found };
+        edges.push(target === undefined
+          ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence, ...args }
+          : { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, toSymbol: target.qualifiedName, toFile: target.file, evidence, ...args });
+        continue;
+      }
       const lookupName = raw.toName.includes(".")
         ? (raw.toName.split(".").pop() ?? raw.toName)
         : raw.toName;
@@ -1163,21 +1312,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         return false;
       };
-      // An object creation names a type, never the constructor that shares its name, so only types are candidates.
-      const creation = raw.constructs !== undefined && (card.language === "java" || card.language === "c_sharp");
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
         languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)) &&
-        (!creation || isHolder(symbol)));
+        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)));
       const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
       const preferred = sameFile.length > 0 ? sameFile : imported.length > 0 ? imported : candidates;
       const names = [...new Set(preferred.map((symbol) => symbol.qualifiedName))].sort();
-      const type = names.length === 1 ? preferred[0] : undefined;
-      // `new T(...)` runs one of T's own constructors when T declares any; an anonymous subclass, or a type
-      // without a written constructor, is named by the type itself.
-      const constructors = type === undefined || raw.constructs !== "instance" ? [] : declaredAs(type.file, `${type.qualifiedName}.${type.name}`).filter((symbol) => symbol.kind === "method");
-      const resolved = creation && constructors.length > 0 ? constructors[0] : type;
+      const resolved = names.length === 1 ? preferred[0] : undefined;
       const resolution: EdgeResolution = names.length > 1
         ? { status: "ambiguous", candidates: names }
         // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of

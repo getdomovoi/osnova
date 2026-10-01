@@ -15,7 +15,7 @@ function accessOf(method: Node): ParameterRange["access"] {
   return method.parent?.parent?.type === "interface_declaration" ? undefined : "private";
 }
 
-function parameterRange(list: Node, method: Node): ParameterRange {
+function parameterRange(list: Node, method: Node, constructor = false): ParameterRange {
   const overrides = childrenOf(method).some((child) => child.type === "modifier" && child.text === "override");
   const access = accessOf(method);
   let required = 0;
@@ -28,7 +28,15 @@ function parameterRange(list: Node, method: Node): ParameterRange {
     if (childOfType(child, "equals_value_clause") !== null) optional += 1;
     else required += 1;
   }
-  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }) };
+  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
+}
+
+// A parameter list written after the type's name and type parameters: a record's, or a class's or struct's
+// primary constructor (C# 12), which the recovery parse leaves out of the tree but not out of the node's text.
+function hasPrimaryConstructor(type: Node, name: Node): boolean {
+  if (childOfType(type, "parameter_list") !== null) return true;
+  const after = childOfType(type, "type_parameter_list") ?? name;
+  return /^\s*\(/.test(type.text.slice(after.endIndex - type.startIndex));
 }
 
 export const csharpAdapter: LanguageAdapter = {
@@ -69,6 +77,7 @@ export const csharpAdapter: LanguageAdapter = {
                   : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           arities.push(childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length);
+          if (hasPrimaryConstructor(node, nameNode)) out.markPrimary();
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
@@ -82,7 +91,7 @@ export const csharpAdapter: LanguageAdapter = {
           if (nameNode !== null && IDENTIFIER_RE.test(nameNode.text)) {
             out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             const parameters = node.childForFieldName("parameters");
-            if (parameters !== null) out.setParameters(parameterRange(parameters, node));
+            if (parameters !== null) out.setParameters(parameterRange(parameters, node, node.type === "constructor_declaration" && !childrenOf(node).some((child) => child.type === "modifier" && child.text === "static")));
             out.push(nameNode.text);
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -124,7 +133,9 @@ export const csharpAdapter: LanguageAdapter = {
         case "object_creation_expression": {
           // `new Box<string>(1)` names Box.
           const typeNode = node.childForFieldName("type");
-          if (typeNode !== null) out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, argumentCount(node.childForFieldName("arguments")), "instance");
+          // `new T { Init = 1 }` without an argument list runs the parameterless constructor.
+          const args = node.childForFieldName("arguments");
+          if (typeNode !== null) out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, args === null ? 0 : argumentCount(args), "instance");
           for (const child of childrenOf(node)) visit(child);
           return;
         }

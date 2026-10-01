@@ -103,6 +103,11 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, parameters });
   }
 
+  markPrimary(): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, primary: true });
+  }
+
   markPartial(identity: string): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, partial: identity });

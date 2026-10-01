@@ -104,7 +104,7 @@ function parameterRange(list: Node, method: Node, scope: TypeScope, typeVariable
   }
   const proven = types.every((type): type is string => type !== undefined);
   return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }),
-    ...(proven ? { types, ...(names.size > 0 ? { names: [...names].sort() } : {}) } : {}) };
+    ...(proven ? { types, ...(names.size > 0 ? { names: [...names].sort() } : {}) } : {}), ...(method.type === "constructor_declaration" ? { constructs: true as const } : {}) };
 }
 
 export const javaAdapter: LanguageAdapter = {
@@ -135,6 +135,8 @@ export const javaAdapter: LanguageAdapter = {
             .filter((child) => child.type === "super_interfaces" || child.type === "extends_interfaces")
             .reduce((total, clause) => total + childrenOf(childOfType(clause, "type_list") ?? clause).length, 0);
           if (supertypes > 0) out.markSupertypes(supertypes, bindings.interfaces(node));
+          // A record always has a canonical constructor, written on its header or in a compact declaration.
+          if (node.type === "record_declaration") out.markPrimary();
           out.push(nameNode.text);
           typeVariables.push(typeParametersOf(node));
           for (const child of childrenOf(node)) visit(child);

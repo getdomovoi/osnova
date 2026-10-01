@@ -198,16 +198,16 @@
         "external": 12202,
         "noVerdict": 0
       },
-      "claimedEdges": 8144,
-      "decided": 8141,
-      "undecided": 3,
-      "truePositive": 8137,
+      "claimedEdges": 8180,
+      "decided": 8173,
+      "undecided": 7,
+      "truePositive": 8169,
       "falsePositive": 4,
       "precision": 0.9995,
       "falseEdgeRate": 0.00049,
       "oracleInRepoSites": 11222,
-      "coveredInRepoSites": 8127,
-      "recall": 0.7242,
+      "coveredInRepoSites": 8159,
+      "recall": 0.7271,
       "falseEdgesWithCorrectTarget": 3,
       "falseByCause": [
         {
@@ -234,7 +234,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
         "determinism": "three runs byte-identical"
       },
-      "overloadUndetermined": 2558,
+      "overloadUndetermined": 2526,
       "previous": {
         "osnova": {
           "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
@@ -410,16 +410,16 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 7804,
-      "decided": 7494,
-      "undecided": 310,
-      "truePositive": 7491,
+      "claimedEdges": 7802,
+      "decided": 7500,
+      "undecided": 302,
+      "truePositive": 7497,
       "falsePositive": 3,
       "precision": 0.9996,
       "falseEdgeRate": 0.0004,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 7489,
-      "recall": 0.6333,
+      "coveredInRepoSites": 7495,
+      "recall": 0.6338,
       "falseByCause": [
         {
           "cause": "local function in top-level statements",
@@ -445,7 +445,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (617 to 642)",
         "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
       },
-      "overloadUndetermined": 661,
+      "overloadUndetermined": 655,
       "falseEdgesWithCorrectTarget": 1,
       "previous": {
         "osnova": {
