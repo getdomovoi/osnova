@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "6a55f252f79293888c76091b4126fe84c6cd4fc3",
+    "commit": "3356690b3db5eec60c6b68239c2e9711dd9f9ace",
     "version": "0.11.0",
     "unreleased": "Java and C# overload choice by argument count, including base and partial types; call edges at the callee name's line; C# parse recovery for primary constructors and raw strings; C# record structs"
   },
@@ -198,16 +198,16 @@
         "external": 12202,
         "noVerdict": 0
       },
-      "claimedEdges": 6347,
-      "decided": 6345,
+      "claimedEdges": 6332,
+      "decided": 6330,
       "undecided": 2,
-      "truePositive": 6336,
+      "truePositive": 6321,
       "falsePositive": 9,
       "precision": 0.9986,
       "falseEdgeRate": 0.00142,
       "oracleInRepoSites": 11222,
-      "coveredInRepoSites": 6326,
-      "recall": 0.5637,
+      "coveredInRepoSites": 6311,
+      "recall": 0.5624,
       "falseEdgesWithCorrectTarget": 3,
       "falseByCause": [
         {
@@ -241,7 +241,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
         "determinism": "three runs byte-identical"
       },
-      "overloadUndetermined": 2126,
+      "overloadUndetermined": 2141,
       "previous": {
         "osnova": {
           "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
