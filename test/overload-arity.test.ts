@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyChanges, buildIndex, callersDetailed, loadIndex } from "../src/index.js";
+import { applyChanges, buildIndex, callersDetailed, loadIndex, serializeArtifact } from "../src/index.js";
 import { formatCallersDetailed } from "../src/query/format.js";
 import { deserializeEdges, serializeEdges } from "../src/index/edgeStore.js";
 
@@ -238,5 +238,36 @@ describe("warp answers for overloads found in a base class", () => {
     expect(ping).toContain("overload: line 2, chosen by argument count 0; moved from src/Sub.java#Sub.ping");
     const pong = formatCallersDetailed(callersDetailed(index, "src/Sub.java#Sub.pong"));
     expect(pong).toContain("overload: not determined; argument count 1 fits lines 3, src/Base.java:3");
+  });
+});
+
+describe("incremental updates that change only a resolution input outside the symbols", () => {
+  const same = async (files: Record<string, string>, edit: Record<string, string>) => {
+    await write(files);
+    const before = await buildIndex(workspace, { cacheDir });
+    await write(edit);
+    const updated = await applyChanges(before, workspace, Object.keys(edit));
+    const fresh = await buildIndex(workspace, { cacheDir: path.join(temporary, "fresh-cache") });
+    expect(updated.edges).toEqual(fresh.edges);
+    expect(serializeArtifact(updated).equals(serializeArtifact(fresh))).toBe(true);
+    return fresh;
+  };
+
+  it("re-resolves when a Java base class moves to another package", async () => {
+    const fresh = await same({
+      "Base.java": "package p;\npublic class Base {\n  void put() {}\n}\n",
+      "Child.java": "package p;\npublic class Child extends Base {\n  public void put(int i) {}\n  public void run() { put(); }\n}\n",
+    }, { "Base.java": "package q;\npublic class Base {\n  void put() {}\n}\n" });
+    expect(choiceAt(fresh, "Child.java", 4, "put").toSymbol).toBe("Child.java#Child.put");
+  });
+
+  it("re-resolves when a C# partial part gains or loses a syntax error", async () => {
+    const a = "partial class A\n{\n  public void Put(int x) {}\n  public void Run() { Put(); }\n}\n";
+    const clean = "partial class A\n{\n  public void Put()\n  {\n    return;\n  }\n}\n";
+    const broken = clean.replace("return;", "return)");
+    const afterBreak = await same({ "A.cs": a, "A2.cs": clean }, { "A2.cs": broken });
+    expect(choiceAt(afterBreak, "A.cs", 4, "Put").toSymbol).toBe("A.cs#A.Put");
+    const afterFix = await same({ "A2.cs": broken }, { "A2.cs": clean });
+    expect(choiceAt(afterFix, "A.cs", 4, "Put").toSymbol).toBe("A2.cs#A.Put");
   });
 });

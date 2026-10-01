@@ -20,7 +20,11 @@ const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
 const BUILTIN_TYPES = new Set(["string", "number", "boolean", "bigint", "symbol", "Array", "Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Object", "Function", "str", "list", "dict", "set", "tuple", "int", "float", "bool", "bytes"]);
 const goPackages = new WeakMap<FileCard, string>();
 const javaPackages = new WeakMap<FileCard, string>();
-function javaPackageOf(card: FileCard | undefined): string {
+export function parsedWithoutErrors(card: FileCard | undefined): boolean {
+  return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors");
+}
+
+export function javaPackageOf(card: FileCard | undefined): string {
   if (card === undefined) return "";
   const cached = javaPackages.get(card);
   if (cached !== undefined) return cached;
@@ -541,7 +545,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // as a receiver annotation is.
   // A file the grammar could not parse cleanly may attribute a nested type's members to its outer type,
   // so a partial type with such a file is not merged.
-  const parsedCleanly = (file: string): boolean => !(files.get(file)?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors");
+  const parsedCleanly = (file: string): boolean => parsedWithoutErrors(files.get(file));
   const typeKey = (symbol: OsnovaSymbol): string => `${files.get(symbol.file)?.language ?? ""}\u0000${localOfQualifiedName(symbol.qualifiedName)}`;
   const partsOf = (holder: OsnovaSymbol): { parts: OsnovaSymbol[]; complete: boolean } => {
     const parts = new Map<string, OsnovaSymbol>([[holder.file, holder]]);

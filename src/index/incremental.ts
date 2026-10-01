@@ -5,6 +5,7 @@ import type { RawEdgeItem } from "./indexImpl.js";
 import { extractCard, finalizeIndex } from "./build.js";
 import { EXTRACT_POOL_REFRESH_MIN_FILES, extractCards } from "./extractPool.js";
 import type { EdgeReuse } from "./resolve.js";
+import { javaPackageOf, parsedWithoutErrors } from "./resolve.js";
 import type { FileCard } from "../types.js";
 import { scanFiles, sameFileMetadata, sha256File, sha256Hex } from "./scan.js";
 import { maximumIndexedFileSizeBytes } from "../types.js";
@@ -114,7 +115,9 @@ function crossFileShape(card: FileCard, raws: readonly RawEdgeItem[]): string {
     .filter((raw) => raw.kind === "imports")
     .map((raw) => `${raw.kind} ${raw.toName}`)
     .sort();
-  return JSON.stringify([card.symbols, card.reExports, routes]);
+  // Resolution also reads a Java file's package clause (package-private access) and whether a file parsed
+  // cleanly (partial merging), neither of which the symbols record.
+  return JSON.stringify([card.symbols, card.reExports, routes, javaPackageOf(card), parsedWithoutErrors(card)]);
 }
 
 function reusableEdges(
