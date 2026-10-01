@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>osnova, a deterministic code map for AI coding agents</title>
+<meta name="description" content="Osnova indexes a repository into a symbol and call graph and answers your coding agent with exact file and line. Same commit, same answer. Install it from any agent with one prompt.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0D0E0F" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F5F3EF" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="https://getosnova.dev/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://getosnova.dev/">
+<meta property="og:title" content="osnova">
+<meta property="og:description" content="A deterministic code map for AI coding agents.">
+<meta property="og:image" content="https://getosnova.dev/social-preview.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<script src="/main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar">
+  <div class="wrap bar-inner">
+    <a class="brand" href="/" aria-label="osnova home">
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+        <rect class="m-plinth" x="1.6" y="17.4" width="20.8" height="3.1" rx="0.4"/>
+        <rect class="m-warp" style="--i:0" x="4.4" y="2.6" width="3.1" height="17.9" rx="0.4"/>
+        <rect class="m-warp" style="--i:1" x="10.45" y="5.6" width="3.1" height="14.9" rx="0.4"/>
+        <rect class="m-warp" style="--i:2" x="16.5" y="4.1" width="3.1" height="16.4" rx="0.4"/>
+        <rect class="m-weft" x="1.6" y="10.9" width="20.8" height="2.6" rx="0.4"/>
+      </svg>
+      <span class="wordmark">osnova</span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="#install">Install</a>
+      <a href="#tools">Tools</a>
+      <a href="#evidence">Evidence</a>
+      <a href="https://github.com/getdomovoi/osnova">GitHub</a>
+    </nav>
+    <a class="version" href="https://www.npmjs.com/package/@getdomovoi/osnova" aria-label="Latest version on npm">npm <span data-npm-version>0.11.0</span></a>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero wrap" aria-labelledby="hero-title">
+  <h1 id="hero-title">A deterministic code map for AI coding agents</h1>
+  <p class="lede">Osnova reads your repository with tree-sitter and builds a symbol and call graph. Your agent asks where things are and who calls them, and gets exact file and line back. Same commit, same answer.</p>
+  <div class="hero-actions">
+    <a class="button" href="#install">Install with your agent</a>
+    <div class="oneliner">
+      <span class="sign" aria-hidden="true">$</span>
+      <code>npm install -g @getdomovoi/osnova</code>
+      <button class="copy" type="button" data-copy="npm install -g @getdomovoi/osnova">Copy</button>
+    </div>
+  </div>
+  <ul class="facts">
+    <li>Twenty languages</li>
+    <li>Ten tools over MCP and CLI</li>
+    <li>No telemetry, no network</li>
+    <li>Apache-2.0</li>
+  </ul>
+</section>
+
+<section class="stage wrap" aria-labelledby="stage-title" data-stage>
+  <div class="stage-head">
+    <h2 id="stage-title" class="stage-title">One real answer, drawn as it arrives</h2>
+    <button class="ghost" type="button" data-replay>Replay</button>
+  </div>
+  <div class="stage-grid">
+    <div class="term">
+      <div class="term-bar"><span>osnova warp</span><span>osnova's own repository, cut to twelve lines</span></div>
+<pre class="term-body"><span class="ln cmdline"><span class="sign" aria-hidden="true">$ </span><code class="typed">osnova warp src/api.ts#refreshWorkspace</code><span class="caret" aria-hidden="true"></span></span>
+<span class="ln" style="--i:1">function src/api.ts#refreshWorkspace: 83 indexed edges</span>
+<span class="ln" style="--i:2">reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 10; tests 18</span>
+<span class="ln" style="--i:3">d1 calls src/cli/cli.ts#ensureIndex:78 <span class="basis">[import-binding]</span></span>
+<span class="ln" style="--i:4">d1 calls src/cli/hook.ts#runHook:191,203,225,240 <span class="basis">[import-binding]</span></span>
+<span class="ln" style="--i:5">d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:297 <span class="basis">[import-binding]</span></span>
+<span class="ln" style="--i:6">d1 calls test/verification-fastpath.test.ts#&lt;module&gt;:37,47,48,51,53,57,58,64,68,74,78,85,110,114,132,145,154,166,171,197 <span class="basis">[re-export-binding]</span></span>
+<span class="ln dim" style="--i:7">  via src/index.ts:65 refreshWorkspace -&gt; src/api.ts (export refreshWorkspace)</span>
+<span class="ln warn" style="--i:8">This does not prove absence of callers or that deletion is safe.</span>
+<span class="ln dim" style="--i:9">unresolved evidence (10); not confirmed relationships</span>
+<span class="ln dim" style="--i:10">candidates for refreshWorkspace (2, unverified): src/api.ts#refreshWorkspace, test/mcp-watch.test.ts#refreshWorkspace</span>
+<span class="ln dim" style="--i:11">d1 calls refreshWorkspace test/artifact-format9.test.ts:78,85,104,120,140 [binding-blocked]</span>
+<span class="ln dim" style="--i:12">d1 calls refreshWorkspace scripts/perf.mjs:485,486,491 [import-target-unresolved]</span></pre>
+    </div>
+    <figure class="loom-wrap">
+      <svg class="loom" viewBox="0 0 440 420" role="img" aria-labelledby="loom-title">
+        <title id="loom-title">The answer drawn as a weave: four confirmed caller files rise in brass from refreshWorkspace, one tick per call site; two files with unresolved evidence stand in grey dashes.</title>
+        <line class="plinth" style="--i:1" x1="24" y1="380" x2="424" y2="380"/>
+        <rect class="tick-brass" style="--i:1" x="24" y="377" width="3" height="7"/>
+        <text class="loom-target" style="--i:1" x="24" y="408">src/api.ts#refreshWorkspace</text>
+        <g class="th ok" style="--i:3"><line class="th-line" x1="64" y1="380" x2="64" y2="182"/><path class="th-ticks" d="M61 190h6"/><text class="th-label" transform="translate(78 372) rotate(-90)">cli.ts</text></g>
+        <g class="th ok" style="--i:4"><line class="th-line" x1="124" y1="380" x2="124" y2="160"/><path class="th-ticks" d="M121 168h6M121 180h6M121 192h6M121 204h6"/><text class="th-label" transform="translate(138 372) rotate(-90)">hook.ts</text></g>
+        <g class="th ok" style="--i:5"><line class="th-line" x1="184" y1="380" x2="184" y2="182"/><path class="th-ticks" d="M181 190h6"/><text class="th-label" transform="translate(198 372) rotate(-90)">server.ts</text></g>
+        <g class="th ok" style="--i:6"><line class="th-line" x1="244" y1="380" x2="244" y2="40"/><path class="th-ticks" d="M241 48h6M241 60h6M241 72h6M241 84h6M241 96h6M241 108h6M241 120h6M241 132h6M241 144h6M241 156h6M241 168h6M241 180h6M241 192h6M241 204h6M241 216h6M241 228h6M241 240h6M241 252h6M241 264h6M241 276h6"/><text class="th-label" transform="translate(258 372) rotate(-90)">verification-fastpath.test.ts</text></g>
+        <g class="th un" style="--i:11"><line class="th-line" x1="334" y1="380" x2="334" y2="152"/><path class="th-ticks" d="M331 160h6M331 172h6M331 184h6M331 196h6M331 208h6"/><text class="th-label" transform="translate(348 372) rotate(-90)">artifact-format9.test.ts</text></g>
+        <g class="th un" style="--i:12"><line class="th-line" x1="394" y1="380" x2="394" y2="168"/><path class="th-ticks" d="M391 176h6M391 188h6M391 200h6"/><text class="th-label" transform="translate(408 372) rotate(-90)">perf.mjs</text></g>
+      </svg>
+      <figcaption class="legend">
+        <span class="key key-brass">Brass: osnova confirmed the caller, one tick per call site</span>
+        <span class="key key-grey">Grey dashes: unresolved evidence, never counted as a caller</span>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="turn wrap" aria-labelledby="turn-title">
+  <h2 id="turn-title">Where it sits in one agent turn</h2>
+  <p class="section-lede">Osnova answers twice. Before the edit, with the symbols, callers and tests the task touches. After it, with what the change reached.</p>
+  <ol class="steps" data-reveal>
+    <li class="step" style="--i:0"><span class="rule" aria-hidden="true"></span><code class="step-name">prompt</code><p>The developer asks for a change in billing.</p><span class="who">human</span></li>
+    <li class="step osn" style="--i:1"><span class="rule" aria-hidden="true"></span><code class="step-name">footing</code><p>The agent asks osnova for the symbols, callers and tests that touch the task.</p><span class="who">osnova</span></li>
+    <li class="step" style="--i:2"><span class="rule" aria-hidden="true"></span><code class="step-name">edit</code><p>The agent edits with exact paths and line ranges instead of a guess.</p><span class="who">agent</span></li>
+    <li class="step osn" style="--i:3"><span class="rule" aria-hidden="true"></span><code class="step-name">settle</code><p>Osnova re-indexes the diff and returns what the change reached.</p><span class="who">osnova</span></li>
+    <li class="step" style="--i:4"><span class="rule" aria-hidden="true"></span><code class="step-name">review</code><p>The developer reads the impact list, not the whole diff.</p><span class="who">human</span></li>
+  </ol>
+</section>
+
+<section class="install wrap" id="install" aria-labelledby="install-title">
+  <h2 id="install-title">Install with your agent</h2>
+  <p class="section-lede">Paste one prompt into the agent you already use. It installs osnova, shows you the config change, and writes nothing until you approve. You need Node.js 22.13 or newer.</p>
+
+  <div class="tabs" role="tablist" aria-label="Choose your agent" data-tabs>
+    <button type="button" role="tab" id="tab-claude" aria-controls="panel-claude" aria-selected="true">Claude Code</button>
+    <button type="button" role="tab" id="tab-codex" aria-controls="panel-codex" aria-selected="false">Codex</button>
+    <button type="button" role="tab" id="tab-cursor" aria-controls="panel-cursor" aria-selected="false">Cursor</button>
+    <button type="button" role="tab" id="tab-opencode" aria-controls="panel-opencode" aria-selected="false">OpenCode</button>
+    <button type="button" role="tab" id="tab-kilo" aria-controls="panel-kilo" aria-selected="false">Kilo</button>
+    <button type="button" role="tab" id="tab-pi" aria-controls="panel-pi" aria-selected="false">Pi</button>
+    <button type="button" role="tab" id="tab-all" aria-controls="panel-all" aria-selected="false">All of them</button>
+    <button type="button" role="tab" id="tab-mcp" aria-controls="panel-mcp" aria-selected="false">Any MCP client</button>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-claude" aria-labelledby="tab-claude" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into Claude Code</h3><button class="copy" type="button" data-copy-target="prompt-claude">Copy prompt</button></div>
+<pre class="prompt" id="prompt-claude">Install osnova for Claude Code. Osnova is a deterministic code map that serves a symbol and call graph over MCP.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Run `npm install -g @getdomovoi/osnova`.
+3. Run `osnova setup claude`. It prints the config diff and writes nothing. Show me the diff.
+4. When I approve, run `osnova setup claude --apply`. It backs up every file it changes.
+5. Run `osnova doctor` and tell me about any warning.
+6. Tell me to restart Claude Code so the MCP server, hooks and skill load.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-claude">Copy</button></div>
+<pre class="shell"><code id="shell-claude">npm install -g @getdomovoi/osnova
+osnova setup claude --apply</code></pre>
+      <p class="note">Adds the MCP entry, session, prompt and stop hooks, and the skill. Prefer a plugin with no global install? Type these in Claude Code:</p>
+<pre class="shell"><code>/plugin marketplace add getdomovoi/osnova
+/plugin install osnova@osnova</code></pre>
+      <p class="note">Remove it with <code>osnova setup claude --uninstall --apply</code>.</p>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-codex" aria-labelledby="tab-codex" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into Codex</h3><button class="copy" type="button" data-copy-target="prompt-codex">Copy prompt</button></div>
+<pre class="prompt" id="prompt-codex">Install osnova for Codex. Osnova is a deterministic code map that serves a symbol and call graph over MCP.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Run `npm install -g @getdomovoi/osnova`.
+3. Run `osnova setup agents --only codex`. It prints the config diff and writes nothing. Show me the diff.
+4. When I approve, run `osnova setup agents --only codex --apply`. It backs up every file it changes.
+5. Run `osnova doctor` and tell me about any warning.
+6. Tell me to restart Codex, open `/hooks` and trust the three osnova hooks. Codex skips a hook it does not trust, without a message.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-codex">Copy</button></div>
+<pre class="shell"><code id="shell-codex">npm install -g @getdomovoi/osnova
+osnova setup agents --only codex --apply</code></pre>
+      <p class="note">Adds the MCP entry, the session, prompt and stop hooks, and the shared skill. Then trust the hooks in <code>/hooks</code>.</p>
+      <p class="note">Remove it with <code>osnova setup agents --only codex --uninstall --apply</code>.</p>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-cursor" aria-labelledby="tab-cursor" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into Cursor</h3><button class="copy" type="button" data-copy-target="prompt-cursor">Copy prompt</button></div>
+<pre class="prompt" id="prompt-cursor">Install osnova for Cursor. Osnova is a deterministic code map that serves a symbol and call graph over MCP.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Run `npm install -g @getdomovoi/osnova`.
+3. Run `osnova setup agents --only cursor`. It prints the config diff and writes nothing. Show me the diff.
+4. When I approve, run `osnova setup agents --only cursor --apply`. It backs up every file it changes.
+5. Run `osnova doctor` and tell me about any warning.
+6. Tell me to restart Cursor so the MCP server and hooks load.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-cursor">Copy</button></div>
+<pre class="shell"><code id="shell-cursor">npm install -g @getdomovoi/osnova
+osnova setup agents --only cursor --apply</code></pre>
+      <p class="note">Adds the MCP entry and a stop hook that sends what your change reached as a follow-up message.</p>
+      <p class="note">Remove it with <code>osnova setup agents --only cursor --uninstall --apply</code>.</p>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-opencode" aria-labelledby="tab-opencode" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into OpenCode</h3><button class="copy" type="button" data-copy-target="prompt-opencode">Copy prompt</button></div>
+<pre class="prompt" id="prompt-opencode">Install osnova for OpenCode. Osnova is a deterministic code map that serves a symbol and call graph over MCP.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Run `npm install -g @getdomovoi/osnova`.
+3. Run `osnova setup agents --only opencode`. It prints the config diff and writes nothing. Show me the diff.
+4. When I approve, run `osnova setup agents --only opencode --apply`. It backs up every file it changes.
+5. Run `osnova doctor` and tell me about any warning.
+6. Tell me to restart OpenCode so the MCP server and plugin load.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-opencode">Copy</button></div>
+<pre class="shell"><code id="shell-opencode">npm install -g @getdomovoi/osnova
+osnova setup agents --only opencode --apply</code></pre>
+      <p class="note">Adds the MCP entry and a plugin that appends starting points to each message.</p>
+      <p class="note">Remove it with <code>osnova setup agents --only opencode --uninstall --apply</code>.</p>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-kilo" aria-labelledby="tab-kilo" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into Kilo</h3><button class="copy" type="button" data-copy-target="prompt-kilo">Copy prompt</button></div>
+<pre class="prompt" id="prompt-kilo">Install osnova for Kilo. Osnova is a deterministic code map that serves a symbol and call graph over MCP.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Run `npm install -g @getdomovoi/osnova`.
+3. Run `osnova setup agents --only kilo`. It prints the config diff and writes nothing. Show me the diff.
+4. When I approve, run `osnova setup agents --only kilo --apply`. It backs up every file it changes.
+5. Run `osnova doctor` and tell me about any warning.
+6. Tell me to restart Kilo so the MCP server and plugin load.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-kilo">Copy</button></div>
+<pre class="shell"><code id="shell-kilo">npm install -g @getdomovoi/osnova
+osnova setup agents --only kilo --apply</code></pre>
+      <p class="note">Adds the MCP entry and the same plugin OpenCode uses.</p>
+      <p class="note">Remove it with <code>osnova setup agents --only kilo --uninstall --apply</code>.</p>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-pi" aria-labelledby="tab-pi" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into Pi</h3><button class="copy" type="button" data-copy-target="prompt-pi">Copy prompt</button></div>
+<pre class="prompt" id="prompt-pi">Install osnova for Pi. Osnova is a deterministic code map that serves a symbol and call graph over MCP.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Pi reaches MCP servers through the `pi-mcp-adapter` extension. If it is not installed, stop and tell me.
+3. Run `npm install -g @getdomovoi/osnova`.
+4. Run `osnova setup agents --only pi`. It prints the config diff and writes nothing. Show me the diff.
+5. When I approve, run `osnova setup agents --only pi --apply`. It backs up every file it changes.
+6. Run `osnova doctor` and tell me about any warning.
+7. Tell me to restart Pi so the MCP server and extension load.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-pi">Copy</button></div>
+<pre class="shell"><code id="shell-pi">npm install -g @getdomovoi/osnova
+osnova setup agents --only pi --apply</code></pre>
+      <p class="note">Adds the MCP entry for <code>pi-mcp-adapter</code> and an extension that adds starting points before each turn.</p>
+      <p class="note">Remove it with <code>osnova setup agents --only pi --uninstall --apply</code>.</p>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-all" aria-labelledby="tab-all" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into any of them</h3><button class="copy" type="button" data-copy-target="prompt-all">Copy prompt</button></div>
+<pre class="prompt" id="prompt-all">Install osnova for every coding agent on this machine. Osnova is a deterministic code map that serves a symbol and call graph over MCP.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Run `npm install -g @getdomovoi/osnova`.
+3. Run `osnova setup claude` and `osnova setup agents`. They print the config diffs and write nothing. The agents family covers Codex, Cursor, OpenCode, Kilo and Pi, and skips any that is not installed. Show me both diffs.
+4. When I approve, run `osnova setup claude --apply` and `osnova setup agents --apply`. They back up every file they change.
+5. Run `osnova doctor` and tell me about any warning.
+6. Tell me to restart each agent. If Codex is set up, tell me to open `/hooks` in Codex and trust the three osnova hooks.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-all">Copy</button></div>
+<pre class="shell"><code id="shell-all">npm install -g @getdomovoi/osnova
+osnova setup claude --apply
+osnova setup agents --apply</code></pre>
+      <p class="note">One global install serves every repository. Nothing is written inside your projects.</p>
+      <p class="note">Remove it with <code>osnova setup claude --uninstall --apply</code> and <code>osnova setup agents --uninstall --apply</code>.</p>
+    </div>
+  </div>
+
+  <div class="panel" role="tabpanel" id="panel-mcp" aria-labelledby="tab-mcp" tabindex="0">
+    <div class="box prompt-box">
+      <div class="box-head"><h3>Paste into your agent</h3><button class="copy" type="button" data-copy-target="prompt-mcp">Copy prompt</button></div>
+<pre class="prompt" id="prompt-mcp">Add osnova to my MCP client. Osnova is a deterministic code map that serves a symbol and call graph over MCP. It runs through npx, so nothing is installed globally.
+
+1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
+2. Find my MCP client's config file and tell me its path.
+3. Add this server entry and keep every other key:
+   { "mcpServers": { "osnova": { "command": "npx", "args": ["-y", "@getdomovoi/osnova", "mcp"] } } }
+4. Show me the change before you save it.
+5. Tell me to restart the client.</pre>
+    </div>
+    <div class="box shell-box">
+      <div class="box-head"><h3>Or add it yourself</h3><button class="copy" type="button" data-copy-target="shell-mcp">Copy</button></div>
+<pre class="shell"><code id="shell-mcp">{ "mcpServers": { "osnova": { "command": "npx", "args": ["-y", "@getdomovoi/osnova", "mcp"] } } }</code></pre>
+      <p class="note">Works with any client that takes the common <code>mcpServers</code> shape. Pin a repository with <code>--workspace /path/to/repo</code> after <code>mcp</code> when the client does not start in the project root.</p>
+    </div>
+  </div>
+</section>
+
+<section class="tools wrap" id="tools" aria-labelledby="tools-title">
+  <h2 id="tools-title">Ten tools, named for the ground under the code</h2>
+  <p class="section-lede">Your agent calls them over MCP. You can type the same names on the command line: <code>osnova warp</code> and <code>osnova_warp</code> run the same query.</p>
+  <div class="tool-groups">
+    <div class="tool-group">
+      <h3>Find</h3>
+      <dl>
+        <div><dt><code>ground</code></dt><dd>Keyword search. Ranked definitions with exact file and line.</dd></div>
+        <div><dt><code>thread</code></dt><dd>Text search. Regex or literal matches, grouped by the symbol they sit in.</dd></div>
+        <div><dt><code>outline</code></dt><dd>Signatures and line spans for one file.</dd></div>
+        <div><dt><code>groundwork</code></dt><dd>Repository map. Directory clusters, hubs and hotspots.</dd></div>
+      </dl>
+    </div>
+    <div class="tool-group">
+      <h3>Trace</h3>
+      <dl>
+        <div><dt><code>footing</code></dt><dd>Task context. Definitions, relationships and candidate tests around a question.</dd></div>
+        <div><dt><code>warp</code></dt><dd>Call graph. Callers and callees, direct or transitive, with the evidence for each edge.</dd></div>
+        <div><dt><code>tests</code></dt><dd>The test files that reach a symbol, or the symbols one test file reaches.</dd></div>
+      </dl>
+    </div>
+    <div class="tool-group">
+      <h3>Check</h3>
+      <dl>
+        <div><dt><code>settle</code></dt><dd>Change impact. The symbols a diff touches and everything indexed that depends on them.</dd></div>
+        <div><dt><code>plumb</code></dt><dd>Checks a claimed list of call sites. Which the index confirms, and which it left out.</dd></div>
+        <div><dt><code>unreferenced</code></dt><dd>Definitions with no indexed caller, with their leads. Candidates, never proof.</dd></div>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section class="evidence wrap" id="evidence" aria-labelledby="evidence-title">
+  <h2 id="evidence-title">Measured, with the misses left in</h2>
+
+  <div class="oracle" data-reveal>
+    <div class="oracle-text">
+      <h3>Checked against a type checker</h3>
+      <p>Every call site in two pinned open-source checkouts went to the language's own type checker. Each osnova edge counted as true when it named the declaration the checker found, and false when it did not.</p>
+      <p class="small">Measured at 0.8.0. The scripts reproduce every count at 0.10.0.</p>
+    </div>
+    <div class="oracle-rows">
+      <div class="oracle-row">
+        <p class="oracle-name"><code>click</code> <span>Python, 160 files</span></p>
+        <p class="oracle-fig">0 false edges in 2,883</p>
+        <div class="meter" style="--v:0.904" aria-hidden="true"><i></i></div>
+        <p class="oracle-cov">Covers 90.4% of the call sites the checker resolves in the repository</p>
+      </div>
+      <div class="oracle-row">
+        <p class="oracle-name"><code>zod</code> <span>TypeScript, 702 files</span></p>
+        <p class="oracle-fig">4 false edges in 21,276</p>
+        <div class="meter" style="--v:0.769" aria-hidden="true"><i></i></div>
+        <p class="oracle-cov">Covers 76.9% of the call sites the checker resolves in the repository</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="grep">
+    <h3>Grep against the graph</h3>
+    <p>The first regex a person types is wrong more often than it looks. Nine call-site sets in five languages were verified line by line. Each cell shows sites found, then precision and recall.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th scope="col">Target</th><th scope="col" class="num">Verified sites</th><th scope="col" class="num">Text search</th><th scope="col" class="num">osnova</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>Context.invoke</code> <span>click, depth 2</span></th><td class="num">13</td><td class="num">12 <span>0.92 / 0.85</span></td><td class="num">12 <span>1.00 / 0.92</span></td></tr>
+          <tr><th scope="row"><code>getChildNodes</code> <span>pyright, depth 2</span></th><td class="num">28</td><td class="num">5 <span>0.80 / 0.14</span></td><td class="num">28 <span>1.00 / 1.00</span></td></tr>
+          <tr><th scope="row"><code>Command.Root</code> <span>cobra, depth 1</span></th><td class="num">30</td><td class="num">30 <span>1.00 / 1.00</span></td><td class="num">30 <span>1.00 / 1.00</span></td></tr>
+          <tr><th scope="row"><code>Command.PersistentFlags</code> <span>cobra, depth 1</span></th><td class="num">12</td><td class="num">13 <span>0.92 / 1.00</span></td><td class="num">12 <span>1.00 / 1.00</span></td></tr>
+          <tr><th scope="row"><code>Configurator.GetFormatter</code> <span>humanizer, depth 1</span></th><td class="num">18</td><td class="num">19 <span>0.74 / 0.78</span></td><td class="num">18 <span>1.00 / 1.00</span></td></tr>
+          <tr><th scope="row"><code>Searcher.line_terminator</code> <span>ripgrep, depth 1</span></th><td class="num">12</td><td class="num">32 <span>0.38 / 1.00</span></td><td class="num">12 <span>1.00 / 1.00</span></td></tr>
+          <tr><th scope="row"><code>LineTerminator.as_byte</code> <span>ripgrep, depth 1</span></th><td class="num">26</td><td class="num">26 <span>1.00 / 1.00</span></td><td class="num">26 <span>1.00 / 1.00</span></td></tr>
+          <tr><th scope="row"><code>JsonReader.beginObject</code> <span>gson, depth 1</span></th><td class="num">10</td><td class="num">29 <span>0.34 / 1.00</span></td><td class="num">10 <span>1.00 / 1.00</span></td></tr>
+          <tr><th scope="row"><code>TypeToken.getRawType</code> <span>gson, depth 1</span></th><td class="num">27</td><td class="num">43 <span>0.63 / 1.00</span></td><td class="num">27 <span>1.00 / 1.00</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small">The graph never returned a site that was not a call of the target. The frozen records are in <a href="https://github.com/getdomovoi/osnova/tree/main/benchmarks/results">benchmarks/results</a>.</p>
+  </div>
+
+  <div class="limits">
+    <h3>What osnova does not do</h3>
+    <ul>
+      <li><strong>No type inference.</strong> Edges come from syntax: calls, imports, name references, written heritage and framework routes. Resolution is heuristic, and every edge says how it was resolved.</li>
+      <li><strong>No semantic search.</strong> <code>ground</code> ranks definitions by their words. It is fast and explainable, and it will not match a paraphrase.</li>
+      <li><strong>No proof of safety.</strong> An empty caller list means the index found no caller, not that none exists.</li>
+      <li><strong>No cost claims.</strong> Agent trials so far show the same correctness with and without the graph on small tasks.</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <div class="foot-brand">
+      <svg class="mark mark-static" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.4" y="2.6" width="3.1" height="17.9" rx="0.4"/><rect x="10.45" y="5.6" width="3.1" height="14.9" rx="0.4"/><rect x="16.5" y="4.1" width="3.1" height="16.4" rx="0.4"/><rect x="1.6" y="10.9" width="20.8" height="2.6" rx="0.4"/><rect x="1.6" y="17.4" width="20.8" height="3.1" rx="0.4"/></svg>
+      <p><em>Osnova</em> is the Slavic word for base or foundation. That is the job: give an agent solid ground to stand on before it edits code.</p>
+    </div>
+    <nav class="foot-links" aria-label="Project">
+      <a href="https://github.com/getdomovoi/osnova">GitHub</a>
+      <a href="https://www.npmjs.com/package/@getdomovoi/osnova">npm</a>
+      <a href="https://github.com/getdomovoi/osnova/blob/main/docs/reference.md">Reference</a>
+      <a href="https://github.com/getdomovoi/osnova/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/getdomovoi/osnova/blob/main/PRIVACY.md">Privacy</a>
+      <a href="https://github.com/getdomovoi/osnova/blob/main/SECURITY.md">Security</a>
+    </nav>
+    <p class="foot-note">Apache-2.0, by getdomovoi. This site sets no cookies and runs no analytics. It loads fonts from Google Fonts and asks the npm registry for the latest version number.</p>
+  </div>
+  <div class="foot-plinth" aria-hidden="true"></div>
+</footer>
+<div class="visually-hidden" aria-live="polite" data-live></div>
+</body>
+</html>
