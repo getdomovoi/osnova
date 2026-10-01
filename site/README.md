@@ -13,26 +13,31 @@ npx -y live-server@1.2.2 site/public --port=8788 --no-browser
 ## What the page shows
 
 - The film at the top tells the lede in eight scenes. Every number and output line in it was measured on osnova 0.11.0's own source; the next section records how.
-- The install prompts must only use commands the CLI accepts and does what they say. `test/site.test.ts` runs every `osnova setup` command on the page in a temporary home where every agent harness is installed: previews must write nothing, applies must leave nothing to change, and uninstalls must remove what they installed.
+- The install prompts must only use commands the CLI accepts and does what they say. `test/site.test.ts` runs every `osnova setup` command on the page in a temporary home where every agent harness is installed: previews must write nothing, applies must leave nothing to change, and uninstalls must remove every component they installed, except the shared skill that `--only` keeps while another installed harness still reads it.
 - `/changelog/`, `/privacy/` and `/security/` are built from `CHANGELOG.md`, `PRIVACY.md` and `SECURITY.md` by `pnpm site:pages`. Edit the Markdown, never the generated HTML; `test/site.test.ts` fails while a page is out of date.
 - The npm badge in the header shows the version written into the page, then replaces it with the registry's latest version when the page loads.
 - Colours, type and motion follow `assets/brand/README.md`.
 
 ## Where the film's numbers come from
 
-Measured on 2026-09-30 from a clean export of tag `v0.11.0`, indexed into a scratch cache:
+Measured on 2026-10-01 with the published 0.11.0 package on a clean export of tag `v0.11.0`. Run from the repository root; every directory is fresh:
 
 ```sh
-git archive v0.11.0 | tar -x -C /tmp/v011
-osnova build /tmp/v011 --cache-dir /tmp/v011-cache
-osnova warp 'src/api.ts#refreshWorkspace' --workspace /tmp/v011 --cache-dir /tmp/v011-cache
-osnova warp 'src/api.ts#refreshWorkspace' --direction out --workspace /tmp/v011 --cache-dir /tmp/v011-cache
+osnova011() { npx -y @getdomovoi/osnova@0.11.0 "$@"; }
+src=$(mktemp -d); cache_a=$(mktemp -d); cache_b=$(mktemp -d); out=$(mktemp -d)
+git archive v0.11.0 | tar -x -C "$src"
+osnova011 build "$src" --cache-dir "$cache_a"
+osnova011 build "$src" --cache-dir "$cache_b"
+shasum -a 256 "$cache_a"/*/edges.json "$cache_b"/*/edges.json "$cache_a"/*/text.bin "$cache_b"/*/text.bin
+for run in 1 2; do osnova011 warp 'src/api.ts#refreshWorkspace' --workspace "$src" --cache-dir "$cache_a" > "$out/warp$run.txt" 2>&1; done
+shasum -a 256 "$out/warp1.txt" "$out/warp2.txt"
+osnova011 warp 'src/api.ts#refreshWorkspace' --direction out --workspace "$src" --cache-dir "$cache_a"
 ```
 
-- Read scene: `built index ...: 397 files, 7069 symbols, 31453 edges`.
-- Weave scene: eleven of the callees `--direction out` lists, each at its calling line in `src/api.ts` (93 to 182). The full answer has 34 indexed edges; the scene says it shows eleven.
-- Answer scene: lines copied from the first `osnova warp` output.
-- Repeat scene: a second `osnova build` into another empty cache gave byte-identical `index.json` (`2bd883c1241f61a7`) and `edges.json` (`aa077378f5db9f52`), and two runs of the first `warp` command gave the same output (`cfeccec7a316834d`); each is the first 16 hex digits of SHA-256.
+- Read scene: the first build prints `397 files, 7069 symbols, 31453 edges`.
+- Weave scene: eleven of the callees the last command lists, each at its calling line in `src/api.ts` (93 to 182). The full answer has 34 indexed edges; the scene says it shows eleven.
+- Answer scene: lines copied from `warp1.txt`.
+- Repeat scene: both caches hold the same `edges.json` (`aa077378f5db9f52`) and `text.bin` (`35a0907989ddcb04`), and both `warp` runs print the same output (`cfeccec7a316834d`); each value is the first 16 hex digits of SHA-256. `index.json` is left out because it records the absolute path of the indexed folder, so it differs between machines.
 
 ## Deploy
 

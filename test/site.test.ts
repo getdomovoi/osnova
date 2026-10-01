@@ -50,13 +50,19 @@ async function cli(args: string[]): Promise<{ code: number; errors: string[] }> 
   return { code, errors };
 }
 
-// What still differs from a full install of the command's family, after the command ran.
-async function pendingChanges(args: string[], home: string): Promise<string[]> {
+// How far the home is from a full install of the command's family: each component still to write
+// (kind and path under home), each component setup would keep instead of writing, and each harness it would skip.
+async function planState(args: string[], home: string): Promise<{ pending: string[]; kept: string[]; skipped: string[] }> {
   const family = args[1] as SetupFamily;
   const onlyAt = args.indexOf("--only");
   const only = onlyAt === -1 ? undefined : (args[onlyAt + 1] ?? "").split(",") as AgentHarness[];
   const plan = await planFamily(family, { home, only });
-  return plan.changes.filter((change) => change.action !== "unchanged").map((change) => `${change.kind} ${change.action}`);
+  const component = (change: { kind: string; path: string }) => `${change.kind} ${path.relative(home, change.path)}`;
+  return {
+    pending: plan.changes.filter((change) => change.action !== "unchanged").map(component).sort(),
+    kept: plan.kept.map(component).sort(),
+    skipped: plan.skipped.map((entry) => entry.harness).sort(),
+  };
 }
 
 const setupLines = () => shownCommands().filter((line) => line.startsWith("osnova setup "));
@@ -84,7 +90,8 @@ describe("marketing site install commands", () => {
       const before = filesUnder(home);
       expect({ line, ...(await cli([...args, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
       expect({ line, files: filesUnder(home) }).toEqual({ line, files: before });
-      expect({ line, pending: (await pendingChanges(args, home)).length > 0 }).toEqual({ line, pending: true });
+      const state = await planState(args, home);
+      expect({ line, kept: state.kept, skipped: state.skipped, hasWork: state.pending.length > 0 }).toEqual({ line, kept: [], skipped: [], hasWork: true });
     }
   });
 
@@ -95,21 +102,24 @@ describe("marketing site install commands", () => {
       const args = line.split(/\s+/).slice(1);
       const home = harnessHome();
       expect({ line, ...(await cli([...args, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
-      expect({ line, pending: await pendingChanges(args, home) }).toEqual({ line, pending: [] });
+      expect({ line, ...(await planState(args, home)) }).toEqual({ line, pending: [], kept: [], skipped: [] });
     }
   });
 
-  it("removes what each shown uninstall command names", async () => {
+  it("removes every component each shown uninstall command installed", async () => {
     const removals = setupLines().filter((line) => line.includes("--uninstall"));
     expect(removals.length).toBeGreaterThan(0);
     for (const line of removals) {
       const args = line.split(/\s+/).slice(1);
       const home = harnessHome();
+      const fresh = await planState(args, home);
       const install = args.filter((arg) => arg !== "--uninstall");
       expect({ line, ...(await cli([...install, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
-      expect({ line, pending: await pendingChanges(args, home) }).toEqual({ line, pending: [] });
+      expect({ line, ...(await planState(args, home)) }).toEqual({ line, pending: [], kept: [], skipped: [] });
       expect({ line, ...(await cli([...args, "--home", home])) }).toEqual({ line, code: 0, errors: [] });
-      expect({ line, removed: (await pendingChanges(args, home)).length > 0 }).toEqual({ line, removed: true });
+      // With --only, the shared skill stays while another installed harness still reads it; everything else must be gone.
+      const expected = args.includes("--only") ? fresh.pending.filter((entry) => !entry.startsWith("skill ")) : fresh.pending;
+      expect({ line, ...(await planState(args, home)) }).toEqual({ line, pending: expected, kept: [], skipped: [] });
     }
   });
 

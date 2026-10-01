@@ -179,7 +179,7 @@
           <div class="same">
             <div class="run">
               <p class="run-head cue" data-at="250">build 1</p>
-              <p class="cue" data-at="450"><span>index.json</span><b>2bd883c1241f61a7</b></p>
+              <p class="cue" data-at="450"><span>text.bin</span><b>35a0907989ddcb04</b></p>
               <p class="cue" data-at="650"><span>edges.json</span><b>aa077378f5db9f52</b></p>
               <p class="cue" data-at="850"><span>warp output</span><b>cfeccec7a316834d</b></p>
             </div>
@@ -190,7 +190,7 @@
             </div>
             <div class="run">
               <p class="run-head cue" data-at="250">build 2</p>
-              <p class="cue" data-at="450"><span>index.json</span><b>2bd883c1241f61a7</b></p>
+              <p class="cue" data-at="450"><span>text.bin</span><b>35a0907989ddcb04</b></p>
               <p class="cue" data-at="650"><span>edges.json</span><b>aa077378f5db9f52</b></p>
               <p class="cue" data-at="850"><span>warp output</span><b>cfeccec7a316834d</b></p>
             </div>
@@ -235,7 +235,7 @@
       <li>It builds a symbol and call graph. Eleven of the functions refreshWorkspace calls are shown, each tied to the line that calls it.</li>
       <li>Your agent asks who calls refreshWorkspace, through the osnova_warp tool.</li>
       <li>It gets exact file and line back, with the evidence for each caller, and unresolved calls listed apart.</li>
-      <li>Same commit, same answer: two fresh builds produce byte-identical index files and identical output.</li>
+      <li>Same commit, same answer: two fresh builds produce byte-identical call graphs and source text, and identical output.</li>
       <li>Install with npm install -g @getdomovoi/osnova.</li>
     </ol>
   </div>
