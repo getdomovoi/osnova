@@ -13,6 +13,14 @@
   --dur-fast: 140ms;
   --dur-base: 200ms;
   --dur-slow: 320ms;
+  /* Entrances: slower and eased at both ends, by request; quick hovers keep --ease and the short durations. */
+  --ease-io: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-in: 900ms;
+  --dur-in-long: 1300ms;
+  /* The film sits halfway between the board timing and the slower page entrances. */
+  --ease-film: cubic-bezier(0.4, 0.5, 0.33, 1);
+  --dur-film: 600ms;
+  --dur-film-long: 860ms;
   --font-head: Archivo, "IBM Plex Sans", Helvetica, Arial, sans-serif;
   --font-body: "IBM Plex Sans", Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
@@ -92,12 +100,16 @@ h3 { font-size: 1.125rem; font-weight: 500; letter-spacing: -0.01em; line-height
 .version span { color: var(--brass); }
 
 /* Hero */
-.hero { padding-block: clamp(48px, 7vw, 88px) clamp(32px, 4vw, 48px); }
+/* The film is the hero: the headline row and the film share one width, sized so the frame and its controls fit the first screen. */
+.hero { --film-w: min(100%, calc((100svh - 300px) * 16 / 9)); padding-block: clamp(24px, 3.5vw, 40px) clamp(56px, 8vw, 96px); }
+.hero-head { width: var(--film-w); margin: 0 auto 20px; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; }
+.hero .film-stage { width: var(--film-w); margin-inline: auto; }
 .hero h1 {
-  font-size: clamp(2.5rem, 5.6vw, 4.5rem);
-  line-height: 1.02;
+  font-size: clamp(1.75rem, 2.4vw, 2.125rem);
+  line-height: 1.04;
+  flex: 1 1 20rem;
   letter-spacing: -0.025em;
-  max-width: 20ch;
+  max-width: 24ch;
 }
 .lede { font-size: clamp(1.0625rem, 1.6vw, 1.25rem); color: var(--muted); max-width: 58ch; margin: 24px 0 0; }
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 32px; }
@@ -151,8 +163,8 @@ h3 { font-size: 1.125rem; font-weight: 500; letter-spacing: -0.01em; line-height
 .film-progress i { position: absolute; inset: 0; background: var(--brass); transform-origin: 0 50%; transform: scaleX(0); }
 
 .scene, .layer { position: absolute; inset: 0; padding: 6.4cqw 6cqw 5.4cqw; display: flex; flex-direction: column; gap: 2cqw; }
-.js .scene, .js .layer { opacity: 0; visibility: hidden; transition: opacity var(--dur-slow) var(--ease), visibility 0s linear var(--dur-slow); }
-.js .scene.on, .js .layer.on { opacity: 1; visibility: visible; transition: opacity var(--dur-slow) var(--ease), visibility 0s; }
+.js .scene, .js .layer { opacity: 0; visibility: hidden; transition: opacity 510ms var(--ease-film), visibility 0s linear 510ms; }
+.js .scene.on, .js .layer.on { opacity: 1; visibility: visible; transition: opacity 510ms var(--ease-film), visibility 0s; }
 html:not(.js) .scene:not(.s-end), html:not(.js) .layer, html:not(.js) .film-controls, html:not(.js) .hud { display: none; }
 
 .cap { margin: 0; font-family: var(--font-head); font-weight: 600; font-size: 3.6cqw; line-height: 1.08; letter-spacing: -0.025em; max-width: 72%; text-wrap: balance; }
@@ -162,22 +174,22 @@ html:not(.js) .scene:not(.s-end), html:not(.js) .layer, html:not(.js) .film-cont
 .vis svg { display: block; width: 100%; height: 100%; }
 .mono { font-family: var(--font-mono); }
 
-.js .film .cue, .js .film .w { opacity: 0; transform: translateY(0.45em); transition: opacity var(--dur-slow) var(--ease), transform 420ms var(--ease); }
+.js .film .cue, .js .film .w { opacity: 0; transform: translateY(0.45em); transition: opacity var(--dur-film) var(--ease-film), transform var(--dur-film-long) var(--ease-film); }
 .js .film .cue.on, .js .film .w.on { opacity: 1; transform: none; }
-.js .film .draw { stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 420ms var(--ease); }
+.js .film .draw { stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset var(--dur-film-long) var(--ease-film); }
 .js .film .draw.on { stroke-dashoffset: 0; }
-.js .film .grow-x, .js .film .grow-y { transform-box: fill-box; transition: transform var(--dur-slow) var(--ease); }
+.js .film .grow-x, .js .film .grow-y { transform-box: fill-box; transition: transform var(--dur-film) var(--ease-film); }
 .js .film .grow-x { transform-origin: 0 50%; transform: scaleX(0); }
 .js .film .grow-y { transform-origin: 50% 100%; transform: scaleY(0); }
 .js .film .grow-x.on, .js .film .grow-y.on { transform: none; }
-.film .lit { transition: fill var(--dur-base) var(--ease), color var(--dur-base) var(--ease); }
+.film .lit { transition: fill 400ms var(--ease-film), color 400ms var(--ease-film); }
 
 /* 1 Foundation */
 .s-name .vis { justify-content: flex-start; }
 .name { display: flex; flex-direction: column; align-items: flex-start; gap: 1.8cqw; }
 .word { margin: 0; display: flex; font-family: var(--font-mono); font-size: 9cqw; line-height: 1.1; }
 .glyph { position: relative; display: inline-block; width: 0.6em; height: 1.1em; overflow: hidden; }
-.glyph .cy, .glyph .la { position: absolute; inset: 0; text-align: center; transition: transform 420ms var(--ease), opacity var(--dur-slow) var(--ease); }
+.glyph .cy, .glyph .la { position: absolute; inset: 0; text-align: center; transition: transform var(--dur-film) var(--ease-film), opacity var(--dur-film) var(--ease-film); }
 .js .glyph .la { opacity: 0; transform: translateY(70%); }
 .js .glyph.on .cy { opacity: 0; transform: translateY(-70%); }
 .js .glyph.on .la { opacity: 1; transform: none; }
@@ -189,7 +201,7 @@ html:not(.js) .glyph .cy { display: none; }
 /* 2 Read */
 .vis-read { align-items: stretch; justify-content: space-between; }
 .files { flex: 1; min-width: 0; }
-.file { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; transition: stroke var(--dur-base) var(--ease); }
+.file { fill: none; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; transition: stroke 400ms var(--ease-film); }
 .col.on .file { stroke: var(--muted); }
 .shuttle { stroke: var(--brass); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .counters { flex: none; width: 19cqw; display: flex; flex-direction: column; justify-content: center; gap: 1.3cqw; }
@@ -234,7 +246,7 @@ html:not(.js) .glyph .cy { display: none; }
 .blink { animation: blink 1.05s step-end infinite; }
 .t-dot { display: inline-block; width: 0.22em; height: 0.62em; margin-right: 1ch; vertical-align: -0.02em; background: var(--brass); }
 .t-arg, .t-loc b { color: var(--brass); font-weight: 400; }
-.t-loc { text-decoration: underline 1px transparent; text-underline-offset: 0.35em; transition: text-decoration-color 420ms var(--ease) 240ms; }
+.t-loc { text-decoration: underline 1px transparent; text-underline-offset: 0.35em; transition: text-decoration-color var(--dur-film) var(--ease-film) 270ms; }
 .t-hit.on .t-loc { text-decoration-color: var(--brass); }
 
 /* 7 Repeat */
@@ -410,13 +422,13 @@ td:last-child { color: var(--brass); }
 @keyframes blink { 0%, 45% { opacity: 1; } 50%, 100% { opacity: 0; } }
 
 @media (prefers-reduced-motion: no-preference) {
-  .js .mark.building .m-plinth, .js .mark.building .m-weft { transform-box: fill-box; transform-origin: 0 50%; animation: grow-x var(--dur-slow) var(--ease) both; }
-  .js .mark.building .m-weft { animation-delay: 360ms; }
-  .js .mark.building .m-warp { transform-box: fill-box; transform-origin: 50% 100%; animation: grow-y var(--dur-slow) var(--ease) both; animation-delay: calc(120ms + var(--i) * 70ms); }
+  .js .mark.building .m-plinth, .js .mark.building .m-weft { transform-box: fill-box; transform-origin: 0 50%; animation: grow-x var(--dur-in) var(--ease-io) both; }
+  .js .mark.building .m-weft { animation-delay: 560ms; }
+  .js .mark.building .m-warp { transform-box: fill-box; transform-origin: 50% 100%; animation: grow-y var(--dur-in) var(--ease-io) both; animation-delay: calc(180ms + var(--i) * 110ms); }
 
   .js [data-reveal]:not(.in) .rule, .js [data-reveal]:not(.in) .meter i { transform: scaleX(0); }
-  .js [data-reveal].in .rule { animation: grow-x var(--dur-slow) var(--ease) both; animation-delay: calc(var(--i) * 180ms); }
-  .js [data-reveal].in .meter i { animation: grow-x 900ms var(--ease) both; animation-delay: 150ms; }
+  .js [data-reveal].in .rule { animation: grow-x var(--dur-in) var(--ease-io) both; animation-delay: calc(var(--i) * 260ms); }
+  .js [data-reveal].in .meter i { animation: grow-x 1600ms var(--ease-io) both; animation-delay: 300ms; }
 }
 
 /* Narrow screens */
@@ -455,4 +467,77 @@ td:last-child { color: var(--brass); }
 
 @media (prefers-reduced-motion: reduce) {
   .film *, .film *::before, .film *::after { transition: none !important; animation: none !important; }
+}
+
+/* Page motion outside the film: one vocabulary of words arriving, rules drawing and brass ticks landing. */
+.wd { display: inline-block; white-space: pre; }
+
+.tool-group dt { display: flex; align-items: center; gap: 12px; }
+.tool-glyph { width: 28px; height: 28px; flex: none; overflow: visible; }
+.tool-glyph path { fill: none; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.tool-glyph .gl { stroke: var(--muted); }
+.tool-glyph path.gb { stroke: var(--brass); }
+.tool-glyph rect.gb { fill: var(--brass); }
+.tool-glyph rect.gs:not(.gb) { fill: none; }
+.tool-glyph .gs, .tool-glyph .gf { transform-box: fill-box; }
+
+.js .tabs { position: relative; }
+.js .tabs [role="tab"]::after { display: none; }
+.js .tabs::before {
+  content: ""; position: absolute; left: 0; top: 0; height: 2px; width: var(--ink-w, 0);
+  background: var(--brass); transform: translate(var(--ink-x, 0), var(--ink-y, 0)); pointer-events: none;
+}
+.steps { position: relative; }
+
+
+@keyframes g-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes g-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes g-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes g-settle { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes panel-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pulse-x { 0% { left: 0; opacity: 1; } 92% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
+@keyframes pulse-y { 0% { top: 0; opacity: 1; } 92% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .js [data-words] .wd { transition: opacity var(--dur-in) var(--ease-io), transform var(--dur-in-long) var(--ease-io); transition-delay: calc(var(--wi) * 90ms); }
+  .js [data-words]:not(.in) .wd { opacity: 0; transform: translateY(0.35em); }
+  .js .hero-actions { animation: g-settle var(--dur-in-long) var(--ease-io) 700ms both; }
+  .js .hero .film { animation: g-settle 1400ms var(--ease-io) 200ms both; }
+
+  .js .steps:not(.in) .step > :not(.rule) { opacity: 0; transform: translateY(6px); }
+  .js .steps .step > :not(.rule) { transition: opacity var(--dur-in) var(--ease-io), transform var(--dur-in-long) var(--ease-io); transition-delay: calc(var(--i) * 260ms + 220ms); }
+  .steps::after { content: ""; position: absolute; top: -3px; left: 0; width: 3px; height: 7px; margin-left: -1px; background: var(--brass); opacity: 0; pointer-events: none; }
+  .js .steps.in::after { animation: pulse-x 1700ms var(--ease-io) 200ms both; }
+
+  .js .tabs::before { transition: transform 600ms var(--ease-io), width 600ms var(--ease-io); }
+  .js .panel.enter { animation: panel-in 500ms var(--ease-io) both; }
+
+  .js .tool-group .gd { stroke-dasharray: 1; stroke-dashoffset: 1; }
+  .js .tool-group .gf, .js .tool-group .gs { opacity: 0; }
+  .js .tool-group.in .gd { animation: g-draw 1200ms var(--ease-io) both; animation-delay: calc(var(--gi) * 140ms + var(--d, 0ms) * 1.6); }
+  .js .tool-group.in .gf { animation: g-fade 700ms var(--ease-io) both; animation-delay: calc(var(--gi) * 140ms + var(--d, 0ms) * 1.6); }
+  .js .tool-group.in .gs { animation: g-settle 1000ms var(--ease-io) both; animation-delay: calc(var(--gi) * 140ms + var(--d, 0ms) * 1.6); }
+  .js .tool-group.in .go { animation: g-out 700ms var(--ease-io) both; animation-delay: calc(var(--gi) * 140ms + var(--d, 0ms) * 1.6); }
+
+  .js .table-scroll:not(.in) tbody tr, .js ul[data-reveal]:not(.in) > li { opacity: 0; transform: translateY(6px); }
+  .js .table-scroll tbody tr, .js ul[data-reveal] > li { transition: opacity var(--dur-in) var(--ease-io), transform var(--dur-in-long) var(--ease-io); transition-delay: calc(var(--ri, 0) * 110ms); }
+
+  .js .foot:not(.in) .foot-plinth { transform: scaleX(0); }
+  .js .foot-plinth { transform-origin: 0 50%; transition: transform 1800ms var(--ease-io) 300ms; }
+  .js .foot.in .foot-brand .mark rect { transform-box: fill-box; animation: grow-y var(--dur-in) var(--ease-io) both; transform-origin: 50% 100%; }
+  .js .foot.in .foot-brand .mark rect:nth-child(2) { animation-delay: 110ms; }
+  .js .foot.in .foot-brand .mark rect:nth-child(3) { animation-delay: 220ms; }
+  .js .foot.in .foot-brand .mark rect:nth-child(n+4) { animation-name: grow-x; transform-origin: 0 50%; animation-delay: 380ms; }
+}
+
+@media (max-width: 760px) and (prefers-reduced-motion: no-preference) {
+  .steps::after { top: 0; left: -1px; margin-left: -1px; width: 3px; height: 7px; }
+  .js .steps.in::after { animation-name: pulse-y; }
+}
+
+.hero-head .hero-actions { margin-top: 0; min-width: 0; max-width: 100%; }
+.film-controls .facts { margin: 0 0 0 auto; font-size: 0.875rem; }
+
+@media (max-width: 760px) {
+  .hero-head .hero-actions { width: 100%; }
 }

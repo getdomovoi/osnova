@@ -24,6 +24,9 @@ function svg(tag, attrs, parent) {
 }
 
 const clamp01 = (value) => Math.min(1, Math.max(0, value));
+const easeInOut = (p) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
+// The film plays its authored timeline 1.15 times slower, so each entrance has room to ease in and out.
+const FILM_PACE = 1.15;
 
 // Scene 2: a field of files. A column lights when the shuttle crosses it, so its cue time follows its x.
 const READ_SWEEP = { from: 600, to: 3200, x0: 10, x1: 990 };
@@ -150,7 +153,7 @@ function setupFilm() {
     for (const cue of cues) cue.el.classList.toggle("on", t >= cue.at);
     for (const counter of counters) {
       const p = clamp01((t - counter.from) / (counter.to - counter.from));
-      counter.el.textContent = Math.round(counter.value * (1 - (1 - p) ** 3)).toLocaleString("en-US");
+      counter.el.textContent = Math.round(counter.value * easeInOut(p)).toLocaleString("en-US");
     }
     let typing = false;
     for (const typer of typers) {
@@ -166,7 +169,7 @@ function setupFilm() {
     }
     const index = Math.max(0, scenes.findLastIndex((scene) => t >= scene.start));
     if (progress) progress.style.transform = `scaleX(${t / total})`;
-    if (timeOut) timeOut.textContent = `00:${(t / 1000).toFixed(1).padStart(4, "0")}`;
+    if (timeOut) timeOut.textContent = `00:${((t * FILM_PACE) / 1000).toFixed(1).padStart(4, "0")}`;
     if (countOut) countOut.textContent = `${String(index + 1).padStart(2, "0")} / ${String(scenes.length).padStart(2, "0")}`;
     if (nameOut) nameOut.textContent = scenes[index]?.name.toLowerCase() ?? "";
     chips.forEach((chip, i) => (i === index ? chip.setAttribute("aria-current", "step") : chip.removeAttribute("aria-current")));
@@ -179,7 +182,7 @@ function setupFilm() {
   function frameStep(now) {
     if (!playing) return;
     // Cap the step so a tab that slept does not jump the film forward.
-    t = Math.min(total, t + Math.min(100, now - lastFrame));
+    t = Math.min(total, t + Math.min(100, now - lastFrame) / FILM_PACE);
     lastFrame = now;
     render();
     if (t >= total) {
@@ -251,19 +254,103 @@ function setupFilm() {
   }, { threshold: 0.4 }).observe(frame);
 }
 
+// Headings arrive word by word. Screen readers get the sentence once, from a hidden copy.
+function splitWords(el) {
+  const text = el.textContent ?? "";
+  const spoken = document.createElement("span");
+  spoken.className = "visually-hidden";
+  spoken.textContent = text;
+  const shown = document.createElement("span");
+  shown.setAttribute("aria-hidden", "true");
+  text.split(/(?<=\s)/).forEach((token, i) => {
+    const word = document.createElement("span");
+    word.className = "wd";
+    word.style.setProperty("--wi", String(i));
+    word.textContent = token;
+    shown.append(word);
+  });
+  el.replaceChildren(spoken, shown);
+}
+
+// One line glyph per tool, drawn from the image its name comes from. gd strokes draw, gf and gs fade or settle in.
+const TOOL_GLYPHS = {
+  ground: '<path class="gl gd" pathLength="1" d="M3 22H29"/><path class="gl gd" style="--d:250ms" pathLength="1" d="M7 22l-3 4M13 22l-3 4M19 22l-3 4M25 22l-3 4"/><rect class="gb gf" style="--d:520ms" x="15" y="13" width="3" height="7"/>',
+  thread: '<path class="gl gd" pathLength="1" d="M9 4V28M16 4V28M23 4V28"/><path class="gb gd" style="--d:320ms" pathLength="1" d="M3 16H7M11 16H21M25 16H29"/>',
+  outline: '<path class="gl gd" pathLength="1" d="M6 4H26V28H6Z"/><path class="gb gd" style="--d:360ms" pathLength="1" d="M10 10H22M10 16H19M10 22H21"/>',
+  groundwork: '<path class="gl gd" pathLength="1" d="M4 4h6v6h-6zM13 4h6v6h-6zM22 4h6v6h-6zM4 13h6v6h-6zM22 13h6v6h-6zM4 22h6v6h-6zM13 22h6v6h-6zM22 22h6v6h-6z"/><path class="gb gd" style="--d:460ms" pathLength="1" d="M13 13h6v6h-6z"/>',
+  footing: '<path class="gl gd" pathLength="1" d="M3 26H29"/><path class="gl gs" style="--d:260ms" d="M9 15H23V26H9Z"/><rect class="gb gf" style="--d:620ms" x="15" y="8" width="3" height="6"/>',
+  warp: '<path class="gl gd" pathLength="1" d="M3 26H29"/><path class="gb gd" style="--d:220ms" pathLength="1" d="M8 26V5M16 26V9M24 26V7"/>',
+  tests: '<path class="gl gd" pathLength="1" d="M5 6V26M27 6V26"/><path class="gl go" style="--d:420ms" d="M5 14L16 22L27 14"/><path class="gb gd" style="--d:460ms" pathLength="1" d="M5 14H27"/>',
+  settle: '<path class="gl gs" d="M4 12H28"/><path class="gb gd" style="--d:440ms" pathLength="1" d="M8 12V20M16 12V25M24 12V17"/>',
+  plumb: '<path class="gl gd" pathLength="1" d="M6 4H26"/><path class="gb gd" style="--d:200ms" pathLength="1" d="M16 4V21"/><rect class="gb gs" style="--d:560ms" x="14" y="21" width="4" height="6"/>',
+  unreferenced: '<path class="gl gd" pathLength="1" d="M3 27H29"/><path class="gl gd" style="--d:220ms" pathLength="1" d="M8 27V5M16 27V5"/><path class="gb gd" style="--d:420ms" pathLength="1" d="M24 5V16"/><path class="gl gf" style="--d:700ms" stroke-dasharray="2 2" d="M24 19V27"/>',
+};
+
+function buildToolGlyphs() {
+  for (const group of document.querySelectorAll(".tool-group")) {
+    group.querySelectorAll("dl > div").forEach((row, i) => {
+      const dt = row.querySelector("dt");
+      const name = dt?.textContent?.trim() ?? "";
+      const markup = TOOL_GLYPHS[name];
+      if (!dt || !markup) return;
+      const glyph = document.createElementNS(SVG, "svg");
+      glyph.setAttribute("class", "tool-glyph");
+      glyph.setAttribute("viewBox", "0 0 32 32");
+      glyph.setAttribute("aria-hidden", "true");
+      glyph.style.setProperty("--gi", String(i));
+      glyph.innerHTML = markup;
+      dt.prepend(glyph);
+      // Pointing at a tool replays its glyph from the first stroke.
+      row.addEventListener("mouseenter", () => {
+        if (!group.classList.contains("in") || reduceMotion.matches) return;
+        for (const animation of glyph.getAnimations({ subtree: true })) {
+          animation.currentTime = 0;
+          animation.play();
+        }
+      });
+    });
+  }
+}
+
+function countUp(el) {
+  const target = Number(el.dataset.countup);
+  if (reduceMotion.matches || !Number.isFinite(target)) return;
+  const start = window.performance.now();
+  const step = (now) => {
+    const p = clamp01((now - start - 150) / 1800);
+    el.textContent = Math.round(target * easeInOut(p)).toLocaleString("en-US");
+    if (p < 1) window.requestAnimationFrame(step);
+  };
+  window.requestAnimationFrame(step);
+}
+
 function setupReveals() {
+  for (const el of document.querySelectorAll("[data-words]")) {
+    splitWords(el);
+    el.setAttribute("data-reveal", "");
+  }
+  document.querySelectorAll(".tool-group").forEach((group) => group.setAttribute("data-reveal", ""));
+  document.querySelectorAll(".table-scroll tbody tr, ul[data-reveal] > li").forEach((row) => {
+    row.style.setProperty("--ri", String(Array.prototype.indexOf.call(row.parentElement?.children ?? [], row)));
+  });
+  if (!reduceMotion.matches) document.querySelectorAll("[data-countup]").forEach((el) => (el.textContent = "0"));
+  const reveal = (el) => {
+    el.classList.add("in");
+    el.querySelectorAll("[data-countup]").forEach(countUp);
+  };
   const targets = document.querySelectorAll("[data-reveal]");
   if (!("IntersectionObserver" in window)) {
-    targets.forEach((target) => target.classList.add("in"));
+    targets.forEach(reveal);
     return;
   }
+  // Reveal when the top edge is a tenth of the way into the viewport, whatever the element's height.
   const observer = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
-      entry.target.classList.add("in");
+      reveal(entry.target);
       observer.unobserve(entry.target);
     }
-  }, { threshold: 0.3 });
+  }, { threshold: 0, rootMargin: "0px 0px -10% 0px" });
   targets.forEach((target) => observer.observe(target));
 }
 
@@ -271,14 +358,33 @@ function setupTabs() {
   const list = document.querySelector("[data-tabs]");
   if (!list) return;
   const tabs = Array.from(list.querySelectorAll('[role="tab"]'));
+  let current = null;
+  // One brass underline slides to the selected tab; its box comes from the tab's own padding.
+  const placeInk = () => {
+    if (!current) return;
+    const pad = parseFloat(window.getComputedStyle(current).paddingLeft) || 0;
+    list.style.setProperty("--ink-x", `${current.offsetLeft + pad}px`);
+    list.style.setProperty("--ink-y", `${current.offsetTop + current.offsetHeight - 2}px`);
+    list.style.setProperty("--ink-w", `${current.offsetWidth - pad * 2}px`);
+  };
+  window.addEventListener("resize", placeInk);
   const select = (tab, focus) => {
+    const changed = current !== null && current !== tab;
+    current = tab;
     for (const other of tabs) {
       const selected = other === tab;
       other.setAttribute("aria-selected", String(selected));
       other.tabIndex = selected ? 0 : -1;
       const panel = document.getElementById(other.getAttribute("aria-controls") ?? "");
-      if (panel) panel.hidden = !selected;
+      if (!panel) continue;
+      panel.hidden = !selected;
+      if (selected && changed) {
+        panel.classList.remove("enter");
+        void panel.offsetWidth;
+        panel.classList.add("enter");
+      }
     }
+    placeInk();
     if (!focus) return;
     tab.focus({ preventScroll: true });
     // Scroll only the tab strip; scrollIntoView would also move the page.
@@ -361,6 +467,7 @@ async function showLatestVersion() {
 
 buildMark();
 setupFilm();
+buildToolGlyphs();
 setupReveals();
 setupTabs();
 setupCopy();

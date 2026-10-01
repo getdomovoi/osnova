@@ -52,27 +52,19 @@
 <main id="main">
 
 <section class="hero wrap" aria-labelledby="hero-title">
-  <h1 id="hero-title">A deterministic code map for AI coding agents</h1>
-  <p class="lede">Osnova reads your repository with tree-sitter and builds a symbol and call graph. Your agent asks where things are and who calls them, and gets exact file and line back. Same commit, same answer.</p>
-  <div class="hero-actions">
-    <a class="button" href="#install">Install with your agent</a>
-    <div class="oneliner">
-      <span class="sign" aria-hidden="true">$</span>
-      <code>npm install -g @getdomovoi/osnova</code>
-      <button class="copy" type="button" data-copy="npm install -g @getdomovoi/osnova">Copy</button>
+  <div class="hero-head">
+    <h1 id="hero-title" data-words>A deterministic code map for AI coding agents</h1>
+    <div class="hero-actions">
+      <a class="button" href="#install">Install with your agent</a>
+      <div class="oneliner">
+        <span class="sign" aria-hidden="true">$</span>
+        <code>npm install -g @getdomovoi/osnova</code>
+        <button class="copy" type="button" data-copy="npm install -g @getdomovoi/osnova">Copy</button>
+      </div>
     </div>
   </div>
-  <ul class="facts">
-    <li>Twenty languages</li>
-    <li>Ten tools over MCP and CLI</li>
-    <li>No telemetry, no network</li>
-    <li>Apache-2.0</li>
-  </ul>
-</section>
-
-<section class="film-section wrap" aria-labelledby="film-title">
-  <h2 id="film-title" class="visually-hidden">How osnova works, in eight scenes</h2>
   <div class="film" data-film>
+    <div class="film-stage">
     <div class="film-frame" aria-hidden="true">
       <span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
       <div class="hud hud-l"><span>osnova</span><span data-film-name></span></div>
@@ -228,6 +220,13 @@
     <div class="film-controls">
       <button class="ghost film-toggle" type="button" data-film-toggle>Play</button>
       <div class="chips" role="group" aria-label="Jump to scene" data-film-chips></div>
+      <ul class="facts">
+        <li>Twenty languages</li>
+        <li>Ten tools over MCP and CLI</li>
+        <li>No telemetry, no network</li>
+        <li>Apache-2.0</li>
+      </ul>
+    </div>
     </div>
     <ol class="visually-hidden">
       <li>Osnova is a Slavic word. It means base or foundation, and on a loom, the warp: the threads held taut so the cloth can be woven on them.</li>
@@ -243,7 +242,7 @@
 </section>
 
 <section class="turn wrap" aria-labelledby="turn-title">
-  <h2 id="turn-title">Where it sits in one agent turn</h2>
+  <h2 id="turn-title" data-words>Where it sits in one agent turn</h2>
   <p class="section-lede">Osnova answers twice. Before the edit, with the symbols, callers and tests the task touches. After it, with what the change reached.</p>
   <ol class="steps" data-reveal>
     <li class="step" style="--i:0"><span class="rule" aria-hidden="true"></span><code class="step-name">prompt</code><p>The developer asks for a change in billing.</p><span class="who">human</span></li>
@@ -255,7 +254,7 @@
 </section>
 
 <section class="install wrap" id="install" aria-labelledby="install-title">
-  <h2 id="install-title">Install with your agent</h2>
+  <h2 id="install-title" data-words>Install with your agent</h2>
   <p class="section-lede">Paste one prompt into the agent you already use. It installs osnova, shows you the config change, and writes nothing until you approve. You need Node.js 22.13 or newer.</p>
 
   <div class="tabs" role="tablist" aria-label="Choose your agent" data-tabs>
@@ -441,7 +440,7 @@ osnova setup agents --apply</code></pre>
 </section>
 
 <section class="tools wrap" id="tools" aria-labelledby="tools-title">
-  <h2 id="tools-title">Ten tools, named for the ground under the code</h2>
+  <h2 id="tools-title" data-words>Ten tools, named for the ground under the code</h2>
   <p class="section-lede">Your agent calls them over MCP. You can type the same names on the command line: <code>osnova warp</code> and <code>osnova_warp</code> run the same query.</p>
   <div class="tool-groups">
     <div class="tool-group">
@@ -473,7 +472,7 @@ osnova setup agents --apply</code></pre>
 </section>
 
 <section class="evidence wrap" id="evidence" aria-labelledby="evidence-title">
-  <h2 id="evidence-title">Measured, with the misses left in</h2>
+  <h2 id="evidence-title" data-words>Measured, with the misses left in</h2>
 
   <div class="oracle" data-reveal>
     <div class="oracle-text">
@@ -484,13 +483,13 @@ osnova setup agents --apply</code></pre>
     <div class="oracle-rows">
       <div class="oracle-row">
         <p class="oracle-name"><code>click</code> <span>Python, 160 files</span></p>
-        <p class="oracle-fig">0 false edges in 2,883</p>
+        <p class="oracle-fig">0 false edges in <b data-countup="2883">2,883</b></p>
         <div class="meter" style="--v:0.904" aria-hidden="true"><i></i></div>
         <p class="oracle-cov">Covers 90.4% of the call sites the checker resolves in the repository</p>
       </div>
       <div class="oracle-row">
         <p class="oracle-name"><code>zod</code> <span>TypeScript, 702 files</span></p>
-        <p class="oracle-fig">4 false edges in 21,276</p>
+        <p class="oracle-fig">4 false edges in <b data-countup="21276">21,276</b></p>
         <div class="meter" style="--v:0.769" aria-hidden="true"><i></i></div>
         <p class="oracle-cov">Covers 76.9% of the call sites the checker resolves in the repository</p>
       </div>
@@ -500,7 +499,7 @@ osnova setup agents --apply</code></pre>
   <div class="grep">
     <h3>Grep against the graph</h3>
     <p>The first regex a person types is wrong more often than it looks. Nine call-site sets in five languages were verified line by line. Each cell shows sites found, then precision and recall.</p>
-    <div class="table-scroll">
+    <div class="table-scroll" data-reveal>
       <table>
         <thead><tr><th scope="col">Target</th><th scope="col" class="num">Verified sites</th><th scope="col" class="num">Text search</th><th scope="col" class="num">osnova</th></tr></thead>
         <tbody>
@@ -521,7 +520,7 @@ osnova setup agents --apply</code></pre>
 
   <div class="limits">
     <h3>What osnova does not do</h3>
-    <ul>
+    <ul data-reveal>
       <li><strong>No type inference.</strong> Edges come from syntax: calls, imports, name references, written heritage and framework routes. Resolution is heuristic, and every edge says how it was resolved.</li>
       <li><strong>No semantic search.</strong> <code>ground</code> ranks definitions by their words. It is fast and explainable, and it will not match a paraphrase.</li>
       <li><strong>No proof of safety.</strong> An empty caller list means the index found no caller, not that none exists.</li>
@@ -532,7 +531,7 @@ osnova setup agents --apply</code></pre>
 
 </main>
 
-<footer class="foot">
+<footer class="foot" data-reveal>
   <div class="wrap foot-inner">
     <div class="foot-brand">
       <svg class="mark mark-static" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.4" y="2.6" width="3.1" height="17.9" rx="0.4"/><rect x="10.45" y="5.6" width="3.1" height="14.9" rx="0.4"/><rect x="16.5" y="4.1" width="3.1" height="16.4" rx="0.4"/><rect x="1.6" y="10.9" width="20.8" height="2.6" rx="0.4"/><rect x="1.6" y="17.4" width="20.8" height="3.1" rx="0.4"/></svg>
