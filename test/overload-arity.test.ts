@@ -362,3 +362,20 @@ describe("partial identity in the cache", () => {
     expect(loaded?.files.get("B.cs")?.diagnostics ?? []).toEqual([]);
   });
 });
+
+describe("nested C# partial types", () => {
+  it("keeps the arity of every enclosing type in the part identity", async () => {
+    await write({
+      "A.cs": "namespace N {\n partial class Outer<T> {\n  public partial class Inner {\n   public void Put(int x) {}\n   public void Run() { Put(1); Put(); }\n  }\n }\n}\n",
+      "B.cs": "namespace N {\n partial class Outer<T, U> {\n  public partial class Inner {\n   public void Put(int x, int y = 0) {}\n  }\n }\n}\n",
+      "C.cs": "namespace N {\n partial class Outer<T> {\n  public partial class Inner {\n   public void Put() {}\n  }\n }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const calls = callsAt(index, "A.cs", 5, "Put").map((edge) => [edge.arguments, edge.toSymbol, edge.overload]).sort((a, b) => Number(a[0]) - Number(b[0]));
+    expect(calls).toEqual([[0, "C.cs#Outer.Inner.Put", { line: 4, from: "A.cs#Outer.Inner.Put" }], [1, "A.cs#Outer.Inner.Put", undefined]]);
+    expect(index.files.get("A.cs")?.symbols.find((symbol) => symbol.qualifiedName === "A.cs#Outer.Inner")?.partial).toBe("N`1.0");
+    expect(index.files.get("B.cs")?.symbols.find((symbol) => symbol.qualifiedName === "B.cs#Outer.Inner")?.partial).toBe("N`2.0");
+    const loaded = await loadIndex(workspace, { cacheDir });
+    expect(loaded?.files.get("A.cs")?.symbols.find((symbol) => symbol.qualifiedName === "A.cs#Outer.Inner")?.partial).toBe("N`1.0");
+  });
+});

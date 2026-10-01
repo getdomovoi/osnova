@@ -363,7 +363,7 @@ function deserializeBody(
         throw new Error("osnova: corrupt exported-name metadata");
       }
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
-      if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[^\s`]*`\d+$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
+      if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[^\s`]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
       if (symbol.heritage !== undefined && (!Array.isArray(symbol.heritage) || !symbol.heritage.every((item: unknown) => typeof item === "object" && item !== null &&
         (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||

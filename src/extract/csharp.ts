@@ -38,6 +38,9 @@ export const csharpAdapter: LanguageAdapter = {
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
     const namespaces: string[] = [];
+    // The generic arity of each enclosing type, outermost first: `Outer<T>.Inner` and `Outer<T, U>.Inner`
+    // are different types with the same local name.
+    const arities: number[] = [];
     const visit = (node: Node): void => {
       switch (node.type) {
         case "namespace_declaration":
@@ -65,12 +68,12 @@ export const csharpAdapter: LanguageAdapter = {
                   ? "struct"
                   : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
-          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) {
-            out.markPartial(`${namespaces.join(".")}\`${childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length}`);
-          }
+          arities.push(childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length);
+          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
+          arities.pop();
           return;
         }
         case "method_declaration":
