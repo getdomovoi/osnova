@@ -71,7 +71,7 @@ export function makeGenericAdapter(
     extract(tree: Tree, source: string): AdapterOutput {
       query ??= compile(queryText);
       const rawPending: Pending[] = [];
-      const rawCalls: Array<{ name: string; node: Node }> = [];
+      const rawCalls: Array<{ name: string; node: Node; at: Node }> = [];
       const headSpans = new Set<string>();
       for (const match of query.matches(tree.rootNode)) {
         const nameCapture = match.captures.find((capture) => capture.name === "name");
@@ -83,7 +83,7 @@ export function makeGenericAdapter(
           const kind = definitionKinds[capture.name];
           if (kind !== undefined) rawPending.push({ name, kind, node: capture.node, end: body ?? capture.node });
           else if (capture.name === "reference.call") {
-            if (!ignoreCallNames.has(name)) rawCalls.push({ name, node: capture.node });
+            if (!ignoreCallNames.has(name)) rawCalls.push({ name, node: capture.node, at: nameCapture.node });
           } else if (capture.name === "definition.head") {
             headSpans.add(`${capture.node.startIndex}:${capture.node.endIndex}`);
           }
@@ -119,7 +119,8 @@ export function makeGenericAdapter(
             break;
           }
         }
-        return { kind: "calls", toName: call.name, line: call.node.startPosition.row + 1, enclosing };
+        // The line of the callee name, not of the call expression, which starts at the receiver of a chained call.
+        return { kind: "calls", toName: call.name, line: call.at.startPosition.row + 1, enclosing };
       });
       return { definitions, edges };
     },

@@ -27,13 +27,15 @@ function enclosing(index: OsnovaIndex, file: string, line: number): OsnovaSymbol
 /**
  * The server's references to the target, sorted against the graph answer above it: the declaration, callers the graph
  * already resolved, unresolved leads the server confirms, and locations the graph does not hold. Server locations stay
- * in this section and never become graph edges. A call line may sit one line from the identifier the server reports.
+ * in this section and never become graph edges. A call edge sits on the callee name's line, where the server reports it;
+ * an edge anchored elsewhere, such as a decorator route above its method, may sit one line from the reported name.
  */
 export function formatLspReferences(index: OsnovaIndex, result: Found, answer: LspReferencesAnswer, budget = maximumLspSectionCodeUnits): string {
   if (answer.status === "unavailable") return `${header}): unavailable (${answer.code})`;
-  // A location on a line the graph lists matches that line, however many calls the line holds. A call split
-  // across two lines may instead match a neighbouring listed line, but only a line no location matched exactly, and
-  // each such line once, so an import next to a resolved call is not mistaken for that call.
+  // A location on a line the graph lists matches that line, however many calls the line holds. An edge anchored one
+  // line from the name (a decorator route above its method, a registration whose handler sits on the next line) may
+  // instead match a neighbouring listed line, but only a line no location matched exactly, and each such line once,
+  // so an import next to a resolved call is not mistaken for that call.
   const resolved = new Set(result.hits.filter((hit) => hit.depth === 1 && hit.file !== null && hit.line !== null).map((hit) => `${hit.file}:${hit.line}`));
   const leads = new Set(result.unresolved.filter((lead) => lead.depth === 1).map((lead) => `${lead.edge.fromFile}:${lead.edge.line}`));
   const matched = new Set<string>();

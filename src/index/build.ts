@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { discardParser, getParser } from "../grammar/loader.js";
 import { languageForPath } from "../grammar/languages.js";
 import { adapterFor } from "../extract/adapters.js";
+import { recoverCsharpTree } from "../extract/csharp-recovery.js";
 import { markShadowed } from "../extract/scope.js";
 import { forgetTree, localJoin } from "../extract/util.js";
 import type { RawDefinition, RawEdge } from "../extract/adapter.js";
@@ -82,7 +83,8 @@ export async function extractCard(
     throw new IndexingError({ phase: "parse", path: relPath, code: "grammar-unavailable" }, error);
   });
   try {
-    const tree = parser.parse(text);
+    const parsed = parser.parse(text);
+    const tree = parsed !== null && language === "c_sharp" && parsed.rootNode.hasError ? recoverCsharpTree(parser, text, parsed) : parsed;
     if (tree !== null) {
       try {
         if (tree.rootNode.hasError) {
@@ -98,6 +100,7 @@ export async function extractCard(
           enclosing: edge.enclosing,
           ...(edge.binding === undefined ? {} : { binding: edge.binding }),
           ...(edge.route === undefined ? {} : { route: edge.route }),
+          ...(edge.arguments === undefined ? {} : { arguments: edge.arguments }),
         }));
       } finally {
         tree.delete();
@@ -126,6 +129,9 @@ export async function extractCard(
       signature: def.signature,
       lineCount: Math.max(1, def.span.endLine - def.span.startLine + 1),
       ...(def.shadowed === undefined ? {} : { shadowed: def.shadowed }),
+      ...(def.partial === undefined ? {} : { partial: def.partial }),
+      ...(def.supertypes === undefined ? {} : { supertypes: def.supertypes }),
+      ...(def.interfaces === undefined ? {} : { interfaces: def.interfaces }),
       ...(def.exportedNames === undefined ? {} : { exportedNames: def.exportedNames }),
       ...(def.memberKind === undefined ? {} : { memberKind: def.memberKind }),
       ...(def.heritage === undefined ? {} : { heritage: def.heritage }),
@@ -139,6 +145,7 @@ export async function extractCard(
       ...(def.elementTypes === undefined ? {} : { elementTypes: def.elementTypes }),
       ...(def.values === undefined ? {} : { values: def.values }),
       ...(def.valueTypes === undefined ? {} : { valueTypes: def.valueTypes }),
+      ...(def.parameters === undefined ? {} : { parameters: def.parameters }),
     };
   });
 
