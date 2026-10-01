@@ -103,9 +103,9 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, parameters });
   }
 
-  markPartial(): void {
+  markPartial(identity: string): void {
     const last = this.definitions.pop();
-    if (last !== undefined) this.definitions.push({ ...last, partial: true });
+    if (last !== undefined) this.definitions.push({ ...last, partial: identity });
   }
 
   // The edge sits at the line `node` starts on. A call passes its callee name token, so a call written on its own

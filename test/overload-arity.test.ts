@@ -291,3 +291,28 @@ describe("stored provenance of a moved overload edge", () => {
     }
   });
 });
+
+describe("C# partial parts are one type only within one namespace and arity", () => {
+  it("does not merge partial types of the same name in different namespaces", async () => {
+    await write({
+      "One.cs": "namespace One {\n partial class Box {\n  public void Put(int x) {}\n  public void Run() { Put(1); Put(); }\n }\n}\n",
+      "Two.cs": "namespace Two {\n partial class Box {\n  public void Put(int x, int y = 0) {}\n  public void Put() {}\n }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const calls = callsAt(index, "One.cs", 4, "Put").map((edge) => [edge.arguments, edge.toSymbol, edge.overload]);
+    expect(calls).toEqual([[0, "One.cs#Box.Put", { candidates: [] }], [1, "One.cs#Box.Put", undefined]]);
+  });
+
+  it("merges parts in one namespace, block or file-scoped, but not across generic arity", async () => {
+    await write({
+      "A.cs": "namespace N.M {\n partial class Box {\n  public void Put(int x) {}\n  public void Run() { Put(); }\n }\n}\n",
+      "B.cs": "namespace N.M;\npartial class Box {\n  public void Put() {}\n}\n",
+      "G.cs": "namespace N.M {\n partial class Box<T> {\n  public void Put(int x, int y) {}\n }\n}\n",
+      "U.cs": "namespace N.M {\n class Use {\n  void Go(Box b) { b.Put(1, 2); }\n }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "A.cs", 4, "Put")).toEqual({ toSymbol: "B.cs#Box.Put", arguments: 0, overload: { line: 3, from: "A.cs#Box.Put" } });
+    expect(index.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("N.M`0");
+    expect(index.files.get("G.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("N.M`1");
+  });
+});

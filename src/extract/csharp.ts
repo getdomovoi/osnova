@@ -37,8 +37,17 @@ export const csharpAdapter: LanguageAdapter = {
     const out = new Extractor();
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
+    const namespaces: string[] = [];
     const visit = (node: Node): void => {
       switch (node.type) {
+        case "namespace_declaration":
+        case "file_scoped_namespace_declaration": {
+          const name = node.childForFieldName("name");
+          if (name !== null) namespaces.push(name.text.replace(/\s+/g, ""));
+          for (const child of childrenOf(node)) visit(child);
+          if (name !== null) namespaces.pop();
+          return;
+        }
         case "class_declaration":
         case "interface_declaration":
         case "struct_declaration":
@@ -56,7 +65,9 @@ export const csharpAdapter: LanguageAdapter = {
                   ? "struct"
                   : "class";
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
-          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial();
+          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) {
+            out.markPartial(`${namespaces.join(".")}\`${childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length}`);
+          }
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
           out.pop();

@@ -540,20 +540,26 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
 
   // Java and C# overload sets reach past the target's file. A C# type written `partial` has its other
-  // `partial` declarations of the same name in other C# files as parts (qualified names carry no
-  // namespace). A base written without an import is the single holder of that name in the language,
-  // as a receiver annotation is.
+  // `partial` declarations of the same local name, namespace and generic arity in other C# files as parts.
+  // A base written without an import is the single type of that name in the language, as a receiver
+  // annotation is.
   // A file the grammar could not parse cleanly may attribute a nested type's members to its outer type,
   // so a partial type with such a file is not merged.
   const parsedCleanly = (file: string): boolean => parsedWithoutErrors(files.get(file));
-  const typeKey = (symbol: OsnovaSymbol): string => `${files.get(symbol.file)?.language ?? ""}\u0000${localOfQualifiedName(symbol.qualifiedName)}`;
+  // One C# type: the parts of a partial type share its local name and namespace-and-arity identity;
+  // any other type is its own declaration.
+  const partialIdentity = (symbol: OsnovaSymbol): string | undefined => declarationsOf(symbol).find((part) => part.partial !== undefined)?.partial;
+  const typeKey = (symbol: OsnovaSymbol): string => {
+    const identity = partialIdentity(symbol);
+    return identity === undefined ? symbol.qualifiedName : `${localOfQualifiedName(symbol.qualifiedName)}\u0000${identity}`;
+  };
   const partsOf = (holder: OsnovaSymbol): { parts: OsnovaSymbol[]; complete: boolean } => {
     const parts = new Map<string, OsnovaSymbol>([[holder.file, holder]]);
     let complete = true;
-    if (files.get(holder.file)?.language === "c_sharp" && declarationsOf(holder).some((part) => part.partial === true)) {
+    if (files.get(holder.file)?.language === "c_sharp" && partialIdentity(holder) !== undefined) {
       if (!parsedCleanly(holder.file)) return { parts: declarationsOf(holder), complete: false };
       for (const symbol of symbolsByName.get(holder.name) ?? []) {
-        if (!isHolder(symbol) || symbol.partial !== true || parts.has(symbol.file) || typeKey(symbol) !== typeKey(holder)) continue;
+        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || symbol.partial === undefined || parts.has(symbol.file) || typeKey(symbol) !== typeKey(holder)) continue;
         if (parsedCleanly(symbol.file)) parts.set(symbol.file, symbol);
         else complete = false;
       }
