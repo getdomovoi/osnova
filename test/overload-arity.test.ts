@@ -271,3 +271,23 @@ describe("incremental updates that change only a resolution input outside the sy
     expect(choiceAt(afterFix, "A.cs", 4, "Put").toSymbol).toBe("A2.cs#A.Put");
   });
 });
+
+describe("stored provenance of a moved overload edge", () => {
+  it("refuses a from that names no indexed method", async () => {
+    await write({
+      "src/Base.java": "class Base {\n  void ping() { }\n}\n",
+      "src/Sub.java": "class Sub extends Base {\n  void ping(int a) { }\n}\n",
+      "src/Run.java": "class Run {\n  void go(Sub s) {\n    s.ping();\n  }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const paths = [...index.files.keys()].sort();
+    const moved = index.edges.find((edge) => edge.overload !== undefined && "from" in edge.overload && edge.overload.from !== undefined);
+    expect(moved?.overload).toEqual({ line: 2, from: "src/Sub.java#Sub.ping" });
+    expect(deserializeEdges(serializeEdges(index.edges, paths).bytes, paths, index.files)).toEqual(index.edges);
+    for (const from of ["not-indexed.java#No.Such", "src/Sub.java#", "#Sub.ping", "src/Sub.java#Sub..ping", "src/Sub.java#Sub.nothing"]) {
+      const tampered = index.edges.map((edge) => edge === moved ? { ...edge, overload: { line: 2, from } } : edge);
+      const store = () => deserializeEdges(serializeEdges(tampered, paths).bytes, paths, index.files);
+      expect(store, from).toThrow(/corrupt overload metadata/);
+    }
+  });
+});

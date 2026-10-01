@@ -219,12 +219,22 @@ function validateRoute(value: unknown): RouteInfo {
   return route.path === undefined ? { method: route.method } : { method: route.method, path: route.path };
 }
 
-function validateOverload(value: unknown, known: ReadonlySet<string>): OverloadChoice {
+// `from` names the method a moved edge resolved to first: `<indexed file>#<member path>` with no empty
+// segment, and, when the file cards are at hand (loading), a symbol that file declares.
+function validFrom(from: unknown, known: ReadonlySet<string>, declares?: (qualifiedName: string) => boolean): from is string {
+  if (typeof from !== "string") return false;
+  const hash = from.indexOf("#");
+  if (hash <= 0 || !known.has(from.slice(0, hash))) return false;
+  if (from.slice(hash + 1).split(".").some((segment) => segment.length === 0)) return false;
+  return declares === undefined || declares(from);
+}
+
+function validateOverload(value: unknown, known: ReadonlySet<string>, declares?: (qualifiedName: string) => boolean): OverloadChoice {
   const choice = value as { line?: unknown; from?: unknown; candidates?: unknown; elsewhere?: unknown } | null;
   const line = (item: unknown): item is number => integerIn(item, 1, Number.MAX_SAFE_INTEGER);
   if (typeof choice === "object" && choice !== null) {
     const keys = Object.keys(choice).sort().join(",");
-    if ((keys === "line" || keys === "from,line") && line(choice.line) && (choice.from === undefined || (typeof choice.from === "string" && choice.from.includes("#")))) {
+    if ((keys === "line" || keys === "from,line") && line(choice.line) && (choice.from === undefined || validFrom(choice.from, known, declares))) {
       return choice.from === undefined ? { line: choice.line } : { line: choice.line, from: choice.from };
     }
     if ((keys === "candidates" || keys === "candidates,elsewhere") && Array.isArray(choice.candidates) &&
@@ -254,7 +264,9 @@ export function deserializeEdges(bytes: Buffer, paths: readonly string[], files:
   const bindingTable = header.bindings.map((entry) => validateBinding(entry));
   const routeTable = header.routes.map((entry) => validateRoute(entry));
   const knownPaths = new Set(paths);
-  const overloadTable = header.overloads.map((entry) => validateOverload(entry, knownPaths));
+  const declares = (qualifiedName: string): boolean =>
+    files.get(qualifiedName.slice(0, qualifiedName.indexOf("#")))?.symbols.some((symbol) => symbol.qualifiedName === qualifiedName) ?? false;
+  const overloadTable = header.overloads.map((entry) => validateOverload(entry, knownPaths, declares));
   const out: OsnovaEdge[] = [];
   for (let i = 1; i < lines.length; i += 1) {
     const tuple = JSON.parse(lines[i]!) as unknown;
