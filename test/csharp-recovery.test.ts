@@ -109,6 +109,28 @@ describe("C# constructs the pinned grammar cannot read", () => {
   });
 });
 
+describe("C# record structs", () => {
+  it("index the type and own their members", async () => {
+    await write({
+      "R.cs": [
+        /* 1 */ "readonly record struct Forms(string? One, string? Many) : IFormattable",
+        /* 2 */ "{",
+        /* 3 */ "    public string Resolve(int n) => n == 1 ? One ?? \"\" : Many ?? \"\";",
+        /* 4 */ "    public string ToString(string? f, IFormatProvider? p) => Resolve(2);",
+        /* 5 */ "}",
+        /* 6 */ "record struct Point(int X, int Y);",
+        "",
+      ].join("\n"),
+      "Use.cs": "class Use\n{\n    string Run(Forms forms) => forms.Resolve(1);\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(symbolsOf(index, "R.cs")).toEqual(["struct Forms 1-5", "method Forms.Resolve 3-3", "method Forms.ToString 4-4", "struct Point 6-6"]);
+    expect(callAt(index, "Use.cs", 3, "Resolve")).toEqual(["R.cs#Forms.Resolve"]);
+    expect(callAt(index, "R.cs", 4, "Resolve")).toEqual(["R.cs#Forms.Resolve"]);
+    expect(index.symbols.get("R.cs#Forms")?.heritage).toEqual([{ kind: "local", name: "IFormattable" }]);
+  });
+});
+
 describe("csharpExcludedSpans", () => {
   const excluded = (text: string) => csharpExcludedSpans(text).map(([start, end]) => text.slice(start, end));
 

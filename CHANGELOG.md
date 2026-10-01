@@ -14,6 +14,7 @@ The extraction version moves to `structural-9.31` and the edge section format to
 
 - Two calls to one method on one line with different argument counts are two edges; they were merged into one.
 - C# files with a primary constructor on a class or struct (C# 12) or a raw string literal (C# 11) no longer lose the rest of the file to parse errors. The bundled grammar cannot read either construct, so such a file is parsed a second time without the constructor's parameter list, its base-type arguments and the body of each raw string (a single-line interpolation hole without quotes or braces stays readable); offsets do not move, so spans and signatures are the source's own. On the pinned humanizer checkout, C# files reported with `syntax-errors` fell from 136 to 36, and scored against Roslyn, false call edges fell from 55 to 23, claimed edges rose from 7264 to 7670 and in-repo sites covered from 58.5% to 62.2%. The remaining errors are mostly collection expressions and bodiless classes, which the grammar also cannot read.
+- C# `record struct` declarations are indexed as `struct` symbols that own their members and declared bases; the type was missing and its methods had no owner, so calls on a record struct receiver did not resolve. On the pinned humanizer checkout, in-repo sites covered rose from 62.2% to 62.6% with no new false edges.
 
 ## 0.11.0 (2026-09-30)
 
