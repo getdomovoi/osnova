@@ -105,18 +105,20 @@ export const rustAdapter: LanguageAdapter = {
           const fn = node.childForFieldName("function");
           if (fn !== null) {
             if (fn.type === "identifier") {
-              out.addEdge("calls", fn.text, node);
+              out.addEdge("calls", fn.text, fn);
             } else if (fn.type === "scoped_identifier" || fn.type === "scoped_type_identifier") {
-              const name = fn.childForFieldName("name")?.text ?? lastSegment(fn.text);
-              if (/^[A-Za-z_]\w*$/.test(name)) out.addEdge("calls", name, node, bindings.at(fn, node));
+              const nameNode = fn.childForFieldName("name");
+              const name = nameNode?.text ?? lastSegment(fn.text);
+              if (/^[A-Za-z_]\w*$/.test(name)) out.addEdge("calls", name, nameNode ?? fn, bindings.at(fn, node));
             } else if (fn.type === "field_expression") {
               const field = fn.childForFieldName("field");
-              if (field !== null) out.addEdge("calls", field.text, node, bindings.at(fn, node));
+              if (field !== null) out.addEdge("calls", field.text, field, bindings.at(fn, node));
             } else if (fn.type === "generic_function") {
               const inner = fn.childForFieldName("function");
               if (inner !== null) {
-                const name = inner.type === "identifier" ? inner.text : inner.childForFieldName("name")?.text ?? lastSegment(inner.text);
-                if (/^[A-Za-z_]\w*$/.test(name)) out.addEdge("calls", name, node, bindings.at(inner, node));
+                const nameNode = inner.type === "identifier" ? inner : inner.childForFieldName("name");
+                const name = nameNode?.text ?? lastSegment(inner.text);
+                if (/^[A-Za-z_]\w*$/.test(name)) out.addEdge("calls", name, nameNode ?? inner, bindings.at(inner, node));
               }
             }
           }
@@ -125,7 +127,7 @@ export const rustAdapter: LanguageAdapter = {
         }
         case "macro_invocation": {
           const macro = node.childForFieldName("macro");
-          if (macro !== null) out.addEdge("references", macro.text, node);
+          if (macro !== null) out.addEdge("references", macro.text, macro);
           return;
         }
         case "use_declaration": {

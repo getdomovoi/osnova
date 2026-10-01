@@ -103,6 +103,13 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, parameters });
   }
 
+  markPartial(): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, partial: true });
+  }
+
+  // The edge sits at the line `node` starts on. A call passes its callee name token, so a call written on its own
+  // line of a multi-line chain is not reported at the line where the chain's receiver starts.
   addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number): void {
     const name = toName.trim();
     if (name.length === 0 || name.length > 300) return;
@@ -126,11 +133,15 @@ export function argumentCount(list: Node | null): number | undefined {
   return list === null ? undefined : childrenOf(list).filter((child) => child.isNamed && !COMMENT_TYPES.has(child.type)).length;
 }
 
-export function lastIdentifier(node: Node): string | null {
-  if (node.type === "identifier") return node.text;
+export function lastIdentifierNode(node: Node): Node | null {
+  if (node.type === "identifier") return node;
   for (const child of childrenOf(node)) {
-    const found = lastIdentifier(child);
+    const found = lastIdentifierNode(child);
     if (found !== null) return found;
   }
   return null;
+}
+
+export function lastIdentifier(node: Node): string | null {
+  return lastIdentifierNode(node)?.text ?? null;
 }
