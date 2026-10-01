@@ -7,7 +7,8 @@ Every file here is a frozen measurement with its corpus fingerprint. A record in
 | Record | What it measures | Cited by |
 | --- | --- | --- |
 | `resolution-coverage-2026-09-21b.json` | Call-site resolution coverage on the pinned checkouts | `README.md`, `docs/reference.md` |
-| `type-checker-oracle-2026-09-21.json` | Call edge precision and recall against a type checker on click and zod | `README.md`, `docs/reference.md`, `CHANGELOG.md` |
+| `type-checker-oracle-2026-09-30.json` | Call edge precision and recall against each language's type checker on six pinned checkouts, every false edge classified by cause | `README.md`, `docs/reference.md`, `CHANGELOG.md`, `benchmarks/oracle/README.md` |
+| `type-checker-oracle-2026-09-21.json` | The same measure at 0.8.0 on click and zod, with the 0.7.0 numbers; reproduced unchanged at 0.11.0 by the 2026-09-30 record | `CHANGELOG.md`, `benchmarks/oracle/README.md` |
 | `grep-vs-graph-2026-09-21.json` | Nine hand-verified call-site sets, text search against the resolved graph | `README.md`, `docs/reference.md` |
 | `receiver-boundary-census-2026-09-21.json` | Census of the call sites the graph does not resolve, by what the receiver lacks | `README.md` |
 | `route-edges-2026-09-21.json` | Route edges on three pinned framework checkouts | `docs/reference.md`, `CHANGELOG.md` |

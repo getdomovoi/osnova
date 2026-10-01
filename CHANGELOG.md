@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- `benchmarks/oracle/` scores Go, Java, Rust and C# against each language's own compiler or type checker, beside Python and TypeScript: `go/types` through `golang.org/x/tools/go/packages` (`truth-go/`, pinned in `go.sum`), the javac Compiler Tree API with one task per Maven module (`TruthJava.java`), rust-analyzer over the shared LSP client (`sites-rust.mjs`, `truth-rust.mjs`, `lsp.mjs`), and Roslyn replaying every csc invocation of a real build with its source-generator output (`truth-csharp/`, pinned in `packages.lock.json`). All write the truth format `score.mjs` already reads. `benchmarks/results/type-checker-oracle-2026-09-30.json` records all six pinned corpora at 0.11.0: click 2883 decided edges and 0 false, zod 21276 and 4 false, cobra 1980 and 0 false (recall 87.5%), ripgrep 5435 and 112 false (2.06%, recall 75.6%), humanizer 7476 and 617 false (8.25%, recall 58.0%), gson 8261 and 2045 false (24.75%, recall 55.1%). Every false edge is classified by cause: 2026 on gson and 466 on humanizer name the last-declared overload of the right method, since the index keeps one symbol per qualified name, and 85 on ripgrep are scorer matches to a neighbouring call of the same name where Osnova's target is right. Each new oracle was spot-checked on 20 random sites (20 of 20 each), gave exactly 25 more false edges for 25 corrupted target spans, and wrote byte-identical truth on a second run. click and zod reproduce the 2026-09-21 counts unchanged.
+
 ## 0.11.0 (2026-09-30)
 
 ### Breaking

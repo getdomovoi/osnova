@@ -84,7 +84,18 @@ A call site counts as resolved when the index ties it to one definition through 
 
 Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 
-Resolved is not the same as right, so the call edges are also scored against a type checker. Every call site in two pinned checkouts was sent to the language's own checker for the callee's declarations, and each osnova edge was marked true when the symbol it names contains that declaration and false when it does not. Measured at 0.8.0: on click (160 files, pyright 1.1.414) 2883 edges were decided and 0 are false, and osnova covers 90.4% of the call sites the checker resolves inside the repository. On zod (702 files, TypeScript 5.9.3) 21276 edges were decided and 4 are false, a false-edge rate of 0.02%, with 76.9% of in-repo sites covered. The four false edges are listed by site in [`benchmarks/results/type-checker-oracle-2026-09-21.json`](benchmarks/results/type-checker-oracle-2026-09-21.json) with the method and its limits. The scripts that produce these numbers are in [`benchmarks/oracle/`](benchmarks/oracle/README.md), and they reproduce every count at 0.10.0.
+Resolved is not the same as right, so the call edges are also scored against each language's type checker or compiler. Every call site in six pinned checkouts was sent to the checker for the callee's declarations, and each osnova edge was marked true when the symbol it names contains that declaration and false when it does not. Measured at 0.11.0:
+
+| Corpus | Checker | Decided edges | False | False-edge rate | In-repo sites covered |
+| --- | --- | ---: | ---: | ---: | ---: |
+| click | pyright 1.1.414 | 2883 | 0 | 0% | 90.4% |
+| zod | TypeScript 5.9.3 | 21276 | 4 | 0.02% | 76.9% |
+| cobra | go/types, Go 1.27.1 | 1980 | 0 | 0% | 87.5% |
+| ripgrep | rust-analyzer 1.98.1 | 5435 | 112 | 2.06% | 75.6% |
+| humanizer | Roslyn 5.9.0 | 7476 | 617 | 8.25% | 58.0% |
+| gson | javac 27 | 8261 | 2045 | 24.75% | 55.1% |
+
+Most false edges on the Java and C# corpora name the right method of the right class but the wrong overload: osnova keeps one symbol per qualified name, the last overload declared, while the compiler names the overload the call binds. That accounts for 2026 of gson's 2045 and 466 of humanizer's 617, and another 113 on humanizer are overloads declared in a base class. On ripgrep, 85 of the 112 are claims the scorer matched to another call of the same name on the same or an adjacent line, mostly in method chains written one call per line, and for each of them osnova's target is the checker's; 11 more are functions declared once per `#[cfg]` branch. Every false edge is classified by cause in [`benchmarks/results/type-checker-oracle-2026-09-30.json`](benchmarks/results/type-checker-oracle-2026-09-30.json) with the method and its limits. The scripts that produce these numbers are in [`benchmarks/oracle/`](benchmarks/oracle/README.md).
 
 ## Grep versus the graph
 
