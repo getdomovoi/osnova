@@ -70,46 +70,175 @@
   </ul>
 </section>
 
-<section class="stage wrap" aria-labelledby="stage-title" data-stage>
-  <div class="stage-head">
-    <h2 id="stage-title" class="stage-title">One real answer, drawn as it arrives</h2>
-    <button class="ghost" type="button" data-replay>Replay</button>
-  </div>
-  <div class="stage-grid">
-    <div class="term">
-      <div class="term-bar"><span>osnova warp</span><span>osnova's own repository, cut to twelve lines</span></div>
-<pre class="term-body"><span class="ln cmdline"><span class="sign" aria-hidden="true">$ </span><code class="typed">osnova warp src/api.ts#refreshWorkspace</code><span class="caret" aria-hidden="true"></span></span>
-<span class="ln" style="--i:1">function src/api.ts#refreshWorkspace: 83 indexed edges</span>
-<span class="ln" style="--i:2">reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 10; tests 18</span>
-<span class="ln" style="--i:3">d1 calls src/cli/cli.ts#ensureIndex:78 <span class="basis">[import-binding]</span></span>
-<span class="ln" style="--i:4">d1 calls src/cli/hook.ts#runHook:191,203,225,240 <span class="basis">[import-binding]</span></span>
-<span class="ln" style="--i:5">d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:297 <span class="basis">[import-binding]</span></span>
-<span class="ln" style="--i:6">d1 calls test/verification-fastpath.test.ts#&lt;module&gt;:37,47,48,51,53,57,58,64,68,74,78,85,110,114,132,145,154,166,171,197 <span class="basis">[re-export-binding]</span></span>
-<span class="ln dim" style="--i:7">  via src/index.ts:65 refreshWorkspace -&gt; src/api.ts (export refreshWorkspace)</span>
-<span class="ln warn" style="--i:8">This does not prove absence of callers or that deletion is safe.</span>
-<span class="ln dim" style="--i:9">unresolved evidence (10); not confirmed relationships</span>
-<span class="ln dim" style="--i:10">candidates for refreshWorkspace (2, unverified): src/api.ts#refreshWorkspace, test/mcp-watch.test.ts#refreshWorkspace</span>
-<span class="ln dim" style="--i:11">d1 calls refreshWorkspace test/artifact-format9.test.ts:78,85,104,120,140 [binding-blocked]</span>
-<span class="ln dim" style="--i:12">d1 calls refreshWorkspace scripts/perf.mjs:485,486,491 [import-target-unresolved]</span></pre>
+<section class="film-section wrap" aria-labelledby="film-title">
+  <h2 id="film-title" class="visually-hidden">How osnova works, in eight scenes</h2>
+  <div class="film" data-film>
+    <div class="film-frame" aria-hidden="true">
+      <span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+      <div class="hud hud-l"><span>osnova</span><span data-film-name></span></div>
+      <div class="hud hud-r"><span data-film-count>01 / 08</span><span data-film-time>00:00.0</span></div>
+
+      <div class="scene s-name" data-scene="Foundation" data-start="0" data-end="3800">
+        <p class="cap">Osnova is a Slavic word.</p>
+        <div class="vis">
+          <div class="name">
+            <p class="word">
+              <span class="glyph" data-at="900"><span class="cy">о</span><span class="la">o</span></span><span class="glyph" data-at="1010"><span class="cy">с</span><span class="la">s</span></span><span class="glyph" data-at="1120"><span class="cy">н</span><span class="la">n</span></span><span class="glyph" data-at="1230"><span class="cy">о</span><span class="la">o</span></span><span class="glyph" data-at="1340"><span class="cy">в</span><span class="la">v</span></span><span class="glyph" data-at="1450"><span class="cy">а</span><span class="la">a</span></span>
+            </p>
+            <span class="name-rule grow-x" data-at="1600"></span>
+            <ol class="defs">
+              <li class="cue" data-at="1800">base, foundation</li>
+              <li class="cue" data-at="2150">the warp: the threads a loom holds taut so the cloth can be woven on them</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      <div class="scene s-read" data-scene="Read" data-start="3800" data-end="8000">
+        <p class="cap">Osnova <span class="kw">reads</span> your repository</p>
+        <div class="vis vis-read">
+          <svg class="files" viewBox="0 0 1000 300" preserveAspectRatio="xMidYMid meet" data-files></svg>
+          <div class="counters">
+            <p><b data-count="397" data-from="700" data-to="3300">0</b> files</p>
+            <p><b data-count="7069" data-from="700" data-to="3300">0</b> symbols</p>
+            <p><b data-count="31453" data-from="700" data-to="3300">0</b> edges</p>
+            <p class="counters-note cue" data-at="3400">osnova's own source at 0.11.0</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="scene s-parse" data-scene="Parse" data-start="8000" data-end="11800">
+        <p class="cap">with <span class="kw">tree-sitter</span>,</p>
+        <div class="vis">
+          <svg class="parse" viewBox="0 0 1000 360" preserveAspectRatio="xMidYMid meet" data-narrow-viewbox="520 0 480 360">
+            <g class="code cue" data-at="200">
+              <rect class="card" x="0.5" y="24.5" width="480" height="214"/>
+              <text class="code-src" x="0" y="0">
+                <tspan class="ln-no" x="20" y="62">91</tspan><tspan x="52" y="62">export async function </tspan><tspan class="lit" data-at="1100">refreshWorkspace</tspan><tspan>(</tspan>
+                <tspan x="52" y="88">  root: string, options: WorkspaceOptions = {},</tspan>
+                <tspan x="52" y="114">): Promise&lt;OsnovaIndex&gt; {</tspan>
+                <tspan class="ln-no" x="20" y="140">92</tspan><tspan x="52" y="140">  const canonicalRoot = await </tspan><tspan class="lit" data-at="2330">canonicalWorkspaceRoot</tspan><tspan>(root);</tspan>
+                <tspan class="ln-no" x="20" y="166">93</tspan><tspan x="52" y="166">  const limits = </tspan><tspan class="lit" data-at="2550">cacheLimits</tspan><tspan>(options);</tspan>
+                <tspan class="ln-no" x="20" y="192">94</tspan><tspan x="52" y="192">  const cacheDir = </tspan><tspan class="lit" data-at="2700">resolveCacheDir</tspan><tspan>(options.cacheDir);</tspan>
+                <tspan x="52" y="218">  …</tspan>
+              </text>
+              <text class="code-path" x="0" y="14">src/api.ts</text>
+            </g>
+            <text class="parse-note cue" data-at="2900" x="0" y="272">1 symbol and 3 calls in four lines</text>
+            <g class="tree">
+              <path class="edge draw" pathLength="1" data-at="770" d="M544 56V78H560"/>
+              <path class="edge draw" pathLength="1" data-at="940" d="M570 88V110H586"/>
+              <path class="edge draw" pathLength="1" data-at="1110" d="M596 120V142H612"/>
+              <path class="edge draw" pathLength="1" data-at="1280" d="M596 120V174H612"/>
+              <path class="edge draw" pathLength="1" data-at="1450" d="M596 120V206H612"/>
+              <path class="edge draw" pathLength="1" data-at="1620" d="M622 216V238H638"/>
+              <path class="edge draw" pathLength="1" data-at="1790" d="M648 248V270H664"/>
+              <path class="edge draw" pathLength="1" data-at="1960" d="M674 280V302H690"/>
+              <path class="edge draw" pathLength="1" data-at="2130" d="M700 312V334H716"/>
+              <text class="node cue" data-at="700" x="540" y="50">program</text>
+              <text class="node cue" data-at="870" x="566" y="82">export_statement</text>
+              <text class="node cue lit" data-at="1040" x="592" y="114">function_declaration<tspan class="node-note" dx="14">symbol</tspan></text>
+              <text class="node cue" data-at="1210" x="618" y="146">identifier<tspan class="node-note" dx="14">refreshWorkspace</tspan></text>
+              <text class="node cue" data-at="1380" x="618" y="178">formal_parameters</text>
+              <text class="node cue" data-at="1550" x="618" y="210">statement_block</text>
+              <text class="node cue" data-at="1720" x="644" y="242">lexical_declaration</text>
+              <text class="node cue" data-at="1890" x="670" y="274">variable_declarator</text>
+              <text class="node cue" data-at="2060" x="696" y="306">await_expression</text>
+              <text class="node cue lit" data-at="2230" x="722" y="338">call_expression<tspan class="node-note" dx="14">call</tspan></text>
+            </g>
+          </svg>
+        </div>
+      </div>
+
+      <div class="scene s-weave" data-scene="Weave" data-start="11800" data-end="16400">
+        <p class="cap">and builds a symbol and <span class="kw">call graph</span>.</p>
+        <div class="vis vis-weave">
+          <svg class="weave" viewBox="0 0 1000 360" preserveAspectRatio="xMidYMid meet" data-weave></svg>
+          <p class="weave-note cue" data-at="3500">The calls <span class="mono">refreshWorkspace</span> makes in osnova 0.11.0, one weft per calling line.</p>
+        </div>
+      </div>
+
+      <div class="scene s-ask" data-scene="Ask" data-start="16400" data-end="19200">
+        <p class="cap">Your agent asks where things are and <span class="kw">who calls them</span>,</p>
+      </div>
+      <div class="scene s-answer" data-scene="Answer" data-start="19200" data-end="23000">
+        <p class="cap">and gets exact <span class="kw">file and line</span> back.</p>
+      </div>
+      <div class="layer s-term" data-start="16400" data-end="23000">
+        <div class="term2">
+          <div class="term2-bar"><span>agent</span><span>osnova 0.11.0, its own source</span></div>
+          <div class="term2-body">
+            <p class="t-q cue" data-at="150"><span class="t-pr">&gt;</span> <span data-type="who calls refreshWorkspace?" data-type-from="300" data-type-to="1300"></span><span class="t-caret"></span></p>
+            <p class="t-call cue" data-at="1650"><span class="t-dot"></span>osnova_warp <span class="t-arg">src/api.ts#refreshWorkspace</span></p>
+            <p class="t-out cue" data-at="3000">function src/api.ts#refreshWorkspace: 83 indexed edges</p>
+            <p class="t-out t-extra cue" data-at="3200">reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 10; tests 18</p>
+            <p class="t-out t-hit cue" data-at="3450">d1 calls <span class="t-loc">src/cli/cli.ts#ensureIndex:<b>81</b></span> <span class="t-basis">[import-binding]</span></p>
+            <p class="t-out t-hit cue" data-at="3650">d1 calls <span class="t-loc">src/cli/hook.ts#runHook:<b>191,203,225,240</b></span> <span class="t-basis">[import-binding]</span></p>
+            <p class="t-out t-hit cue" data-at="3850">d1 calls <span class="t-loc">src/mcp/server.ts#createOsnovaMcpServer.refresh:<b>301</b></span> <span class="t-basis">[import-binding]</span></p>
+            <p class="t-out t-hit t-extra cue" data-at="4050">d1 calls <span class="t-loc">test/cache-hardening.test.ts#&lt;module&gt;:<b>137,138,143,151,158,166</b></span> <span class="t-basis">[import-binding]</span></p>
+            <p class="t-out t-dim cue" data-at="4400">d1 calls refreshWorkspace scripts/perf.mjs:485,486,491 [import-target-unresolved]</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="scene s-same" data-scene="Repeat" data-start="23000" data-end="26400">
+        <p class="cap">Same commit, <span class="kw">same answer</span>.</p>
+        <div class="vis">
+          <div class="same">
+            <div class="run">
+              <p class="run-head cue" data-at="250">build 1</p>
+              <p class="cue" data-at="450"><span>index.json</span><b>2bd883c1241f61a7</b></p>
+              <p class="cue" data-at="650"><span>edges.json</span><b>aa077378f5db9f52</b></p>
+              <p class="cue" data-at="850"><span>warp output</span><b>cfeccec7a316834d</b></p>
+            </div>
+            <div class="eq"><span></span>
+              <span class="cue" data-at="1350">=</span>
+              <span class="cue" data-at="1500">=</span>
+              <span class="cue" data-at="1650">=</span>
+            </div>
+            <div class="run">
+              <p class="run-head cue" data-at="250">build 2</p>
+              <p class="cue" data-at="450"><span>index.json</span><b>2bd883c1241f61a7</b></p>
+              <p class="cue" data-at="650"><span>edges.json</span><b>aa077378f5db9f52</b></p>
+              <p class="cue" data-at="850"><span>warp output</span><b>cfeccec7a316834d</b></p>
+            </div>
+          </div>
+          <p class="same-note cue" data-at="2100">Two fresh builds of osnova 0.11.0 on its own source. SHA-256, first 16 hex digits.</p>
+        </div>
+      </div>
+
+      <div class="scene s-end" data-scene="Install" data-start="26400" data-end="29000">
+        <div class="lockup">
+          <svg class="lock-mark" viewBox="0 0 24 24">
+            <rect class="grow-x" data-at="150" x="1.6" y="17.4" width="20.8" height="3.1" rx="0.4"/>
+            <rect class="grow-y" data-at="300" x="4.4" y="2.6" width="3.1" height="17.9" rx="0.4"/>
+            <rect class="grow-y" data-at="380" x="10.45" y="5.6" width="3.1" height="14.9" rx="0.4"/>
+            <rect class="grow-y" data-at="460" x="16.5" y="4.1" width="3.1" height="16.4" rx="0.4"/>
+            <rect class="grow-x" data-at="620" x="1.6" y="10.9" width="20.8" height="2.6" rx="0.4"/>
+          </svg>
+          <p class="lock-word cue" data-at="700">osnova</p>
+          <p class="lock-tag cue" data-at="900">A deterministic code map for AI coding agents</p>
+          <p class="lock-cmd cue" data-at="1200"><span class="t-pr">$</span> npm install -g @getdomovoi/osnova<span class="t-caret blink"></span></p>
+          <p class="lock-def cue" data-at="1600">основа: a foundation, and the warp a weave is built on</p>
+        </div>
+      </div>
+
+      <div class="film-progress"><i data-film-progress></i></div>
     </div>
-    <figure class="loom-wrap">
-      <svg class="loom" viewBox="0 0 440 420" role="img" aria-labelledby="loom-title">
-        <title id="loom-title">The answer drawn as a weave: four confirmed caller files rise in brass from refreshWorkspace, one tick per call site; two files with unresolved evidence stand in grey dashes.</title>
-        <line class="plinth" style="--i:1" x1="24" y1="380" x2="424" y2="380"/>
-        <rect class="tick-brass" style="--i:1" x="24" y="377" width="3" height="7"/>
-        <text class="loom-target" style="--i:1" x="24" y="408">src/api.ts#refreshWorkspace</text>
-        <g class="th ok" style="--i:3"><line class="th-line" x1="64" y1="380" x2="64" y2="182"/><path class="th-ticks" d="M61 190h6"/><text class="th-label" transform="translate(78 372) rotate(-90)">cli.ts</text></g>
-        <g class="th ok" style="--i:4"><line class="th-line" x1="124" y1="380" x2="124" y2="160"/><path class="th-ticks" d="M121 168h6M121 180h6M121 192h6M121 204h6"/><text class="th-label" transform="translate(138 372) rotate(-90)">hook.ts</text></g>
-        <g class="th ok" style="--i:5"><line class="th-line" x1="184" y1="380" x2="184" y2="182"/><path class="th-ticks" d="M181 190h6"/><text class="th-label" transform="translate(198 372) rotate(-90)">server.ts</text></g>
-        <g class="th ok" style="--i:6"><line class="th-line" x1="244" y1="380" x2="244" y2="40"/><path class="th-ticks" d="M241 48h6M241 60h6M241 72h6M241 84h6M241 96h6M241 108h6M241 120h6M241 132h6M241 144h6M241 156h6M241 168h6M241 180h6M241 192h6M241 204h6M241 216h6M241 228h6M241 240h6M241 252h6M241 264h6M241 276h6"/><text class="th-label" transform="translate(258 372) rotate(-90)">verification-fastpath.test.ts</text></g>
-        <g class="th un" style="--i:11"><line class="th-line" x1="334" y1="380" x2="334" y2="152"/><path class="th-ticks" d="M331 160h6M331 172h6M331 184h6M331 196h6M331 208h6"/><text class="th-label" transform="translate(348 372) rotate(-90)">artifact-format9.test.ts</text></g>
-        <g class="th un" style="--i:12"><line class="th-line" x1="394" y1="380" x2="394" y2="168"/><path class="th-ticks" d="M391 176h6M391 188h6M391 200h6"/><text class="th-label" transform="translate(408 372) rotate(-90)">perf.mjs</text></g>
-      </svg>
-      <figcaption class="legend">
-        <span class="key key-brass">Brass: osnova confirmed the caller, one tick per call site</span>
-        <span class="key key-grey">Grey dashes: unresolved evidence, never counted as a caller</span>
-      </figcaption>
-    </figure>
+    <div class="film-controls">
+      <button class="ghost film-toggle" type="button" data-film-toggle>Play</button>
+      <div class="chips" role="group" aria-label="Jump to scene" data-film-chips></div>
+    </div>
+    <ol class="visually-hidden">
+      <li>Osnova is a Slavic word. It means base or foundation, and on a loom, the warp: the threads held taut so the cloth can be woven on them.</li>
+      <li>Osnova reads your repository. Its own source at 0.11.0 is 397 files, 7,069 symbols and 31,453 edges.</li>
+      <li>With tree-sitter, each file becomes a syntax tree, and declarations and calls become symbols and edges.</li>
+      <li>It builds a symbol and call graph. The function refreshWorkspace calls 11 named functions, each tied to the line that calls it.</li>
+      <li>Your agent asks who calls refreshWorkspace, through the osnova_warp tool.</li>
+      <li>It gets exact file and line back, with the evidence for each caller, and unresolved calls listed apart.</li>
+      <li>Same commit, same answer: two fresh builds produce byte-identical index files and identical output.</li>
+      <li>Install with npm install -g @getdomovoi/osnova.</li>
+    </ol>
   </div>
 </section>
 

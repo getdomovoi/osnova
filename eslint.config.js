@@ -31,7 +31,7 @@ export default tseslint.config(
     files: ["site/**/*.js"],
     languageOptions: {
       sourceType: "script",
-      globals: { window: "readonly", document: "readonly", navigator: "readonly", fetch: "readonly", Element: "readonly", IntersectionObserver: "readonly" },
+      globals: { window: "readonly", document: "readonly", navigator: "readonly", fetch: "readonly", Element: "readonly", Node: "readonly", IntersectionObserver: "readonly" },
     },
   },
   {
