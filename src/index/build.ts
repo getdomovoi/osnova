@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { discardParser, getParser } from "../grammar/loader.js";
 import { languageForPath } from "../grammar/languages.js";
 import { adapterFor } from "../extract/adapters.js";
+import { recoverCsharpTree } from "../extract/csharp-recovery.js";
 import { markShadowed } from "../extract/scope.js";
 import { forgetTree, localJoin } from "../extract/util.js";
 import type { RawDefinition, RawEdge } from "../extract/adapter.js";
@@ -82,7 +83,8 @@ export async function extractCard(
     throw new IndexingError({ phase: "parse", path: relPath, code: "grammar-unavailable" }, error);
   });
   try {
-    const tree = parser.parse(text);
+    const parsed = parser.parse(text);
+    const tree = parsed !== null && language === "c_sharp" && parsed.rootNode.hasError ? recoverCsharpTree(parser, text, parsed) : parsed;
     if (tree !== null) {
       try {
         if (tree.rootNode.hasError) {
