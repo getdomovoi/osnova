@@ -97,6 +97,20 @@ it("plumb: lists a left-out unresolved lead and counts a site the graph already 
   expect(missing).not.toMatch(/use\.ts:2\b/);
 });
 
+it("plumb: confirms a claim only from a location on the claimed line, and lists a neighbouring one where the server put it", async () => {
+  const f = await fixture();
+  await fs.writeFile(path.join(f.workspace, "use.ts"), "import { helper } from \"./lib\";\nexport const value = 42;\n");
+  await respond(f, [{ file: "use.ts", line: 0, character: 9 }]);
+  const args = { symbol: "lib.ts#helper", sites: ["use.ts:2"] };
+  const without = await call(await connect(f, false), "osnova_plumb", args);
+  const { graph, section } = split(await call(await connect(f), "osnova_plumb", args));
+  expect(graph).toBe(without);
+  expect(graph).toMatch(/no-call[^\n]*use\.ts:2/);
+  expect(section).toContain("1 locations: declaration 0, on claimed sites 0, on missing sites above 0, elsewhere 1; the server confirms 0 of 1 claims (graph confirmed 0, name-only 0, no-call 0, not-indexed 0)");
+  expect(section).toMatch(/left out of the claim and not missing above \(1 line\):\n\s+use\.ts:1 \(top level\)$/);
+  expect(section).not.toMatch(/use\.ts:2\b/);
+});
+
 it("plumb: adds nothing for a callees claim or without a server", async () => {
   const f = await fixture();
   expect(await call(await connect(f, false), "osnova_plumb", { symbol: "lib.ts#helper", sites: ["use.ts:2"] })).not.toContain("language server");

@@ -89,23 +89,26 @@ function bounded(first: string, groups: readonly { title: string; entries: reado
 }
 
 // Places each location on the first tier holding its line. A location on a line a tier lists matches that line,
-// however many calls the line holds. A call split across two lines may instead match a neighbouring listed line, but
-// only a line no location matched exactly, and each such line once, so an import next to a listed call is not
-// mistaken for that call. Tiers are tried in order, exactly first and then by neighbour.
-function place(locations: readonly At[], tiers: readonly ReadonlySet<string>[]): { tier: number | undefined; key: string | undefined; at: At }[] {
+// however many calls the line holds. A call split across two lines may instead match a neighbouring line of a tier
+// that allows it, but only a line no location matched exactly, and each such line once, so an import next to a listed
+// call is not mistaken for that call. Only tiers of graph call lines allow it: a claimed line may hold no call at all.
+// Tiers are tried in order, exactly first and then by neighbour.
+interface Tier { readonly lines: ReadonlySet<string>; readonly nearby: boolean }
+function place(locations: readonly At[], tiers: readonly Tier[]): { tier: number | undefined; key: string | undefined; at: At }[] {
   const matched = new Set<string>();
   const placed: { tier: number | undefined; key: string | undefined; at: At }[] = [];
   const pending: At[] = [];
   for (const at of locations) {
     const key = `${at.file}:${at.line}`;
-    const tier = tiers.findIndex((set) => set.has(key));
+    const tier = tiers.findIndex(({ lines }) => lines.has(key));
     if (tier < 0) { pending.push(at); continue; }
     placed.push({ tier, key, at }); matched.add(key);
   }
   for (const at of pending) {
     let found: { tier: number; key: string } | undefined;
-    for (const [tier, set] of tiers.entries()) {
-      const key = [`${at.file}:${at.line - 1}`, `${at.file}:${at.line + 1}`].find((near) => set.has(near) && !matched.has(near));
+    for (const [tier, { lines, nearby }] of tiers.entries()) {
+      if (!nearby) continue;
+      const key = [`${at.file}:${at.line - 1}`, `${at.file}:${at.line + 1}`].find((near) => lines.has(near) && !matched.has(near));
       if (key !== undefined) { found = { tier, key }; break; }
     }
     if (found !== undefined) matched.add(found.key);
@@ -137,7 +140,7 @@ export function formatLspReferences(index: OsnovaIndex, result: Found, answer: L
   const { declaration, at } = sites(index, result.target, answer);
   // The graph stores no column, so a line holding both a resolved call and an unresolved lead confirms nothing:
   // its locations count as resolved above.
-  const placed = place(at, [resolved, leads]);
+  const placed = place(at, [{ lines: resolved, nearby: true }, { lines: leads, nearby: true }]);
   const already = placed.filter((item) => item.tier === 0).length;
   const confirmedAt = placed.filter((item) => item.tier === 1).map((item) => item.at);
   const outsideAt = placed.filter((item) => item.tier === undefined).map((item) => item.at);
@@ -151,14 +154,17 @@ export function formatLspReferences(index: OsnovaIndex, result: Found, answer: L
 /**
  * The server's references to a plumb target, sorted against the claim and the graph's missing list above: claims the
  * server confirms (and the graph verdict each one got), sites the graph already lists as missing, and sites the claim
- * left out that the graph does not list. The graph verdicts above are unchanged; server locations never become edges.
+ * left out that the graph does not list. A claim is confirmed only by a location on its own line; a neighbouring
+ * location is listed where the server put it. The graph verdicts above are unchanged; server locations never become
+ * edges.
  */
 export function formatLspPlumb(index: OsnovaIndex, result: PlumbResult, answer: LspReferencesAnswer, budget = maximumLspSectionCodeUnits): string {
   if (answer.status === "unavailable") return unavailable(answer.code);
   const claimed = new Set(result.claims.map((item) => `${item.claim.file}:${item.claim.line}`));
   const missing = new Set(result.missing.map((edge) => `${edge.fromFile}:${edge.line}`));
   const { declaration, at } = sites(index, result.target, answer);
-  const placed = place(at, [claimed, missing]);
+  // A claim is any line the caller names, so only a location on that very line confirms it.
+  const placed = place(at, [{ lines: claimed, nearby: false }, { lines: missing, nearby: true }]);
   const confirmedKeys = new Set(placed.filter((item) => item.tier === 0).map((item) => item.key));
   const confirmed = result.claims.filter((item) => confirmedKeys.has(`${item.claim.file}:${item.claim.line}`));
   const tally = (verdict: PlumbVerdict): number => confirmed.filter((item) => item.verdict === verdict).length;
