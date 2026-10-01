@@ -319,6 +319,42 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Inner.cs", 2)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("reads a C# alias name past comments in its directive", async () => {
+    await write({
+      "Alias.cs": "global using X /* alias */ = P.T;\n",
+      "Lead.cs": "global using /* alias */ Y = P.T;\n",
+      "Box.cs": "namespace P { public class T { public T() {} } }\n",
+      "Other.cs": "namespace Q { public class X { public X() {} }\npublic class Y { public Y() {} } }\n",
+      "Use.cs": "class Use {\n  void Run() { new X(); }\n  void Lead() { new Y(); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("does not merge C# partial types of one name with different namespaces or arities", async () => {
+    await write({
+      "Types.cs": "namespace A {\n  public partial class T {\n    public static void Use() { new T(); }\n  }\n}\nnamespace B {\n  public partial class T {\n    public T() {}\n  }\n}\n",
+      "Arity.cs": "public partial class U {\n  public static void Use() { new U(); }\n}\npublic partial class U<TItem> {\n  public U() {}\n}\n",
+      "Split.cs": "public partial class V {\n  public static void Use() { new V(1); }\n}\n",
+      "SplitB.cs": "public partial class V {\n  public V(int x) {}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 3)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Arity.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Split.cs", 2)).toMatchObject({ toSymbol: "SplitB.cs#V.V" });
+  });
+
+  it("does not take a C# nested type from an interface a class implements", async () => {
+    await write({
+      "Types.cs": "class T { public T() {} }\ninterface I { public class T { public T() {} } }\nclass C : I { public void Use() { new T(); } }\n",
+      "Base.cs": "class B { public class N { public N() {} } }\nclass N { public N() {} }\nclass D : B { public void Use() { new N(); } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 3)).toMatchObject({ toSymbol: "Types.cs#T.T" });
+    expect(creationAt(index, "Base.cs", 3)).toMatchObject({ toSymbol: "Base.cs#B.N.N" });
+  });
+
   it("resolves a dotted C# name from its first segment, not by suffix", async () => {
     await write({
       "Box.cs": "namespace P { public class Box { public Box(int x) {} } }\n",

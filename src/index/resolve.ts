@@ -549,6 +549,13 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // One C# type: the parts of a partial type share its local name and namespace-and-arity identity;
   // any other type is its own declaration.
   const partialIdentity = (symbol: OsnovaSymbol): string | undefined => declarationsOf(symbol).find((part) => part.partial !== undefined)?.partial;
+  // Declarations under one qualified name in one file are one type only when there is one, or all are parts of a
+  // partial type with one namespace-and-arity identity: `A.T` and `B.T`, or `T` and `T<U>`, share the name.
+  const singleType = (holder: OsnovaSymbol): boolean => {
+    const declarations = declarationsOf(holder);
+    const identities = new Set(declarations.map((part) => part.partial));
+    return declarations.length === 1 || (identities.size === 1 && !identities.has(undefined));
+  };
   const typeKey = (symbol: OsnovaSymbol): string => {
     const identity = partialIdentity(symbol);
     return identity === undefined ? symbol.qualifiedName : `${localOfQualifiedName(symbol.qualifiedName)}\u0000${identity}`;
@@ -557,9 +564,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const parts = new Map<string, OsnovaSymbol>([[holder.file, holder]]);
     let complete = true;
     if (files.get(holder.file)?.language === "c_sharp" && partialIdentity(holder) !== undefined) {
-      if (!parsedCleanly(holder.file)) return { parts: declarationsOf(holder), complete: false };
+      if (!parsedCleanly(holder.file) || !singleType(holder)) return { parts: declarationsOf(holder), complete: false };
+      const identity = partialIdentity(holder);
       for (const symbol of symbolsByName.get(holder.name) ?? []) {
-        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || symbol.partial === undefined || parts.has(symbol.file) || typeKey(symbol) !== typeKey(holder)) continue;
+        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || symbol.partial === undefined || parts.has(symbol.file) ||
+          localOfQualifiedName(symbol.qualifiedName) !== localOfQualifiedName(holder.qualifiedName)) continue;
+        // Another file that declares the name with mixed identities may hold a part the index cannot single out.
+        if (!singleType(symbol)) {
+          if (declarationsOf(symbol).some((part) => part.partial === identity)) complete = false;
+          continue;
+        }
+        if (typeKey(symbol) !== typeKey(holder)) continue;
         if (parsedCleanly(symbol.file)) parts.set(symbol.file, symbol);
         else complete = false;
       }
@@ -715,6 +730,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     for (const part of partsOf(type).parts) {
       for (const binding of part.heritage ?? []) {
         const base = baseOf(part, binding);
+        // A class or struct inherits member types from its base class only, not from interfaces it implements.
+        if (base !== undefined && base.kind === "interface" && type.kind !== "interface") continue;
         const member = base === undefined ? undefined : csharpMemberTypeOf(base, name, seen);
         if (member !== undefined) return member;
       }
@@ -754,9 +771,6 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       .filter((symbol) => symbol.kind === "method" && symbol.parameters?.constructs === true);
     return { constructors, primary: parts.some((part) => part.primary === true), complete };
   };
-  // Two types declared under one qualified name in one file (local classes in different blocks of a method) are
-  // not parts of one type, and the index cannot tell them apart.
-  const distinctType = (type: OsnovaSymbol): boolean => partialIdentity(type) !== undefined || declarationsOf(type).length === 1;
   const constructedBy = (type: OsnovaSymbol, construction: Construction): OsnovaSymbol => {
     if (construction !== "instance") return type;
     const { constructors, primary } = constructorsOf(type);
@@ -1359,7 +1373,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       }
       if (raw.constructs !== undefined && (card.language === "java" || card.language === "c_sharp")) {
         const found = card.language === "java" ? javaCreatedType(card, fromSymbol, raw.toName) : csharpCreatedType(card, fromSymbol, raw.toName, importTargets);
-        const typeFound: CreatedType = found.status === "resolved" && !distinctType(found.type) ? unknownType : found;
+        // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
+        // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart.
+        const typeFound: CreatedType = found.status === "resolved" && !singleType(found.type) ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
         const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
         const evidence = { source: "syntax" as const, resolution: typeFound.status === "resolved" ? { status: "resolved" as const, method: typeFound.method } : typeFound };

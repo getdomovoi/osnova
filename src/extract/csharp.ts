@@ -140,11 +140,12 @@ export const csharpAdapter: LanguageAdapter = {
           return;
         }
         case "using_directive": {
-          const nameNode = node.childForFieldName("name");
-          const namespaceNode = nameNode ?? childrenOf(node)[0];
-          if (namespaceNode !== null && namespaceNode !== undefined) {
-            out.addEdge("imports", namespaceNode.text, node);
-          }
+          // An alias directive records its alias name and `=` (`X =`); comments may sit anywhere in the directive.
+          const parts = childrenOf(node).filter((child) => child.type !== "comment");
+          const alias = parts.find((child) => child.type === "name_equals");
+          const aliasName = alias === undefined ? undefined : childrenOf(alias).find((child) => child.type === "identifier");
+          const name = alias === undefined ? parts[0]?.text : aliasName === undefined ? undefined : `${aliasName.text} =`;
+          if (name !== undefined) out.addEdge("imports", name, node);
           return;
         }
         default: {
