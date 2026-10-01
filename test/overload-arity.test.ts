@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyChanges, buildIndex, callersDetailed, loadIndex } from "../src/index.js";
+import { applyChanges, buildIndex, callersDetailed, loadIndex, serializeArtifact } from "../src/index.js";
 import { formatCallersDetailed } from "../src/query/format.js";
 import { deserializeEdges, serializeEdges } from "../src/index/edgeStore.js";
 
@@ -238,5 +238,96 @@ describe("warp answers for overloads found in a base class", () => {
     expect(ping).toContain("overload: line 2, chosen by argument count 0; moved from src/Sub.java#Sub.ping");
     const pong = formatCallersDetailed(callersDetailed(index, "src/Sub.java#Sub.pong"));
     expect(pong).toContain("overload: not determined; argument count 1 fits lines 3, src/Base.java:3");
+  });
+});
+
+describe("incremental updates that change only a resolution input outside the symbols", () => {
+  const same = async (files: Record<string, string>, edit: Record<string, string>) => {
+    await write(files);
+    const before = await buildIndex(workspace, { cacheDir });
+    await write(edit);
+    const updated = await applyChanges(before, workspace, Object.keys(edit));
+    const fresh = await buildIndex(workspace, { cacheDir: path.join(temporary, "fresh-cache") });
+    expect(updated.edges).toEqual(fresh.edges);
+    expect(serializeArtifact(updated).equals(serializeArtifact(fresh))).toBe(true);
+    return fresh;
+  };
+
+  it("re-resolves when a Java base class moves to another package", async () => {
+    const fresh = await same({
+      "Base.java": "package p;\npublic class Base {\n  void put() {}\n}\n",
+      "Child.java": "package p;\npublic class Child extends Base {\n  public void put(int i) {}\n  public void run() { put(); }\n}\n",
+    }, { "Base.java": "package q;\npublic class Base {\n  void put() {}\n}\n" });
+    expect(choiceAt(fresh, "Child.java", 4, "put").toSymbol).toBe("Child.java#Child.put");
+  });
+
+  it("re-resolves when a C# partial part gains or loses a syntax error", async () => {
+    const a = "partial class A\n{\n  public void Put(int x) {}\n  public void Run() { Put(); }\n}\n";
+    const clean = "partial class A\n{\n  public void Put()\n  {\n    return;\n  }\n}\n";
+    const broken = clean.replace("return;", "return)");
+    const afterBreak = await same({ "A.cs": a, "A2.cs": clean }, { "A2.cs": broken });
+    expect(choiceAt(afterBreak, "A.cs", 4, "Put").toSymbol).toBe("A.cs#A.Put");
+    const afterFix = await same({ "A2.cs": broken }, { "A2.cs": clean });
+    expect(choiceAt(afterFix, "A.cs", 4, "Put").toSymbol).toBe("A2.cs#A.Put");
+  });
+});
+
+describe("stored provenance of a moved overload edge", () => {
+  it("refuses a from that names no indexed method", async () => {
+    await write({
+      "src/Base.java": "class Base {\n  void ping() { }\n}\n",
+      "src/Sub.java": "class Sub extends Base {\n  void ping(int a) { }\n}\n",
+      "src/Run.java": "class Run {\n  void go(Sub s) {\n    s.ping();\n  }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const paths = [...index.files.keys()].sort();
+    const moved = index.edges.find((edge) => edge.overload !== undefined && "from" in edge.overload && edge.overload.from !== undefined);
+    expect(moved?.overload).toEqual({ line: 2, from: "src/Sub.java#Sub.ping" });
+    expect(deserializeEdges(serializeEdges(index.edges, paths).bytes, paths, index.files)).toEqual(index.edges);
+    for (const from of ["not-indexed.java#No.Such", "src/Sub.java#", "#Sub.ping", "src/Sub.java#Sub..ping", "src/Sub.java#Sub.nothing"]) {
+      const tampered = index.edges.map((edge) => edge === moved ? { ...edge, overload: { line: 2, from } } : edge);
+      const store = () => deserializeEdges(serializeEdges(tampered, paths).bytes, paths, index.files);
+      expect(store, from).toThrow(/corrupt overload metadata/);
+    }
+  });
+});
+
+describe("C# partial parts are one type only within one namespace and arity", () => {
+  it("does not merge partial types of the same name in different namespaces", async () => {
+    await write({
+      "One.cs": "namespace One {\n partial class Box {\n  public void Put(int x) {}\n  public void Run() { Put(1); Put(); }\n }\n}\n",
+      "Two.cs": "namespace Two {\n partial class Box {\n  public void Put(int x, int y = 0) {}\n  public void Put() {}\n }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const calls = callsAt(index, "One.cs", 4, "Put").map((edge) => [edge.arguments, edge.toSymbol, edge.overload]);
+    expect(calls).toEqual([[0, "One.cs#Box.Put", { candidates: [] }], [1, "One.cs#Box.Put", undefined]]);
+  });
+
+  it("merges parts in one namespace, block or file-scoped, but not across generic arity", async () => {
+    await write({
+      "A.cs": "namespace N.M {\n partial class Box {\n  public void Put(int x) {}\n  public void Run() { Put(); }\n }\n}\n",
+      "B.cs": "namespace N.M;\npartial class Box {\n  public void Put() {}\n}\n",
+      "G.cs": "namespace N.M {\n partial class Box<T> {\n  public void Put(int x, int y) {}\n }\n}\n",
+      "U.cs": "namespace N.M {\n class Use {\n  void Go(Box b) { b.Put(1, 2); }\n }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "A.cs", 4, "Put")).toEqual({ toSymbol: "B.cs#Box.Put", arguments: 0, overload: { line: 3, from: "A.cs#Box.Put" } });
+    expect(index.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("N.M`0");
+    expect(index.files.get("G.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("N.M`1");
+  });
+});
+
+describe("a Java @Override that may implement an interface method", () => {
+  it("does not hide a superclass overload of the same arity", async () => {
+    await write({
+      "Base.java": "public class Base {\n  public void put(int x) {}\n}\n",
+      "I.java": "public interface I {\n  void put(String x);\n}\n",
+      "Child.java": "public class Child extends Base implements I {\n  @Override public void put(String x) {}\n  public void put(String x, String y) {}\n}\n",
+      "Use.java": "public class Use {\n  public void run(Child child) { child.put(1); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const call = choiceAt(index, "Use.java", 2, "put");
+    expect(call.overload).not.toEqual({ line: 2 });
+    expect(call.overload).toEqual({ candidates: [2], elsewhere: [{ file: "Base.java", line: 2 }] });
   });
 });

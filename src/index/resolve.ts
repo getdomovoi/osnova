@@ -20,7 +20,11 @@ const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
 const BUILTIN_TYPES = new Set(["string", "number", "boolean", "bigint", "symbol", "Array", "Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Object", "Function", "str", "list", "dict", "set", "tuple", "int", "float", "bool", "bytes"]);
 const goPackages = new WeakMap<FileCard, string>();
 const javaPackages = new WeakMap<FileCard, string>();
-function javaPackageOf(card: FileCard | undefined): string {
+export function parsedWithoutErrors(card: FileCard | undefined): boolean {
+  return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors");
+}
+
+export function javaPackageOf(card: FileCard | undefined): string {
   if (card === undefined) return "";
   const cached = javaPackages.get(card);
   if (cached !== undefined) return cached;
@@ -536,20 +540,26 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     symbols !== null && symbols.length > 0 && new Set(symbols.map((symbol) => symbol.qualifiedName)).size === 1 ? symbols[0] : undefined;
 
   // Java and C# overload sets reach past the target's file. A C# type written `partial` has its other
-  // `partial` declarations of the same name in other C# files as parts (qualified names carry no
-  // namespace). A base written without an import is the single holder of that name in the language,
-  // as a receiver annotation is.
+  // `partial` declarations of the same local name, namespace and generic arity in other C# files as parts.
+  // A base written without an import is the single type of that name in the language, as a receiver
+  // annotation is.
   // A file the grammar could not parse cleanly may attribute a nested type's members to its outer type,
   // so a partial type with such a file is not merged.
-  const parsedCleanly = (file: string): boolean => !(files.get(file)?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors");
-  const typeKey = (symbol: OsnovaSymbol): string => `${files.get(symbol.file)?.language ?? ""}\u0000${localOfQualifiedName(symbol.qualifiedName)}`;
+  const parsedCleanly = (file: string): boolean => parsedWithoutErrors(files.get(file));
+  // One C# type: the parts of a partial type share its local name and namespace-and-arity identity;
+  // any other type is its own declaration.
+  const partialIdentity = (symbol: OsnovaSymbol): string | undefined => declarationsOf(symbol).find((part) => part.partial !== undefined)?.partial;
+  const typeKey = (symbol: OsnovaSymbol): string => {
+    const identity = partialIdentity(symbol);
+    return identity === undefined ? symbol.qualifiedName : `${localOfQualifiedName(symbol.qualifiedName)}\u0000${identity}`;
+  };
   const partsOf = (holder: OsnovaSymbol): { parts: OsnovaSymbol[]; complete: boolean } => {
     const parts = new Map<string, OsnovaSymbol>([[holder.file, holder]]);
     let complete = true;
-    if (files.get(holder.file)?.language === "c_sharp" && declarationsOf(holder).some((part) => part.partial === true)) {
+    if (files.get(holder.file)?.language === "c_sharp" && partialIdentity(holder) !== undefined) {
       if (!parsedCleanly(holder.file)) return { parts: declarationsOf(holder), complete: false };
       for (const symbol of symbolsByName.get(holder.name) ?? []) {
-        if (!isHolder(symbol) || symbol.partial !== true || parts.has(symbol.file) || typeKey(symbol) !== typeKey(holder)) continue;
+        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || symbol.partial === undefined || parts.has(symbol.file) || typeKey(symbol) !== typeKey(holder)) continue;
         if (parsedCleanly(symbol.file)) parts.set(symbol.file, symbol);
         else complete = false;
       }
@@ -568,9 +578,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // and so on. A base declaration the holder cannot call (private, or package-private in another Java
   // package) is left out. Interfaces add nothing to a class's overloads here: C# does not inherit their
   // members into a class, and Java's default methods are left out. `complete` is false when a declared
-  // base cannot be identified, so declarations further up may be missing.
-  const levelCache = new Map<string, { levels: OsnovaSymbol[][]; complete: boolean }>();
-  const overloadLevelsOf = (holder: OsnovaSymbol, member: string): { levels: OsnovaSymbol[][]; complete: boolean } => {
+  // base cannot be identified, so declarations further up may be missing. `interfaces` is true when a
+  // type in the walk declares an interface it implements.
+  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean; interfaces: boolean };
+  const levelCache = new Map<string, OverloadLevels>();
+  const overloadLevelsOf = (holder: OsnovaSymbol, member: string): OverloadLevels => {
     const key = `${holder.qualifiedName}\u0000${member}`;
     const cached = levelCache.get(key);
     if (cached !== undefined) return cached;
@@ -578,17 +590,19 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     levelCache.set(key, found);
     return found;
   };
-  const walkLevels = (holder: OsnovaSymbol, member: string): { levels: OsnovaSymbol[][]; complete: boolean } => {
+  const walkLevels = (holder: OsnovaSymbol, member: string): OverloadLevels => {
     const levels: OsnovaSymbol[][] = [];
+    let interfaces = false;
     const visited = new Set<string>();
     const home = javaPackageOf(files.get(holder.file));
     let current: OsnovaSymbol | undefined = holder;
     let complete = true;
     while (current !== undefined) {
-      if (visited.has(typeKey(current)) || levels.length > 8) return { levels, complete: false };
+      if (visited.has(typeKey(current)) || levels.length > 8) return { levels, complete: false, interfaces };
       visited.add(typeKey(current));
       const { parts, complete: whole } = partsOf(current);
       complete &&= whole;
+      if (parts.some((part) => declarationsOf(part).some((declaration) => declaration.interfaces === true))) interfaces = true;
       const seen = new Set<string>();
       const inherited = levels.length > 0;
       levels.push(parts.flatMap((part) => {
@@ -602,17 +616,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       for (const part of parts) {
         for (const binding of part.heritage ?? []) {
           const base = baseOf(part, binding);
-          if (base === undefined) return { levels, complete: false };
-          if (base.kind === "interface" && current.kind !== "interface") continue;
+          if (base === undefined) return { levels, complete: false, interfaces };
+          if (base.kind === "interface" && current.kind !== "interface") { interfaces = true; continue; }
           bases.set(typeKey(base), base);
         }
       }
-      if (bases.size > 1) return { levels, complete: false };
+      if (bases.size > 1) return { levels, complete: false, interfaces };
       current = [...bases.values()][0];
     }
-    return { levels, complete };
+    return { levels, complete, interfaces };
   };
-  // An override hides one base declaration with the same parameter range. When a level holds more
+  // An override hides one base declaration with the same parameter range (see overridesHide). When a level holds more
   // declarations of that range than overrides above it, which ones stay is unknown, so all are listed.
   const chooseOverload = (edge: OsnovaEdge): OsnovaEdge => {
     const local = withOverload(edge, declaredAs);
@@ -625,7 +639,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       : edge.toSymbol.slice(0, edge.toSymbol.lastIndexOf("."));
     const holder = declaredAs(holderName.slice(0, holderName.indexOf("#")), holderName).find(isHolder);
     if (holder === undefined) return local;
-    const { levels, complete } = overloadLevelsOf(holder, own[0]!.name);
+    const { levels, complete, interfaces } = overloadLevelsOf(holder, own[0]!.name);
+    // Java's @Override also marks an interface method's implementation, so once the walk meets an
+    // interface an override no longer says which base declaration it replaces; it hides none. C#'s
+    // `override` applies to class members only.
+    const overridesHide = !(language === "java" && interfaces);
     if (levels.some((level) => level.some((symbol) => symbol.parameters === undefined))) return local;
     const count = edge.arguments;
     const keyOf = (range: ParameterRange): string => `${range.min}:${range.max ?? ""}:${range.extension === true ? "e" : ""}`;
@@ -640,7 +658,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         groups.set(key, [...(groups.get(key) ?? []), symbol]);
       }
       for (const [key, group] of groups) {
-        const hidden = Math.min(pending.get(key) ?? 0, group.length);
+        const hidden = overridesHide ? Math.min(pending.get(key) ?? 0, group.length) : 0;
         slots += group.length - hidden;
         if (hidden < group.length) listed.push(...group);
         // Every override in the group, hidden or not, still hides one declaration further up.

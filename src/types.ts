@@ -53,8 +53,11 @@ export interface OsnovaSymbol {
   readonly signature: string;
   readonly lineCount: number;
   readonly shadowed?: true | undefined;
-  // A C# type written `partial`: its other partial declarations of the same name in other files are parts of it.
-  readonly partial?: true | undefined;
+  // A C# type written `partial`, as its namespace and generic arity (`N.M`1`): the other partial declarations
+  // of the same local name with the same value, in other files, are parts of it.
+  readonly partial?: string | undefined;
+  // A Java type that writes an `implements` clause; its @Override methods may implement those interfaces.
+  readonly interfaces?: true | undefined;
   readonly exportedNames?: readonly string[] | undefined;
   readonly memberKind?: MemberKind | undefined;
   readonly heritage?: readonly SymbolBinding[] | undefined;
