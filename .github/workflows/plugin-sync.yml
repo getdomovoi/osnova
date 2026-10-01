@@ -27,8 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Current main, not the triggering commit: a rerun of an older run must never publish older plugin files.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: main
           persist-credentials: false
       # A deploy key with write access to the plugin repository only. GitHub's host key is pinned from api.github.com/meta.
       - name: Clone the plugin repository
@@ -46,9 +48,8 @@ jobs:
           GIT_SSH_COMMAND="ssh -i ~/.ssh/plugin_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" \
             git clone --depth 1 git@github.com:getdomovoi/osnova-claude-plugin.git "$RUNNER_TEMP/plugin"
       - name: Sync and push
-        env:
-          SOURCE_SHA: ${{ github.sha }}
         run: |
+          SOURCE_SHA=$(git rev-parse HEAD)
           sh scripts/sync-claude-plugin.sh "$RUNNER_TEMP/plugin"
           cd "$RUNNER_TEMP/plugin"
           git add -A

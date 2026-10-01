@@ -23,16 +23,30 @@ afterEach(() => {
   for (const dir of temps.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { stdio: "pipe" });
+
+// A committed checkout whose origin is the plugin repository, holding the given files.
+const pluginCheckout = (files: Record<string, string>, origin = "git@github.com:getdomovoi/osnova-claude-plugin.git"): string => {
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-plugin-sync-"));
+  temps.push(dest);
+  git(dest, "init", "-q");
+  git(dest, "remote", "add", "origin", origin);
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dest, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dest, rel), text);
+  }
+  git(dest, "add", "-A");
+  git(dest, "commit", "-q", "--allow-empty", "-m", "seed");
+  return dest;
+};
+
+const sync = (dest: string) => execFileSync("sh", [script, dest], { stdio: "pipe" });
+
 describe.skipIf(process.platform === "win32")("claude plugin repository sync", () => {
   it("makes the checkout hold exactly the plugin folder, LICENSE and NOTICE, keeping its git data", () => {
-    const dest = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-plugin-sync-"));
-    temps.push(dest);
-    execFileSync("git", ["init", "-q", dest]);
-    fs.mkdirSync(path.join(dest, "hooks"));
-    fs.writeFileSync(path.join(dest, "hooks", "stale.json"), "{}");
-    fs.writeFileSync(path.join(dest, "pnpm-workspace.yaml"), "allowBuilds: {}\n");
+    const dest = pluginCheckout({ "hooks/stale.json": "{}", "pnpm-workspace.yaml": "allowBuilds: {}\n" });
 
-    execFileSync("sh", [script, dest]);
+    sync(dest);
 
     const expected = listFiles(pluginDir);
     expected.LICENSE = fs.readFileSync(path.join(root, "LICENSE")).toString("base64");
@@ -41,11 +55,34 @@ describe.skipIf(process.platform === "win32")("claude plugin repository sync", (
     expect(fs.existsSync(path.join(dest, ".git", "HEAD"))).toBe(true);
   });
 
+  it("accepts the HTTPS form of the plugin repository's origin", () => {
+    const dest = pluginCheckout({}, "https://github.com/getdomovoi/osnova-claude-plugin");
+    sync(dest);
+    expect(fs.existsSync(path.join(dest, "LICENSE"))).toBe(true);
+  });
+
   it("refuses a target that is not a git checkout", () => {
     const dest = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-plugin-sync-"));
     temps.push(dest);
     fs.writeFileSync(path.join(dest, "keep.txt"), "x");
-    expect(() => execFileSync("sh", [script, dest], { stdio: "pipe" })).toThrow();
+    expect(() => sync(dest)).toThrow();
     expect(fs.existsSync(path.join(dest, "keep.txt"))).toBe(true);
+  });
+
+  it("refuses a checkout of another repository", () => {
+    const dest = pluginCheckout({ "keep.txt": "x" }, "git@github.com:getdomovoi/osnova.git");
+    expect(() => sync(dest)).toThrow(/not a checkout of getdomovoi\/osnova-claude-plugin/);
+    expect(fs.existsSync(path.join(dest, "keep.txt"))).toBe(true);
+  });
+
+  it("refuses a checkout with uncommitted changes", () => {
+    const dest = pluginCheckout({ "keep.txt": "x" });
+    fs.writeFileSync(path.join(dest, "draft.txt"), "unsaved");
+    expect(() => sync(dest)).toThrow(/uncommitted changes/);
+    expect(fs.readFileSync(path.join(dest, "draft.txt"), "utf8")).toBe("unsaved");
+  });
+
+  it("refuses this repository", () => {
+    expect(() => sync(root)).toThrow();
   });
 });
