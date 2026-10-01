@@ -1,0 +1,13 @@
+{
+  "name": "getosnova-site",
+  "private": true,
+  "description": "getosnova.dev: static assets deployed to Cloudflare Workers. Wrangler is pinned here so CI installs it from this lockfile.",
+  "packageManager": "pnpm@12.4.1",
+  "scripts": {
+    "check": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.142.0"
+  }
+}
