@@ -4,7 +4,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
-The extraction version moves to `structural-9.31` and the edge section format to 12, so the first run after upgrading rebuilds the cache once.
+The extraction version moves to `structural-9.32` and the edge section format to 12, so the first run after upgrading rebuilds the cache once.
 
 ### Added
 
