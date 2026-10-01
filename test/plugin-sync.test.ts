@@ -82,6 +82,21 @@ describe.skipIf(process.platform === "win32")("claude plugin repository sync", (
     expect(fs.readFileSync(path.join(dest, "draft.txt"), "utf8")).toBe("unsaved");
   });
 
+  it("refuses a checkout with an ignored file, which a plain status hides", () => {
+    const dest = pluginCheckout({ ".gitignore": ".env\n" });
+    fs.writeFileSync(path.join(dest, ".env"), "SECRET=1");
+    expect(() => sync(dest)).toThrow(/uncommitted changes/);
+    expect(fs.readFileSync(path.join(dest, ".env"), "utf8")).toBe("SECRET=1");
+  });
+
+  it("refuses an untracked file even when the checkout hides untracked files", () => {
+    const dest = pluginCheckout({ "keep.txt": "x" });
+    git(dest, "config", "status.showUntrackedFiles", "no");
+    fs.writeFileSync(path.join(dest, "draft.txt"), "unsaved");
+    expect(() => sync(dest)).toThrow(/uncommitted changes/);
+    expect(fs.readFileSync(path.join(dest, "draft.txt"), "utf8")).toBe("unsaved");
+  });
+
   it("refuses this repository", () => {
     expect(() => sync(root)).toThrow();
   });
