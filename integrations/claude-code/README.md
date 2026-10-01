@@ -1,6 +1,6 @@
 # osnova for Claude Code
 
-Osnova indexes your repository with tree-sitter into a symbol and call graph and serves it to Claude Code. Ask who calls a function and get every caller with its exact file and line, plus the evidence behind each edge. Same input, same output, byte for byte. Twenty languages, no embeddings and no telemetry.
+Osnova indexes your repository with tree-sitter into a symbol and call graph and serves it to Claude Code. Ask who calls a function and get its indexed callers with exact file and line, plus the evidence behind each edge. A call it cannot resolve from the written source, such as a dynamic dispatch, is reported as unresolved with its same-name candidates instead of guessed. Same input, same output, byte for byte. Twenty languages, no embeddings and no telemetry.
 
 Website: https://getosnova.dev. Source, documentation and benchmarks: https://github.com/getdomovoi/osnova.
 
