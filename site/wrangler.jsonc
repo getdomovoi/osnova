@@ -1,0 +1,12 @@
+{
+  // Static site for getosnova.dev: assets only, no Worker script.
+  "name": "getosnova",
+  "compatibility_date": "2026-09-30",
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    { "pattern": "getosnova.dev", "custom_domain": true }
+  ]
+}
