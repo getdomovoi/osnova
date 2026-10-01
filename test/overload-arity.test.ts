@@ -531,3 +531,43 @@ describe("what a Java simple name proof follows", () => {
     ]) expect(() => deserializeArtifact(corrupt(change), undefined)).toThrow(/corrupt/);
   });
 });
+
+describe("a Java supertype the walk follows is the type the compiler binds", () => {
+  it("does not take a same-named type of another package for an unindexed same-package interface", async () => {
+    await write({
+      "p/Item.java": "package p;\npublic class Item {}\n",
+      "q/Base.java": "package q;\npublic class Base {\n  public void put(p.Item x) {}\n}\n",
+      "q/External.java": "package q;\npublic interface External {}\n",
+      "p/Child.java": "package p;\nimport q.Base;\npublic class Child extends Base implements External {\n  @Override public void put(Item x) {}\n  public void put(Item x, int y) {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child, p.Item x) { child.put(x); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put").overload).toEqual({ candidates: [4], elsewhere: [{ file: "q/Base.java", line: 3 }] });
+  });
+
+  it("names no Java declaration when a written superclass is outside the index", async () => {
+    await write({
+      "p/Child.java": "package p;\npublic class Child extends Missing {\n  public void put(int x) {}\n  public void put(int x, int y) {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child) { child.put(1); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put").overload).toEqual({ candidates: [3] });
+  });
+
+  it("names no C# declaration when a written base is outside the index", async () => {
+    await write({ "Child.cs": "class Child : Missing {\n  public void Put(int x) {}\n  public void Put(int x, int y) {}\n  void Run() { Put(1); }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "Child.cs", 4, "Put").overload).toEqual({ candidates: [2] });
+  });
+
+  it("follows a superclass written as a qualified name", async () => {
+    await write({
+      "q/Base.java": "package q;\npublic class Base {\n  public void put(int x) {}\n}\n",
+      "p/I.java": "package p;\npublic interface I {\n  void put(String x);\n}\n",
+      "p/Child.java": "package p;\npublic class Child extends q.Base implements I {\n  @Override public void put(String x) {}\n  public void put(String x, String y) {}\n}\n",
+      "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child) { child.put(1); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(choiceAt(index, "p/Use.java", 3, "put")).toEqual({ toSymbol: "p/Child.java#Child.put", arguments: 1, overload: { candidates: [3], elsewhere: [{ file: "q/Base.java", line: 3 }] } });
+  });
+});

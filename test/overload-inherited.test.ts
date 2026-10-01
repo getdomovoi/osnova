@@ -242,7 +242,10 @@ describe("C# overloads declared in a base class or another partial declaration",
   it("does not merge same-named types that are not written partial", async () => {
     await write(csharp);
     const index = await buildIndex(workspace, { cacheDir });
-    expect(choiceAt(index, "docs/a/Loud.cs", 2, "Transform")).toMatchObject({ toSymbol: "docs/a/Loud.cs#Loud.Transform", overload: { line: 3 } });
+    // ITransformer is outside the index, so it may be a base class with more overloads; the other Loud adds none.
+    const choice = choiceAt(index, "docs/a/Loud.cs", 2, "Transform");
+    expect(choice.toSymbol).toBe("docs/a/Loud.cs#Loud.Transform");
+    expect(choice.overload).toEqual({ candidates: [3] });
   });
 
   it("refuses past an unidentified base only when two declarations already accept the count", async () => {

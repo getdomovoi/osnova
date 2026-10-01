@@ -566,7 +566,22 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     return { parts: [...parts.values()].flatMap((part) => declarationsOf(part)), complete };
   };
+  // A Java supertype written as a simple name without an import names a type of an enclosing type or
+  // of the same package (a same-file top-level type is one of those); a same-named type of another
+  // package is not evidence, since the compiler may bind an unindexed type of this package.
+  const javaLocalBaseOf = (part: OsnovaSymbol, name: string): OsnovaSymbol | undefined => {
+    const enclosing = localOfQualifiedName(part.qualifiedName).split(".").slice(0, -1);
+    for (let depth = enclosing.length; depth > 0; depth -= 1) {
+      const nested = declaredAs(part.file, qualifiedNameOf(part.file, [...enclosing.slice(0, depth), name].join("."))).find(isHolder);
+      if (nested !== undefined) return nested;
+    }
+    const home = javaPackageOf(files.get(part.file));
+    const holders = (symbolsByName.get(name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "java" &&
+      !localOfQualifiedName(symbol.qualifiedName).includes(".") && javaPackageOf(files.get(symbol.file)) === home);
+    return new Set(holders.map((symbol) => symbol.qualifiedName)).size === 1 ? holders[0] : undefined;
+  };
   const baseOf = (part: OsnovaSymbol, base: SymbolBinding): OsnovaSymbol | undefined => {
+    if (base.kind === "local" && files.get(part.file)?.language === "java") return javaLocalBaseOf(part, base.name);
     const found = basesOf(part, base)?.[0];
     if (found !== undefined || base.kind !== "local") return found;
     const language = files.get(part.file)?.language;
@@ -717,8 +732,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     const isOwn = (symbol: OsnovaSymbol): boolean => symbol.file === edge.toFile && symbol.qualifiedName === edge.toSymbol;
     const elsewhere = listed.filter((symbol) => !isOwn(symbol));
-    // Declarations above an unidentified base can only add choices, so two found already are enough to refuse.
-    if (elsewhere.length === 0 || (!complete && slots < 2)) return local;
+    // Declarations above an unidentified base can only add choices: two found already are enough to refuse,
+    // and one found is not proven the only one, so a line chosen in the target's file is withdrawn.
+    if (!complete && slots < 2) return local.overload !== undefined && "line" in local.overload ? { ...local, overload: { candidates: [local.overload.line] } } : local;
+    if (elsewhere.length === 0) return local;
     const { overload: _previous, ...rest } = edge;
     if (slots === 1 && listed.length === 1) {
       const chosen = listed[0]!;
