@@ -6,9 +6,11 @@
 
 # Osnova
 
-[![npm version](https://img.shields.io/npm/v/%40getdomovoi%2Fosnova)](https://www.npmjs.com/package/@getdomovoi/osnova) [![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![ci](https://img.shields.io/github/actions/workflow/status/getdomovoi/osnova/ci.yml?branch=main&label=ci)](https://github.com/getdomovoi/osnova/actions/workflows/ci.yml) [![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen)](package.json) [![M8ven Verified](https://m8ven.ai/badge/mcp/getdomovoi-osnova-2032ih?variant=verified)](https://m8ven.ai/mcp/getdomovoi-osnova-2032ih)
+[![website getosnova.dev](https://img.shields.io/badge/website-getosnova.dev-2E5F66)](https://getosnova.dev) [![npm version](https://img.shields.io/npm/v/%40getdomovoi%2Fosnova)](https://www.npmjs.com/package/@getdomovoi/osnova) [![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![ci](https://img.shields.io/github/actions/workflow/status/getdomovoi/osnova/ci.yml?branch=main&label=ci)](https://github.com/getdomovoi/osnova/actions/workflows/ci.yml) [![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen)](package.json) [![M8ven Verified](https://m8ven.ai/badge/mcp/getdomovoi-osnova-2032ih?variant=verified)](https://m8ven.ai/mcp/getdomovoi-osnova-2032ih)
 
 **A deterministic code map for AI coding agents.** Osnova indexes a repository into a symbol and call graph with tree-sitter, then serves it to any MCP client or from the command line. Same input, same output, byte for byte. No embeddings, no telemetry, and no network connection unless you type `osnova update-check`. Twenty languages, seven of them (TypeScript, JavaScript, Python, Go, Rust, Java, C#) with deep adapters.
+
+<a href="https://getosnova.dev"><img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/demo/film.gif" width="960" alt="The getosnova.dev film in eight scenes, measured on osnova 0.11.0 indexing its own source: the word osnova; 397 files read into 7,069 symbols and 31,453 edges; one function parsed into its tree-sitter tree; eleven of the calls refreshWorkspace makes, woven as threads; an agent asks who calls refreshWorkspace and osnova_warp answers with exact file and line; two fresh builds give identical hashes; the install command."></a>
 
 *Osnova* is the Slavic word for base or foundation. That is the job: give an agent solid ground to stand on before it edits code.
 

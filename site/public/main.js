@@ -458,7 +458,19 @@ async function showLatestVersion() {
   }
 }
 
+// The not-found page names the path that was asked for; textContent keeps it inert.
+function showLostPath() {
+  let asked = window.location.pathname;
+  try {
+    asked = decodeURI(asked);
+  } catch {
+    // A malformed escape stays as typed.
+  }
+  document.querySelectorAll("[data-lost-path]").forEach((el) => (el.textContent = asked));
+}
+
 buildMark();
+showLostPath();
 setupFilm();
 buildToolGlyphs();
 setupReveals();
