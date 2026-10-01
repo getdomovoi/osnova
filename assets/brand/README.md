@@ -11,6 +11,7 @@ Tagline: A deterministic code map for AI coding agents.
 | `mark.svg` | Icon, `currentColor`, for anything that sets its own colour |
 | `mark-dark.svg` | Icon in ink on dark grounds (`#E8E6E3`), 24 by 24 |
 | `mark-light.svg` | Icon in ink on light grounds (`#17181A`), 24 by 24 |
+| `plugin-icon.svg` | Brass mark on the dark ground with clearspace, 1024 by 1024; rendered to `integrations/claude-code/.claude-plugin/icon.png` for the Claude plugin directory listing |
 | `diagram-architecture-dark.svg` | Architecture diagram, dark mode, 1600 by 720, transparent |
 | `diagram-architecture-light.svg` | Architecture diagram, light mode, 1600 by 720, transparent |
 | `diagram-agent-turn-dark.svg` | One agent turn, dark mode, 1600 by 420, transparent |

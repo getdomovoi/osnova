@@ -16,7 +16,7 @@ The extraction version moves to `structural-9.34` and the edge section format to
 
 ### Changed
 
-- The Claude Code plugin pins its launcher to the release it ships with: `.mcp.json` and the three hooks run `npx -y @getdomovoi/osnova@<version>` instead of the unpinned package, because the Claude plugin directory rejects an unpinned `npx` launcher. The plugin folder gains a `README.md` that the directory shows as the listing and that states what the plugin runs, fetches and writes. `test/distribution-manifests.test.ts` requires the launchers and that README to name the package version, so a release bump updates all of them.
+- The Claude Code plugin pins its launcher to the release it ships with: `.mcp.json` and the three hooks run `npx -y @getdomovoi/osnova@<version>` instead of the unpinned package, because the Claude plugin directory rejects an unpinned `npx` launcher. The plugin folder gains a `README.md` that the directory shows as the listing and that states what the plugin runs, fetches and writes. `test/distribution-manifests.test.ts` requires the launchers and that README to name the package version, so a release bump updates all of them. The plugin also ships a 1024 px listing icon (`.claude-plugin/icon.png`, from `assets/brand/plugin-icon.svg`), and the repository's `pnpm-workspace.yaml` no longer allows esbuild's install script: the directory blocks a repository whose workspace lets an install run a build script, and esbuild runs from its prebuilt platform package without it.
 
 ### Fixed
 
