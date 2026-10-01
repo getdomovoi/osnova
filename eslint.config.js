@@ -43,6 +43,7 @@ export default tseslint.config(
         performance: "readonly",
         Buffer: "readonly",
         fetch: "readonly",
+        WebSocket: "readonly",
       },
     },
     rules: {

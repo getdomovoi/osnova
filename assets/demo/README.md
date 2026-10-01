@@ -11,3 +11,22 @@ ffmpeg -framerate 50 -i frames/frame-text-%05d.png -framerate 50 -i frames/frame
 ```
 
 Colours follow `assets/brand/README.md`.
+
+## Film
+
+`film.gif` is the getosnova.dev hero film, recorded from the live page. `scripts/record-film.mjs` plays it once in a headless Chromium-family browser and saves every screencast frame with its timestamp:
+
+```sh
+node scripts/record-film.mjs https://getosnova.dev/ /tmp/film
+```
+
+`/tmp/film/meta.json` holds the film frame's rectangle in CSS pixels; multiply it by the scale (1.84) for the crop. With the defaults the crop is `1940:1091:355:352`. Skip the first half second, which shows the autoplay before the recorder restarts the film:
+
+```sh
+ffmpeg -f concat -safe 0 -i /tmp/film/concat.txt -ss 0.5 \
+  -vf "crop=1940:1091:355:352,scale=1920:1080:flags=lanczos,fps=30,format=yuv420p" \
+  -c:v libx264 -preset slow -crf 18 -tune animation -movflags +faststart -an film-1080p.mp4
+ffmpeg -i film-1080p.mp4 \
+  -vf "fps=15,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
+  -loop 0 film.gif
+```
