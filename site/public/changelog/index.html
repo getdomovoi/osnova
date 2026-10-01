@@ -66,6 +66,10 @@
 <li>With <code>osnova mcp --lsp-server</code>, <code>osnova_settle</code> asks the language server for references to the changed symbols and lists, in a section after the unchanged impact answer, those not inside a listed dependent or a changed symbol. It asks about at most 8 symbols per call, most graph dependents first, under one request timeout for the whole call that also bounds the wait behind other requests and any server start-up, and counts exactly the symbols it did not ask about (over the cap, past the deadline, after a failure) and the lines its 1,024-code-unit budget leaves out.</li>
 <li>With <code>osnova mcp --lsp-server</code>, <code>osnova_tests</code> given <code>symbols</code> adds a third, separately labelled tier after the unchanged two: test files where the language server finds references to the symbol that neither graph tier holds, with their lines, and counts of the server's other locations (outside test files, in resolved-edge files, in import-only files). It shares settle's cap of 8 symbols and one request timeout per call, with the same exact counts and 1,024-code-unit budget.</li>
 </ul>
+<h3 id="unreleased-changed">Changed</h3>
+<ul>
+<li>The Claude Code plugin pins its launcher to the release it ships with: <code>.mcp.json</code> and the three hooks run <code>npx -y @getdomovoi/osnova@&lt;version&gt;</code> instead of the unpinned package, because the Claude plugin directory rejects an unpinned <code>npx</code> launcher. The plugin folder gains a <code>README.md</code> that the directory shows as the listing and that states what the plugin runs, fetches and writes. <code>test/distribution-manifests.test.ts</code> requires the launchers and that README to name the package version, so a release bump updates all of them.</li>
+</ul>
 <h3 id="unreleased-fixed">Fixed</h3>
 <ul>
 <li>Two calls to one method on one line with different argument counts are two edges; they were merged into one.</li>
