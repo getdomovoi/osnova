@@ -476,7 +476,7 @@ osnova setup agents --apply</code></pre>
   <div class="oracle" data-reveal>
     <div class="oracle-text">
       <h3>Checked against a type checker</h3>
-      <p>Every call site in six pinned open-source checkouts went to the language's own type checker or compiler. Each osnova edge counted as true when it named the declaration the checker found, and false when it did not.</p>
+      <p>The call sites in six pinned open-source checkouts went to the language's own type checker or compiler, within the scope the record lists for each. Each decided osnova edge counted as true when it named the declaration the checker found, and false when it did not. Sites the checker could not resolve, and Java or C# overloads the written argument count cannot tell apart, count in neither rate.</p>
       <p class="small">Measured at 0.12.0. The <a href="https://github.com/getdomovoi/osnova/blob/main/benchmarks/results/type-checker-oracle-2026-09-30.json">record</a> classifies every false edge by cause, and the scripts in <a href="https://github.com/getdomovoi/osnova/tree/main/benchmarks/oracle">benchmarks/oracle</a> reproduce every count.</p>
     </div>
     <div class="oracle-rows">
