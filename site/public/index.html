@@ -476,21 +476,45 @@ osnova setup agents --apply</code></pre>
   <div class="oracle" data-reveal>
     <div class="oracle-text">
       <h3>Checked against a type checker</h3>
-      <p>Every call site in two pinned open-source checkouts went to the language's own type checker. Each osnova edge counted as true when it named the declaration the checker found, and false when it did not.</p>
-      <p class="small">Measured at 0.8.0. The scripts reproduce every count at 0.11.0.</p>
+      <p>Every call site in six pinned open-source checkouts went to the language's own type checker or compiler. Each osnova edge counted as true when it named the declaration the checker found, and false when it did not.</p>
+      <p class="small">Measured at 0.12.0. The <a href="https://github.com/getdomovoi/osnova/blob/main/benchmarks/results/type-checker-oracle-2026-09-30.json">record</a> classifies every false edge by cause, and the scripts in <a href="https://github.com/getdomovoi/osnova/tree/main/benchmarks/oracle">benchmarks/oracle</a> reproduce every count.</p>
     </div>
     <div class="oracle-rows">
       <div class="oracle-row">
-        <p class="oracle-name"><code>click</code> <span>Python, 160 files</span></p>
+        <p class="oracle-name"><code>click</code> <span>Python, pyright</span></p>
         <p class="oracle-fig">0 false edges in <b data-countup="2883">2,883</b></p>
         <div class="meter" style="--v:0.904" aria-hidden="true"><i></i></div>
         <p class="oracle-cov">Covers 90.4% of the call sites the checker resolves in the repository</p>
       </div>
       <div class="oracle-row">
-        <p class="oracle-name"><code>zod</code> <span>TypeScript, 702 files</span></p>
-        <p class="oracle-fig">4 false edges in <b data-countup="21276">21,276</b></p>
-        <div class="meter" style="--v:0.769" aria-hidden="true"><i></i></div>
-        <p class="oracle-cov">Covers 76.9% of the call sites the checker resolves in the repository</p>
+        <p class="oracle-name"><code>zod</code> <span>TypeScript, tsc</span></p>
+        <p class="oracle-fig">4 false edges in <b data-countup="21593">21,593</b></p>
+        <div class="meter" style="--v:0.782" aria-hidden="true"><i></i></div>
+        <p class="oracle-cov">Covers 78.2% of the call sites the checker resolves in the repository</p>
+      </div>
+      <div class="oracle-row">
+        <p class="oracle-name"><code>cobra</code> <span>Go, go/types</span></p>
+        <p class="oracle-fig">0 false edges in <b data-countup="1980">1,980</b></p>
+        <div class="meter" style="--v:0.875" aria-hidden="true"><i></i></div>
+        <p class="oracle-cov">Covers 87.5% of the call sites the checker resolves in the repository</p>
+      </div>
+      <div class="oracle-row">
+        <p class="oracle-name"><code>ripgrep</code> <span>Rust, rust-analyzer</span></p>
+        <p class="oracle-fig">29 false edges in <b data-countup="6066">6,066</b></p>
+        <div class="meter" style="--v:0.858" aria-hidden="true"><i></i></div>
+        <p class="oracle-cov">Covers 85.8% of the call sites the checker resolves in the repository</p>
+      </div>
+      <div class="oracle-row">
+        <p class="oracle-name"><code>humanizer</code> <span>C#, Roslyn</span></p>
+        <p class="oracle-fig">3 false edges in <b data-countup="7363">7,363</b></p>
+        <div class="meter" style="--v:0.622" aria-hidden="true"><i></i></div>
+        <p class="oracle-cov">Covers 62.2% of the call sites the checker resolves in the repository</p>
+      </div>
+      <div class="oracle-row">
+        <p class="oracle-name"><code>gson</code> <span>Java, javac</span></p>
+        <p class="oracle-fig">4 false edges in <b data-countup="8133">8,133</b></p>
+        <div class="meter" style="--v:0.723" aria-hidden="true"><i></i></div>
+        <p class="oracle-cov">Covers 72.3% of the call sites the checker resolves in the repository</p>
       </div>
     </div>
   </div>
