@@ -719,6 +719,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     return tick < 0 ? { name: part, arity: 0 } : { name: part.slice(0, tick), arity: Number(part.slice(tick + 1)) };
   });
   const arityOf = (symbol: OsnovaSymbol): number => symbol.arity ?? 0;
+  // A C# type for name lookup: a holder, or a delegate (kind `type`), which hides a same-named type further out but
+  // holds no members and is not a creation target the index can prove.
+  const csharpTypeLike = (symbol: OsnovaSymbol): boolean => isHolder(symbol) || (symbol.kind === "type" && files.get(symbol.file)?.language === "c_sharp");
   const typeKeyIn = (namespace: string, segment: CsharpSegment): string => `${namespace}\u0000${segment.name}\u0000${segment.arity}`;
   let csharpScope: CsharpScope | undefined;
   const csharpScopeOf = (): CsharpScope => {
@@ -728,7 +731,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (files.get(file)?.language !== "c_sharp") continue;
       for (const raw of raws) {
         if (raw.kind !== "imports") continue;
-        const alias = /^@?([\p{L}_][\p{L}\p{N}_]*)\s*=$/u.exec(raw.toName);
+        const alias = /^(\S+) =$/u.exec(raw.toName);
         if (alias !== null) {
           scope.aliases.add(alias[1]!);
           continue;
@@ -742,7 +745,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     for (const symbols of symbolsByName.values()) {
       for (const symbol of symbols) {
-        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
+        if (!csharpTypeLike(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
         const namespace = symbol.namespace ?? "";
         const parts = namespace.length === 0 ? [] : namespace.split(".");
         for (let depth = 1; depth <= parts.length; depth += 1) scope.namespaces.add(parts.slice(0, depth).join("."));
@@ -764,7 +767,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (!singleType(type)) return null;
     const { parts, complete } = partsOf(type);
     const found = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`))
-      .find((symbol) => isHolder(symbol) && arityOf(symbol) === segment.arity && csharpVisible(symbol, view));
+      .find((symbol) => csharpTypeLike(symbol) && arityOf(symbol) === segment.arity && csharpVisible(symbol, view));
     return found ?? (complete ? undefined : null);
   };
   // The namespace of the top-level type that holds this one; null when that type's name is shared by another.
@@ -892,8 +895,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const level = parts.slice(0, depth).join(".");
       const own = csharpInNamespace(site.card, level, segments);
       if (own !== undefined) return own;
+      // A site on the first or last line of a namespace declaration that holds directives may lie outside it, beside
+      // another declaration on that line, so the line cannot tell whether those directives apply.
+      const scoped = usings.filter((using) => using.scope === level);
+      if (depth > 0 && scoped.some((using) => site.line === using.from || site.line === using.to)) return unknownType;
       const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...scope.global]
-        : usings.filter((using) => using.scope === level && using.from <= site.line && site.line <= using.to);
+        : scoped.filter((using) => using.from < site.line && site.line < using.to);
       const imported = declared.length === 0 ? undefined : csharpImported(site.card, declared, first, depth > 0);
       if (imported === null) return unknownType;
       if (imported !== undefined) return csharpNested(imported, rest);

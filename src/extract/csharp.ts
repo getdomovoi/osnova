@@ -4,7 +4,8 @@ import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
 
-const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// A C# identifier after `plain`: a letter or underscore, then letters, digits, marks and connectors.
+const IDENTIFIER_RE = /^[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$/u;
 
 // This grammar writes `params int[] rest` as a bare `params` token in the list, not as a parameter.
 // A method a derived type cannot call: written `private`, or without an access modifier outside an interface.
@@ -31,8 +32,12 @@ function parameterRange(list: Node, method: Node, constructor = false): Paramete
   return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
 }
 
-// `@class` and `class` are one identifier.
-const plain = (identifier: string): string => identifier.replace(/^@/, "");
+// One C# identifier however it is spelled, as the compiler compares them: `@class` is `class`, a `\u0041` escape is `A`,
+// and formatting characters (such as U+200C) are not part of the name.
+const plain = (identifier: string): string => identifier
+  .replace(/\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})/g, (_, short: string | undefined, long: string | undefined) => String.fromCodePoint(parseInt(short ?? long!, 16)))
+  .replace(/^@/, "")
+  .replace(/\p{Cf}/gu, "");
 
 // A written type name with each segment's generic arity: `Outer<int>.Inner` is ``Outer`1.Inner``, and
 // `global::N.T` keeps its `global::` qualifier.
@@ -139,7 +144,8 @@ export const csharpAdapter: LanguageAdapter = {
           // The first base as written, which a class inherits member types from; an interface inherits them from
           // every base, which this one name cannot hold, so several are recorded as unknown (`?`).
           const bases = childrenOf(childOfType(node, "base_list") ?? node).filter((child) => ["identifier", "generic_name", "qualified_name", "alias_qualified_name"].includes(child.type));
-          if (node.childForFieldName("bases") !== null || childOfType(node, "base_list") !== null) {
+          // An enum's base is its underlying integral type, which holds no member types.
+          if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
             else if (bases[0] !== undefined) out.markBaseType(aritiedName(bases[0]));
           }
@@ -148,6 +154,18 @@ export const csharpAdapter: LanguageAdapter = {
           for (const child of childrenOf(node)) visit(child);
           out.pop();
           arities.pop();
+          return;
+        }
+        case "delegate_declaration": {
+          // A delegate is a type, so it hides a same-named type further out, though its constructor is not indexed.
+          const nameNode = node.childForFieldName("name");
+          if (nameNode === null || !IDENTIFIER_RE.test(plain(nameNode.text))) return;
+          out.addDef(plain(nameNode.text), "type", node);
+          const arity = childrenOf(node.childForFieldName("type_parameters") ?? node).filter((child) => child.type === "type_parameter").length;
+          if (arity > 0) out.markArity(arity);
+          if (arities.length === 0 && namespaces.length > 0) out.markNamespace(namespaces.join("."));
+          const access = arities.length > 0 ? memberTypeAccess(node) : undefined;
+          if (access !== undefined) out.markAccess(access);
           return;
         }
         case "method_declaration":

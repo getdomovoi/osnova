@@ -503,11 +503,11 @@ describe("a creation claims a declaration only where the compiler's binding is p
     await write({
       "Global.cs": "class T{public T(){}}\n",
       "Q.cs": "namespace Q{public class T{public T(){}}}\n",
-      "Use.cs": "namespace A {using Q; class First{public static object Run(){return new T();}}}\nnamespace A {\n  class Second{public static object Run(){return new T();}}\n}\n",
+      "Use.cs": "namespace A {\n  using Q;\n  class First{public static object Run(){return new T();}}\n}\nnamespace A {\n  class Second{public static object Run(){return new T();}}\n}\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: "Q.cs#T.T" });
-    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toSymbol: "Global.cs#T.T" });
+    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toSymbol: "Q.cs#T.T" });
+    expect(creationAt(index, "Use.cs", 6)).toMatchObject({ toSymbol: "Global.cs#T.T" });
   });
 
   it("resolves a C# partial type's base in the part that writes it", async () => {
@@ -549,6 +549,55 @@ describe("a creation claims a declaration only where the compiler's binding is p
     // `@C(int)` and `C(string)` both take one argument, so the count names neither.
     expect(creationAt(index, "Ctor.cs", 4)).toMatchObject({ toSymbol: "Ctor.cs#C.C", overload: { candidates: [2, 3] } });
     expect(creationAt(index, "Nested.cs", 4)).toMatchObject({ toSymbol: "Nested.cs#D.T.T" });
+  });
+
+  it("records no base for a C# enum's underlying type, and reads the cache back", async () => {
+    await write({ "Types.cs": "enum E : System.Byte { A }\nclass C {public static object Run(){return new C();}}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(index.files.get("Types.cs")!.symbols.find((symbol) => symbol.name === "E")!.baseType).toBeUndefined();
+    expect((await loadIndex(workspace, { cacheDir }))!.files.size).toBe(1);
+  });
+
+  it("refuses a C# directive's choice on a line two namespace declarations share", async () => {
+    await write({
+      "Global.cs": "class T{public T(){}}\n",
+      "Q.cs": "namespace Q{public class T{public T(){}}}\n",
+      "Use.cs": "namespace A {\n using Q; class First{public static object Run(){return new T();}}\n} namespace A {class Second{public static object Run(){return new T();}}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: "Q.cs#T.T" });
+    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("reads C# identifiers as the compiler does: escapes decoded, formatting characters dropped", async () => {
+    await write({
+      "Param.cs": "class T {public T(){}}\nclass C<T‌> where T:new() {\n public static object Run(){return new T();}\n}\n",
+      "Ns.cs": "namespace P‌ {\n  class D{public static object Run(){return new U();}}\n}\n",
+      "Actual.cs": "namespace P{public class U{public U(){}}}\n",
+      "Global.cs": "class U{public U(){}}\n",
+      "Escape.cs": "class \\u0056 {public V(){}}\nclass E{public static object Run(){return new V();}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Param.cs", 3)).toMatchObject({ toSymbol: undefined, constructs: undefined });
+    expect(creationAt(index, "Ns.cs", 2)).toMatchObject({ toSymbol: "Actual.cs#U.U" });
+    // The bundled grammar cannot read a \u escape in an identifier, so that class is not indexed and names nothing.
+    expect(creationAt(index, "Escape.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("indexes Unicode C# type names", async () => {
+    await write({ "Types.cs": "class Ω {public class T {public T(){}}}\nclass C:Ω {public static object Run(){return new T();}}\nclass T {public T(){}}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 2)).toMatchObject({ toSymbol: "Types.cs#Ω.T.T" });
+  });
+
+  it("lets a C# member delegate shadow an outer class without naming either", async () => {
+    await write({
+      "Types.cs": "using System;\nclass T {public T(Action x){}}\nclass C {\n  public delegate void T();\n  static void M(){}\n  public static object Run(){return new T(M);}\n}\n",
+      "Inherited.cs": "using System;\nclass U {public U(Action x){}}\nclass B { public delegate void U(); }\nclass D : B {\n  static void M(){}\n  public static object Run(){return new U(M);}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 6)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Inherited.cs", 6)).toMatchObject({ toSymbol: undefined });
   });
 
   it("finds a C# primary constructor behind a comment", async () => {
