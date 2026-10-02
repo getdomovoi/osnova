@@ -85,6 +85,7 @@ interface SerializedSymbol {
   readonly shadowed?: true | undefined;
   readonly primary?: true | undefined;
   readonly access?: "private" | "package" | undefined;
+  readonly arity?: number | undefined;
   readonly partial?: string | undefined;
   readonly supertypes?: number | undefined;
   readonly interfaces?: readonly SymbolBinding[] | undefined;
@@ -180,6 +181,7 @@ export function serializeSections(
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.primary === undefined ? {} : { primary: symbol.primary }),
         ...(symbol.access === undefined ? {} : { access: symbol.access }),
+        ...(symbol.arity === undefined ? {} : { arity: symbol.arity }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
         ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
         ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
@@ -376,6 +378,7 @@ function deserializeBody(
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
       if (symbol.primary !== undefined && (symbol.primary !== true || !["class", "struct"].includes(symbol.kind))) throw new Error("osnova: corrupt primary constructor metadata");
       if (symbol.access !== undefined && (!(symbol.access === "private" || symbol.access === "package") || !["class", "interface", "enum"].includes(symbol.kind))) throw new Error("osnova: corrupt member-type access metadata");
+      if (symbol.arity !== undefined && (!Number.isSafeInteger(symbol.arity) || symbol.arity < 1 || !["class", "interface", "struct"].includes(symbol.kind))) throw new Error("osnova: corrupt generic arity metadata");
       if (symbol.supertypes !== undefined && (!Number.isSafeInteger(symbol.supertypes) || symbol.supertypes < 1)) throw new Error("osnova: corrupt supertype count");
       if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[^\s`]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
@@ -417,6 +420,7 @@ function deserializeBody(
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.primary === undefined ? {} : { primary: symbol.primary }),
         ...(symbol.access === undefined ? {} : { access: symbol.access }),
+        ...(symbol.arity === undefined ? {} : { arity: symbol.arity }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
         ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
         ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),

@@ -714,40 +714,51 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     return csharpAliases;
   };
-  // A member type declared in any part of a C# type, or in an indexed base; null when a part that did not parse
-  // cleanly may hold it.
-  const csharpDeclaredMember = (type: OsnovaSymbol, path: string): OsnovaSymbol | null | undefined => {
+  // A written C# type name segment and its generic arity: ``Box`1`` names `Box<T>`, which a type records as `arity`.
+  type CsharpSegment = { readonly name: string; readonly arity: number };
+  const csharpSegments = (written: string): CsharpSegment[] => written.split(".").map((part) => {
+    const tick = part.indexOf("`");
+    return tick < 0 ? { name: part, arity: 0 } : { name: part.slice(0, tick), arity: Number(part.slice(tick + 1)) };
+  });
+  const arityOf = (symbol: OsnovaSymbol): number => symbol.arity ?? 0;
+  // A member type of that name and arity declared in any part of a C# type; null when a part that did not parse
+  // cleanly may hold it, or when the type shares its qualified name with a type of another identity, since the
+  // index cannot tell which declaration's members are whose.
+  const csharpDeclaredMember = (type: OsnovaSymbol, segment: CsharpSegment): OsnovaSymbol | null | undefined => {
+    if (!singleType(type)) return null;
     const { parts, complete } = partsOf(type);
-    const found = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${path}`)).find(isHolder);
+    const found = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`))
+      .find((symbol) => isHolder(symbol) && arityOf(symbol) === segment.arity);
     return found ?? (complete ? undefined : null);
   };
-  const csharpMemberTypeOf = (type: OsnovaSymbol, name: string, seen: Set<string>): OsnovaSymbol | null | undefined => {
+  const csharpMemberTypeOf = (type: OsnovaSymbol, segment: CsharpSegment, seen: Set<string>): OsnovaSymbol | null | undefined => {
     if (seen.size > 32) return null;
     if (seen.has(typeKey(type))) return undefined;
     seen.add(typeKey(type));
-    const own = csharpDeclaredMember(type, name);
+    const own = csharpDeclaredMember(type, segment);
     if (own !== undefined) return own;
     for (const part of partsOf(type).parts) {
       for (const binding of part.heritage ?? []) {
         const base = baseOf(part, binding);
         // A class or struct inherits member types from its base class only, not from interfaces it implements.
         if (base !== undefined && base.kind === "interface" && type.kind !== "interface") continue;
-        const member = base === undefined ? undefined : csharpMemberTypeOf(base, name, seen);
+        const member = base === undefined ? undefined : csharpMemberTypeOf(base, segment, seen);
         if (member !== undefined) return member;
       }
     }
     return undefined;
   };
-  const csharpSimpleType = (card: FileCard, fromSymbol: string, name: string, importTargets: readonly string[]): CreatedType => {
+  // C# looks a name up by its arity too, so `T<int>` skips a member `T` and finds a top-level `T<U>`.
+  const csharpSimpleType = (card: FileCard, fromSymbol: string, segment: CsharpSegment, importTargets: readonly string[]): CreatedType => {
     const enclosing = fromSymbol.includes("#") ? localOfQualifiedName(fromSymbol).split(".") : [];
     for (let depth = enclosing.length; depth > 0; depth -= 1) {
       const holder = declaredAs(card.path, qualifiedNameOf(card.path, enclosing.slice(0, depth).join("."))).find(isHolder);
-      const member = holder === undefined ? undefined : csharpMemberTypeOf(holder, name, new Set());
+      const member = holder === undefined ? undefined : csharpMemberTypeOf(holder, segment, new Set());
       if (member === null) return unknownType;
       if (member !== undefined) return { status: "resolved", type: member, method: member.file === card.path ? "same-file-name" : "lexical-definition" };
     }
-    const types = (symbolsByName.get(name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "c_sharp" &&
-      localOfQualifiedName(symbol.qualifiedName) === name);
+    const types = (symbolsByName.get(segment.name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "c_sharp" &&
+      localOfQualifiedName(symbol.qualifiedName) === segment.name && arityOf(symbol) === segment.arity);
     const sameFile = types.filter((symbol) => symbol.file === card.path);
     const imported = types.filter((symbol) => importTargets.includes(symbol.file));
     // The parts of one partial type are one type, named by the part in the creating file or else the first.
@@ -756,12 +767,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     return oneType(onePartial(sameFile), "same-file-name") ?? oneType(onePartial(imported), "imported-file-name") ?? oneType(onePartial(types), "lexical-definition") ?? externalType;
   };
   const csharpCreatedType = (card: FileCard, fromSymbol: string, written: string, importTargets: readonly string[]): CreatedType => {
-    const [first, ...rest] = written.split(".");
-    if (csharpAliasNames().has(first!)) return unknownType;
-    const outer = csharpSimpleType(card, fromSymbol, first!, importTargets);
+    const [first, ...rest] = csharpSegments(written);
+    if (first === undefined || csharpAliasNames().has(first.name)) return unknownType;
+    const outer = csharpSimpleType(card, fromSymbol, first, importTargets);
     if (rest.length === 0 || outer.status !== "resolved") return rest.length === 0 ? outer : unknownType;
-    const inner = csharpDeclaredMember(outer.type, rest.join("."));
-    return inner === undefined || inner === null ? unknownType : { ...outer, type: inner };
+    let type: OsnovaSymbol = outer.type;
+    for (const segment of rest) {
+      const inner = csharpDeclaredMember(type, segment);
+      if (inner === undefined || inner === null) return unknownType;
+      type = inner;
+    }
+    return { ...outer, type };
   };
   // What `new T(...)` runs: an instance constructor of T written in any part of the type, or T itself when it
   // declares none, declares a primary or canonical constructor, or the creation makes an anonymous subclass.

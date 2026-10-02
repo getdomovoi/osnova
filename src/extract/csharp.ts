@@ -31,6 +31,29 @@ function parameterRange(list: Node, method: Node, constructor = false): Paramete
   return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
 }
 
+// A written type name with each segment's generic arity: `Outer<int>.Inner` is ``Outer`1.Inner``.
+function aritiedName(type: Node): string {
+  const parts = childrenOf(type).filter((child) => child.type !== "comment");
+  if (type.type === "generic_name") {
+    const name = parts.find((child) => child.type === "identifier");
+    const list = parts.find((child) => child.type === "type_argument_list");
+    const arity = list === undefined ? 0 : childrenOf(list).filter((child) => child.type !== "comment").length;
+    return name === undefined ? withoutTypeArguments(type.text) : arity === 0 ? name.text : `${name.text}\`${arity}`;
+  }
+  if (type.type === "qualified_name") return parts.map(aritiedName).join(".");
+  if (type.type === "identifier") return type.text;
+  return withoutTypeArguments(type.text);
+}
+
+// Whether an enclosing declaration (a type, method or local function) declares a type parameter of this name.
+function typeParameterInScope(node: Node, name: string): boolean {
+  for (let scope = node.parent; scope !== null; scope = scope.parent) {
+    const list = childOfType(scope, "type_parameter_list");
+    if (list !== null && childrenOf(list).some((parameter) => parameter.type === "type_parameter" && childrenOf(parameter).some((child) => child.type === "identifier" && child.text === name))) return true;
+  }
+  return false;
+}
+
 // A parameter list written after the type's name and type parameters: a record's, or a class's or struct's
 // primary constructor (C# 12), which the recovery parse leaves out of the tree but not out of the node's text.
 function hasPrimaryConstructor(type: Node, name: Node): boolean {
@@ -78,6 +101,7 @@ export const csharpAdapter: LanguageAdapter = {
           out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           arities.push(childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length);
           if (hasPrimaryConstructor(node, nameNode)) out.markPrimary();
+          if (arities[arities.length - 1]! > 0) out.markArity(arities[arities.length - 1]!);
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
@@ -131,11 +155,16 @@ export const csharpAdapter: LanguageAdapter = {
           return;
         }
         case "object_creation_expression": {
-          // `new Box<string>(1)` names Box.
+          // `new Box<string>(1)` names ``Box`1``: C# tells `Box` from `Box<T>` by arity, so the name carries it as
+          // metadata names do. A type parameter in scope (`new T()` under `where T : new()`) names no declared
+          // type, so that creation stays a plain call.
           const typeNode = node.childForFieldName("type");
           // `new T { Init = 1 }` without an argument list runs the parameterless constructor.
           const args = node.childForFieldName("arguments");
-          if (typeNode !== null) out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, args === null ? 0 : argumentCount(args), "instance");
+          if (typeNode !== null) {
+            if (typeNode.type === "identifier" && typeParameterInScope(node, typeNode.text)) out.addEdge("calls", typeNode.text, typeNode);
+            else out.addEdge("calls", aritiedName(typeNode), typeNode, undefined, undefined, args === null ? 0 : argumentCount(args), "instance");
+          }
           for (const child of childrenOf(node)) visit(child);
           return;
         }

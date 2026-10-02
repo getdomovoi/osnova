@@ -108,6 +108,11 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, primary: true });
   }
 
+  markArity(arity: number): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, arity });
+  }
+
   markAccess(access: "private" | "package"): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, access });

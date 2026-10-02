@@ -138,9 +138,9 @@ describe("C# object creation", () => {
   it("names the constructor the argument count selects, and the type when it declares none", async () => {
     await write({ "P/Box.cs": csharpBox, "Q/Use.cs": csharpUse });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(creationAt(index, "Q/Use.cs", 5)).toEqual({ toName: "Box", toSymbol: "P/Box.cs#Box.Box", constructs: "instance", arguments: 1, overload: { line: 3 }, status: "resolved" });
+    expect(creationAt(index, "Q/Use.cs", 5)).toEqual({ toName: "Box`1", toSymbol: "P/Box.cs#Box.Box", constructs: "instance", arguments: 1, overload: { line: 3 }, status: "resolved" });
     // A namespace-qualified name could name a type the index cannot place by namespace, so it stays unresolved.
-    expect(creationAt(index, "Q/Use.cs", 6)).toMatchObject({ toName: "P.Box", toSymbol: undefined, constructs: "instance", arguments: 2 });
+    expect(creationAt(index, "Q/Use.cs", 6)).toMatchObject({ toName: "P.Box`1", toSymbol: undefined, constructs: "instance", arguments: 2 });
     expect(creationAt(index, "Q/Use.cs", 7)).toMatchObject({ toName: "Plain", toSymbol: "P/Box.cs#Plain", constructs: "instance", arguments: 0, overload: undefined });
   });
 });
@@ -396,6 +396,35 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Base.cs", 3)).toMatchObject({ toSymbol: "Base.cs#B.N.N" });
   });
 
+  it("leaves a C# name unknown when an enclosing holder mixes partial identities", async () => {
+    await write({ "Types.cs": "namespace A {\n  public partial class C {\n    public class T { public T() {} }\n  }\n}\nnamespace B {\n  public partial class C {\n    public static void Use() { new T(); }\n  }\n}\nclass T { public T() {} }\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 8)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("keeps a creation of a C# type parameter a plain call", async () => {
+    await write({
+      "Types.cs": "class T { public T() {} }\nclass U { public U() {} }\nclass C<T> where T : new() {\n  public static object Use() { return new T(); }\n  public static V Make<V>() where V : new() => new V();\n  public static object Local() { W Inner<W>() where W : new() => new W(); return Inner<U>(); }\n}\nclass V { public V() {} }\nclass W { public W() {} }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    for (const line of [4, 5, 6]) expect(creationAt(index, "Types.cs", line)).toMatchObject({ toSymbol: undefined, constructs: undefined });
+  });
+
+  it("matches a C# creation's written generic arity", async () => {
+    await write({
+      "Types.cs": "class T { public T() {} }\nclass Use {\n  public static void Run() { new T<int>(); new T(); }\n}\n",
+      "Generic.cs": "class T<TItem> { public T() {} }\n",
+      "Outer.cs": "class Outer<TKey> {\n  public class Inner { public Inner() {} }\n}\n",
+      "OuterPlain.cs": "class Outer {\n  public class Inner { public Inner(int x) {} }\n}\n",
+      "Nested.cs": "class Nested { void Run() { new Outer<int>.Inner(); } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.constructs !== undefined).map((edge) => [edge.fromFile, edge.line, edge.toName, edge.toSymbol]);
+    expect(creations).toContainEqual(["Types.cs", 3, "T`1", "Generic.cs#T.T"]);
+    expect(creations).toContainEqual(["Types.cs", 3, "T", "Types.cs#T.T"]);
+    expect(creations).toContainEqual(["Nested.cs", 1, "Outer`1.Inner", "Outer.cs#Outer.Inner.Inner"]);
+  });
+
   it("resolves a dotted C# name from its first segment, not by suffix", async () => {
     await write({
       "Box.cs": "namespace P { public class Box { public Box(int x) {} } }\n",
@@ -476,6 +505,23 @@ describe("object creation across the cache and incremental updates", () => {
     for (const change of [
       (symbols: Stored["files"][number]["symbols"]) => { symbols.find((symbol) => symbol.q === "A.T")!.access = "public"; },
       (symbols: Stored["files"][number]["symbols"]) => { symbols.find((symbol) => symbol.q === "A.run")!.access = "private"; },
+    ]) expect(() => deserializeArtifact(corrupt(change), undefined)).toThrow(/corrupt/);
+  });
+
+  it("refuses corrupted generic arity metadata on load", async () => {
+    await write({ "Box.cs": "class Box<T> {\n  public void Run() { }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    type Stored = { files: { symbols: { q: string; arity?: unknown }[] }[] };
+    const corrupt = (change: (symbols: Stored["files"][number]["symbols"]) => void): string => {
+      const data = JSON.parse(serializeArtifact(index).toString()) as Stored;
+      change(data.files[0]!.symbols);
+      return JSON.stringify(data);
+    };
+    expect(() => deserializeArtifact(corrupt((symbols) => { expect(symbols.find((symbol) => symbol.q === "Box")!.arity).toBe(1); }), undefined)).not.toThrow(/corrupt/);
+    for (const change of [
+      (symbols: Stored["files"][number]["symbols"]) => { symbols.find((symbol) => symbol.q === "Box")!.arity = 0; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols.find((symbol) => symbol.q === "Box")!.arity = "1"; },
+      (symbols: Stored["files"][number]["symbols"]) => { symbols.find((symbol) => symbol.q === "Box.Run")!.arity = 1; },
     ]) expect(() => deserializeArtifact(corrupt(change), undefined)).toThrow(/corrupt/);
   });
 
