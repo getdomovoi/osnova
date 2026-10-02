@@ -600,6 +600,30 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Inherited.cs", 6)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("names no constructor for a C# delegate that shares its qualified name with a type", async () => {
+    await write({
+      "Arity.cs": "using System;\nclass C {\n public delegate void T();\n public class T<U> {public T(Action x){}}\n static void M(){}\n public static object Run(){return new T(M);}\n}\n",
+      "Reverse.cs": "using System;\nclass D {\n public class V {public V(Action x){}}\n public delegate void V<U>();\n static void M(){}\n public static object Run(){return new V<int>(M);}\n}\n",
+      "Ns.cs": "using System;\nnamespace A { public delegate void W(); class E { static void M(){} public static object Run(){return new W(M);} } }\nnamespace B { public class W { public W(Action x){} } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Arity.cs", 6)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Reverse.cs", 6)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Ns.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("keeps a C# alias named global apart from the global:: qualifier", async () => {
+    await write({
+      "Use.cs": "using @global = P;\nnamespace N {class C {public static object Run(){return new @global::T();}}}\n",
+      "Plain.cs": "namespace M {class D {public static object Run(){return new global::T();}}}\n",
+      "Actual.cs": "namespace P {public class T{public T(){}}}\n",
+      "Global.cs": "class T{public T(){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Plain.cs", 1)).toMatchObject({ toSymbol: "Global.cs#T.T" });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

@@ -1528,8 +1528,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (raw.constructs !== undefined && (card.language === "java" || card.language === "c_sharp")) {
         const found = card.language === "java" ? javaCreatedType(card, fromSymbol, raw.toName) : csharpCreatedType(card, fromSymbol, raw.toName, raw.line);
         // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
-        // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart.
-        const typeFound: CreatedType = found.status === "resolved" && !singleType(found.type) ? unknownType : found;
+        // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart. A
+        // C# delegate's constructor is not indexed, and the name it shares may also hold another type's constructors.
+        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || !singleType(found.type)) ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
         const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
         const evidence = { source: "syntax" as const, resolution: typeFound.status === "resolved" ? { status: "resolved" as const, method: typeFound.method } : typeFound };

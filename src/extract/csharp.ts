@@ -50,7 +50,13 @@ function aritiedName(type: Node): string {
     return name === undefined ? withoutTypeArguments(type.text) : arity === 0 ? plain(name.text) : `${plain(name.text)}\`${arity}`;
   }
   if (type.type === "qualified_name") return parts.map(aritiedName).join(".");
-  if (type.type === "alias_qualified_name") return parts.map(aritiedName).join("::");
+  // Only the keyword `global` itself names the global namespace; `@global` or a respelled `global` is an alias, kept
+  // marked with `@` so that it is never read as the keyword.
+  if (type.type === "alias_qualified_name") {
+    const [qualifier, ...rest] = parts;
+    const alias = qualifier === undefined ? "" : qualifier.text === "global" ? "global" : `@${plain(qualifier.text)}`;
+    return [alias, ...rest.map(aritiedName)].join("::");
+  }
   if (type.type === "identifier") return plain(type.text);
   return withoutTypeArguments(type.text);
 }
