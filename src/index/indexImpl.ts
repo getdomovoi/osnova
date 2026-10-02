@@ -1,4 +1,4 @@
-import type { EdgeBinding, RouteInfo, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol, SymbolDegree } from "../types.js";
+import type { Construction, EdgeBinding, RouteInfo, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol, SymbolDegree } from "../types.js";
 import { canonical, deserializeEdges } from "./edgeStore.js";
 import { IndexingError } from "./diagnostics.js";
 
@@ -14,6 +14,7 @@ export interface RawEdgeItem {
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
   readonly arguments?: number | undefined;
+  readonly constructs?: Construction | undefined;
 }
 
 export function qualifiedNameOf(file: string, local: string): string {
@@ -186,7 +187,8 @@ function compareEdges(a: OsnovaEdge, b: OsnovaEdge): number {
     compareStr(a.toFile ?? "", b.toFile ?? "") ||
     compareStr(a.fromSymbol, b.fromSymbol) ||
     compareStr(canonical(a.binding ?? null), canonical(b.binding ?? null)) ||
-    (a.arguments ?? -1) - (b.arguments ?? -1)
+    (a.arguments ?? -1) - (b.arguments ?? -1) ||
+    compareStr(a.constructs ?? "", b.constructs ?? "")
   );
 }
 
@@ -204,7 +206,8 @@ function dedupeEdges(sorted: OsnovaEdge[]): OsnovaEdge[] {
       prev.toSymbol === edge.toSymbol &&
       prev.toFile === edge.toFile &&
       canonical(prev.binding ?? null) === canonical(edge.binding ?? null) &&
-      prev.arguments === edge.arguments
+      prev.arguments === edge.arguments &&
+      prev.constructs === edge.constructs
     ) {
       continue;
     }

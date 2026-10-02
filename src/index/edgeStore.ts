@@ -1,4 +1,4 @@
-import type { EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OverloadChoice, OverloadDeclaration, ReceiverBasis, ReceiverMode, RouteInfo } from "../types.js";
+import type { Construction, EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OverloadChoice, OverloadDeclaration, ReceiverBasis, ReceiverMode, RouteInfo } from "../types.js";
 import { sha256Hex } from "./scan.js";
 
 // The position in this list is the stored encoding of an edge's kind, so the order is written down
@@ -41,7 +41,7 @@ export interface EdgeLayout {
 }
 
 interface EdgeHeader {
-  readonly formatVersion: 12;
+  readonly formatVersion: 13;
   readonly count: number;
   readonly evidence: readonly EdgeEvidence[];
   readonly bindings: readonly EdgeBinding[];
@@ -49,7 +49,10 @@ interface EdgeHeader {
   readonly overloads: readonly OverloadChoice[];
 }
 
-type Tuple = [kind: number, fromFile: number, fromSymbol: string, toName: string, line: number, toSymbol: string | null, toFile: number, evidence: number, binding: number, route: number, args: number, overload: number];
+type Tuple = [kind: number, fromFile: number, fromSymbol: string, toName: string, line: number, toSymbol: string | null, toFile: number, evidence: number, binding: number, route: number, args: number, overload: number, constructs: number];
+
+// The construction column: 0 for an edge that is not an object creation.
+const constructionCodes: readonly (Construction | undefined)[] = [undefined, "instance", "anonymous"];
 
 const MAX_ARRAY_INDEX = 4294967294;
 
@@ -120,7 +123,7 @@ export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly str
   const bindings = intern(edges.map((edge) => edge.binding));
   const routes = intern(edges.map((edge) => (edge.route === undefined ? undefined : validateRoute(edge.route))));
   const overloads = intern(edges.map((edge) => (edge.overload === undefined ? undefined : validateOverload(edge.overload, knownPaths))));
-  const header: EdgeHeader = { formatVersion: 12, count: edges.length, evidence: evidence.table, bindings: bindings.table, routes: routes.table, overloads: overloads.table };
+  const header: EdgeHeader = { formatVersion: 13, count: edges.length, evidence: evidence.table, bindings: bindings.table, routes: routes.table, overloads: overloads.table };
   const lines = [JSON.stringify(header)];
   for (const [i, edge] of edges.entries()) {
     const fromFile = pathIndex.get(edge.fromFile);
@@ -129,7 +132,7 @@ export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly str
     const kind = edgeKinds.indexOf(edge.kind);
     if (kind < 0) throw new Error(`osnova: unknown edge kind ${JSON.stringify(edge.kind)}`);
     const tuple: Tuple = [kind, fromFile, edge.fromSymbol, edge.toName, edge.line, edge.toSymbol ?? null, toFile,
-      evidence.ids[i]!, bindings.ids[i]!, routes.ids[i]!, edge.arguments ?? -1, overloads.ids[i]!];
+      evidence.ids[i]!, bindings.ids[i]!, routes.ids[i]!, edge.arguments ?? -1, overloads.ids[i]!, constructionCodes.indexOf(edge.constructs)];
     lines.push(JSON.stringify(tuple));
   }
   const bytes = Buffer.from(`${lines.join("\n")}\n`, "utf8");
@@ -258,7 +261,7 @@ export function deserializeEdges(bytes: Buffer, paths: readonly string[], files:
   if (!text.endsWith("\n")) throw new Error("osnova: corrupt edge section");
   const lines = text.slice(0, -1).split("\n");
   const header = JSON.parse(lines[0] ?? "null") as Partial<EdgeHeader> | null;
-  if (header === null || header.formatVersion !== 12 || !Array.isArray(header.evidence) || !Array.isArray(header.bindings) || !Array.isArray(header.routes) || !Array.isArray(header.overloads) ||
+  if (header === null || header.formatVersion !== 13 || !Array.isArray(header.evidence) || !Array.isArray(header.bindings) || !Array.isArray(header.routes) || !Array.isArray(header.overloads) ||
     !integerIn(header.count, 0, Number.MAX_SAFE_INTEGER) || header.count !== lines.length - 1) throw new Error("osnova: corrupt edge header");
   const evidenceTable = header.evidence.map((entry) => validateEvidence(entry));
   const bindingTable = header.bindings.map((entry) => validateBinding(entry));
@@ -270,12 +273,13 @@ export function deserializeEdges(bytes: Buffer, paths: readonly string[], files:
   const out: OsnovaEdge[] = [];
   for (let i = 1; i < lines.length; i += 1) {
     const tuple = JSON.parse(lines[i]!) as unknown;
-    if (!Array.isArray(tuple) || tuple.length !== 12) throw new Error("osnova: corrupt edge tuple");
-    const [k, f, fs, t, l, ts, tf, e, b, r, a, o] = tuple as Tuple;
+    if (!Array.isArray(tuple) || tuple.length !== 13) throw new Error("osnova: corrupt edge tuple");
+    const [k, f, fs, t, l, ts, tf, e, b, r, a, o, c] = tuple as Tuple;
     if (!integerIn(k, 0, edgeKinds.length - 1) || !integerIn(f, 0, paths.length - 1) || typeof fs !== "string" || typeof t !== "string" ||
       !integerIn(l, 1, Number.MAX_SAFE_INTEGER) || (ts !== null && typeof ts !== "string") || !integerIn(tf, -1, paths.length - 1) ||
       !integerIn(e, 0, evidenceTable.length - 1) || !integerIn(b, -1, bindingTable.length - 1) || !integerIn(r, -1, routeTable.length - 1) ||
-      !integerIn(a, -1, Number.MAX_SAFE_INTEGER) || !integerIn(o, -1, overloadTable.length - 1)) throw new Error("osnova: corrupt edge tuple");
+      !integerIn(a, -1, Number.MAX_SAFE_INTEGER) || !integerIn(o, -1, overloadTable.length - 1) || !integerIn(c, 0, constructionCodes.length - 1)) throw new Error("osnova: corrupt edge tuple");
+    if (c !== 0 && edgeKinds[k] !== "calls") throw new Error("osnova: corrupt edge metadata");
     if (o !== -1 && (edgeKinds[k] !== "calls" || a === -1 || ts === null)) throw new Error("osnova: corrupt edge metadata");
     if ((edgeKinds[k] === "routes") !== (r !== -1)) throw new Error("osnova: corrupt edge metadata");
     const fromFile = paths[f]!;
@@ -291,6 +295,7 @@ export function deserializeEdges(bytes: Buffer, paths: readonly string[], files:
       ...(r === -1 ? {} : { route: routeTable[r]! }),
       ...(a === -1 ? {} : { arguments: a }),
       ...(o === -1 ? {} : { overload: overloadTable[o]! }),
+      ...(c === 0 ? {} : { constructs: constructionCodes[c]! }),
     });
   }
   return out;
