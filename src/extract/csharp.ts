@@ -129,13 +129,14 @@ function hasPrimaryConstructor(type: Node, name: Node): boolean {
 
 export const csharpAdapter: LanguageAdapter = {
   language: "c_sharp",
-  extract(tree, _source): AdapterOutput {
+  extract(tree, source): AdapterOutput {
     const out = new Extractor();
     // A namespace header or an escaped identifier the grammar could not read leaves the file's namespaces unknown, so no
     // creation in it can be bound by scope.
     const scopeLost = parseLostScope(tree.rootNode);
     // The byte ranges of `#if` regions, whose declarations and directives may not be compiled.
-    const regions = conditionalRegions(tree.rootNode);
+    // Most files have none, so the tree is walked for them only when the text holds `#if`.
+    const regions = source.includes("#if") ? conditionalRegions(tree.rootNode) : [];
     const conditional = (node: Node): boolean => regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
