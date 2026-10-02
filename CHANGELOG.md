@@ -2,6 +2,14 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+The extraction version moves to `structural-9.41`, so the first run after upgrading rebuilds the cache once.
+
+### Fixed
+
+- A C# object creation names the constructor it runs, as a Java one does since 0.12.0. A creation resolves only to a type: a member type that an enclosing type declares in any `partial` part or inherits from an indexed base class (never from an implemented interface), innermost first, or else a top-level type by the tiers a call takes, then to that type's instance constructors in every `partial` part, chosen by argument count, or to the type when it declares none or has a primary constructor. C# looks a type name up by its generic arity too, so a creation's name carries the arity it writes as metadata names do (`new Box<int>()` is ``Box`1``) and C# types record theirs as `OsnovaSymbol.arity`. Instance constructors record `parameters.constructs` (a static constructor does not) and types with a primary constructor record `primary`. A creation stays unresolved through a name any file declares as a `using` alias (read past comments in the directive), through a namespace-qualified name, or when an enclosing type shares its qualified name with a type of another namespace or arity, and a creation of a type parameter in scope (`new T()` under `where T : new()`) stays a plain call. `new T { Init = 1 }` counts no arguments. Scored against Roslyn on the pinned humanizer checkout, decided call edges rose from 7363 to 7456 and in-repo sites covered from 62.2% to 63.0%, with the same 3 false edges as 0.12.0; the other five oracle corpora score the same.
+
 ## 0.12.0 (2026-10-01)
 
 The extraction version moves to `structural-9.40` and the edge section format to 13, so the first run after upgrading rebuilds the cache once.
