@@ -670,6 +670,29 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Part.cs", 2)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("does not offer another file a type whose namespace header did not parse", async () => {
+    await write({
+      "Broken.cs": "namespace \\u0050 {\n class T {public T(){}}\n class B {public class V {public V(){}}}\n}\n",
+      "Actual.cs": "namespace Q {public class T {public T(){}} public class B {public class V {public V(){}}}}\n",
+      "Use.cs": "using Q;\nclass C {public static object Run(){return new T();}}\nclass D:B {public static object Run(){return new V();}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("reads a C# record base it cannot parse as unknown", async () => {
+    await write({
+      "Qualified.cs": "record C(int x):P.B(x) {\n public static object Run(){return new T();}\n}\n",
+      "Generic.cs": "record D(int x):G<int>(x) {\n public static object Run(){return new T();}\n}\n",
+      "Base.cs": "namespace P {public record B(int x) {public class T {public T(){}}}}\nrecord G<U>(int x) {public class T {public T(){}}}\n",
+      "Global.cs": "class T {public T(){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Qualified.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Generic.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

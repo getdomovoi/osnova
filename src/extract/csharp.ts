@@ -159,7 +159,8 @@ export const csharpAdapter: LanguageAdapter = {
           if (hasPrimaryConstructor(node, nameNode)) out.markPrimary();
           if (arities[arities.length - 1]! > 0) out.markArity(arities[arities.length - 1]!);
           // A top-level type records its namespace; a member type records whether a derived type can see it.
-          if (arities.length === 1 && namespaces.length > 0) out.markNamespace(namespaces.join("."));
+          // In a file whose namespace header was lost, a top-level type's namespace is unknown (`?`).
+          if (arities.length === 1 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
           const access = arities.length > 1 ? memberTypeAccess(node) : undefined;
           if (access !== undefined) out.markAccess(access);
           // The first base as written, which a class inherits member types from; an interface inherits them from
@@ -169,8 +170,11 @@ export const csharpAdapter: LanguageAdapter = {
           const bases = childrenOf(childOfType(node, "base_list") ?? node).filter((child) => child.type !== "comment")
             .map((child) => child.type === "primary_constructor_base_type" ? childrenOf(child).find((part) => part.type !== "comment" && part.type !== "argument_list") ?? child : child);
           const readable = (base: Node): boolean => ["identifier", "generic_name", "qualified_name", "alias_qualified_name"].includes(base.type);
-          // An enum's base is its underlying integral type, which holds no member types.
-          if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
+          // A parse error in the declaration's header can hide or garble its base (`record C(int x) : P.B(x)`), so the
+          // base is unknown. An enum's base is its underlying integral type, which holds no member types.
+          const headerBroken = childrenOf(node).some((child) => child.type === "ERROR" || (child.type === "base_list" && child.hasError));
+          if (node.type !== "enum_declaration" && headerBroken) out.markBaseType("?");
+          else if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
             else if (bases[0] !== undefined) out.markBaseType(readable(bases[0]) ? aritiedName(bases[0]) : "?");
           }
@@ -188,7 +192,7 @@ export const csharpAdapter: LanguageAdapter = {
           out.addDef(plain(nameNode.text), "type", node);
           const arity = childrenOf(node.childForFieldName("type_parameters") ?? node).filter((child) => child.type === "type_parameter").length;
           if (arity > 0) out.markArity(arity);
-          if (arities.length === 0 && namespaces.length > 0) out.markNamespace(namespaces.join("."));
+          if (arities.length === 0 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
           const access = arities.length > 0 ? memberTypeAccess(node) : undefined;
           if (access !== undefined) out.markAccess(access);
           return;

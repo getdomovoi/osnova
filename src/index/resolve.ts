@@ -712,6 +712,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     readonly byFile: Map<string, CsharpUsing[]>;
     readonly namespaces: Set<string>;
     readonly types: Map<string, OsnovaSymbol[]>;
+    // Names and arities of types whose namespace is unknown (`?`), which could be the type any lookup of that name means.
+    readonly unplaced: Set<string>;
   };
   // A written C# type name segment and its generic arity: ``Box`1`` names `Box<T>`, which a type records as `arity`.
   const csharpSegments = (written: string): CsharpSegment[] => written.split(".").map((part) => {
@@ -726,7 +728,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   let csharpScope: CsharpScope | undefined;
   const csharpScopeOf = (): CsharpScope => {
     if (csharpScope !== undefined) return csharpScope;
-    const scope: CsharpScope = { aliases: new Set(), global: [], byFile: new Map(), namespaces: new Set(), types: new Map() };
+    const scope: CsharpScope = { aliases: new Set(), global: [], byFile: new Map(), namespaces: new Set(), types: new Map(), unplaced: new Set() };
     for (const [file, raws] of rawEdges) {
       if (files.get(file)?.language !== "c_sharp") continue;
       for (const raw of raws) {
@@ -747,6 +749,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       for (const symbol of symbols) {
         if (!csharpTypeLike(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
         const namespace = symbol.namespace ?? "";
+        if (namespace === "?") {
+          scope.unplaced.add(`${symbol.name}\u0000${arityOf(symbol)}`);
+          continue;
+        }
         const parts = namespace.length === 0 ? [] : namespace.split(".");
         for (let depth = 1; depth <= parts.length; depth += 1) scope.namespaces.add(parts.slice(0, depth).join("."));
         const key = typeKeyIn(namespace, { name: symbol.name, arity: arityOf(symbol) });
@@ -776,7 +782,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   const csharpNamespaceOf = (file: string, outermost: string): string | null => {
     const holders = declaredAs(file, qualifiedNameOf(file, outermost)).filter(isHolder);
     if (holders.length === 0) return "";
-    return singleType(holders[0]!) ? holders[0]!.namespace ?? "" : null;
+    const namespace = holders[0]!.namespace ?? "";
+    return singleType(holders[0]!) && namespace !== "?" ? namespace : null;
   };
   // The indexed base class a C# type inherits member types from: undefined when it writes none, or the written base
   // is outside the index; null when the index cannot tell which type it is.
@@ -891,6 +898,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (member === null) return unknownType;
       if (member !== undefined) return csharpNested({ status: "resolved", type: member, method: member.file === site.card.path ? "same-file-name" : "lexical-definition" }, rest);
     }
+    // Past the enclosing types, a type whose namespace is unknown could be the one any namespace or import supplies.
+    if (scope.unplaced.has(`${first.name}\u0000${first.arity}`)) return unknownType;
     const usings = scope.byFile.get(site.card.path) ?? [];
     const parts = site.namespace.length === 0 ? [] : site.namespace.split(".");
     for (let depth = parts.length; depth >= 0; depth -= 1) {
