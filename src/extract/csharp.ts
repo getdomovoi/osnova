@@ -135,9 +135,16 @@ export const csharpAdapter: LanguageAdapter = {
     // creation in it can be bound by scope.
     const scopeLost = parseLostScope(tree.rootNode);
     // The byte ranges of `#if` regions, whose declarations and directives may not be compiled.
-    // Most files have none, so the tree is walked for them only when the text holds `#if`.
-    const regions = source.includes("#if") ? conditionalRegions(tree.rootNode) : [];
+    // Most files have none, so the tree is walked for them only when a line starts with `#if` (spaces and tabs allowed
+    // around the `#`).
+    const regions = /^[ \t]*#[ \t]*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : [];
     const conditional = (node: Node): boolean => regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
+    // A declaration header (before the body) that holds an `#if` region may write a base or type parameters that are
+    // not compiled.
+    const conditionalHeader = (node: Node): boolean => {
+      const end = (node.childForFieldName("body") ?? childOfType(node, "declaration_list"))?.startIndex ?? node.endIndex;
+      return regions.some(([from, to]) => from <= end && to >= node.startIndex);
+    };
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
     const namespaces: string[] = [];
@@ -199,7 +206,7 @@ export const csharpAdapter: LanguageAdapter = {
           // base is unknown. An enum's base is its underlying integral type, which holds no member types.
           const headerBroken = childrenOf(node).some((child) => child.type === "ERROR" || (child.type === "base_list" && child.hasError));
           if (headerBroken) out.markUnparsedHeader();
-          if (conditional(node)) out.markConditional();
+          if (conditional(node) || conditionalHeader(node)) out.markConditional();
           if (node.type !== "enum_declaration" && headerBroken) out.markBaseType("?");
           else if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
@@ -232,6 +239,8 @@ export const csharpAdapter: LanguageAdapter = {
             out.addDef(plain(nameNode.text), "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             const parameters = node.childForFieldName("parameters");
             if (parameters !== null) out.setParameters(parameterRange(parameters, node, node.type === "constructor_declaration" && !childrenOf(node).some((child) => child.type === "modifier" && child.text === "static")));
+            // A constructor inside an `#if` region may not be compiled, which changes the constructors a creation can run.
+            if (node.type === "constructor_declaration" && conditional(node)) out.markConditional();
             out.push(plain(nameNode.text));
             for (const child of childrenOf(node)) visit(child);
             out.pop();

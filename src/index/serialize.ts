@@ -386,7 +386,7 @@ function deserializeBody(
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
       if (symbol.primary !== undefined && (symbol.primary !== true || !["class", "struct"].includes(symbol.kind))) throw new Error("osnova: corrupt primary constructor metadata");
       if (symbol.access !== undefined && (!(symbol.access === "private" || symbol.access === "package" || symbol.access === "protected") || !["class", "interface", "enum", "struct", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt member-type access metadata");
-      if (symbol.conditional !== undefined && (symbol.conditional !== true || !["class", "interface", "struct", "enum", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt conditional metadata");
+      if (symbol.conditional !== undefined && (symbol.conditional !== true || !["class", "interface", "struct", "enum", "type", "method"].includes(symbol.kind))) throw new Error("osnova: corrupt conditional metadata");
       if (symbol.unparsedHeader !== undefined && (symbol.unparsedHeader !== true || !["class", "interface", "struct", "enum"].includes(symbol.kind))) throw new Error("osnova: corrupt header metadata");
       if (symbol.baseType !== undefined && (typeof symbol.baseType !== "string" || symbol.baseType.length === 0 || /\s/u.test(symbol.baseType) || !["class", "interface", "struct"].includes(symbol.kind))) throw new Error("osnova: corrupt base type metadata");
       if (symbol.namespace !== undefined && (typeof symbol.namespace !== "string" || !/^[^\s.]+(?:\.[^\s.]+)*$/u.test(symbol.namespace) || !["class", "interface", "struct", "enum", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt namespace metadata");

@@ -724,6 +724,38 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Scoped.cs", 5)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("reads a C# #if written with spaces or a tab after the hash", async () => {
+    await write({
+      "Spaced.cs": "# if false\nclass T {public T(){}}\n#endif\n",
+      "Tabbed.cs": "#\tif false\nclass W {public W(){}}\n#endif\n",
+      "Actual.cs": "namespace P {class T {public T(){}} class W {public W(){}}}\n",
+      "Use.cs": "using P;\nclass C {public static object Run(){new W(); return new T();}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.constructs !== undefined).map((edge) => [edge.toName, edge.toSymbol]);
+    expect(creations).toContainEqual(["T", undefined]);
+    expect(creations).toContainEqual(["W", undefined]);
+  });
+
+  it("does not inherit C# member types through a base written or declared inside #if", async () => {
+    await write({
+      "Use.cs": "partial class C {\npublic static object Run(){return new T();}\n}\n",
+      "Disabled.cs": "#if false\npartial class C:B {}\n#endif\n",
+      "Header.cs": "class D\n#if false\n:B\n#endif\n{public static object Run(){return new T();}}\n",
+      "Base.cs": "class B {public class T {public T(){}}}\n",
+      "Global.cs": "class T {public T(){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Header.cs", 5)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("does not let a C# constructor inside #if decide which constructor runs", async () => {
+    await write({ "Use.cs": "class C {\n#if false\npublic C() {}\n#endif\n}\nclass Caller {public static object Run(){return new C();}}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 6)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

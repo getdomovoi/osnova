@@ -792,7 +792,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // is outside the index; null when the index cannot tell which type it is.
   // The base is read in the scope of the part that writes it, which can import other namespaces than another part.
   const csharpBaseOf = (type: OsnovaSymbol, guard: Set<string>): OsnovaSymbol | null | undefined => {
-    const part = partsOf(type).parts.find((declaration) => declaration.baseType !== undefined);
+    const { parts } = partsOf(type);
+    // A part inside an `#if` region, or one that writes its base there, may or may not supply the base.
+    if (parts.some((declaration) => declaration.conditional === true)) return null;
+    const part = parts.find((declaration) => declaration.baseType !== undefined);
     if (part === undefined) return undefined;
     const written = part.baseType!;
     const card = files.get(part.file);
@@ -1549,7 +1552,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
         // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart. A
         // C# delegate's constructor is not indexed, and the name it shares may also hold another type's constructors.
-        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || found.type.conditional === true || !singleType(found.type)) ? unknownType : found;
+        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || found.type.conditional === true || !singleType(found.type) ||
+          constructorsOf(found.type).constructors.some((constructor) => constructor.conditional === true)) ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
         const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
         const evidence = { source: "syntax" as const, resolution: typeFound.status === "resolved" ? { status: "resolved" as const, method: typeFound.method } : typeFound };
