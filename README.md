@@ -86,7 +86,7 @@ A call site counts as resolved when the index ties it to one definition through 
 
 Per-language rows are in the [reference](docs/reference.md#resolution-coverage-and-claim-checking). `osnova coverage` reports the same numbers for your own repository, per language and per reason.
 
-Resolved is not the same as right, so the call edges are also scored against each language's type checker or compiler. Every call site in six pinned checkouts was sent to the checker for the callee's declarations, and each osnova edge was marked true when the definition it names contains that declaration and false when it does not. Measured on the current development branch (0.11.0 plus the unreleased changes listed in the changelog):
+Resolved is not the same as right, so the call edges are also scored against each language's type checker or compiler. Every call site in six pinned checkouts was sent to the checker for the callee's declarations, and each osnova edge was marked true when the definition it names contains that declaration and false when it does not. Measured at 0.12.0:
 
 | Corpus | Checker | Decided edges | False | False-edge rate | In-repo sites covered |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -158,7 +158,7 @@ The action runs `osnova settle --base-ref` against the pull request base and lis
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: getdomovoi/osnova@v0.11.0
+- uses: getdomovoi/osnova@v0.12.0
   with:
     depth: "2"
 ```

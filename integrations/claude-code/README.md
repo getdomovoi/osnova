@@ -16,7 +16,7 @@ This plugin is maintained in `integrations/claude-code` of [getdomovoi/osnova](h
 
 ## What it runs, fetches and writes
 
-Every command runs `npx -y @getdomovoi/osnova@0.11.0`, pinned to the release this plugin version ships with. The first run fetches that package from the npm registry; that is npm's request, made once per version, and later runs use the npm cache.
+Every command runs `npx -y @getdomovoi/osnova@0.12.0`, pinned to the release this plugin version ships with. The first run fetches that package from the npm registry; that is npm's request, made once per version, and later runs use the npm cache.
 
 Osnova itself makes no network connection. It reads the repository and writes only to its cache directory: the index and per-session hook state under your user cache directory, or `OSNOVA_CACHE_DIR` when set. It writes nothing inside your repository. The privacy statement is at [getosnova.dev/privacy](https://getosnova.dev/privacy/).
 

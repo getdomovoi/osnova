@@ -1,5 +1,5 @@
 {
   "mcpServers": {
-    "osnova": { "command": "npx", "args": ["-y", "@getdomovoi/osnova@0.11.0", "mcp"] }
+    "osnova": { "command": "npx", "args": ["-y", "@getdomovoi/osnova@0.12.0", "mcp"] }
   }
 }
