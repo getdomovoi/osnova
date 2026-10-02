@@ -31,17 +31,22 @@ function parameterRange(list: Node, method: Node, constructor = false): Paramete
   return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
 }
 
-// A written type name with each segment's generic arity: `Outer<int>.Inner` is ``Outer`1.Inner``.
+// `@class` and `class` are one identifier.
+const plain = (identifier: string): string => identifier.replace(/^@/, "");
+
+// A written type name with each segment's generic arity: `Outer<int>.Inner` is ``Outer`1.Inner``, and
+// `global::N.T` keeps its `global::` qualifier.
 function aritiedName(type: Node): string {
   const parts = childrenOf(type).filter((child) => child.type !== "comment");
   if (type.type === "generic_name") {
     const name = parts.find((child) => child.type === "identifier");
     const list = parts.find((child) => child.type === "type_argument_list");
     const arity = list === undefined ? 0 : childrenOf(list).filter((child) => child.type !== "comment").length;
-    return name === undefined ? withoutTypeArguments(type.text) : arity === 0 ? name.text : `${name.text}\`${arity}`;
+    return name === undefined ? withoutTypeArguments(type.text) : arity === 0 ? plain(name.text) : `${plain(name.text)}\`${arity}`;
   }
   if (type.type === "qualified_name") return parts.map(aritiedName).join(".");
-  if (type.type === "identifier") return type.text;
+  if (type.type === "alias_qualified_name") return parts.map(aritiedName).join("::");
+  if (type.type === "identifier") return plain(type.text);
   return withoutTypeArguments(type.text);
 }
 
@@ -49,7 +54,7 @@ function aritiedName(type: Node): string {
 function typeParameterInScope(node: Node, name: string): boolean {
   for (let scope = node.parent; scope !== null; scope = scope.parent) {
     const list = childOfType(scope, "type_parameter_list");
-    if (list !== null && childrenOf(list).some((parameter) => parameter.type === "type_parameter" && childrenOf(parameter).some((child) => child.type === "identifier" && child.text === name))) return true;
+    if (list !== null && childrenOf(list).some((parameter) => parameter.type === "type_parameter" && childrenOf(parameter).some((child) => child.type === "identifier" && plain(child.text) === plain(name)))) return true;
   }
   return false;
 }
@@ -102,6 +107,17 @@ export const csharpAdapter: LanguageAdapter = {
           arities.push(childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length);
           if (hasPrimaryConstructor(node, nameNode)) out.markPrimary();
           if (arities[arities.length - 1]! > 0) out.markArity(arities[arities.length - 1]!);
+          // A top-level type records its namespace; a member type records whether a derived type can see it.
+          if (arities.length === 1 && namespaces.length > 0) out.markNamespace(namespaces.join("."));
+          const access = arities.length > 1 ? accessOf(node) : undefined;
+          if (access === "private") out.markAccess(access);
+          // The first base as written, which a class inherits member types from; an interface inherits them from
+          // every base, which this one name cannot hold, so several are recorded as unknown (`?`).
+          const bases = childrenOf(childOfType(node, "base_list") ?? node).filter((child) => ["identifier", "generic_name", "qualified_name", "alias_qualified_name"].includes(child.type));
+          if (node.childForFieldName("bases") !== null || childOfType(node, "base_list") !== null) {
+            if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
+            else if (bases[0] !== undefined) out.markBaseType(aritiedName(bases[0]));
+          }
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(nameNode.text);
           for (const child of childrenOf(node)) visit(child);
@@ -162,7 +178,8 @@ export const csharpAdapter: LanguageAdapter = {
           // `new T { Init = 1 }` without an argument list runs the parameterless constructor.
           const args = node.childForFieldName("arguments");
           if (typeNode !== null) {
-            if (typeNode.type === "identifier" && typeParameterInScope(node, typeNode.text)) out.addEdge("calls", typeNode.text, typeNode);
+            // A type parameter's constructor depends on the type argument, so the call is blocked rather than matched by name.
+            if (typeNode.type === "identifier" && typeParameterInScope(node, typeNode.text)) out.addEdge("calls", plain(typeNode.text), typeNode, { kind: "blocked", reason: "unsupported" });
             else out.addEdge("calls", aritiedName(typeNode), typeNode, undefined, undefined, args === null ? 0 : argumentCount(args), "instance");
           }
           for (const child of childrenOf(node)) visit(child);
@@ -173,7 +190,13 @@ export const csharpAdapter: LanguageAdapter = {
           const parts = childrenOf(node).filter((child) => child.type !== "comment");
           const alias = parts.find((child) => child.type === "name_equals");
           const aliasName = alias === undefined ? undefined : childrenOf(alias).find((child) => child.type === "identifier");
-          const name = alias === undefined ? parts[0]?.text : aliasName === undefined ? undefined : `${aliasName.text} =`;
+          // Any other directive records what it imports, as `[global ][static ]Target[ in Namespace]`: `global` applies
+          // it to every file, `static` imports a type's members, and `in` names the namespace it is declared inside.
+          const keywords = new Set(node.children.filter((child): child is Node => child !== null && !child.isNamed).map((child) => child.type));
+          const target = parts[0] === undefined ? undefined : aritiedName(parts[0]);
+          const scope = namespaces.join(".");
+          const imported = target === undefined ? undefined : `${keywords.has("global") ? "global " : ""}${keywords.has("static") ? "static " : ""}${target}${scope.length > 0 ? ` in ${scope}` : ""}`;
+          const name = alias === undefined ? imported : aliasName === undefined ? undefined : `${plain(aliasName.text)} =`;
           if (name !== undefined) out.addEdge("imports", name, node);
           return;
         }

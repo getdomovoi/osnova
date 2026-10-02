@@ -60,6 +60,11 @@ export interface OsnovaSymbol {
   readonly access?: "private" | "package" | undefined;
   // A generic C# type: how many type parameters it declares, since `Box` and `Box<T>` are different types.
   readonly arity?: number | undefined;
+  // A top-level C# type: the namespace it is declared in, when any.
+  readonly namespace?: string | undefined;
+  // A C# type: its first base as written, with each segment's generic arity (``Base`1``); `?` when an interface
+  // names several bases.
+  readonly baseType?: string | undefined;
   // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
   // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.

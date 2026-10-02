@@ -139,8 +139,8 @@ describe("C# object creation", () => {
     await write({ "P/Box.cs": csharpBox, "Q/Use.cs": csharpUse });
     const index = await buildIndex(workspace, { cacheDir });
     expect(creationAt(index, "Q/Use.cs", 5)).toEqual({ toName: "Box`1", toSymbol: "P/Box.cs#Box.Box", constructs: "instance", arguments: 1, overload: { line: 3 }, status: "resolved" });
-    // A namespace-qualified name could name a type the index cannot place by namespace, so it stays unresolved.
-    expect(creationAt(index, "Q/Use.cs", 6)).toMatchObject({ toName: "P.Box`1", toSymbol: undefined, constructs: "instance", arguments: 2 });
+    // `P` is an indexed namespace, so `P.Box<string>` names its `Box<T>`.
+    expect(creationAt(index, "Q/Use.cs", 6)).toMatchObject({ toName: "P.Box`1", toSymbol: "P/Box.cs#Box.Box", constructs: "instance", arguments: 2, overload: { line: 4 } });
     expect(creationAt(index, "Q/Use.cs", 7)).toMatchObject({ toName: "Plain", toSymbol: "P/Box.cs#Plain", constructs: "instance", arguments: 0, overload: undefined });
   });
 });
@@ -429,11 +429,60 @@ describe("a creation claims a declaration only where the compiler's binding is p
     await write({
       "Box.cs": "namespace P { public class Box { public Box(int x) {} } }\n",
       "Other.cs": "class Other {\n  public class P {\n    public class Box { public Box(int x) {} }\n  }\n  void Run() { new P.Box(1); }\n}\n",
-      "Use.cs": "class Use { void Run() { new P.Box(1); } }\n",
+      "Use.cs": "class Use { void Run() { new P.Box(1); new Q.Box(1); } }\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+    // `P` is an indexed namespace here; `Q` is not, so it may be one the index does not hold.
+    const creations = index.edges.filter((edge) => edge.constructs !== undefined).map((edge) => [edge.fromFile, edge.toName, edge.toSymbol]);
+    expect(creations).toContainEqual(["Use.cs", "P.Box", "Box.cs#Box.Box"]);
+    expect(creations).toContainEqual(["Use.cs", "Q.Box", undefined]);
     expect(creationAt(index, "Other.cs", 5)).toMatchObject({ toSymbol: "Other.cs#Other.P.Box.Box" });
+  });
+
+  it("keeps a C# type-parameter creation unresolved, escaped or not, whatever else shares its name", async () => {
+    await write({
+      "Types.cs": "class Decoy { public static void T() {} }\nclass C<T> where T : new() {\n  public static object Use() { return new T(); }\n}\n",
+      "Escaped.cs": "class U { public U() {} }\nclass D<@U> where U : new() {\n  public static object Use() { return new U(); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 3)).toMatchObject({ toSymbol: undefined, constructs: undefined });
+    expect(creationAt(index, "Escaped.cs", 3)).toMatchObject({ toSymbol: undefined, constructs: undefined });
+  });
+
+  it("resolves a C# base by its written arity and namespace before searching its member types", async () => {
+    await write({
+      "Types.cs": "class Base { public class T { public T() {} } }\nclass C : Base<int> {\n  public static object Use() { return new T(); }\n}\nclass T { public T() {} }\n",
+      "Generic.cs": "class Base<U> {}\n",
+      "Ns.cs": "namespace Q { class Base { public class V { public V() {} } } }\nclass D : P.Base {\n  public static object Use() { return new V(); }\n}\nclass V { public V() {} }\n",
+      "PBase.cs": "namespace P { public class Base {} }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 3)).toMatchObject({ toSymbol: "Types.cs#T.T" });
+    expect(creationAt(index, "Ns.cs", 3)).toMatchObject({ toSymbol: "Ns.cs#V.V" });
+  });
+
+  it("does not inherit a private C# member type", async () => {
+    await write({ "Types.cs": "class A {\n  private class T { public T() {} }\n  class U { public U() {} }\n  protected class W { public W() {} }\n}\nclass B : A {\n  public static object Use() { return new T(); }\n  public static object Other() { new U(); return new W(); }\n}\nclass T { public T() {} }\nclass U { public U() {} }\nclass W { public W() {} }\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.constructs !== undefined).map((edge) => [edge.line, edge.toName, edge.toSymbol]);
+    expect(creations).toContainEqual([7, "T", "Types.cs#T.T"]);
+    expect(creations).toContainEqual([8, "U", "Types.cs#U.U"]);
+    expect(creations).toContainEqual([8, "W", "Types.cs#A.W.W"]);
+  });
+
+  it("finds a member type a C# using static directive imports, not an out-of-scope type", async () => {
+    await write({
+      "Types.cs": "using static P.Holder;\nnamespace Q { public class T { public T(){} } }\nclass C {\n  public static object Use(){return new T();}\n}\n",
+      "Actual.cs": "namespace P { public class Holder {\n  public class T { public T(){} }\n} }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 4)).toMatchObject({ toSymbol: "Actual.cs#Holder.T.T" });
+  });
+
+  it("does not read a C# namespace-qualified name as an out-of-scope type chain", async () => {
+    await write({ "Types.cs": "namespace P { public class T { public T(){} } }\nnamespace Q {\n  public class P { public class T { public T(){} } }\n}\nclass Use {\n  public static object Run() { return new P.T(); }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 6)).toMatchObject({ toSymbol: "Types.cs#T.T" });
   });
 
   it("finds a C# primary constructor behind a comment", async () => {

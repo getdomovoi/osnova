@@ -11,6 +11,8 @@ export interface RawDefinition {
   readonly primary?: true | undefined;
   readonly access?: "private" | "package" | undefined;
   readonly arity?: number | undefined;
+  readonly namespace?: string | undefined;
+  readonly baseType?: string | undefined;
   readonly partial?: string | undefined;
   readonly supertypes?: number | undefined;
   readonly interfaces?: readonly SymbolBinding[] | undefined;

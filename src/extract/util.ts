@@ -108,6 +108,16 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, primary: true });
   }
 
+  markBaseType(baseType: string): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, baseType });
+  }
+
+  markNamespace(namespace: string): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, namespace });
+  }
+
   markArity(arity: number): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, arity });

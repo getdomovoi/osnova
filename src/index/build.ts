@@ -133,6 +133,8 @@ export async function extractCard(
       ...(def.primary === undefined ? {} : { primary: def.primary }),
       ...(def.access === undefined ? {} : { access: def.access }),
       ...(def.arity === undefined ? {} : { arity: def.arity }),
+      ...(def.namespace === undefined ? {} : { namespace: def.namespace }),
+      ...(def.baseType === undefined ? {} : { baseType: def.baseType }),
       ...(def.partial === undefined ? {} : { partial: def.partial }),
       ...(def.supertypes === undefined ? {} : { supertypes: def.supertypes }),
       ...(def.interfaces === undefined ? {} : { interfaces: def.interfaces }),

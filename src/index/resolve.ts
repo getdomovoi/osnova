@@ -694,90 +694,198 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const inner = declaredAs(outer.type.file, `${outer.type.qualifiedName}.${rest.join(".")}`).find(isHolder);
     return inner === undefined ? unknownType : { ...outer, type: inner };
   };
-  // C# binds a type name through its using directives and namespaces, which the index does not follow. A name
-  // any C# file declares as a `using` alias stays unresolved, since an alias can be global or scoped to a
-  // namespace. A simple name is a member type an enclosing type declares or an indexed base type declares,
-  // innermost first, or else a top-level type by the tiers a call takes. A dotted name resolves its first segment
-  // that way and then the member types it declares, so a namespace-qualified creation stays unresolved.
-  // An alias directive's imports edge carries the alias name and its `=` (`X =`); a change to it changes the
-  // file's imports, which re-resolves every file on an incremental update.
-  let csharpAliases: Set<string> | undefined;
-  const csharpAliasNames = (): Set<string> => {
-    if (csharpAliases !== undefined) return csharpAliases;
-    csharpAliases = new Set();
-    for (const [file, raws] of rawEdges) {
-      if (files.get(file)?.language !== "c_sharp") continue;
-      for (const raw of raws) {
-        const alias = raw.kind === "imports" ? /^@?([\p{L}_][\p{L}\p{N}_]*)\s*=$/u.exec(raw.toName) : null;
-        if (alias !== null) csharpAliases.add(alias[1]!);
-      }
-    }
-    return csharpAliases;
+  // C# binds a type name by scope: the member types of each enclosing type (declared in any `partial` part, or
+  // inherited from its written base class when that resolves to an indexed type), innermost first; then each
+  // enclosing namespace from the innermost out, where a namespace's own types come before the types that the
+  // `using` directives declared inside it import; and at the global namespace, after its own types, the
+  // compilation unit's directives and every `global using`. A dotted name's first segment may name a namespace
+  // instead, and `global::` starts at the global namespace. A name any C# file declares as a `using` alias stays
+  // unresolved, since an alias can be global or scoped to a namespace. The imports edges carry each directive as
+  // `[global ][static ]Target[ in Namespace]`, or `X =` for an alias; a change to them changes the file's imports,
+  // which re-resolves every file on an incremental update.
+  type CsharpSegment = { readonly name: string; readonly arity: number };
+  type CsharpUsing = { readonly static: boolean; readonly target: string; readonly scope: string };
+  type CsharpScope = {
+    readonly aliases: Set<string>;
+    readonly global: CsharpUsing[];
+    readonly byFile: Map<string, CsharpUsing[]>;
+    readonly namespaces: Set<string>;
+    readonly types: Map<string, OsnovaSymbol[]>;
   };
   // A written C# type name segment and its generic arity: ``Box`1`` names `Box<T>`, which a type records as `arity`.
-  type CsharpSegment = { readonly name: string; readonly arity: number };
   const csharpSegments = (written: string): CsharpSegment[] => written.split(".").map((part) => {
     const tick = part.indexOf("`");
     return tick < 0 ? { name: part, arity: 0 } : { name: part.slice(0, tick), arity: Number(part.slice(tick + 1)) };
   });
   const arityOf = (symbol: OsnovaSymbol): number => symbol.arity ?? 0;
-  // A member type of that name and arity declared in any part of a C# type; null when a part that did not parse
-  // cleanly may hold it, or when the type shares its qualified name with a type of another identity, since the
-  // index cannot tell which declaration's members are whose.
-  const csharpDeclaredMember = (type: OsnovaSymbol, segment: CsharpSegment): OsnovaSymbol | null | undefined => {
+  const typeKeyIn = (namespace: string, segment: CsharpSegment): string => `${namespace}\u0000${segment.name}\u0000${segment.arity}`;
+  let csharpScope: CsharpScope | undefined;
+  const csharpScopeOf = (): CsharpScope => {
+    if (csharpScope !== undefined) return csharpScope;
+    const scope: CsharpScope = { aliases: new Set(), global: [], byFile: new Map(), namespaces: new Set(), types: new Map() };
+    for (const [file, raws] of rawEdges) {
+      if (files.get(file)?.language !== "c_sharp") continue;
+      for (const raw of raws) {
+        if (raw.kind !== "imports") continue;
+        const alias = /^@?([\p{L}_][\p{L}\p{N}_]*)\s*=$/u.exec(raw.toName);
+        if (alias !== null) {
+          scope.aliases.add(alias[1]!);
+          continue;
+        }
+        const directive = /^(global )?(static )?(\S+?)(?: in (\S+))?$/u.exec(raw.toName);
+        if (directive === null) continue;
+        const using = { static: directive[2] !== undefined, target: directive[3]!, scope: directive[4] ?? "" };
+        if (directive[1] !== undefined) scope.global.push(using);
+        else scope.byFile.set(file, [...(scope.byFile.get(file) ?? []), using]);
+      }
+    }
+    for (const symbols of symbolsByName.values()) {
+      for (const symbol of symbols) {
+        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
+        const namespace = symbol.namespace ?? "";
+        const parts = namespace.length === 0 ? [] : namespace.split(".");
+        for (let depth = 1; depth <= parts.length; depth += 1) scope.namespaces.add(parts.slice(0, depth).join("."));
+        const key = typeKeyIn(namespace, { name: symbol.name, arity: arityOf(symbol) });
+        scope.types.set(key, [...(scope.types.get(key) ?? []), symbol]);
+      }
+    }
+    csharpScope = scope;
+    return scope;
+  };
+  // A member type of that name and arity declared in any part of a C# type, leaving out a private one when it is
+  // looked up from a derived type; null when a part that did not parse cleanly may hold it, or when the type
+  // shares its qualified name with a type of another identity, since the index cannot tell whose members are whose.
+  const csharpDeclaredMember = (type: OsnovaSymbol, segment: CsharpSegment, inherited: boolean): OsnovaSymbol | null | undefined => {
     if (!singleType(type)) return null;
     const { parts, complete } = partsOf(type);
     const found = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`))
-      .find((symbol) => isHolder(symbol) && arityOf(symbol) === segment.arity);
+      .find((symbol) => isHolder(symbol) && arityOf(symbol) === segment.arity && !(inherited && symbol.access === "private"));
     return found ?? (complete ? undefined : null);
   };
-  const csharpMemberTypeOf = (type: OsnovaSymbol, segment: CsharpSegment, seen: Set<string>): OsnovaSymbol | null | undefined => {
+  // The namespace of the top-level type that holds this one; null when that type's name is shared by another.
+  const csharpNamespaceOf = (file: string, outermost: string): string | null => {
+    const holders = declaredAs(file, qualifiedNameOf(file, outermost)).filter(isHolder);
+    if (holders.length === 0) return "";
+    return singleType(holders[0]!) ? holders[0]!.namespace ?? "" : null;
+  };
+  // The indexed base class a C# type inherits member types from: undefined when it writes none, or the written base
+  // is outside the index; null when the index cannot tell which type it is.
+  const csharpBaseOf = (type: OsnovaSymbol, guard: Set<string>): OsnovaSymbol | null | undefined => {
+    const written = partsOf(type).parts.map((part) => part.baseType).find((base) => base !== undefined);
+    if (written === undefined) return undefined;
+    const card = files.get(type.file);
+    const local = localOfQualifiedName(type.qualifiedName).split(".");
+    const namespace = csharpNamespaceOf(type.file, local[0]!);
+    const key = `${type.qualifiedName}\u0000${type.span.startLine}`;
+    if (written === "?" || card === undefined || namespace === null || guard.has(key)) return null;
+    guard.add(key);
+    const found = csharpResolve({ card, enclosing: local.slice(0, -1), namespace }, written, guard);
+    guard.delete(key);
+    return found.status === "resolved" ? found.type : found.status === "unresolved" && found.reason === "unbound-global" ? undefined : null;
+  };
+  const csharpMemberTypeOf = (type: OsnovaSymbol, segment: CsharpSegment, seen: Set<string>, inherited: boolean, guard: Set<string>): OsnovaSymbol | null | undefined => {
     if (seen.size > 32) return null;
     if (seen.has(typeKey(type))) return undefined;
     seen.add(typeKey(type));
-    const own = csharpDeclaredMember(type, segment);
+    const own = csharpDeclaredMember(type, segment, inherited);
     if (own !== undefined) return own;
-    for (const part of partsOf(type).parts) {
-      for (const binding of part.heritage ?? []) {
-        const base = baseOf(part, binding);
-        // A class or struct inherits member types from its base class only, not from interfaces it implements.
-        if (base !== undefined && base.kind === "interface" && type.kind !== "interface") continue;
-        const member = base === undefined ? undefined : csharpMemberTypeOf(base, segment, seen);
-        if (member !== undefined) return member;
-      }
-    }
-    return undefined;
+    const base = csharpBaseOf(type, guard);
+    if (base === null) return null;
+    // A class or struct inherits member types from its base class only, not from interfaces it implements.
+    if (base === undefined || (base.kind === "interface" && type.kind !== "interface")) return undefined;
+    return csharpMemberTypeOf(base, segment, seen, true, guard);
   };
-  // C# looks a name up by its arity too, so `T<int>` skips a member `T` and finds a top-level `T<U>`.
-  const csharpSimpleType = (card: FileCard, fromSymbol: string, segment: CsharpSegment, importTargets: readonly string[]): CreatedType => {
-    const enclosing = fromSymbol.includes("#") ? localOfQualifiedName(fromSymbol).split(".") : [];
-    for (let depth = enclosing.length; depth > 0; depth -= 1) {
-      const holder = declaredAs(card.path, qualifiedNameOf(card.path, enclosing.slice(0, depth).join("."))).find(isHolder);
-      const member = holder === undefined ? undefined : csharpMemberTypeOf(holder, segment, new Set());
-      if (member === null) return unknownType;
-      if (member !== undefined) return { status: "resolved", type: member, method: member.file === card.path ? "same-file-name" : "lexical-definition" };
-    }
-    const types = (symbolsByName.get(segment.name) ?? []).filter((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "c_sharp" &&
-      localOfQualifiedName(symbol.qualifiedName) === segment.name && arityOf(symbol) === segment.arity);
-    const sameFile = types.filter((symbol) => symbol.file === card.path);
-    const imported = types.filter((symbol) => importTargets.includes(symbol.file));
+  // Where a C# type name is written: its file, the enclosing type and member names (outermost first) and the namespace.
+  type CsharpSite = { readonly card: FileCard; readonly enclosing: readonly string[]; readonly namespace: string };
+  const csharpFound = (card: FileCard, found: readonly OsnovaSymbol[], method: "imported-file-name" | "lexical-definition"): CreatedType => {
     // The parts of one partial type are one type, named by the part in the creating file or else the first.
-    const onePartial = (found: OsnovaSymbol[]): OsnovaSymbol[] => new Set(found.map(typeKey)).size === 1
-      ? [found.find((symbol) => symbol.file === card.path) ?? [...found].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))[0]!] : found;
-    return oneType(onePartial(sameFile), "same-file-name") ?? oneType(onePartial(imported), "imported-file-name") ?? oneType(onePartial(types), "lexical-definition") ?? externalType;
+    const parts = new Set(found.map(typeKey)).size === 1
+      ? [found.find((symbol) => symbol.file === card.path) ?? [...found].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))[0]!] : [...found];
+    const chosen = oneType(parts, method) ?? externalType;
+    return chosen.status === "resolved" && chosen.type.file === card.path ? { ...chosen, method: "same-file-name" } : chosen;
   };
-  const csharpCreatedType = (card: FileCard, fromSymbol: string, written: string, importTargets: readonly string[]): CreatedType => {
-    const [first, ...rest] = csharpSegments(written);
-    if (first === undefined || csharpAliasNames().has(first.name)) return unknownType;
-    const outer = csharpSimpleType(card, fromSymbol, first, importTargets);
-    if (rest.length === 0 || outer.status !== "resolved") return rest.length === 0 ? outer : unknownType;
-    let type: OsnovaSymbol = outer.type;
-    for (const segment of rest) {
-      const inner = csharpDeclaredMember(type, segment);
+  const csharpNested = (found: CreatedType, path: readonly CsharpSegment[]): CreatedType => {
+    if (found.status !== "resolved") return found;
+    let type = found.type;
+    for (const segment of path) {
+      const inner = csharpDeclaredMember(type, segment, false);
       if (inner === undefined || inner === null) return unknownType;
       type = inner;
     }
-    return { ...outer, type };
+    return { ...found, type };
+  };
+  // A name rooted in a namespace: a type of that namespace, or a nested namespace when more segments follow.
+  // Undefined when the namespace holds neither; unknown when an indexed namespace lacks the type, since a
+  // namespace can also hold types the index does not.
+  const csharpInNamespace = (card: FileCard, namespace: string, segments: readonly CsharpSegment[]): CreatedType | undefined => {
+    const [first, ...rest] = segments;
+    if (first === undefined) return undefined;
+    const scope = csharpScopeOf();
+    const types = scope.types.get(typeKeyIn(namespace, first)) ?? [];
+    if (types.length > 0) return csharpNested(csharpFound(card, types, "lexical-definition"), rest);
+    const deeper = namespace.length === 0 ? first.name : `${namespace}.${first.name}`;
+    if (rest.length > 0 && first.arity === 0 && scope.namespaces.has(deeper)) return csharpInNamespace(card, deeper, rest) ?? unknownType;
+    return undefined;
+  };
+  // The types some using directives import for a simple name: a type of each imported namespace, or a member type
+  // of each statically imported type. Undefined when none does; null when a directive the index cannot read could
+  // supply it before an outer namespace is searched.
+  const csharpImported = (card: FileCard, usings: readonly CsharpUsing[], segment: CsharpSegment, scoped: boolean): CreatedType | null | undefined => {
+    const scope = csharpScopeOf();
+    const found: OsnovaSymbol[] = [];
+    let unreadable = false;
+    for (const using of usings) {
+      if (!using.static) {
+        if (scope.namespaces.has(using.target)) found.push(...(scope.types.get(typeKeyIn(using.target, segment)) ?? []));
+        else unreadable = true;
+        continue;
+      }
+      const host = csharpInNamespace(card, "", csharpSegments(using.target));
+      if (host === undefined || host.status !== "resolved") {
+        unreadable = true;
+        continue;
+      }
+      const member = csharpDeclaredMember(host.type, segment, true);
+      if (member === null) return null;
+      if (member !== undefined) found.push(member);
+    }
+    if (found.length > 0) return csharpFound(card, found, "imported-file-name");
+    return unreadable && scoped ? null : undefined;
+  };
+  const csharpResolve = (site: CsharpSite, written: string, guard: Set<string>): CreatedType => {
+    const segments = csharpSegments(written);
+    const [first, ...rest] = segments;
+    if (first === undefined) return unknownType;
+    const scope = csharpScopeOf();
+    if (first.name.includes("::")) {
+      if (!first.name.startsWith("global::")) return unknownType;
+      return csharpInNamespace(site.card, "", [{ ...first, name: first.name.slice("global::".length) }, ...rest]) ?? externalType;
+    }
+    if (scope.aliases.has(first.name)) return unknownType;
+    for (let depth = site.enclosing.length; depth > 0; depth -= 1) {
+      const holders = declaredAs(site.card.path, qualifiedNameOf(site.card.path, site.enclosing.slice(0, depth).join("."))).filter(isHolder);
+      if (holders.length === 0) continue;
+      const member = csharpMemberTypeOf(holders[0]!, first, new Set(), false, guard);
+      if (member === null) return unknownType;
+      if (member !== undefined) return csharpNested({ status: "resolved", type: member, method: member.file === site.card.path ? "same-file-name" : "lexical-definition" }, rest);
+    }
+    const usings = scope.byFile.get(site.card.path) ?? [];
+    const parts = site.namespace.length === 0 ? [] : site.namespace.split(".");
+    for (let depth = parts.length; depth >= 0; depth -= 1) {
+      const level = parts.slice(0, depth).join(".");
+      const own = csharpInNamespace(site.card, level, segments);
+      if (own !== undefined) return own;
+      const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...scope.global] : usings.filter((using) => using.scope === level);
+      const imported = declared.length === 0 ? undefined : csharpImported(site.card, declared, first, depth > 0);
+      if (imported === null) return unknownType;
+      if (imported !== undefined) return csharpNested(imported, rest);
+    }
+    return externalType;
+  };
+  const csharpCreatedType = (card: FileCard, fromSymbol: string, written: string): CreatedType => {
+    const enclosing = fromSymbol.includes("#") ? localOfQualifiedName(fromSymbol).split(".") : [];
+    const namespace = enclosing.length === 0 ? "" : csharpNamespaceOf(card.path, enclosing[0]!);
+    return namespace === null ? unknownType : csharpResolve({ card, enclosing, namespace }, written, new Set());
   };
   // What `new T(...)` runs: an instance constructor of T written in any part of the type, or T itself when it
   // declares none, declares a primary or canonical constructor, or the creation makes an anonymous subclass.
@@ -1393,7 +1501,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         continue;
       }
       if (raw.constructs !== undefined && (card.language === "java" || card.language === "c_sharp")) {
-        const found = card.language === "java" ? javaCreatedType(card, fromSymbol, raw.toName) : csharpCreatedType(card, fromSymbol, raw.toName, importTargets);
+        const found = card.language === "java" ? javaCreatedType(card, fromSymbol, raw.toName) : csharpCreatedType(card, fromSymbol, raw.toName);
         // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
         // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart.
         const typeFound: CreatedType = found.status === "resolved" && !singleType(found.type) ? unknownType : found;
