@@ -624,6 +624,28 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Plain.cs", 1)).toMatchObject({ toSymbol: "Global.cs#T.T" });
   });
 
+  it("imports no member types through a C# delegate named by using static", async () => {
+    await write({
+      "Types.cs": "delegate void D();\nclass D<U> {public class T {public T(){}}}\nclass T {public T(){}}\nnamespace N {\n using static D;\n class C {public static object Run(){return new T();}}\n}\n",
+      "Generic.cs": "class E<U> {public class V {public V(){}}}\nnamespace M {\n using static E<int>;\n class F {public static object Run(){return new V();}}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Types.cs", 6)).toMatchObject({ toSymbol: "Types.cs#T.T" });
+    expect(creationAt(index, "Generic.cs", 4)).toMatchObject({ toSymbol: "Generic.cs#E.V.V" });
+  });
+
+  it("keeps an escaped C# primary-constructor type, and refuses a creation outside any type in a file with parse errors", async () => {
+    await write({
+      "Use.cs": "class @C(int x):B {\n public static object Run(){return new T();}\n}\n",
+      "Base.cs": "class B {public class T {public T(){}}}\n",
+      "Global.cs": "class T{public T(){}}\n",
+      "Lost.cs": "class 1D(int x):B {\n public static object Run(){return new T();}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: "Base.cs#B.T.T" });
+    expect(creationAt(index, "Lost.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

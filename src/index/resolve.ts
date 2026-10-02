@@ -764,6 +764,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   const csharpVisible = (symbol: OsnovaSymbol, view: CsharpView): boolean =>
     view === "own" || (symbol.access !== "private" && (view === "inherited" || symbol.access !== "protected"));
   const csharpDeclaredMember = (type: OsnovaSymbol, segment: CsharpSegment, view: CsharpView): OsnovaSymbol | null | undefined => {
+    // A delegate declares no member types, though a holder sharing its qualified name may.
+    if (type.kind === "type") return undefined;
     if (!singleType(type)) return null;
     const { parts, complete } = partsOf(type);
     const found = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`))
@@ -907,8 +909,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     return externalType;
   };
+  // In a file that did not parse cleanly, a creation outside any type may have lost the declaration that encloses it,
+  // so its scope is unknown.
   const csharpCreatedType = (card: FileCard, fromSymbol: string, written: string, line: number): CreatedType => {
     const enclosing = fromSymbol.includes("#") ? localOfQualifiedName(fromSymbol).split(".") : [];
+    if (enclosing.length === 0 && !parsedCleanly(card.path)) return unknownType;
     const namespace = enclosing.length === 0 ? "" : csharpNamespaceOf(card.path, enclosing[0]!);
     return namespace === null ? unknownType : csharpResolve({ card, enclosing, namespace, line }, written, new Set());
   };
