@@ -101,6 +101,7 @@ export async function extractCard(
           ...(edge.binding === undefined ? {} : { binding: edge.binding }),
           ...(edge.route === undefined ? {} : { route: edge.route }),
           ...(edge.arguments === undefined ? {} : { arguments: edge.arguments }),
+      ...(edge.constructs === undefined ? {} : { constructs: edge.constructs }),
         }));
       } finally {
         tree.delete();
@@ -129,6 +130,8 @@ export async function extractCard(
       signature: def.signature,
       lineCount: Math.max(1, def.span.endLine - def.span.startLine + 1),
       ...(def.shadowed === undefined ? {} : { shadowed: def.shadowed }),
+      ...(def.primary === undefined ? {} : { primary: def.primary }),
+      ...(def.access === undefined ? {} : { access: def.access }),
       ...(def.partial === undefined ? {} : { partial: def.partial }),
       ...(def.supertypes === undefined ? {} : { supertypes: def.supertypes }),
       ...(def.interfaces === undefined ? {} : { interfaces: def.interfaces }),

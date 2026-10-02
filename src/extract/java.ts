@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import { Extractor, argumentCount, childOfType, childrenOf } from "./util.js";
+import { Extractor, argumentCount, childOfType, childrenOf, withoutTypeArguments } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, javaSpec } from "./typed-bindings.js";
@@ -9,12 +9,21 @@ const annotatedOverride = (method: Node): boolean => childrenOf(childOfType(meth
   child.type === "marker_annotation" && /^(?:java\.lang\.)?Override$/.test(child.childForFieldName("name")?.text ?? ""));
 
 // A method a derived type cannot call (`private`), or only from the same package (no access modifier, outside an interface).
+// The modifiers are read as keyword tokens, so an annotation argument or a comment that spells one does not count.
 function accessOf(method: Node): ParameterRange["access"] {
-  const words = new Set((childOfType(method, "modifiers")?.text ?? "").split(/\W+/));
+  const modifiers = childOfType(method, "modifiers");
+  const words = new Set<string>();
+  for (let index = 0; index < (modifiers?.childCount ?? 0); index += 1) {
+    const token = modifiers!.child(index);
+    if (token !== null && !token.isNamed) words.add(token.type);
+  }
   if (words.has("private")) return "private";
   if (words.has("public") || words.has("protected")) return undefined;
   return method.parent?.type === "interface_body" || method.parent?.type === "annotation_type_body" ? undefined : "package";
 }
+
+// The bodies whose type declarations are member types; a class declared in a block is a local class.
+const MEMBER_PARENTS = new Set(["class_body", "interface_body", "enum_body_declarations", "annotation_type_body"]);
 
 const PRIMITIVES = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"]);
 const JAVA_LANG = new Set(["Object", "String", "CharSequence", "Number", "Integer", "Long", "Short", "Byte", "Character", "Boolean",
@@ -104,7 +113,7 @@ function parameterRange(list: Node, method: Node, scope: TypeScope, typeVariable
   }
   const proven = types.every((type): type is string => type !== undefined);
   return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }),
-    ...(proven ? { types, ...(names.size > 0 ? { names: [...names].sort() } : {}) } : {}) };
+    ...(proven ? { types, ...(names.size > 0 ? { names: [...names].sort() } : {}) } : {}), ...(method.type === "constructor_declaration" ? { constructs: true as const } : {}) };
 }
 
 export const javaAdapter: LanguageAdapter = {
@@ -135,6 +144,10 @@ export const javaAdapter: LanguageAdapter = {
             .filter((child) => child.type === "super_interfaces" || child.type === "extends_interfaces")
             .reduce((total, clause) => total + childrenOf(childOfType(clause, "type_list") ?? clause).length, 0);
           if (supertypes > 0) out.markSupertypes(supertypes, bindings.interfaces(node));
+          // A record always has a canonical constructor, written on its header or in a compact declaration.
+          if (node.type === "record_declaration") out.markPrimary();
+          const access = MEMBER_PARENTS.has(node.parent?.type ?? "") ? accessOf(node) : undefined;
+          if (access !== undefined) out.markAccess(access);
           out.push(nameNode.text);
           typeVariables.push(typeParametersOf(node));
           for (const child of childrenOf(node)) visit(child);
@@ -188,9 +201,14 @@ export const javaAdapter: LanguageAdapter = {
           return;
         }
         case "object_creation_expression": {
+          // `new Box<>(1)` names Box; a class body after the arguments makes an anonymous subclass. `a.new Inner()`
+          // names a member type of the qualifying instance's type, which the index does not follow, so it is a plain call.
           const typeNode = node.childForFieldName("type");
           if (typeNode !== null) {
-            out.addEdge("calls", typeNode.text, typeNode);
+            const qualified = childrenOf(node).some((child) => child.type !== "comment" && child.endIndex <= typeNode.startIndex && child.type !== "type_arguments" && !child.type.endsWith("annotation"));
+            const anonymous = childOfType(node, "class_body") !== null;
+            if (qualified) out.addEdge("calls", typeNode.text, typeNode);
+            else out.addEdge("calls", withoutTypeArguments(typeNode.text), typeNode, undefined, undefined, argumentCount(node.childForFieldName("arguments")), anonymous ? "anonymous" : "instance");
           }
           for (const child of childrenOf(node)) visit(child);
           return;
