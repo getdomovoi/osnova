@@ -53,7 +53,7 @@ export interface OsnovaSymbol {
   readonly signature: string;
   readonly lineCount: number;
   readonly shadowed?: true | undefined;
-  // A Java record: its canonical constructor is written on the type's declaration.
+  // A Java record or a C# type with a primary constructor: a constructor is written on the type's declaration.
   readonly primary?: true | undefined;
   // A Java member type a subclass does not inherit: `private`, or `package` (no access modifier, outside an
   // interface), which a subclass in another package does not inherit.
@@ -96,7 +96,7 @@ export interface ParameterRange {
   readonly extension?: true | undefined;
   readonly overrides?: true | undefined;
   readonly access?: "private" | "package" | undefined;
-  // A Java constructor (not a method named like its class).
+  // An instance constructor (not a C# static constructor, nor a Java method named like its class).
   readonly constructs?: true | undefined;
   // Java: each parameter's type as written, whitespace removed (a varargs type ends in `...`).
   readonly types?: readonly string[] | undefined;
@@ -190,7 +190,7 @@ export interface OsnovaEdge {
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
   readonly arguments?: number | undefined;
-  // A Java object creation: `instance` for `new T(...)`, which runs a constructor of T, and `anonymous`
+  // A Java or C# object creation: `instance` for `new T(...)`, which runs a constructor of T, and `anonymous`
   // for `new T(...) { ... }`, which creates an anonymous subclass of T.
   readonly constructs?: Construction | undefined;
   readonly overload?: OverloadChoice | undefined;
