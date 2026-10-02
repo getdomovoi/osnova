@@ -123,7 +123,7 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, arity });
   }
 
-  markAccess(access: "private" | "package"): void {
+  markAccess(access: "private" | "package" | "protected"): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, access });
   }

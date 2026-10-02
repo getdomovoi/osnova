@@ -50,6 +50,22 @@ function aritiedName(type: Node): string {
   return withoutTypeArguments(type.text);
 }
 
+// A namespace name read from its identifiers, past comments and `@`: `A /* c */ . @B` is `A.B`.
+function namespaceName(name: Node): string {
+  if (name.type === "identifier") return plain(name.text);
+  return childrenOf(name).filter((child) => child.type !== "comment").map(namespaceName).join(".");
+}
+
+// Whether a derived type or a static import can see a member type: `private` (written so, or with no access
+// modifier in a class or struct), `protected` (only from derived types, `private protected` included), or neither.
+function memberTypeAccess(type: Node): "private" | "protected" | undefined {
+  const modifiers = new Set(childrenOf(type).filter((child) => child.type === "modifier").map((child) => child.text));
+  if (modifiers.has("private")) return modifiers.has("protected") ? "protected" : "private";
+  if (modifiers.has("protected")) return modifiers.has("internal") ? undefined : "protected";
+  if (modifiers.has("public") || modifiers.has("internal")) return undefined;
+  return type.parent?.parent?.type === "interface_declaration" ? undefined : "private";
+}
+
 // Whether an enclosing declaration (a type, method or local function) declares a type parameter of this name.
 function typeParameterInScope(node: Node, name: string): boolean {
   for (let scope = node.parent; scope !== null; scope = scope.parent) {
@@ -74,6 +90,8 @@ export const csharpAdapter: LanguageAdapter = {
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
     const namespaces: string[] = [];
+    // The line range of each enclosing namespace declaration, which bounds the using directives declared in it.
+    const blocks: string[] = [];
     // The generic arity of each enclosing type, outermost first: `Outer<T>.Inner` and `Outer<T, U>.Inner`
     // are different types with the same local name.
     const arities: number[] = [];
@@ -82,9 +100,15 @@ export const csharpAdapter: LanguageAdapter = {
         case "namespace_declaration":
         case "file_scoped_namespace_declaration": {
           const name = node.childForFieldName("name");
-          if (name !== null) namespaces.push(name.text.replace(/\s+/g, "").replace(/(^|\.)@/g, "$1"));
+          if (name !== null) {
+            namespaces.push(namespaceName(name));
+            blocks.push(`${node.startPosition.row + 1}-${node.endPosition.row + 1}`);
+          }
           for (const child of childrenOf(node)) visit(child);
-          if (name !== null) namespaces.pop();
+          if (name !== null) {
+            namespaces.pop();
+            blocks.pop();
+          }
           return;
         }
         case "class_declaration":
@@ -94,7 +118,8 @@ export const csharpAdapter: LanguageAdapter = {
         case "record_declaration":
         case "record_struct_declaration": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode === null || !IDENTIFIER_RE.test(nameNode.text)) return;
+          if (nameNode === null || !IDENTIFIER_RE.test(plain(nameNode.text))) return;
+          const typeName = plain(nameNode.text);
           const kind =
             node.type === "interface_declaration"
               ? "interface"
@@ -103,14 +128,14 @@ export const csharpAdapter: LanguageAdapter = {
                 : node.type === "struct_declaration" || node.type === "record_struct_declaration"
                   ? "struct"
                   : "class";
-          out.addDef(nameNode.text, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
+          out.addDef(typeName, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           arities.push(childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length);
           if (hasPrimaryConstructor(node, nameNode)) out.markPrimary();
           if (arities[arities.length - 1]! > 0) out.markArity(arities[arities.length - 1]!);
           // A top-level type records its namespace; a member type records whether a derived type can see it.
           if (arities.length === 1 && namespaces.length > 0) out.markNamespace(namespaces.join("."));
-          const access = arities.length > 1 ? accessOf(node) : undefined;
-          if (access === "private") out.markAccess(access);
+          const access = arities.length > 1 ? memberTypeAccess(node) : undefined;
+          if (access !== undefined) out.markAccess(access);
           // The first base as written, which a class inherits member types from; an interface inherits them from
           // every base, which this one name cannot hold, so several are recorded as unknown (`?`).
           const bases = childrenOf(childOfType(node, "base_list") ?? node).filter((child) => ["identifier", "generic_name", "qualified_name", "alias_qualified_name"].includes(child.type));
@@ -119,7 +144,7 @@ export const csharpAdapter: LanguageAdapter = {
             else if (bases[0] !== undefined) out.markBaseType(aritiedName(bases[0]));
           }
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
-          out.push(nameNode.text);
+          out.push(typeName);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
           arities.pop();
@@ -128,11 +153,11 @@ export const csharpAdapter: LanguageAdapter = {
         case "method_declaration":
         case "constructor_declaration": {
           const nameNode = node.childForFieldName("name");
-          if (nameNode !== null && IDENTIFIER_RE.test(nameNode.text)) {
-            out.addDef(nameNode.text, "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
+          if (nameNode !== null && IDENTIFIER_RE.test(plain(nameNode.text))) {
+            out.addDef(plain(nameNode.text), "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             const parameters = node.childForFieldName("parameters");
             if (parameters !== null) out.setParameters(parameterRange(parameters, node, node.type === "constructor_declaration" && !childrenOf(node).some((child) => child.type === "modifier" && child.text === "static")));
-            out.push(nameNode.text);
+            out.push(plain(nameNode.text));
             for (const child of childrenOf(node)) visit(child);
             out.pop();
           }
@@ -190,12 +215,13 @@ export const csharpAdapter: LanguageAdapter = {
           const parts = childrenOf(node).filter((child) => child.type !== "comment");
           const alias = parts.find((child) => child.type === "name_equals");
           const aliasName = alias === undefined ? undefined : childrenOf(alias).find((child) => child.type === "identifier");
-          // Any other directive records what it imports, as `[global ][static ]Target[ in Namespace]`: `global` applies
-          // it to every file, `static` imports a type's members, and `in` names the namespace it is declared inside.
+          // Any other directive records what it imports, as `[global ][static ]Target[ in Namespace@from-to]`: `global`
+          // applies it to every file, `static` imports a type's members, and `in` names the namespace declaration it is
+          // declared inside, with that declaration's lines, since another declaration of the namespace does not see it.
           const keywords = new Set(node.children.filter((child): child is Node => child !== null && !child.isNamed).map((child) => child.type));
           const target = parts[0] === undefined ? undefined : aritiedName(parts[0]);
-          const scope = namespaces.join(".");
-          const imported = target === undefined ? undefined : `${keywords.has("global") ? "global " : ""}${keywords.has("static") ? "static " : ""}${target}${scope.length > 0 ? ` in ${scope}` : ""}`;
+          const scope = namespaces.length === 0 ? "" : ` in ${namespaces.join(".")}@${blocks[blocks.length - 1]!}`;
+          const imported = target === undefined ? undefined : `${keywords.has("global") ? "global " : ""}${keywords.has("static") ? "static " : ""}${target}${scope}`;
           const name = alias === undefined ? imported : aliasName === undefined ? undefined : `${plain(aliasName.text)} =`;
           if (name !== undefined) out.addEdge("imports", name, node);
           return;

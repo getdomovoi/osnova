@@ -9,7 +9,7 @@ export interface RawDefinition {
   readonly parent: string;
   readonly shadowed?: true | undefined;
   readonly primary?: true | undefined;
-  readonly access?: "private" | "package" | undefined;
+  readonly access?: "private" | "package" | "protected" | undefined;
   readonly arity?: number | undefined;
   readonly namespace?: string | undefined;
   readonly baseType?: string | undefined;

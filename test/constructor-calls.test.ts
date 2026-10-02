@@ -485,6 +485,72 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Types.cs", 6)).toMatchObject({ toSymbol: "Types.cs#T.T" });
   });
 
+  it("resolves a C# using directive's target from the namespace it is declared in", async () => {
+    await write({
+      "B.cs": "namespace B{public class T{public T(){}}}\n",
+      "AB.cs": "namespace A.B{public class T{public T(){}}}\n",
+      "Use.cs": "namespace A {\n  using B;\n  class C{public static object Run(){return new T();}}\n}\n",
+      "GlobalHolder.cs": "class Holder { public class U { public U(){} } }\n",
+      "AHolder.cs": "namespace A { public class Holder { public class U { public U(){} } } }\n",
+      "Static.cs": "namespace A.Inner {\n  using static Holder;\n  class D{public static object Run(){return new U();}}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toSymbol: "AB.cs#T.T" });
+    expect(creationAt(index, "Static.cs", 3)).toMatchObject({ toSymbol: "AHolder.cs#Holder.U.U" });
+  });
+
+  it("applies a C# using directive only inside the namespace block that declares it", async () => {
+    await write({
+      "Global.cs": "class T{public T(){}}\n",
+      "Q.cs": "namespace Q{public class T{public T(){}}}\n",
+      "Use.cs": "namespace A {using Q; class First{public static object Run(){return new T();}}}\nnamespace A {\n  class Second{public static object Run(){return new T();}}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: "Q.cs#T.T" });
+    expect(creationAt(index, "Use.cs", 3)).toMatchObject({ toSymbol: "Global.cs#T.T" });
+  });
+
+  it("resolves a C# partial type's base in the part that writes it", async () => {
+    await write({
+      "A.cs": "using Q;\nnamespace N {public partial class C {\n  public static object Run(){return new T();}\n}}\n",
+      "B.cs": "using P;\nnamespace N {public partial class C:Base{}}\n",
+      "P.cs": "namespace P{public class Base{public class T{public T(){}}}}\n",
+      "Q.cs": "namespace Q{public class Base{public class T{public T(){}}}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "A.cs", 3)).toMatchObject({ toSymbol: "P.cs#Base.T.T" });
+  });
+
+  it("reads a C# namespace name past comments", async () => {
+    await write({
+      "Use.cs": "namespace A /* namespace */ . B {\n  class C{public static object Run(){return new T();}}\n}\n",
+      "Actual.cs": "namespace A.B{public class T{public T(){}}}\n",
+      "Global.cs": "class T{public T(){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: "Actual.cs#T.T" });
+    expect((await loadIndex(workspace, { cacheDir }))!.files.size).toBe(3);
+  });
+
+  it("does not import a protected C# member type through using static", async () => {
+    await write({ "Types.cs": "class Holder{protected class T{public T(){}} private protected class U{public U(){}}}\nclass T{public T(){}}\nclass U{public U(){}}\nnamespace N {\n  using static Holder;\n  class C{public static object Run(){new U(); return new T();}}\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.constructs !== undefined).map((edge) => [edge.toName, edge.toSymbol]);
+    expect(creations).toContainEqual(["T", "Types.cs#T.T"]);
+    expect(creations).toContainEqual(["U", "Types.cs#U.U"]);
+  });
+
+  it("reads escaped C# declaration names", async () => {
+    await write({
+      "Ctor.cs": "class C {\n  public @C(int x){}\n  public C(string x){}\n  public static object Run(){return new C(1);}\n}\n",
+      "Nested.cs": "class T{public T(){}}\nclass D {\n  public class @T{public @T(){}}\n  public static object Run(){return new T();}\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    // `@C(int)` and `C(string)` both take one argument, so the count names neither.
+    expect(creationAt(index, "Ctor.cs", 4)).toMatchObject({ toSymbol: "Ctor.cs#C.C", overload: { candidates: [2, 3] } });
+    expect(creationAt(index, "Nested.cs", 4)).toMatchObject({ toSymbol: "Nested.cs#D.T.T" });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

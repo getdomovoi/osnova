@@ -56,8 +56,9 @@ export interface OsnovaSymbol {
   // A Java record or a C# type with a primary constructor: a constructor is written on the type's declaration.
   readonly primary?: true | undefined;
   // A Java member type a subclass does not inherit: `private`, or `package` (no access modifier, outside an
-  // interface), which a subclass in another package does not inherit.
-  readonly access?: "private" | "package" | undefined;
+  // interface), which a subclass in another package does not inherit. A C# member type a derived type or a static import cannot see is
+  // `private` (written so, or with no access modifier in a class or struct), and one only a derived type can see is `protected`.
+  readonly access?: "private" | "package" | "protected" | undefined;
   // A generic C# type: how many type parameters it declares, since `Box` and `Box<T>` are different types.
   readonly arity?: number | undefined;
   // A top-level C# type: the namespace it is declared in, when any.
