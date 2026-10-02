@@ -712,7 +712,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     readonly byFile: Map<string, CsharpUsing[]>;
     readonly namespaces: Set<string>;
     readonly types: Map<string, OsnovaSymbol[]>;
-    // Names and arities of types whose namespace is unknown (`?`), which could be the type any lookup of that name means.
+    // Names of types whose namespace is unknown (`?`) or whose header did not parse (so their arity is unknown), any of
+    // which could be the type a lookup of that name means.
     readonly unplaced: Set<string>;
   };
   // A written C# type name segment and its generic arity: ``Box`1`` names `Box<T>`, which a type records as `arity`.
@@ -749,8 +750,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       for (const symbol of symbols) {
         if (!csharpTypeLike(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
         const namespace = symbol.namespace ?? "";
-        if (namespace === "?") {
-          scope.unplaced.add(`${symbol.name}\u0000${arityOf(symbol)}`);
+        if (namespace === "?" || symbol.unparsedHeader === true) {
+          scope.unplaced.add(symbol.name);
           continue;
         }
         const parts = namespace.length === 0 ? [] : namespace.split(".");
@@ -774,8 +775,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (type.kind === "type") return undefined;
     if (!singleType(type)) return null;
     const { parts, complete } = partsOf(type);
-    const found = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`))
-      .find((symbol) => csharpTypeLike(symbol) && arityOf(symbol) === segment.arity && csharpVisible(symbol, view));
+    const named = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`)).filter(csharpTypeLike);
+    // A member type whose header did not parse may have any arity.
+    if (named.some((symbol) => symbol.unparsedHeader === true)) return null;
+    const found = named.find((symbol) => arityOf(symbol) === segment.arity && csharpVisible(symbol, view));
     return found ?? (complete ? undefined : null);
   };
   // The namespace of the top-level type that holds this one; null when that type's name is shared by another.
@@ -899,7 +902,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (member !== undefined) return csharpNested({ status: "resolved", type: member, method: member.file === site.card.path ? "same-file-name" : "lexical-definition" }, rest);
     }
     // Past the enclosing types, a type whose namespace is unknown could be the one any namespace or import supplies.
-    if (scope.unplaced.has(`${first.name}\u0000${first.arity}`)) return unknownType;
+    if (scope.unplaced.has(first.name)) return unknownType;
     const usings = scope.byFile.get(site.card.path) ?? [];
     const parts = site.namespace.length === 0 ? [] : site.namespace.split(".");
     for (let depth = parts.length; depth >= 0; depth -= 1) {
@@ -1544,7 +1547,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
         // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart. A
         // C# delegate's constructor is not indexed, and the name it shares may also hold another type's constructors.
-        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || !singleType(found.type)) ? unknownType : found;
+        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || !singleType(found.type)) ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
         const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
         const evidence = { source: "syntax" as const, resolution: typeFound.status === "resolved" ? { status: "resolved" as const, method: typeFound.method } : typeFound };

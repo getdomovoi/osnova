@@ -66,6 +66,8 @@ export interface OsnovaSymbol {
   // A C# type: its first base as written, with each segment's generic arity (``Base`1``); `?` when an interface
   // names several bases.
   readonly baseType?: string | undefined;
+  // A C# type whose declaration header holds a parse error, so its generic arity and base cannot be trusted.
+  readonly unparsedHeader?: true | undefined;
   // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
   // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.

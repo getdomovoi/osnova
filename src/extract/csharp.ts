@@ -173,6 +173,7 @@ export const csharpAdapter: LanguageAdapter = {
           // A parse error in the declaration's header can hide or garble its base (`record C(int x) : P.B(x)`), so the
           // base is unknown. An enum's base is its underlying integral type, which holds no member types.
           const headerBroken = childrenOf(node).some((child) => child.type === "ERROR" || (child.type === "base_list" && child.hasError));
+          if (headerBroken) out.markUnparsedHeader();
           if (node.type !== "enum_declaration" && headerBroken) out.markBaseType("?");
           else if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");

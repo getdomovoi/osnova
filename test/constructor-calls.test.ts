@@ -693,6 +693,22 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Generic.cs", 2)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("refuses any lookup of a C# type name whose declaration header did not parse", async () => {
+    await write({
+      "Broken.cs": "namespace P {\npublic record C(int x):B<int>(x);\n}\n",
+      "Base.cs": "namespace P {public record B<U>(int x);}\n",
+      "Use.cs": "namespace P {class Caller {public static object Run(){return new C(1);}}}\nnamespace Q {class Other {public static object Run(){return new C<int>(1);}}}\n",
+      "Global.cs": "class C {public C(int x){}}\n",
+      "GlobalGeneric.cs": "class C<U> {public C(int x){}}\n",
+      "Lost.cs": "namespace \\u0050 {\npublic record D(int x):B<int>(x);\n}\n",
+      "Caller.cs": "class E {public static object Run(){return new D(1);}}\nclass D {public D(int x){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Caller.cs", 1)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });
