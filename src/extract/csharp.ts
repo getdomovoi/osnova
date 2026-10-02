@@ -77,6 +77,27 @@ function memberTypeAccess(type: Node): "private" | "protected" | undefined {
   return type.parent?.parent?.type === "interface_declaration" ? undefined : "private";
 }
 
+// The byte ranges from each `#if` to its `#endif` (or the end of the file), in document order.
+function conditionalRegions(root: Node): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  const open: number[] = [];
+  const pending: Node[] = [root];
+  const directives: Node[] = [];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node.type === "if_directive" || node.type === "endif_directive") directives.push(node);
+    for (let index = node.childCount - 1; index >= 0; index -= 1) {
+      const child = node.child(index);
+      if (child !== null) pending.push(child);
+    }
+  }
+  for (const directive of directives.sort((a, b) => a.startIndex - b.startIndex)) {
+    if (directive.type === "if_directive") open.push(directive.startIndex);
+    else if (open.length > 0) regions.push([open.pop()!, directive.endIndex]);
+  }
+  for (const start of open) regions.push([start, root.endIndex]);
+  return regions;
+}
+
 // Whether a parse error swallowed a `namespace` keyword or an identifier escape (`\u0050`), which the bundled grammar
 // cannot read in a name.
 function parseLostScope(root: Node): boolean {
@@ -113,6 +134,9 @@ export const csharpAdapter: LanguageAdapter = {
     // A namespace header or an escaped identifier the grammar could not read leaves the file's namespaces unknown, so no
     // creation in it can be bound by scope.
     const scopeLost = parseLostScope(tree.rootNode);
+    // The byte ranges of `#if` regions, whose declarations and directives may not be compiled.
+    const regions = conditionalRegions(tree.rootNode);
+    const conditional = (node: Node): boolean => regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
     const namespaces: string[] = [];
@@ -174,6 +198,7 @@ export const csharpAdapter: LanguageAdapter = {
           // base is unknown. An enum's base is its underlying integral type, which holds no member types.
           const headerBroken = childrenOf(node).some((child) => child.type === "ERROR" || (child.type === "base_list" && child.hasError));
           if (headerBroken) out.markUnparsedHeader();
+          if (conditional(node)) out.markConditional();
           if (node.type !== "enum_declaration" && headerBroken) out.markBaseType("?");
           else if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
@@ -196,6 +221,7 @@ export const csharpAdapter: LanguageAdapter = {
           if (arities.length === 0 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
           const access = arities.length > 0 ? memberTypeAccess(node) : undefined;
           if (access !== undefined) out.markAccess(access);
+          if (conditional(node)) out.markConditional();
           return;
         }
         case "method_declaration":
@@ -269,7 +295,8 @@ export const csharpAdapter: LanguageAdapter = {
           const keywords = new Set(node.children.filter((child): child is Node => child !== null && !child.isNamed).map((child) => child.type));
           const target = parts[0] === undefined ? undefined : aritiedName(parts[0]);
           const scope = namespaces.length === 0 ? "" : ` in ${namespaces.join(".")}@${blocks[blocks.length - 1]!}`;
-          const imported = target === undefined ? undefined : `${keywords.has("global") ? "global " : ""}${keywords.has("static") ? "static " : ""}${target}${scope}`;
+          // A directive inside an `#if` region is marked `#if `, since it may not be compiled.
+          const imported = target === undefined ? undefined : `${conditional(node) ? "#if " : ""}${keywords.has("global") ? "global " : ""}${keywords.has("static") ? "static " : ""}${target}${scope}`;
           const name = alias === undefined ? imported : aliasName === undefined ? undefined : `${plain(aliasName.text)} =`;
           if (name !== undefined) out.addEdge("imports", name, node);
           return;

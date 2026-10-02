@@ -709,6 +709,21 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Caller.cs", 1)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("does not let C# declarations or directives inside #if decide an active creation", async () => {
+    await write({
+      "Inactive.cs": "#if false\nclass T {public T(){}}\n#endif\n",
+      "Actual.cs": "namespace P {class T {public T(){}} class U {public U(){}}}\n",
+      "Use.cs": "using P;\nclass C {public static object Run(){return new T();}}\n",
+      "Holder.cs": "class H {\n#if false\npublic class V {public V(){}}\n#endif\n}\n",
+      "Inherit.cs": "class D:H {public static object Run(){return new V();}}\nclass V {public V(){}}\n",
+      "Scoped.cs": "namespace N {\n#if false\nusing P;\n#endif\nclass E {public static object Run(){return new U();}}\n}\nclass U {public U(){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Inherit.cs", 1)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Scoped.cs", 5)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

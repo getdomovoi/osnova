@@ -108,6 +108,11 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, primary: true });
   }
 
+  markConditional(): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, conditional: true });
+  }
+
   markUnparsedHeader(): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, unparsedHeader: true });

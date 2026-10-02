@@ -705,7 +705,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // the namespace declaration it is declared inside and its target is read relative to that namespace; a change to them
   // changes the file's imports, which re-resolves every file on an incremental update.
   type CsharpSegment = { readonly name: string; readonly arity: number };
-  type CsharpUsing = { readonly static: boolean; readonly target: string; readonly scope: string; readonly from: number; readonly to: number };
+  type CsharpUsing = { readonly conditional: boolean; readonly static: boolean; readonly target: string; readonly scope: string; readonly from: number; readonly to: number };
   type CsharpScope = {
     readonly aliases: Set<string>;
     readonly global: CsharpUsing[];
@@ -739,10 +739,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           scope.aliases.add(alias[1]!);
           continue;
         }
-        const directive = /^(global )?(static )?(\S+?)(?: in (\S+)@(\d+)-(\d+))?$/u.exec(raw.toName);
+        const directive = /^(#if )?(global )?(static )?(\S+?)(?: in (\S+)@(\d+)-(\d+))?$/u.exec(raw.toName);
         if (directive === null) continue;
-        const using = { static: directive[2] !== undefined, target: directive[3]!, scope: directive[4] ?? "", from: Number(directive[5] ?? 0), to: Number(directive[6] ?? 0) };
-        if (directive[1] !== undefined) scope.global.push(using);
+        const using = { conditional: directive[1] !== undefined, static: directive[3] !== undefined, target: directive[4]!, scope: directive[5] ?? "", from: Number(directive[6] ?? 0), to: Number(directive[7] ?? 0) };
+        if (directive[2] !== undefined) scope.global.push(using);
         else scope.byFile.set(file, [...(scope.byFile.get(file) ?? []), using]);
       }
     }
@@ -750,7 +750,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       for (const symbol of symbols) {
         if (!csharpTypeLike(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
         const namespace = symbol.namespace ?? "";
-        if (namespace === "?" || symbol.unparsedHeader === true) {
+        if (namespace === "?" || symbol.unparsedHeader === true || symbol.conditional === true) {
           scope.unplaced.add(symbol.name);
           continue;
         }
@@ -777,7 +777,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const { parts, complete } = partsOf(type);
     const named = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`)).filter(csharpTypeLike);
     // A member type whose header did not parse may have any arity.
-    if (named.some((symbol) => symbol.unparsedHeader === true)) return null;
+    if (named.some((symbol) => symbol.unparsedHeader === true || symbol.conditional === true)) return null;
     const found = named.find((symbol) => arityOf(symbol) === segment.arity && csharpVisible(symbol, view));
     return found ?? (complete ? undefined : null);
   };
@@ -915,6 +915,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (depth > 0 && scoped.some((using) => site.line === using.from || site.line === using.to)) return unknownType;
       const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...scope.global]
         : scoped.filter((using) => using.from < site.line && site.line < using.to);
+      // A directive inside an `#if` region may or may not import a type at this level.
+      if (declared.some((using) => using.conditional)) return unknownType;
       const imported = declared.length === 0 ? undefined : csharpImported(site.card, declared, first, depth > 0);
       if (imported === null) return unknownType;
       if (imported !== undefined) return csharpNested(imported, rest);
@@ -1547,7 +1549,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
         // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart. A
         // C# delegate's constructor is not indexed, and the name it shares may also hold another type's constructors.
-        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || !singleType(found.type)) ? unknownType : found;
+        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || found.type.conditional === true || !singleType(found.type)) ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
         const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
         const evidence = { source: "syntax" as const, resolution: typeFound.status === "resolved" ? { status: "resolved" as const, method: typeFound.method } : typeFound };

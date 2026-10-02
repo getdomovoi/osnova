@@ -68,6 +68,8 @@ export interface OsnovaSymbol {
   readonly baseType?: string | undefined;
   // A C# type whose declaration header holds a parse error, so its generic arity and base cannot be trusted.
   readonly unparsedHeader?: true | undefined;
+  // A C# type declared inside an `#if` region, which the index cannot tell is compiled.
+  readonly conditional?: true | undefined;
   // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
   // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.

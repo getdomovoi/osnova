@@ -14,6 +14,7 @@ export interface RawDefinition {
   readonly namespace?: string | undefined;
   readonly baseType?: string | undefined;
   readonly unparsedHeader?: true | undefined;
+  readonly conditional?: true | undefined;
   readonly partial?: string | undefined;
   readonly supertypes?: number | undefined;
   readonly interfaces?: readonly SymbolBinding[] | undefined;
