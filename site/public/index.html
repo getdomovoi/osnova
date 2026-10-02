@@ -90,10 +90,10 @@
         <div class="vis vis-read">
           <svg class="files" viewBox="0 0 1000 300" preserveAspectRatio="xMidYMid meet" data-files></svg>
           <div class="counters">
-            <p><b data-count="397" data-from="700" data-to="3300">0</b> files</p>
-            <p><b data-count="7069" data-from="700" data-to="3300">0</b> symbols</p>
-            <p><b data-count="31453" data-from="700" data-to="3300">0</b> edges</p>
-            <p class="counters-note cue" data-at="3400">osnova's own source at 0.11.0</p>
+            <p><b data-count="442" data-from="700" data-to="3300">0</b> files</p>
+            <p><b data-count="7896" data-from="700" data-to="3300">0</b> symbols</p>
+            <p><b data-count="35343" data-from="700" data-to="3300">0</b> edges</p>
+            <p class="counters-note cue" data-at="3400">osnova's own source at 0.12.0</p>
           </div>
         </div>
       </div>
@@ -145,7 +145,7 @@
         <p class="cap">and builds a symbol and <span class="kw">call graph</span>.</p>
         <div class="vis vis-weave">
           <svg class="weave" viewBox="0 0 1000 360" preserveAspectRatio="xMidYMid meet" data-weave></svg>
-          <p class="weave-note cue" data-at="3500">Eleven of the calls <span class="mono">refreshWorkspace</span> makes in osnova 0.11.0, one weft per calling line.</p>
+          <p class="weave-note cue" data-at="3500">Eleven of the calls <span class="mono">refreshWorkspace</span> makes in osnova 0.12.0, one weft per calling line.</p>
         </div>
       </div>
 
@@ -157,7 +157,7 @@
       </div>
       <div class="layer s-term" data-start="16400" data-end="23000">
         <div class="term2">
-          <div class="term2-bar"><span>agent</span><span>osnova 0.11.0, its own source</span></div>
+          <div class="term2-bar"><span>agent</span><span>osnova 0.12.0, its own source</span></div>
           <div class="term2-body">
             <p class="t-q cue" data-at="150"><span class="t-pr">&gt;</span> <span data-type="who calls refreshWorkspace?" data-type-from="300" data-type-to="1300"></span><span class="t-caret"></span></p>
             <p class="t-call cue" data-at="1650"><span class="t-dot"></span>osnova_warp <span class="t-arg">src/api.ts#refreshWorkspace</span></p>
@@ -178,9 +178,9 @@
           <div class="same">
             <div class="run">
               <p class="run-head cue" data-at="250">build 1</p>
-              <p class="cue" data-at="450"><span>text.bin</span><b>35a0907989ddcb04</b></p>
-              <p class="cue" data-at="650"><span>edges.json</span><b>aa077378f5db9f52</b></p>
-              <p class="cue" data-at="850"><span>warp output</span><b>cfeccec7a316834d</b></p>
+              <p class="cue" data-at="450"><span>text.bin</span><b>2563794a23101811</b></p>
+              <p class="cue" data-at="650"><span>edges.json</span><b>44436d3f275f211e</b></p>
+              <p class="cue" data-at="850"><span>warp output</span><b>de1dcc0e1a3ef358</b></p>
             </div>
             <div class="eq"><span></span>
               <span class="cue" data-at="1350">=</span>
@@ -189,12 +189,12 @@
             </div>
             <div class="run">
               <p class="run-head cue" data-at="250">build 2</p>
-              <p class="cue" data-at="450"><span>text.bin</span><b>35a0907989ddcb04</b></p>
-              <p class="cue" data-at="650"><span>edges.json</span><b>aa077378f5db9f52</b></p>
-              <p class="cue" data-at="850"><span>warp output</span><b>cfeccec7a316834d</b></p>
+              <p class="cue" data-at="450"><span>text.bin</span><b>2563794a23101811</b></p>
+              <p class="cue" data-at="650"><span>edges.json</span><b>44436d3f275f211e</b></p>
+              <p class="cue" data-at="850"><span>warp output</span><b>de1dcc0e1a3ef358</b></p>
             </div>
           </div>
-          <p class="same-note cue" data-at="2100">Two fresh builds of osnova 0.11.0 on its own source. SHA-256, first 16 hex digits.</p>
+          <p class="same-note cue" data-at="2100">Two fresh builds of osnova 0.12.0 on its own source. SHA-256, first 16 hex digits.</p>
         </div>
       </div>
 
@@ -229,7 +229,7 @@
     </div>
     <ol class="visually-hidden">
       <li>Osnova is a Slavic word. It means base or foundation, and on a loom, the warp: the threads held taut so the cloth can be woven on them.</li>
-      <li>Osnova reads your repository. Its own source at 0.11.0 is 397 files, 7,069 symbols and 31,453 edges.</li>
+      <li>Osnova reads your repository. Its own source at 0.12.0 is 442 files, 7,896 symbols and 35,343 edges.</li>
       <li>With tree-sitter, each file becomes a syntax tree, and declarations and calls become symbols and edges.</li>
       <li>It builds a symbol and call graph. Eleven of the functions refreshWorkspace calls are shown, each tied to the line that calls it.</li>
       <li>Your agent asks who calls refreshWorkspace, through the osnova_warp tool.</li>
