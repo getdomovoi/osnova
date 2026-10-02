@@ -46,7 +46,7 @@ function buildFiles(host) {
   svg("line", { class: "shuttle", x1: 0, y1: 0, x2: 0, y2: 300, "data-shuttle": "" }, host);
 }
 
-// Scene 4: refreshWorkspace and the callees osnova 0.11.0 resolved for it, with the line of each call.
+// Scene 4: refreshWorkspace and the callees osnova 0.12.0 resolved for it, with the line of each call.
 const CALLEES = [
   ["cacheLimits", 93], ["resolveCacheDir", 94], ["withCacheLock", 105], ["workspaceLockPath", 105],
   ["artifactSignature", 106], ["readGeneration", 108], ["indexGeneration", 115], ["isRebuildableCacheFailure", 121],

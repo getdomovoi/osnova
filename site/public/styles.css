@@ -356,10 +356,10 @@ html:not(.js) .glyph .cy { display: none; }
 .tool-group dd { margin: 6px 0 0; font-size: 0.9375rem; color: var(--muted); }
 
 /* Evidence */
-.oracle { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 48px; margin-top: 48px; }
-.oracle-text p { color: var(--muted); max-width: 52ch; }
+.oracle { display: grid; grid-template-columns: minmax(0, 1fr); gap: 40px; margin-top: 48px; }
+.oracle-text p { color: var(--muted); max-width: 68ch; }
 .small { font-size: 0.875rem; color: var(--muted); }
-.oracle-rows { display: grid; gap: 32px; align-content: start; }
+.oracle-rows { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px 48px; align-content: start; }
 .oracle-name { margin: 0; display: flex; gap: 12px; align-items: baseline; }
 .oracle-name code { font-size: 1rem; color: var(--ink); }
 .oracle-name span { font-size: 0.875rem; color: var(--muted); }
@@ -421,7 +421,8 @@ td:last-child { color: var(--brass); }
 @media (max-width: 960px) {
   .panel { grid-template-columns: minmax(0, 1fr); }
   .tool-groups { grid-template-columns: minmax(0, 1fr); gap: 40px; }
-  .oracle { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .oracle { gap: 32px; }
+  .oracle-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .limits ul { grid-template-columns: minmax(0, 1fr); }
   .foot-inner { grid-template-columns: minmax(0, 1fr); }
 }
@@ -448,6 +449,7 @@ td:last-child { color: var(--brass); }
 }
 
 @media (max-width: 640px) {
+  .oracle-rows { grid-template-columns: minmax(0, 1fr); }
   .film-frame { aspect-ratio: 4 / 5; }
 }
 
