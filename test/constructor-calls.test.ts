@@ -646,6 +646,30 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Lost.cs", 2)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("reads a C# record's base written with constructor arguments", async () => {
+    await write({
+      "Use.cs": "record C(int x):B(x) {\n public static object Run(){return new T();}\n}\n",
+      "Base.cs": "record B(int x) {public class T {public T(){}}}\n",
+      "Global.cs": "class T {public T(){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: "Base.cs#B.T.T" });
+  });
+
+  it("refuses C# creations in a file whose namespace header did not parse", async () => {
+    await write({
+      "Use.cs": "namespace \\u0050 {\n class C {public static object Run(){return new T();}}\n}\n",
+      "Scoped.cs": "namespace \\u0050;\nclass D {public static object Run(){return new T();}}\n",
+      "Part.cs": "namespace P\\u0061rt {\n class E {public static object Run(){return new T();}}\n}\n",
+      "Actual.cs": "namespace P {class T {public T(){}}}\n",
+      "Global.cs": "class T {public T(){}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Scoped.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Part.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

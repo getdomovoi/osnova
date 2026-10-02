@@ -77,6 +77,18 @@ function memberTypeAccess(type: Node): "private" | "protected" | undefined {
   return type.parent?.parent?.type === "interface_declaration" ? undefined : "private";
 }
 
+// Whether a parse error swallowed a `namespace` keyword or an identifier escape (`\u0050`), which the bundled grammar
+// cannot read in a name.
+function parseLostScope(root: Node): boolean {
+  if (!root.hasError) return false;
+  const pending: Node[] = [root];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node.type === "ERROR" && node.children.some((child) => child !== null && (child.type === "namespace" || child.type === "escape_sequence"))) return true;
+    for (const child of node.children) if (child !== null && child.hasError) pending.push(child);
+  }
+  return false;
+}
+
 // Whether an enclosing declaration (a type, method or local function) declares a type parameter of this name.
 function typeParameterInScope(node: Node, name: string): boolean {
   for (let scope = node.parent; scope !== null; scope = scope.parent) {
@@ -98,6 +110,9 @@ export const csharpAdapter: LanguageAdapter = {
   language: "c_sharp",
   extract(tree, _source): AdapterOutput {
     const out = new Extractor();
+    // A namespace header or an escaped identifier the grammar could not read leaves the file's namespaces unknown, so no
+    // creation in it can be bound by scope.
+    const scopeLost = parseLostScope(tree.rootNode);
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
     const namespaces: string[] = [];
@@ -149,11 +164,15 @@ export const csharpAdapter: LanguageAdapter = {
           if (access !== undefined) out.markAccess(access);
           // The first base as written, which a class inherits member types from; an interface inherits them from
           // every base, which this one name cannot hold, so several are recorded as unknown (`?`).
-          const bases = childrenOf(childOfType(node, "base_list") ?? node).filter((child) => ["identifier", "generic_name", "qualified_name", "alias_qualified_name"].includes(child.type));
+          // A base written with constructor arguments (`record C(int x) : B(x)`) names its type inside the wrapper; a first
+          // base written any other way the index cannot read is recorded as unknown rather than as none.
+          const bases = childrenOf(childOfType(node, "base_list") ?? node).filter((child) => child.type !== "comment")
+            .map((child) => child.type === "primary_constructor_base_type" ? childrenOf(child).find((part) => part.type !== "comment" && part.type !== "argument_list") ?? child : child);
+          const readable = (base: Node): boolean => ["identifier", "generic_name", "qualified_name", "alias_qualified_name"].includes(base.type);
           // An enum's base is its underlying integral type, which holds no member types.
           if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
-            else if (bases[0] !== undefined) out.markBaseType(aritiedName(bases[0]));
+            else if (bases[0] !== undefined) out.markBaseType(readable(bases[0]) ? aritiedName(bases[0]) : "?");
           }
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(typeName);
@@ -228,7 +247,7 @@ export const csharpAdapter: LanguageAdapter = {
           const args = node.childForFieldName("arguments");
           if (typeNode !== null) {
             // A type parameter's constructor depends on the type argument, so the call is blocked rather than matched by name.
-            if (typeNode.type === "identifier" && typeParameterInScope(node, typeNode.text)) out.addEdge("calls", plain(typeNode.text), typeNode, { kind: "blocked", reason: "unsupported" });
+            if (scopeLost || (typeNode.type === "identifier" && typeParameterInScope(node, typeNode.text))) out.addEdge("calls", typeNode.type === "identifier" ? plain(typeNode.text) : aritiedName(typeNode), typeNode, { kind: "blocked", reason: "unsupported" });
             else out.addEdge("calls", aritiedName(typeNode), typeNode, undefined, undefined, args === null ? 0 : argumentCount(args), "instance");
           }
           for (const child of childrenOf(node)) visit(child);
