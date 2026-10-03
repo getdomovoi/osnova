@@ -33,8 +33,9 @@ export function writtenType(type: Node | null, site: Node): string | undefined {
     case "predefined_type": return type.text.replace(/\s+/g, "");
     case "identifier": {
       const name = plain(type.text);
-      // `@int` names a type, not the keyword; it is written as nothing this reads.
-      if (type.text.startsWith("@") && KEYWORD_TYPES.has(name)) return undefined;
+      // A keyword arrives as a `predefined_type`; an identifier that normalizes to one (`@int`, `i\u200Cnt`, `\u0069nt`)
+      // names a type, which this does not read.
+      if (KEYWORD_TYPES.has(name)) return undefined;
       return typeParameterInScope(site, name) ? undefined : name;
     }
     case "generic_name": {
@@ -313,7 +314,8 @@ const INTEGRAL_NAMES = new Set(["Int32", "UInt32", "Int64", "UInt64", "SByte", "
 const maybeIntegral = (written: string): boolean => INTEGRAL_SPELLINGS.has(written) || INTEGRAL_NAMES.has(written.slice(written.lastIndexOf(".") + 1).replace(/^.*::/u, ""));
 const LITERAL_RANGE: Readonly<Record<string, readonly [bigint, bigint]>> = { int: [-2147483648n, 2147483647n], uint: [0n, 4294967295n], long: [-9223372036854775808n, 9223372036854775807n], ulong: [0n, 18446744073709551615n] };
 
-function argumentTypeOf(expression: Node, site: Node): string | null {
+function argumentTypeOf(expression: Node, site: Node, depth = 0): string | null {
+  if (depth > 32) return null;
   // A parenthesized constant is the same constant.
   while (expression.type === "parenthesized_expression" && named(expression).length === 1) expression = named(expression)[0]!;
   if (expression.type === "null_literal") return "#null";
@@ -342,7 +344,7 @@ function argumentTypeOf(expression: Node, site: Node): string | null {
     const written = writtenType(expression.childForFieldName("type"), site);
     const target = written === undefined ? undefined : LITERAL_SPELLINGS[written];
     const operand = expression.childForFieldName("value") ?? named(expression).at(-1);
-    const inner = operand === undefined || operand === null ? null : argumentTypeOf(operand, site);
+    const inner = operand === undefined || operand === null ? null : argumentTypeOf(operand, site, depth + 1);
     if (inner !== null && inner.startsWith("#lit:")) {
       // The value stays only when the target holds it; an overflowing cast is an error or, unchecked, another value.
       const value = BigInt(inner.slice(inner.lastIndexOf(":") + 1));

@@ -292,6 +292,19 @@ describe("a C# extension method chosen by the written argument types", () => {
     expect(picksIn(14)).toEqual([undefined]);
   });
 
+  it("reads an identifier that normalizes to a keyword as a type, in arguments and receivers", async () => {
+    // U+200C inside the spelling makes it an identifier that binds the class @int (or @string).
+    const fint = "i\u200Cnt";
+    const fstring = "str\u200Cing";
+    await write({
+      "Ext.cs": `namespace App;\npublic class @int { }\npublic class @string { }\npublic enum E { M }\npublic static class Ext\n{\n    public static string A(this string s, int n) => "int";\n    public static string A(this string s, object n) => "object";\n    public static string Z(this string s, E n) => "enum";\n    public static string Z(this string s, object n) => "object";\n    public static string R(this int n) => "int";\n    public static string R(this object n) => "object";\n    public static string S(this string s, string n) => "string";\n    public static string S(this string s, object n) => "object";\n}\npublic static class Use\n{\n    public static void Run(${fint} v, ${fstring} w)\n    {\n        "s".A(v);\n        "s".A(new ${fint}());\n        "s".Z(default(${fint}));\n        v.R();\n        "s".S(w);\n        "s".S(default(${fstring}));\n    }\n}\n`,
+    });
+    const index = await build();
+    for (const [line, name] of [[19, "A"], [20, "A"], [21, "Z"], [22, "R"], [23, "S"], [24, "S"]] as const) {
+      expect(index.edges.find((e) => e.kind === "calls" && e.fromFile === "Ext.cs" && e.line === line && e.toName === name)?.toSymbol, `${name} at ${line}`).toBeUndefined();
+    }
+  });
+
   it("gives an incremental update the same picks as a full rebuild", async () => {
     await write({ "Words.cs": words, "Use.cs": use(["5.ToWords(form);", "5.ToWords(culture);"]) });
     const cacheDir = path.join(temporary, "cache");
