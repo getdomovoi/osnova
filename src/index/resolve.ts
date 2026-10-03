@@ -733,7 +733,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const cached = csharpContestedCache.get(name);
     if (cached !== undefined) return cached;
     const types = (symbolsByName.get(name) ?? []).filter((symbol) => files.get(symbol.file)?.language === "c_sharp" && (isHolder(symbol) || symbol.kind === "type"));
-    const contested = new Set(types.map(typeKey)).size > 1;
+    // Each declaration is its own type, though a delegate and a class of one file can share a qualified name; only the
+    // parts of one partial type count once.
+    const contested = new Set(types.map((symbol) => symbol.partial === undefined ? symbol : `${localOfQualifiedName(symbol.qualifiedName)}\u0000${symbol.partial}`)).size > 1;
     csharpContestedCache.set(name, contested);
     return contested;
   };
@@ -759,8 +761,13 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     for (const symbols of symbolsByName.values()) {
       for (const symbol of symbols) {
-        if (!csharpTypeLike(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
+        if (!csharpTypeLike(symbol) || files.get(symbol.file)?.language !== "c_sharp") continue;
         const namespace = symbol.namespace ?? "";
+        // A member type records a namespace only when an unbalanced `#if` may make it top-level (`?`).
+        if (localOfQualifiedName(symbol.qualifiedName).includes(".")) {
+          if (namespace === "?") scope.unplaced.add(symbol.name);
+          continue;
+        }
         if (namespace === "?" || symbol.unparsedHeader === true || (symbol.conditional === true && csharpContested(symbol.name))) {
           scope.unplaced.add(symbol.name);
           continue;

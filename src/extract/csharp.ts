@@ -77,8 +77,8 @@ function memberTypeAccess(type: Node): "private" | "protected" | undefined {
   return type.parent?.parent?.type === "interface_declaration" ? undefined : "private";
 }
 
-// The byte ranges from each `#if` to its `#endif` (or the end of the file), in document order, and the position of
-// each brace token outside strings, with whether it opens.
+// The byte ranges from each `#if` to its `#endif` (or the end of the file), and the position of each brace token
+// outside strings, with whether it opens, both in document order.
 function conditionalRegions(root: Node): { regions: Array<[number, number]>; braces: Array<[number, boolean]> } {
   const directives: Node[] = [];
   const braces: Array<[number, boolean]> = [];
@@ -98,7 +98,7 @@ function conditionalRegions(root: Node): { regions: Array<[number, number]>; bra
     else if (open.length > 0) regions.push([open.pop()!, directive.endIndex]);
   }
   for (const start of open) regions.push([start, root.endIndex]);
-  return { regions, braces };
+  return { regions, braces: braces.sort((a, b) => a[0] - b[0]) };
 }
 
 // Whether a parse error swallowed a `namespace` keyword or an identifier escape (`\u0050`), which the bundled grammar
@@ -141,12 +141,19 @@ export const csharpAdapter: LanguageAdapter = {
     // delegate or constructor that starts in one or whose header (before its body) overlaps one, a type or directive inside
     // a conditional namespace declaration, and a directive in one. The members of a conditional type are compiled with it,
     // so they are not marked on that account. A region whose braces do not balance can change where the rest of the file nests, so then every
-    // declaration and directive in the file is conditional and every creation in it is blocked. The tree is walked only
-    // when a line holds `#` and `if` after any whitespace, a byte-order mark included.
+    // declaration and directive in the file is conditional, every type's namespace is unknown and every creation in it is
+    // blocked. The tree is walked only when a line holds `#` and `if` after any whitespace, a byte-order mark included.
     const { regions, braces } = /^\s*#\s*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : { regions: [], braces: [] };
+    // Read in order, a balanced region never closes a brace opened before it: `#if X } class B { #endif` matches its
+    // counts but moves what follows into another type.
     const structural = regions.some(([from, to]) => {
-      const inside = braces.filter(([at]) => at >= from && at <= to);
-      return inside.filter(([, open]) => open).length !== inside.filter(([, open]) => !open).length;
+      let depth = 0;
+      for (const [at, open] of braces) {
+        if (at < from || at > to) continue;
+        depth += open ? 1 : -1;
+        if (depth < 0) return true;
+      }
+      return depth !== 0;
     });
     const inRegion = (node: Node): boolean => structural || regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
     const headerInRegion = (node: Node): boolean => {
@@ -206,8 +213,10 @@ export const csharpAdapter: LanguageAdapter = {
           if (hasPrimaryConstructor(node, nameNode)) out.markPrimary();
           if (arities[arities.length - 1]! > 0) out.markArity(arities[arities.length - 1]!);
           // A top-level type records its namespace; a member type records whether a derived type can see it.
-          // In a file whose namespace header was lost, a top-level type's namespace is unknown (`?`).
-          if (arities.length === 1 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
+          // In a file whose namespace header was lost, a top-level type's namespace is unknown (`?`). In a file whose `#if`
+          // braces do not balance, any type may be top-level or nested in another, so every type's namespace is unknown.
+          if (structural) out.markNamespace("?");
+          else if (arities.length === 1 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
           const access = arities.length > 1 ? memberTypeAccess(node) : undefined;
           if (access !== undefined) out.markAccess(access);
           // The first base as written, which a class inherits member types from; an interface inherits them from
@@ -241,7 +250,8 @@ export const csharpAdapter: LanguageAdapter = {
           out.addDef(plain(nameNode.text), "type", node);
           const arity = childrenOf(node.childForFieldName("type_parameters") ?? node).filter((child) => child.type === "type_parameter").length;
           if (arity > 0) out.markArity(arity);
-          if (arities.length === 0 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
+          if (structural) out.markNamespace("?");
+          else if (arities.length === 0 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
           const access = arities.length > 0 ? memberTypeAccess(node) : undefined;
           if (access !== undefined) out.markAccess(access);
           if (ownerConditional() || inRegion(node)) out.markConditional();
