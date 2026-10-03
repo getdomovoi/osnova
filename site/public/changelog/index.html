@@ -58,7 +58,7 @@
 </ul>
 </nav>
 <h2 id="unreleased">Unreleased</h2>
-<p>The extraction version moves to <code>structural-9.42</code>, so the first run after upgrading rebuilds the cache once.</p>
+<p>The extraction version moves to <code>structural-9.43</code>, so the first run after upgrading rebuilds the cache once.</p>
 <h3 id="unreleased-changed">Changed</h3>
 <ul>
 <li>The type-checker oracle scorer (<code>benchmarks/oracle/score.mjs</code>) pairs each call edge with one checker call when a line calls the same name more than once (<code>a.get(b.get())</code>). It used to judge every edge at such a line against the first call, so a correct edge for the second call scored false. Rescored, zod has 0 false edges (was 4), gson 1 (was 4), ripgrep 27 (was 29) and humanizer 2 (was 3); recall moves by at most 2 sites per corpus. Every remaining false edge names another function, and the record's <code>method.sameLine</code> states the rule.</li>

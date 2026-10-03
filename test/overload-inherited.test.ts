@@ -100,12 +100,13 @@ describe("Java overloads declared in a superclass", () => {
     expect(choiceAt(index, "src/Use.java", 7, "name")).toMatchObject({ toSymbol: "src/Obj.java#Obj.name", overload: undefined });
   });
 
-  it("names no declaration when a superclass overload of the same count remains beside the override", async () => {
+  it("keeps a superclass overload of the same count beside the override, for the argument types to choose between", async () => {
     await write(java);
     const index = await buildIndex(workspace, { cacheDir });
+    // get(int) stays a candidate beside the override of get(String); the String argument fits only the override.
     expect(choiceAt(index, "src/Use.java", 6, "get")).toMatchObject({
       toSymbol: "src/Obj.java#Obj.get",
-      overload: { candidates: [4], elsewhere: [{ file: "src/Element.java", line: 4 }] },
+      overload: { line: 4, types: true },
     });
   });
 

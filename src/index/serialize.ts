@@ -41,7 +41,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.42.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.43.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -59,7 +59,10 @@ function validParameters(value: unknown): boolean {
     (range.overrides === undefined || range.overrides === true) && (range.access === undefined || range.access === "private" || range.access === "package") &&
     (range.constructs === undefined || range.constructs === true) &&
     (range.types === undefined || (Array.isArray(range.types) && range.types.every((type) => typeof type === "string"))) &&
-    (range.names === undefined || (range.types !== undefined && Array.isArray(range.names) && range.names.length > 0 &&
+    // `erased` stands in for `types` when those prove nothing, one entry per parameter, a varargs one ending in `...`.
+    (range.erased === undefined || (range.types === undefined && Array.isArray(range.erased) && range.erased.length > 0 && range.erased.some((type) => type !== null) &&
+      range.erased.every((type) => type === null || (typeof type === "string" && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\[\])*(?:\.\.\.)?$/u.test(type))))) &&
+    (range.names === undefined || ((range.types !== undefined || range.erased !== undefined) && Array.isArray(range.names) && range.names.length > 0 &&
       range.names.every((name, at) => typeof name === "string" && /^[A-Za-z_$][\w$]*$/u.test(name) && (at === 0 || range.names![at - 1]! < name))));
 }
 
