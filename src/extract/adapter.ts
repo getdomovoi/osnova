@@ -33,6 +33,7 @@ export interface RawDefinition {
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly parameters?: ParameterRange | undefined;
   readonly members?: readonly string[] | undefined;
+  readonly refStruct?: true | undefined;
 }
 
 export interface RawEdge {

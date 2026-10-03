@@ -157,6 +157,8 @@ function memberNames(type: Node): string[] {
   const names = new Set<string>();
   const add = (node: Node | null | undefined) => { if (node != null && node.type === "identifier") names.add(plain(node.text)); };
   for (const parameter of childrenOf(childOfType(type, "parameter_list") ?? type)) if (parameter.type === "parameter") add(parameter.childForFieldName("name"));
+  // A record also has the members the compiler writes for it.
+  if (type.type === "record_declaration" || type.type === "record_struct_declaration") for (const name of ["Deconstruct", "EqualityContract", "PrintMembers"]) names.add(name);
   const body = type.childForFieldName("body") ?? childOfType(type, "declaration_list") ?? childOfType(type, "enum_member_declaration_list");
   for (const member of body === null ? [] : childrenOf(body)) {
     switch (member.type) {
@@ -293,6 +295,7 @@ export const csharpAdapter: LanguageAdapter = {
           }
           const members = memberNames(node);
           if (members.length > 0) out.markMembers(members);
+          if (kind === "struct" && childrenOf(node).some((child) => child.type === "modifier" && child.text === "ref")) out.markRefStruct();
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${forms.join(".")}:${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(typeName);
           for (const child of childrenOf(node)) visit(child);

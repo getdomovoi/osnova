@@ -119,6 +119,7 @@ interface SerializedSymbol {
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly parameters?: ParameterRange | undefined;
   readonly members?: readonly string[] | undefined;
+  readonly refStruct?: true | undefined;
 }
 
 interface SerializedFile {
@@ -221,6 +222,7 @@ export function serializeSections(
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
         ...(symbol.parameters === undefined ? {} : { parameters: symbol.parameters }),
         ...(symbol.members === undefined ? {} : { members: symbol.members }),
+        ...(symbol.refStruct === undefined ? {} : { refStruct: symbol.refStruct }),
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
@@ -427,6 +429,7 @@ function deserializeBody(
       if (symbol.values !== undefined && !validReturn(symbol.values)) throw new Error("osnova: corrupt return metadata");
       if (symbol.parameters !== undefined && !validParameters(symbol.parameters)) throw new Error("osnova: corrupt parameter metadata");
       if (symbol.members !== undefined && !sortedNames(symbol.members)) throw new Error("osnova: corrupt member metadata");
+      if (symbol.refStruct !== undefined && (symbol.refStruct !== true || symbol.kind !== "struct")) throw new Error("osnova: corrupt member metadata");
       if (symbol.valueTypes !== undefined && (typeof symbol.valueTypes !== "object" || symbol.valueTypes === null || Array.isArray(symbol.valueTypes) || !Object.values(symbol.valueTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.elementTypes !== undefined && (typeof symbol.elementTypes !== "object" || symbol.elementTypes === null || Array.isArray(symbol.elementTypes) || !Object.values(symbol.elementTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.returnTuple !== undefined && (!Array.isArray(symbol.returnTuple) || !symbol.returnTuple.every((item: unknown) => item === null || validReturn(item)))) throw new Error("osnova: corrupt return metadata");
@@ -472,6 +475,7 @@ function deserializeBody(
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
         ...(symbol.parameters === undefined ? {} : { parameters: symbol.parameters }),
         ...(symbol.members === undefined ? {} : { members: symbol.members }),
+        ...(symbol.refStruct === undefined ? {} : { refStruct: symbol.refStruct }),
       };
     });
     symbols.forEach((symbol: OsnovaSymbol, i: number) => { degrees.set(symbol.qualifiedName, { incoming: file.d[2 * i]!, outgoing: file.d[2 * i + 1]! }); });

@@ -159,6 +159,7 @@ export async function extractCard(
       ...(def.valueTypes === undefined ? {} : { valueTypes: def.valueTypes }),
       ...(def.parameters === undefined ? {} : { parameters: def.parameters }),
       ...(def.members === undefined ? {} : { members: def.members }),
+      ...(def.refStruct === undefined ? {} : { refStruct: def.refStruct }),
     };
   });
 

@@ -230,6 +230,25 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     }
   });
 
+  it("reads ref struct and record from the declaration, past attributes, line breaks and comments", async () => {
+    const program = (declaration: string) => `using Outer;\nnamespace Outer {\n    public static class OuterExt {\n        public static string Probe(this Inner.R r) => "outer";\n    }\n}\nnamespace Inner {\n${declaration}\n    public static class InnerExt {\n        public static string Probe(this object r) => "inner";\n    }\n    public class Use {\n        public static string Run(R r) => r.Probe();\n    }\n}\n`;
+    for (const [declaration, expected] of [
+      ["    [System.Runtime.InteropServices.StructLayout(\n        System.Runtime.InteropServices.LayoutKind.Sequential)]\n    public ref struct R { }", "P.cs#OuterExt.Probe"],
+      ["    public ref\n    struct R { }", "P.cs#OuterExt.Probe"],
+      ["    public ref /* : (note) */ struct R { }", "P.cs#OuterExt.Probe"],
+      ["    public /* ref struct */ struct R { }", "P.cs#InnerExt.Probe"],
+    ]) {
+      await write({ "P.cs": program(declaration!) });
+      const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+      expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBe(expected);
+    }
+    for (const form of ["record", "record struct"]) {
+      await write({ "P.cs": `namespace Inner {\n    [System.Serializable]\n    public ${form} R(int X) {\n        public bool Test() => this.PrintMembers(new System.Text.StringBuilder());\n    }\n    public static class InnerExt {\n        public static bool PrintMembers(this R r, System.Text.StringBuilder b) => false;\n    }\n}\n` });
+      const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+      expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "PrintMembers")?.toSymbol).not.toBe("P.cs#InnerExt.PrintMembers");
+    }
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });

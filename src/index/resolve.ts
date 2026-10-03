@@ -1428,7 +1428,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const base = csharpBaseOf(type, new Set());
     return base === undefined ? null : base;
   };
-  const refStruct = (type: OsnovaSymbol): boolean => type.kind === "struct" && partsOf(type).parts.some((part) => /\bref\b[^{(:]*\bstruct\b/u.test(part.signature));
+  const refStruct = (type: OsnovaSymbol): boolean => type.kind === "struct" && partsOf(type).parts.some((part) => part.refStruct === true);
   // Whether a receiver of type `r` converts to an extension method's `this` parameter of type `p` by identity, reference
   // or boxing conversion: null when the index cannot tell.
   const receiverConverts = (r: CsharpType, p: CsharpType): boolean | null => {
@@ -1493,8 +1493,6 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           // A part that did not parse cleanly may have lost members.
           if (!complete || parts.some((part) => !parsedCleanly(part.file))) return true;
           if (parts.some((part) => part.members?.includes(name) === true)) return true;
-          // A record also has the members the compiler writes for it.
-          if ((current.kind === "class" || current.kind === "struct") && parts.some((part) => /\brecord\b/u.test(part.signature)) && ["Deconstruct", "PrintMembers", "EqualityContract"].includes(name)) return true;
           // A delegate has Invoke and the members of System.Delegate, which no table lists.
           if (current.kind !== "class" && current.kind !== "struct" && current.kind !== "interface" && current.kind !== "enum") return true;
           if (current.kind === "enum") return listed("System.Enum");

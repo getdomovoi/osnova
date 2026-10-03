@@ -143,6 +143,11 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, partial: identity });
   }
 
+  markRefStruct(): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, refStruct: true });
+  }
+
   markMembers(members: readonly string[]): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, members });

@@ -97,6 +97,8 @@ export interface OsnovaSymbol {
   // types, and a record's positional parameters), sorted, since a member of the name keeps a call from binding an
   // extension method.
   readonly members?: readonly string[] | undefined;
+  // A C# ref struct (written with the `ref` modifier), which never boxes.
+  readonly refStruct?: true | undefined;
 }
 
 // How many arguments a method's parameter list accepts. `max` is absent when a varargs or `params`
