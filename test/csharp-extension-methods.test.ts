@@ -391,6 +391,29 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBeUndefined();
   });
 
+  it("re-resolves callers when a C# file moves between syntax errors and failed extraction, equal to a full rebuild", async () => {
+    let marker = '"x"';
+    for (let i = 0; i < 4096; i += 1) marker = `$"{${marker}}"`;
+    const deep = `namespace Inner;\npublic static class Block {\n    public static string Marker => ${marker};\n    extension(string s) { public string Probe<T>(T value) => "inner"; }\n}\n`;
+    const files = {
+      "Outer.cs": "namespace Outer;\npublic static class Ext {\n    public static string Probe(this string s, int value) => \"outer\";\n}\n",
+      "Program.cs": "using Outer;\nnamespace Inner;\npublic class Use { public static string Run() => \"s\".Probe(1); }\n",
+    };
+    const probe = (index: Index) => index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol;
+    for (const [from, to, expected] of [["@@@", deep, undefined], [deep, "@@@", "Outer.cs#Ext.Probe"], ["}", deep, undefined]] as const) {
+      await write({ ...files, "Block.cs": from });
+      const cache = path.join(temporary, `cache-${Math.random()}`);
+      const first = await buildIndex(workspace, { cacheDir: cache });
+      await serializeArtifact(first, cache);
+      const loaded = (await loadIndex(workspace, { cacheDir: cache }))!;
+      await write({ "Block.cs": to });
+      const updated = await applyChanges(loaded, workspace, ["Block.cs"]);
+      const rebuilt = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+      expect(probe(updated)).toBe(expected);
+      expect(probe(rebuilt)).toBe(expected);
+    }
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });

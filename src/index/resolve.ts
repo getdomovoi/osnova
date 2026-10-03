@@ -26,7 +26,13 @@ const goHeaders = new WeakMap<FileCard, { readonly name: string; readonly constr
 const GO_TARGET_SUFFIX = /_(aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|nacl|netbsd|openbsd|plan9|solaris|wasip1|windows|zos|386|amd64|amd64p32|arm|arm64|arm64be|armbe|loong64|mips|mips64|mips64le|mips64p32|mips64p32le|mipsle|ppc|ppc64|ppc64le|riscv|riscv64|s390|s390x|sparc|sparc64|wasm)(_test)?\.go$/u;
 const javaPackages = new WeakMap<FileCard, string>();
 export function parsedWithoutErrors(card: FileCard | undefined): boolean {
-  return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors" || diagnostic.code === "extraction-failed" || diagnostic.code === "empty-parse");
+  return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors") && !unread(card);
+}
+
+// A file whose extraction failed or parsed to nothing: it may declare anything, which the resolver treats apart from a
+// file with syntax errors.
+export function unread(card: FileCard | undefined): boolean {
+  return (card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "extraction-failed" || diagnostic.code === "empty-parse");
 }
 
 export function javaPackageOf(card: FileCard | undefined): string {
@@ -1518,7 +1524,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   let unreadFile: boolean | undefined;
   const unplacedExtension = (name: string): boolean => {
     unplacedNames ??= new Set([...files.values()].flatMap((card) => card.unplacedExtensions ?? []));
-    unreadFile ??= [...files.values()].some((card) => card.language === "c_sharp" && (card.diagnostics ?? []).some((diagnostic) => diagnostic.code === "extraction-failed" || diagnostic.code === "empty-parse"));
+    unreadFile ??= [...files.values()].some((card) => card.language === "c_sharp" && unread(card));
     return unreadFile || unplacedNames.has(name);
   };
   const chooseExtension = (edge: OsnovaEdge): OsnovaEdge | undefined => {
