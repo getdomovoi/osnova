@@ -208,11 +208,13 @@ function promoted(left: string, right: string): string | undefined {
 // parameter, a multi-catch, a pattern variable) or it may be an inherited field; undefined means no declaration was found.
 type Declared = { readonly type: Node; readonly dimensions: string; readonly varargs: boolean; readonly initializer?: Node | undefined } | null;
 function declaredTypeOf(site: Node, name: string): Declared | undefined {
-  // A local's scope starts at its declared name, so a site inside its own initializer, or a later declarator's, sees it.
+  // A local's scope starts at its declared name, so a site inside its own initializer, or a later declarator's, sees it;
+  // a field's scope is its whole class body, so one declared after the site still holds it.
   const fromDeclarator = (declaration: Node): Declared | undefined => {
+    const local = declaration.type === "local_variable_declaration";
     for (const declarator of childrenOf(declaration)) {
       const declared = declarator.childForFieldName("name");
-      if (declarator.type !== "variable_declarator" || declared?.text !== name || declared.endIndex > site.startIndex) continue;
+      if (declarator.type !== "variable_declarator" || declared?.text !== name || (local && declared.endIndex > site.startIndex)) continue;
       const type = declaration.childForFieldName("type");
       if (type === null) return null;
       return { type, dimensions: (declarator.childForFieldName("dimensions")?.text ?? "").replace(/\s+/g, ""), varargs: false, initializer: declarator.childForFieldName("value") ?? undefined };

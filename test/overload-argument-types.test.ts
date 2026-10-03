@@ -311,6 +311,33 @@ describe("a typed Java overload choice javac would not make is refused", () => {
     for (const line of [9, 10, 11, 12]) expect(overloadsAt(index, "p/A.java", line, "pick")).toEqual([{ line: 7, types: true }]);
   });
 
+  it("lets a field declared after the call shadow an outer one", async () => {
+    await write({
+      "p/A.java": [
+        "package p;",
+        "import java.io.Reader;",
+        "import java.io.StringReader;",
+        "class A {",
+        "  static Integer value = 1;",
+        "  static void pick(Integer x) {}",
+        "  static void pick(Reader x) {}",
+        "  interface Inner {",
+        "    default void go() { A.pick(value); }",
+        "    StringReader value = new StringReader(\"\");",
+        "  }",
+        "  class Member {",
+        "    Member() { A.pick(value); }",
+        "    void go() { A.pick(value); }",
+        "    StringReader value = new StringReader(\"\");",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    for (const line of [9, 13, 14]) expect(overloadsAt(index, "p/A.java", line, "pick")).toEqual([{ line: 7, types: true }]);
+  });
+
   it("does not choose when an implemented interface declares a method of the name", async () => {
     await write({
       "p/I.java": "package p;\ninterface I {\n  default void pick(String x) {}\n}\n",
