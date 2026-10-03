@@ -756,7 +756,11 @@ export function collectBindings(root: Node, python: boolean): {
     bind(scope, write.name, localValue);
     (scope.reassigned ??= new Set()).add(write.name);
   }
-  const forward = (exportedName: string, bindings: readonly EdgeBinding[] | undefined, line: number): void => {
+  const forward = (exportedName: string, bindings: readonly EdgeBinding[] | undefined, line: number, reassigned = false): void => {
+    // TypeScript declaration merging (`export interface X` beside `export const X: T`) exports the one declaration,
+    // as `lookup` reads the name: it is this file's own symbol, not a re-export the index cannot follow.
+    if (!python && !reassigned && bindings !== undefined && bindings.length > 1 && bindings.filter((candidate) => candidate?.kind === "local").length === 1 &&
+      bindings.every((candidate) => candidate?.kind === "local" || candidate?.kind === "instance" || (candidate?.kind === "blocked" && candidate.reason === "local-value"))) return;
     const binding = bindings?.length === 1 ? bindings[0] : undefined;
     if (binding?.kind === "import" && binding.importedName !== "*") {
       reExports.push({ kind: "named", exportedName, source: binding.source, importedName: binding.importedName, line });
@@ -774,7 +778,7 @@ export function collectBindings(root: Node, python: boolean): {
       forward(name, bindings, importLines.get(bindings[0] as EdgeBinding) ?? 1);
     }
   } else {
-    for (const [local, names] of exports) for (const [name, line] of names) forward(name, module.names.get(local), line);
+    for (const [local, names] of exports) for (const [name, line] of names) forward(name, module.names.get(local), line, module.reassigned?.has(local) === true);
   }
   reExports.sort((a, b) => a.line - b.line || (JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0));
   const lookup = (name: string, site: Node): EdgeBinding | undefined => {

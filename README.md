@@ -91,8 +91,8 @@ Resolved is not the same as right, so the call edges are also scored against eac
 | Corpus | Checker | Decided edges | False | False-edge rate | In-repo sites covered |
 | --- | --- | ---: | ---: | ---: | ---: |
 | click | pyright 1.1.414 | 2883 | 0 | 0% | 90.4% |
-| zod | TypeScript 5.9.3 | 21593 | 0 | 0% | 78.2% |
-| cobra | go/types, Go 1.27.1 | 1980 | 0 | 0% | 87.5% |
+| zod | TypeScript 5.9.3 | 24278 | 0 | 0% | 87.9% |
+| cobra | go/types, Go 1.27.1 | 2117 | 0 | 0% | 93.6% |
 | ripgrep | rust-analyzer 1.98.1 | 6066 | 27 | 0.45% | 85.9% |
 | humanizer | Roslyn 5.9.0 | 7421 | 2 | 0.03% | 62.7% |
 | gson | javac 27 | 8133 | 1 | 0.01% | 72.3% |
