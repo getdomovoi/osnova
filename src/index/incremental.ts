@@ -91,6 +91,7 @@ function rawEdgesFromIndex(index: OsnovaIndex): Map<string, RawEdgeItem[]> {
       ...(edge.binding === undefined ? {} : { binding: edge.binding }),
       ...(edge.route === undefined ? {} : { route: edge.route }),
       ...(edge.arguments === undefined ? {} : { arguments: edge.arguments }),
+      ...(edge.argumentTypes === undefined ? {} : { argumentTypes: edge.argumentTypes }),
       ...(edge.constructs === undefined ? {} : { constructs: edge.constructs }),
     };
     const list = out.get(edge.fromFile);

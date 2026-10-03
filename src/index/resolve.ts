@@ -5,6 +5,8 @@ import type { RawEdgeItem } from "./indexImpl.js";
 import { collectLockfiles, externalLabel } from "./external.js";
 import type { Lockfiles } from "./external.js";
 import { TsConfigs, probeNodeFile } from "./tsconfig.js";
+import { chooseByArgumentTypes } from "./java-types.js";
+import type { JavaTypeWorld } from "./java-types.js";
 
 const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
 const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
@@ -1038,8 +1040,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // and so on. A base declaration the holder cannot call (private, or package-private in another Java
   // package) is left out. Interfaces add nothing to a class's overloads here: C# does not inherit their
   // members into a class, and Java's default methods are left out. `complete` is false when a declared
-  // base cannot be identified, so declarations further up may be missing.
-  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean };
+  // base cannot be identified, so declarations further up may be missing. `interfacesClear` (Java) is true when every
+  // written supertype up the chain is followed and every method of the name an interface they reach declares is
+  // implemented or overridden in the chain, so no interface method (a default one, or an abstract one an abstract
+  // class leaves open) adds a choice.
+  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean; interfacesClear?: boolean };
   const levelCache = new Map<string, OverloadLevels>();
   const overloadLevelsOf = (holder: OsnovaSymbol, member: string): OverloadLevels => {
     const key = `${holder.qualifiedName}\u0000${member}`;
@@ -1055,6 +1060,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const home = javaPackageOf(files.get(holder.file));
     let current: OsnovaSymbol | undefined = holder;
     let complete = true;
+    const java = files.get(holder.file)?.language === "java";
+    const interfaces: OsnovaSymbol[] = [];
+    let followed = true;
     while (current !== undefined) {
       if (visited.has(typeKey(current)) || levels.length > 8) return { levels, complete: false };
       visited.add(typeKey(current));
@@ -1071,6 +1079,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       }));
       const bases = new Map<string, OsnovaSymbol>();
       for (const part of parts) {
+        if (java) {
+          if ((part.heritage?.length ?? 0) + (part.interfaces?.length ?? 0) !== (part.supertypes ?? 0)) followed = false;
+          for (const binding of part.interfaces ?? []) {
+            const base = baseOf(part, binding);
+            if (base === undefined) followed = false;
+            else interfaces.push(base);
+          }
+        }
         for (const binding of part.heritage ?? []) {
           const base = baseOf(part, binding);
           if (base === undefined) return { levels, complete: false };
@@ -1081,7 +1097,30 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (bases.size > 1) return { levels, complete: false };
       current = [...bases.values()][0];
     }
-    return { levels, complete };
+    return { levels, complete, ...(java ? { interfacesClear: followed && interfacesAddNone(interfaces, member, levels.flat()) } : {}) };
+  };
+  // Whether every method named `member` that a Java interface in `pending`, or one it extends, declares has a
+  // declaration in `chain` with the same proven parameter types, every written superinterface followed.
+  const interfacesAddNone = (pending: OsnovaSymbol[], member: string, chain: readonly OsnovaSymbol[]): boolean => {
+    const signature = (symbol: OsnovaSymbol): string | undefined =>
+      symbol.parameters?.types !== undefined && javaNamesProven(symbol) ? symbol.parameters.types.join(",") : undefined;
+    const implemented = new Set(chain.map(signature).filter((key): key is string => key !== undefined));
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const type = pending.pop()!;
+      if (seen.has(typeKey(type))) continue;
+      seen.add(typeKey(type));
+      if (seen.size > 32 || files.get(type.file)?.language !== "java") return false;
+      if (declaredAs(type.file, `${type.qualifiedName}.${member}`).some((symbol) => symbol.kind === "method" && !implemented.has(signature(symbol) ?? "\u0000"))) return false;
+      const written = [...(type.heritage ?? []), ...(type.interfaces ?? [])];
+      if (written.length !== (type.supertypes ?? 0)) return false;
+      for (const binding of written) {
+        const base = baseOf(type, binding);
+        if (base === undefined) return false;
+        pending.push(base);
+      }
+    }
+    return true;
   };
   // A simple name a Java parameter type read from its file's scope can still mean another type: a nested
   // type that the declaring type or an enclosing type inherits shadows it, and a type of the same package
@@ -1099,19 +1138,21 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     namesProof.set(method, proven);
     return proven;
   };
-  const proveJavaNames = (method: OsnovaSymbol, names: readonly string[]): boolean => {
-    const home = javaPackageOf(files.get(method.file));
-    const types = method.parameters?.types ?? [];
+  const proveJavaNames = (method: OsnovaSymbol, names: readonly string[]): boolean =>
+    proveJavaNamesIn(method.file, localOfQualifiedName(method.qualifiedName).split(".").slice(0, -1), names,
+      [...(method.parameters?.types ?? []), ...(method.parameters?.erased ?? []).filter((type): type is string => type !== null)]);
+  // The same proof for names read at a site inside the named types `enclosing` (outermost first) of a file.
+  const proveJavaNamesIn = (file: string, enclosing: readonly string[], names: readonly string[], types: readonly string[]): boolean => {
+    const home = javaPackageOf(files.get(file));
     for (const name of names) {
       const relied = types.some((type) => type.split(/[^\w$.]+/).includes(`java.lang.${name}`) ||
         type.split(/[^\w$.]+/).some((part) => part.startsWith(`java.lang.${name}.`)));
       if (relied && (symbolsByName.get(name) ?? []).some((symbol) => isHolder(symbol) && files.get(symbol.file)?.language === "java" &&
         !localOfQualifiedName(symbol.qualifiedName).includes(".") && javaPackageOf(files.get(symbol.file)) === home)) return false;
     }
-    const enclosing = localOfQualifiedName(method.qualifiedName).split(".").slice(0, -1);
     const pending: OsnovaSymbol[] = [];
     for (let depth = 1; depth <= enclosing.length; depth += 1) {
-      const holder = declaredAs(method.file, qualifiedNameOf(method.file, enclosing.slice(0, depth).join("."))).find(isHolder);
+      const holder = declaredAs(file, qualifiedNameOf(file, enclosing.slice(0, depth).join("."))).find(isHolder);
       if (holder === undefined) return false;
       pending.push(holder);
     }
@@ -1132,6 +1173,91 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     return true;
   };
+  // Java types by full name (`package.Outer.Inner`), for choosing an overload by argument types. A name two indexed types
+  // share is a type the index cannot single out, so its supertypes are unknown.
+  let javaTypes: Map<string, OsnovaSymbol[]> | undefined;
+  const javaTypeNamed = (type: string): OsnovaSymbol[] | undefined => {
+    if (javaTypes === undefined) {
+      javaTypes = new Map();
+      for (const symbols of symbolsByName.values()) for (const symbol of symbols) {
+        if (!isHolder(symbol) || files.get(symbol.file)?.language !== "java") continue;
+        const home = javaPackageOf(files.get(symbol.file));
+        const name = `${home.length > 0 ? `${home}.` : ""}${localOfQualifiedName(symbol.qualifiedName)}`;
+        javaTypes.set(name, [...(javaTypes.get(name) ?? []), symbol]);
+      }
+    }
+    return javaTypes.get(type);
+  };
+  const javaTypeNameOf = (symbol: OsnovaSymbol): string => {
+    const home = javaPackageOf(files.get(symbol.file));
+    return `${home.length > 0 ? `${home}.` : ""}${localOfQualifiedName(symbol.qualifiedName)}`;
+  };
+  const javaSupertypes = new Map<string, readonly (string | null)[]>();
+  const javaWorld: JavaTypeWorld = {
+    indexed: (type) => javaTypeNamed(type) !== undefined,
+    supertypes: (type) => {
+      const cached = javaSupertypes.get(type);
+      if (cached !== undefined) return cached;
+      const holders = javaTypeNamed(type);
+      if (holders === undefined) return undefined;
+      const supers: (string | null)[] = [];
+      if (holders.length !== 1 || declarationsOf(holders[0]!).length !== 1) supers.push(null);
+      else {
+        const holder = holders[0]!;
+        const written = [...(holder.heritage ?? []), ...(holder.interfaces ?? [])];
+        for (const binding of written) {
+          const base = baseOf(holder, binding);
+          if (base !== undefined) supers.push(javaTypeNameOf(base));
+          // A supertype imported from outside the index is named by its import; a JDK one has known supertypes.
+          else if (binding.kind === "import" && binding.source.endsWith(`.${binding.importedName}`) && javaTypeNamed(binding.source) === undefined) supers.push(binding.source);
+          else supers.push(null);
+        }
+        if (written.length !== (holder.supertypes ?? 0)) supers.push(null);
+        if (holder.kind === "enum") supers.push("java.lang.Enum");
+        if (holder.primary === true) supers.push("java.lang.Record");
+      }
+      javaSupertypes.set(type, supers);
+      return supers;
+    },
+  };
+  // A declaration's erased parameter types, unknown where its written types prove nothing or another file can shadow them.
+  const javaParametersOf = (symbol: OsnovaSymbol): { parameters: (string | null)[]; variable: boolean } => {
+    const range = symbol.parameters!;
+    const variable = range.max === undefined;
+    const count = range.min + (variable ? 1 : 0);
+    // A written type with a type argument other than `?` is marked `~`: its erasure fitting does not prove it fits.
+    // An `erased` entry comes marked already.
+    const erase = (type: string): string => {
+      let text = type.replace(/<\?(?:,\?)*>/gu, "");
+      const parameterized = text.includes("<");
+      for (let previous = ""; previous !== text;) { previous = text; text = text.replace(/<[^<>]*>/g, ""); }
+      text = text.endsWith("...") ? `${text.slice(0, -3)}[]` : text;
+      return parameterized ? `~${text}` : text;
+    };
+    const written = range.types ?? range.erased;
+    if (written === undefined || written.length !== count || !javaNamesProven(symbol)) return { parameters: new Array<null>(count).fill(null), variable };
+    return { parameters: written.map((type) => type === null ? null : erase(type)), variable };
+  };
+  // The written argument types of a Java call, each one read from the caller's scope kept only when no inherited nested
+  // type of the caller's enclosing types can shadow its names.
+  const javaArgumentTypesOf = (edge: OsnovaEdge): (string | null)[] | undefined => {
+    const written = edge.argumentTypes;
+    if (written === undefined || files.get(edge.fromFile)?.language !== "java") return undefined;
+    const names = written.names ?? [];
+    if (names.length === 0) return [...written.types];
+    const local = localOfQualifiedName(edge.fromSymbol);
+    const segments = local.length === 0 ? [] : local.split(".");
+    const enclosing = segments.length > 0 && declaredAs(edge.fromFile, edge.fromSymbol).some(isHolder) ? segments : segments.slice(0, -1);
+    const proven = proveJavaNamesIn(edge.fromFile, enclosing, names, written.types.filter((type): type is string => type !== null));
+    // Without the proof, a type keeps only when none of its name's segments came from the scope (a literal's, or `this`).
+    return proven ? [...written.types] : written.types.map((type) => type === null || type.split(/[.[\]]+/).some((part) => names.includes(part)) ? null : type);
+  };
+  // The one candidate a Java call's written argument types select, when the candidates are every declaration it can bind.
+  const chooseJavaByTypes = (edge: OsnovaEdge, candidates: readonly OsnovaSymbol[]): OsnovaSymbol | undefined => {
+    const args = javaArgumentTypesOf(edge);
+    if (args === undefined || args.every((type) => type === null) || candidates.some((symbol) => files.get(symbol.file)?.language !== "java" || symbol.parameters === undefined)) return undefined;
+    return chooseByArgumentTypes(javaWorld, candidates.map((item) => ({ item, ...javaParametersOf(item) })), args);
+  };
   // An override hides one base declaration with the same parameter range (and, in Java, the same written
   // parameter types). When a level holds more
   // declarations of that range than overrides above it, which ones stay is unknown, so all are listed.
@@ -1151,6 +1277,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const count = edge.arguments;
     const accepting = constructors.filter((symbol) => accepts(symbol.parameters!, count));
     const isOwn = (symbol: OsnovaSymbol): boolean => symbol.file === edge.toFile && symbol.qualifiedName === edge.toSymbol;
+    // Several constructors that take the count: the written argument types may still single one out.
+    const typed = complete && accepting.length > 1 ? chooseJavaByTypes(edge, accepting) : undefined;
+    if (typed !== undefined) {
+      if (!isOwn(typed)) return { ...rest, toSymbol: typed.qualifiedName, toFile: typed.file, overload: { line: typed.span.startLine, from: edge.toSymbol, types: true } };
+      return { ...rest, overload: { line: typed.span.startLine, types: true } };
+    }
     if (complete && accepting.length === 1) {
       const chosen = accepting[0]!;
       if (!isOwn(chosen)) return { ...rest, toSymbol: chosen.qualifiedName, toFile: chosen.file, overload: { line: chosen.span.startLine, from: edge.toSymbol } };
@@ -1175,7 +1307,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       : edge.toSymbol.slice(0, edge.toSymbol.lastIndexOf("."));
     const holder = declaredAs(holderName.slice(0, holderName.indexOf("#")), holderName).find(isHolder);
     if (holder === undefined) return local;
-    const { levels, complete } = overloadLevelsOf(holder, own[0]!.name);
+    const { levels, complete, interfacesClear } = overloadLevelsOf(holder, own[0]!.name);
     if (levels.some((level) => level.some((symbol) => symbol.parameters === undefined))) return local;
     const count = edge.arguments;
     // Java overrides a method by its parameter types, and @Override also marks an interface method's
@@ -1206,6 +1338,13 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     const isOwn = (symbol: OsnovaSymbol): boolean => symbol.file === edge.toFile && symbol.qualifiedName === edge.toSymbol;
     const elsewhere = listed.filter((symbol) => !isOwn(symbol));
+    // When every level is known, the written argument types may single out one of several declarations that take the count.
+    const typed = language === "java" && complete && interfacesClear === true && slots >= 2 ? chooseJavaByTypes(edge, listed) : undefined;
+    if (typed !== undefined) {
+      const { overload: _discarded, ...plain } = edge;
+      return isOwn(typed) ? { ...plain, overload: { line: typed.span.startLine, types: true } }
+        : { ...plain, toSymbol: typed.qualifiedName, toFile: typed.file, overload: { line: typed.span.startLine, from: edge.toSymbol, types: true } };
+    }
     // Declarations above an unidentified base can only add choices: two found already are enough to refuse,
     // and one found is not proven the only one, so a line chosen in the target's file is withdrawn.
     if (!complete && slots < 2) return local.overload !== undefined && "line" in local.overload ? { ...local, overload: { candidates: [local.overload.line] } } : local;
@@ -1282,7 +1421,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
               kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, binding,
               evidence: { source: "syntax", resolution: { status: "unresolved", reason: "shadowed-declaration" } },
               ...(raw.route === undefined ? {} : { route: raw.route }),
-              ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
+              ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.argumentTypes === undefined ? {} : { argumentTypes: raw.argumentTypes }),
               ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }),
             });
             continue;
@@ -1599,7 +1738,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           evidence: { source: "syntax", resolution },
           ...(resolved === undefined ? {} : { toSymbol: resolved.qualifiedName, toFile: resolved.file }),
           ...(raw.route === undefined ? {} : { route: raw.route }),
-          ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }),
+          ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.argumentTypes === undefined ? {} : { argumentTypes: raw.argumentTypes }),
           ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }),
         });
         continue;
@@ -1612,7 +1751,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || (found.type.conditional === true && csharpContested(found.type.name)) || !singleType(found.type) ||
           constructorsOf(found.type).constructors.some((constructor) => constructor.conditional === true)) ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
-        const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
+        const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.argumentTypes === undefined ? {} : { argumentTypes: raw.argumentTypes }), constructs: raw.constructs };
         const evidence = { source: "syntax" as const, resolution: typeFound.status === "resolved" ? { status: "resolved" as const, method: typeFound.method } : typeFound };
         edges.push(target === undefined
           ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence, ...args }
@@ -1658,7 +1797,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // the family defines is a builtin or a standard-library name: external, like an unbound global.
         : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
           : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : samePackage.length > 0 ? "lexical-definition" : imported.length > 0 ? "imported-file-name" : "unique-name" };
-      const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }) };
+      const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.argumentTypes === undefined ? {} : { argumentTypes: raw.argumentTypes }), ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }) };
       edges.push(
         resolved === undefined
           ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution }, ...args }

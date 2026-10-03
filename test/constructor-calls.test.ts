@@ -86,10 +86,11 @@ describe("Java object creation", () => {
     expect(creationAt(index, "q/Use.java", 9)).toEqual({ toName: "Box", toSymbol: "p/Box.java#Box.Box", constructs: "instance", arguments: 1, overload: { line: 3 }, status: "resolved" });
   });
 
-  it("names no constructor when several take the argument count", async () => {
+  it("lets the written argument types choose among constructors that take the argument count", async () => {
     await write(java);
     const index = await buildIndex(workspace, { cacheDir });
-    expect(creationAt(index, "q/Use.java", 8)).toMatchObject({ toName: "Box", toSymbol: "p/Box.java#Box.Box", constructs: "instance", arguments: 2, overload: { candidates: [4, 5] } });
+    // Box(String, int) and Box(String, String) both take two arguments; the int 2 fits only the first.
+    expect(creationAt(index, "q/Use.java", 8)).toMatchObject({ toName: "Box", toSymbol: "p/Box.java#Box.Box", constructs: "instance", arguments: 2, overload: { line: 4, types: true } });
   });
 
   it("names the type when it declares no constructor", async () => {

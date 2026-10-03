@@ -129,7 +129,7 @@ describe("claimedSites", () => {
     ]);
   }, 60_000);
 
-  it("claims the overload a call's argument count names, and no declaration when it names none", async () => {
+  it("claims the overload a call's argument count or written argument types name", async () => {
     const java = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-oracle-java-"));
     try {
       fs.writeFileSync(path.join(java, "Box.java"), [
@@ -147,8 +147,9 @@ describe("claimedSites", () => {
       const { sites, overloadUndetermined } = claimedSites(index);
       expect(sites).toEqual([
         { callerFile: "Box.java", line: 6, calleeName: "put", targetFile: "Box.java", targetName: "put", targetStartLine: 2, targetEndLine: 2, basis: "same-file-name" },
+        { callerFile: "Box.java", line: 7, calleeName: "put", targetFile: "Box.java", targetName: "put", targetStartLine: 3, targetEndLine: 3, basis: "same-file-name" },
       ]);
-      expect(overloadUndetermined).toBe(1);
+      expect(overloadUndetermined).toBe(0);
     } finally { fs.rmSync(java, { recursive: true, force: true }); }
   }, 60_000);
 });

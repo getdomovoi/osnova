@@ -76,12 +76,14 @@ describe("Java overloads chosen by argument count", () => {
     expect(choiceAt(index, "src/Use.java", 8, "log")).toEqual({ toSymbol: "src/Gson.java#Gson.log", arguments: 3, overload: { line: 8 } });
   });
 
-  it("keeps the edge but names no overload when the count fits several or none", async () => {
+  it("keeps the edge but names no overload when the count fits none, and lets written argument types choose among several", async () => {
     await write({ "src/Gson.java": gson, "src/Use.java": use });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(choiceAt(index, "src/Use.java", 6, "fromJson")).toEqual({ toSymbol: "src/Gson.java#Gson.fromJson", arguments: 2, overload: { candidates: [6, 7] } });
+    // `String.class` is a Class, which both Class and Type accept; Class is the more specific.
+    expect(choiceAt(index, "src/Use.java", 6, "fromJson")).toEqual({ toSymbol: "src/Gson.java#Gson.fromJson", arguments: 2, overload: { line: 6, types: true } });
     expect(choiceAt(index, "src/Use.java", 7, "toJson")).toEqual({ toSymbol: "src/Gson.java#Gson.toJson", arguments: 0, overload: { candidates: [] } });
-    expect(choiceAt(index, "src/Use.java", 9, "log")).toEqual({ toSymbol: "src/Gson.java#Gson.log", arguments: 2, overload: { candidates: [8, 9] } });
+    // `log(int, String)` applies by strict invocation, before the varargs `log(String...)` is tried.
+    expect(choiceAt(index, "src/Use.java", 9, "log")).toEqual({ toSymbol: "src/Gson.java#Gson.log", arguments: 2, overload: { line: 9, types: true } });
   });
 
   it("flags a single declaration that cannot take the call's argument count and leaves a fitting one alone", async () => {
@@ -104,7 +106,7 @@ describe("Java overloads chosen by argument count", () => {
     const ranges = index.files.get("src/Gson.java")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
     expect(ranges).toEqual([
       [3, { min: 1, max: 1, types: ["java.lang.Object"], names: ["Object"] }], [4, { min: 2, max: 2, types: ["java.lang.Object", "java.lang.Appendable"], names: ["Appendable", "Object"] }],
-      [5, { min: 3, max: 3, types: ["java.lang.Object", "java.lang.Appendable", "int"], names: ["Appendable", "Object"] }], [6, { min: 2, max: 2 }],
+      [5, { min: 3, max: 3, types: ["java.lang.Object", "java.lang.Appendable", "int"], names: ["Appendable", "Object"] }], [6, { min: 2, max: 2, erased: ["java.lang.String", "java.lang.Class"], names: ["Class", "String"] }],
       [7, { min: 2, max: 2, types: ["java.lang.String", "java.lang.reflect.Type"], names: ["String"] }], [8, { min: 0, types: ["java.lang.String..."], names: ["String"] }],
       [9, { min: 2, max: 2, types: ["int", "java.lang.String"], names: ["String"] }], [10, { min: 1, max: 1, types: ["int"] }],
     ]);
@@ -212,7 +214,7 @@ describe("warp answers name the overload a call binds", () => {
     expect(toJson).toContain("5: overload: line 4, chosen by argument count 2");
     expect(toJson).toContain("7: overload: no declaration takes argument count 0");
     const fromJson = formatCallersDetailed(callersDetailed(index, "src/Gson.java#Gson.fromJson"));
-    expect(fromJson).toContain("overload: not determined; argument count 2 fits lines 6, 7");
+    expect(fromJson).toContain("overload: line 6, chosen by argument types");
     const one = formatCallersDetailed(callersDetailed(index, "src/Gson.java#Gson.one"));
     expect(one).toContain("10: overload: no declaration takes argument count 2");
     expect(one).not.toMatch(/11: overload/);
@@ -231,7 +233,8 @@ describe("warp answers name the overload a call binds", () => {
 describe("warp answers for overloads found in a base class", () => {
   const base = ["class Base {", "  void ping() { }", "  void pong(String s) { }", "}"].join("\n");
   const sub = ["class Sub extends Base {", "  void ping(int a) { }", "  void pong(int a) { }", "}"].join("\n");
-  const caller = ["class Run {", "  void go(Sub s) {", "    s.ping();", "    s.pong(1);", "  }", "}"].join("\n");
+  // `s.hashCode()` is a call result, whose type the index does not read, so the argument types cannot choose.
+  const caller = ["class Run {", "  void go(Sub s) {", "    s.ping();", "    s.pong(s.hashCode());", "  }", "}"].join("\n");
 
   it("says where a moved edge came from and lists candidates in other files", async () => {
     await write({ "src/Base.java": base, "src/Sub.java": sub, "src/Run.java": caller });
@@ -331,7 +334,8 @@ describe("a Java @Override that may implement an interface method", () => {
     const index = await buildIndex(workspace, { cacheDir });
     const call = choiceAt(index, "Use.java", 2, "put");
     expect(call.overload).not.toEqual({ line: 2 });
-    expect(call.overload).toEqual({ candidates: [2], elsewhere: [{ file: "Base.java", line: 2 }] });
+    // The int argument fits only the superclass's put(int): the override of the interface method did not hide it.
+    expect(call).toEqual({ toSymbol: "Base.java#Base.put", arguments: 1, overload: { line: 2, from: "Child.java#Child.put", types: true } });
   });
 });
 
@@ -389,7 +393,8 @@ describe("Java written types prove an override only when they name the same type
   it("counts array dimensions written after the parameter name", async () => {
     await write({ "Base.java": "public class Base {\n  public void put(String x[]) {}\n}\n", "I.java": iface, "Child.java": child("String x"), "Use.java": use("new String[]{\"x\"}") });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(choiceAt(index, "Use.java", 2, "put").overload).toEqual({ candidates: [2], elsewhere: [{ file: "Base.java", line: 2 }] });
+    // put(String[]) stays beside put(String), and the String[] argument fits only it.
+    expect(choiceAt(index, "Use.java", 2, "put").overload).toEqual({ line: 2, from: "Child.java#Child.put", types: true });
   });
 
   it("keeps simple names imported from different packages apart", async () => {
@@ -401,7 +406,8 @@ describe("Java written types prove an override only when they name the same type
       "Use.java": "public class Use {\n  public void run(Child child, a.Item item) { child.put(item); }\n}\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(choiceAt(index, "Use.java", 2, "put").overload).toEqual({ candidates: [3], elsewhere: [{ file: "Base.java", line: 3 }] });
+    // put(a.Item) stays beside put(b.Item), and the a.Item argument fits only it.
+    expect(choiceAt(index, "Use.java", 2, "put").overload).toEqual({ line: 3, from: "Child.java#Child.put", types: true });
   });
 
   it("proves nothing from a type variable", async () => {
@@ -568,7 +574,7 @@ describe("a Java supertype the walk follows is the type the compiler binds", () 
       "p/Outer.java": "package p;\nimport q.Grand;\npublic class Outer extends Grand {\n  public class Inner extends Base implements I {\n    @Override public void put(String x) {}\n    public void put(String x, String y) {}\n    public void run() { put(1); }\n  }\n}\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(choiceAt(index, "p/Outer.java", 7, "put")).toEqual({ toSymbol: "p/Outer.java#Outer.Inner.put", arguments: 1, overload: { candidates: [5], elsewhere: [{ file: "q/Grand.java", line: 4 }] } });
+    expect(choiceAt(index, "p/Outer.java", 7, "put")).toEqual({ toSymbol: "q/Grand.java#Grand.Base.put", arguments: 1, overload: { line: 4, from: "p/Outer.java#Outer.Inner.put", types: true } });
   });
 
   it("follows a superclass written as a qualified name", async () => {
@@ -579,6 +585,6 @@ describe("a Java supertype the walk follows is the type the compiler binds", () 
       "p/Use.java": "package p;\npublic class Use {\n  public void run(Child child) { child.put(1); }\n}\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(choiceAt(index, "p/Use.java", 3, "put")).toEqual({ toSymbol: "p/Child.java#Child.put", arguments: 1, overload: { candidates: [3], elsewhere: [{ file: "q/Base.java", line: 3 }] } });
+    expect(choiceAt(index, "p/Use.java", 3, "put")).toEqual({ toSymbol: "q/Base.java#Base.put", arguments: 1, overload: { line: 3, from: "p/Child.java#Child.put", types: true } });
   });
 });
