@@ -32,6 +32,7 @@ export interface RawDefinition {
   readonly values?: ReturnBinding | undefined;
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly parameters?: ParameterRange | undefined;
+  readonly members?: readonly string[] | undefined;
 }
 
 export interface RawEdge {
@@ -50,6 +51,7 @@ export interface AdapterOutput {
   readonly definitions: readonly RawDefinition[];
   readonly edges: readonly RawEdge[];
   readonly reExports?: readonly ReExport[] | undefined;
+  readonly unplacedExtensions?: readonly string[] | undefined;
 }
 
 export interface LanguageAdapter {

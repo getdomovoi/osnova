@@ -119,7 +119,7 @@ function crossFileShape(card: FileCard, raws: readonly RawEdgeItem[]): string {
     .sort();
   // Resolution also reads a Java file's package clause (package-private access) and whether a file parsed
   // cleanly (partial merging), neither of which the symbols record.
-  return JSON.stringify([card.symbols, card.reExports, routes, javaPackageOf(card), parsedWithoutErrors(card)]);
+  return JSON.stringify([card.symbols, card.reExports, routes, javaPackageOf(card), parsedWithoutErrors(card), card.unplacedExtensions ?? []]);
 }
 
 function reusableEdges(

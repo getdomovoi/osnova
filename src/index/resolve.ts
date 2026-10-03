@@ -7,6 +7,7 @@ import type { Lockfiles } from "./external.js";
 import { TsConfigs, probeNodeFile } from "./tsconfig.js";
 import { chooseByArgumentTypes } from "./java-types.js";
 import type { JavaTypeWorld } from "./java-types.js";
+import { DOTNET_EXTENSIONS, DOTNET_MEMBERS } from "./dotnet-table.js";
 
 const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
 const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
@@ -1295,6 +1296,287 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line));
     return { ...rest, overload: { candidates, ...(elsewhere.length > 0 ? { elsewhere } : {}) } };
   };
+  // C# extension methods. A member call `x.M(...)` that names no member of x's type binds an extension method: the
+  // compiler searches the innermost namespace declaration first, then each enclosing one, then the compilation unit; at
+  // each level the candidates are the extension methods of static classes declared directly in that namespace and in
+  // the namespaces the level's `using` directives import, and the first level with an applicable candidate wins. The
+  // receiver converts to the `this` parameter only by identity, reference or boxing conversion. The written type of the
+  // receiver decides here when exactly one candidate at that level can take it.
+  type CsharpType =
+    | { readonly kind: "repo"; readonly symbol: OsnovaSymbol; readonly args: readonly CsharpType[] }
+    | { readonly kind: "dotnet"; readonly key: string }
+    | { readonly kind: "external"; readonly name: string; readonly args: readonly CsharpType[] }
+    | { readonly kind: "array"; readonly element: CsharpType; readonly rank: number }
+    | { readonly kind: "nullable"; readonly inner: CsharpType }
+    | { readonly kind: "parameter"; readonly name: string };
+  const CSHARP_KEYWORDS: Readonly<Record<string, string>> = {
+    bool: "System.Boolean", byte: "System.Byte", sbyte: "System.SByte", char: "System.Char", short: "System.Int16", ushort: "System.UInt16",
+    int: "System.Int32", uint: "System.UInt32", long: "System.Int64", ulong: "System.UInt64", float: "System.Single", double: "System.Double",
+    decimal: "System.Decimal", string: "System.String", object: "System.Object",
+  };
+  const DOTNET_REFERENCE = new Set(["System.String", "System.Object", "System.Array", "System.Enum", "System.ValueType", "System.Type"]);
+  // The SDK's implicit global usings, which a project with ImplicitUsings imports from a file the index does not see.
+  const IMPLICIT_USINGS = ["System", "System.Collections.Generic", "System.IO", "System.Linq", "System.Net.Http", "System.Threading", "System.Threading.Tasks"];
+  // A written type split into its dotted name with type arguments and its `?` and `[]` suffixes, outermost last.
+  const splitCsharpType = (written: string): { name: string; args: string[]; suffixes: string[] } | undefined => {
+    let end = written.length;
+    const suffixes: string[] = [];
+    while (end > 0) {
+      if (written[end - 1] === "?") { suffixes.unshift("?"); end -= 1; continue; }
+      if (written[end - 1] === "]") { const open = written.lastIndexOf("[", end - 1); if (open < 0) return undefined; suffixes.unshift(written.slice(open, end)); end = open; continue; }
+      break;
+    }
+    const base = written.slice(0, end);
+    // The type arguments of the last segment; an earlier segment's (`Outer<int>.Inner`) are not read.
+    if (!base.endsWith(">")) return base.includes("<") ? undefined : { name: base, args: [], suffixes };
+    let depth = 0;
+    let open = -1;
+    for (let i = base.length - 1; i >= 0; i -= 1) {
+      if (base[i] === ">") depth += 1;
+      else if (base[i] === "<" && --depth === 0) { open = i; break; }
+    }
+    if (open <= 0 || base.slice(0, open).includes("<")) return undefined;
+    const args: string[] = [];
+    let start = open + 1;
+    depth = 0;
+    for (let i = open + 1; i < base.length - 1; i += 1) {
+      if (base[i] === "<") depth += 1;
+      else if (base[i] === ">") depth -= 1;
+      else if (base[i] === "," && depth === 0) { args.push(base.slice(start, i)); start = i + 1; }
+    }
+    args.push(base.slice(start, base.length - 1));
+    return { name: base.slice(0, open), args, suffixes };
+  };
+  const valueType = (type: CsharpType): boolean | null =>
+    type.kind === "dotnet" ? !DOTNET_REFERENCE.has(type.key) : type.kind === "repo" ? type.symbol.kind === "struct" || type.symbol.kind === "enum"
+      : type.kind === "nullable" ? true : type.kind === "array" ? false : null;
+  // A written type read at a site; null when the index cannot tell which type it names. `generic` lists type parameter
+  // names that stand for themselves (an extension method's own).
+  const csharpTypeAt = (site: CsharpSite, written: string, generic: readonly string[] = [], depth = 0): CsharpType | null => {
+    if (depth > 6) return null;
+    if (written === "this") {
+      for (let level = site.enclosing.length; level > 0; level -= 1) {
+        const holder = declaredAs(site.card.path, qualifiedNameOf(site.card.path, site.enclosing.slice(0, level).join("."))).find(isHolder);
+        if (holder !== undefined) return arityOf(holder) > 0 ? null : { kind: "repo", symbol: holder, args: [] };
+      }
+      return null;
+    }
+    const parts = splitCsharpType(written);
+    if (parts === undefined) return null;
+    let type: CsharpType | null;
+    if (parts.args.length === 0 && generic.includes(parts.name)) type = { kind: "parameter", name: parts.name };
+    else if (parts.args.length === 0 && CSHARP_KEYWORDS[parts.name] !== undefined) type = { kind: "dotnet", key: CSHARP_KEYWORDS[parts.name]! };
+    else if (parts.args.length === 0 && (parts.name === "dynamic" || parts.name === "nint" || parts.name === "nuint" || parts.name === "var")) type = null;
+    else {
+      const args = parts.args.map((arg) => csharpTypeAt(site, arg, generic, depth + 1));
+      if (args.some((arg) => arg === null)) return null;
+      const aritied = parts.name.split(".").map((segment, i, all) => i === all.length - 1 && parts.args.length > 0 ? `${segment}\`${parts.args.length}` : segment).join(".");
+      const found = csharpResolve(site, aritied, new Set());
+      if (found.status === "resolved") type = { kind: "repo", symbol: found.type, args: args as CsharpType[] };
+      else if (found.status === "unresolved" && found.reason === "unbound-global") {
+        // A name no indexed type supplies is a library type: a listed .NET type when it names one (`DateTime` under the
+        // SDK's implicit `using System;`, or `System.DateTime`).
+        const simple = parts.name.replace(/^global::/u, "");
+        const key = parts.args.length === 0 ? (simple.startsWith("System.") ? simple : `System.${simple}`) : undefined;
+        type = key !== undefined && (DOTNET_MEMBERS.has(key) || key === "System.Type") && !simple.slice(0, simple.lastIndexOf(".") + 1).replace(/^System\.$/u, "").length
+          ? { kind: "dotnet", key } : { kind: "external", name: simple, args: args as CsharpType[] };
+      } else type = null;
+    }
+    for (const suffix of parts.suffixes) {
+      if (type === null) return null;
+      if (suffix === "?") {
+        // `T?` is Nullable<T> for a value type and the same type, annotated, for a reference type.
+        const value = valueType(type);
+        if (value === null) return null;
+        if (value && type.kind !== "nullable") type = { kind: "nullable", inner: type };
+      } else type = { kind: "array", element: type, rank: suffix.length - 1 };
+    }
+    return type;
+  };
+  const sameCsharpType = (a: CsharpType, b: CsharpType): boolean | null => {
+    if (a.kind === "parameter" || b.kind === "parameter") return null;
+    if (a.kind !== b.kind) return a.kind === "external" || b.kind === "external" ? null : false;
+    switch (a.kind) {
+      case "dotnet": return a.key === (b as typeof a).key;
+      case "repo": {
+        const other = b as typeof a;
+        if (typeKey(a.symbol) !== typeKey(other.symbol)) return false;
+        return pairwise(a.args, other.args);
+      }
+      case "external": {
+        const other = b as typeof a;
+        return a.name === other.name && a.args.length === other.args.length ? pairwise(a.args, other.args) : null;
+      }
+      case "array": return a.rank === (b as typeof a).rank ? sameCsharpType(a.element, (b as typeof a).element) : false;
+      case "nullable": return sameCsharpType(a.inner, (b as typeof a).inner);
+    }
+  };
+  const pairwise = (a: readonly CsharpType[], b: readonly CsharpType[]): boolean | null => {
+    if (a.length !== b.length) return false;
+    let all: boolean | null = true;
+    for (let i = 0; i < a.length; i += 1) {
+      const same = sameCsharpType(a[i]!, b[i]!);
+      if (same === false) return false;
+      if (same === null) all = null;
+    }
+    return all;
+  };
+  // The indexed class a C# class inherits from: undefined for none written (System.Object), null when the written base
+  // is outside the index or the index cannot tell which type it is.
+  const csharpClassBaseOf = (type: OsnovaSymbol): OsnovaSymbol | null | undefined => {
+    if (type.baseType === undefined) return undefined;
+    const base = csharpBaseOf(type, new Set());
+    return base === undefined ? null : base;
+  };
+  // Whether a receiver of type `r` converts to an extension method's `this` parameter of type `p` by identity, reference
+  // or boxing conversion: null when the index cannot tell.
+  const receiverConverts = (r: CsharpType, p: CsharpType): boolean | null => {
+    if (p.kind === "parameter" || r.kind === "parameter") return null;
+    if (p.kind === "dotnet" && p.key === "System.Object") return true;
+    const same = sameCsharpType(r, p);
+    if (same !== false) return same;
+    if (p.kind === "dotnet") {
+      if (p.key === "System.ValueType") return valueType(r) ?? null;
+      if (p.key === "System.Enum") return r.kind === "repo" ? r.symbol.kind === "enum" : r.kind === "external" ? null : false;
+      if (p.key === "System.Array") return r.kind === "array" ? true : r.kind === "external" ? null : false;
+      // The other listed .NET types are structs or sealed classes, which only their own values convert to.
+      return r.kind === "external" ? null : false;
+    }
+    if (p.kind === "nullable") return r.kind === "external" ? null : false;
+    if (p.kind === "array") {
+      if (r.kind !== "array") return r.kind === "external" ? null : false;
+      if (r.rank !== p.rank) return false;
+      // Array covariance converts reference elements only.
+      return valueType(r.element) === false && valueType(p.element) === false ? receiverConverts(r.element, p.element) : sameCsharpType(r.element, p.element);
+    }
+    if (p.kind === "repo") {
+      if (r.kind !== "repo") return r.kind === "external" ? null : false;
+      if (p.symbol.kind !== "interface" && p.symbol.kind !== "class") return false;
+      // Up the class chain; an interface the receiver implements is not read here.
+      let current: OsnovaSymbol | null | undefined = r.symbol;
+      const seen = new Set<string>();
+      while (current !== undefined && current !== null && !seen.has(typeKey(current))) {
+        seen.add(typeKey(current));
+        if (typeKey(current) === typeKey(p.symbol)) return p.args.length === 0 && r.args.length === 0 ? true : null;
+        if (current.kind !== "class") break;
+        current = csharpClassBaseOf(current);
+      }
+      if (current === null || p.symbol.kind === "interface") return null;
+      return r.symbol.kind === "class" || r.symbol.kind === "struct" || r.symbol.kind === "enum" ? false : null;
+    }
+    return null;
+  };
+  // Whether member lookup on a receiver of this type can find a member named `name`, which keeps the call from binding
+  // an extension method: false only when every member of the type and its bases is known.
+  const memberMayExist = (type: CsharpType, name: string): boolean => {
+    const listed = (key: string): boolean => DOTNET_MEMBERS.get(key)?.has(name) ?? true;
+    switch (type.kind) {
+      case "dotnet": return listed(type.key);
+      case "array": return listed("System.Array");
+      case "nullable": return listed("System.Nullable`1");
+      case "external":
+      case "parameter": return true;
+      case "repo": {
+        const seen = new Set<string>();
+        let current: OsnovaSymbol | null | undefined = type.symbol;
+        while (current !== undefined) {
+          if (current === null || seen.has(typeKey(current)) || seen.size > 16) return true;
+          seen.add(typeKey(current));
+          const { parts, complete } = partsOf(current);
+          // A part that did not parse cleanly may have lost members.
+          if (!complete || parts.some((part) => !parsedCleanly(part.file))) return true;
+          if (parts.some((part) => part.members?.includes(name) === true)) return true;
+          // A record also has the members the compiler writes for it.
+          if (current.kind === "class" && parts.some((part) => /\brecord\b/u.test(part.signature)) && ["Deconstruct", "PrintMembers", "EqualityContract"].includes(name)) return true;
+          if (current.kind === "enum") return listed("System.Enum");
+          if (current.kind === "struct") return listed("System.ValueType");
+          if (current.kind === "interface") return current.baseType !== undefined || listed("System.Object");
+          current = csharpClassBaseOf(current);
+        }
+        return listed("System.Object");
+      }
+    }
+  };
+  const extensionCandidatesByName = new Map<string, OsnovaSymbol[]>();
+  const extensionsNamed = (name: string): OsnovaSymbol[] => {
+    let found = extensionCandidatesByName.get(name);
+    if (found === undefined) {
+      found = (symbolsByName.get(name) ?? []).filter((symbol) => symbol.kind === "method" && symbol.parameters?.extension === true && files.get(symbol.file)?.language === "c_sharp");
+      extensionCandidatesByName.set(name, found);
+    }
+    return found;
+  };
+  let unplacedNames: Set<string> | undefined;
+  const unplacedExtension = (name: string): boolean => {
+    unplacedNames ??= new Set([...files.values()].flatMap((card) => card.unplacedExtensions ?? []));
+    return unplacedNames.has(name);
+  };
+  const chooseExtension = (edge: OsnovaEdge): OsnovaEdge | undefined => {
+    const written = edge.argumentTypes?.receiver;
+    const count = edge.arguments;
+    if (written === undefined || count === undefined || edge.kind !== "calls" || edge.toSymbol !== undefined) return undefined;
+    const card = files.get(edge.fromFile);
+    if (card?.language !== "c_sharp" || unplacedExtension(edge.toName)) return undefined;
+    const enclosing = edge.fromSymbol.includes("#") ? localOfQualifiedName(edge.fromSymbol).split(".") : [];
+    if (enclosing.length === 0) return undefined;
+    const namespace = csharpNamespaceOf(card.path, enclosing[0]!);
+    if (namespace === null) return undefined;
+    const site: CsharpSite = { card, enclosing, namespace, line: edge.line };
+    const receiver = csharpTypeAt(site, written);
+    if (receiver === null || memberMayExist(receiver, edge.toName)) return undefined;
+    const candidates = extensionsNamed(edge.toName).filter((symbol) => {
+      const range = symbol.parameters!;
+      return count + 1 >= range.min && (range.max === undefined || count + 1 <= range.max);
+    });
+    if (candidates.length === 0) return undefined;
+    // An extension method's static class: a top-level type, so its namespace is known unless `?`.
+    const classOf = (method: OsnovaSymbol): OsnovaSymbol | undefined => {
+      const local = localOfQualifiedName(method.qualifiedName).split(".");
+      return local.length === 2 ? declaredAs(method.file, qualifiedNameOf(method.file, local[0]!)).find(isHolder) : undefined;
+    };
+    const scope = csharpScopeOf();
+    const usings = scope.byFile.get(card.path) ?? [];
+    const parts = namespace.length === 0 ? [] : namespace.split(".");
+    let chosen: { method: OsnovaSymbol; imported: boolean } | undefined;
+    let pending: OsnovaSymbol | undefined;
+    for (let depth = parts.length; depth >= 0; depth -= 1) {
+      const level = parts.slice(0, depth).join(".");
+      const scoped = usings.filter((using) => using.scope === level);
+      if (depth > 0 && scoped.some((using) => site.line === using.from || site.line === using.to)) return undefined;
+      const directives = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...scope.global] : scoped.filter((using) => using.from < site.line && site.line < using.to);
+      if (directives.some((using) => using.conditional || using.static)) return undefined;
+      const imported = new Set(directives.map((using) => using.target));
+      if (depth === 0) for (const name of IMPLICIT_USINGS) imported.add(name);
+      // A .NET namespace this level imports may declare an extension method of the name.
+      if ([...imported].some((name) => DOTNET_EXTENSIONS.get(name)?.has(edge.toName) === true)) return undefined;
+      const here: { method: OsnovaSymbol; imported: boolean; fits: boolean | null }[] = [];
+      for (const method of candidates) {
+        const owner = classOf(method);
+        if (owner === undefined || owner.namespace === "?" || owner.conditional === true || method.conditional === true) return undefined;
+        const home = owner.namespace ?? "";
+        const local = home === level;
+        if (!local && !imported.has(home)) continue;
+        const range = method.parameters!;
+        const declaredSite: CsharpSite = { card: files.get(method.file)!, enclosing: localOfQualifiedName(owner.qualifiedName).split("."), namespace: home, line: method.span.startLine };
+        const target = range.receiver === undefined ? null : csharpTypeAt(declaredSite, range.receiver, range.generic ?? []);
+        const fits = target === null ? null : receiverConverts(receiver, target);
+        if (fits !== false) here.push({ method, imported: !local, fits });
+      }
+      if (here.length === 0) continue;
+      if (pending !== undefined || here.length > 1) return undefined;
+      // One candidate the index cannot prove applicable binds only when no other level offers one.
+      if (here[0]!.fits === true) { chosen = here[0]!; break; }
+      pending = here[0]!.method;
+      chosen = here[0]!;
+    }
+    if (chosen === undefined) return undefined;
+    const method = chosen.method;
+    const resolution: EdgeResolution = { status: "resolved", method: method.file === edge.fromFile ? "same-file-name" : chosen.imported ? "imported-file-name" : "lexical-definition" };
+    // The binding stays: an incremental update rebuilds an unchanged file's raw edges from its resolved ones.
+    const { overload: _previous, ...rest } = edge;
+    const shared = declaredAs(method.file, method.qualifiedName).length > 1;
+    return { ...rest, toSymbol: method.qualifiedName, toFile: method.file, evidence: { source: "syntax", resolution }, ...(shared ? { overload: { line: method.span.startLine, types: true } } : {}) };
+  };
   const chooseOverload = (edge: OsnovaEdge): OsnovaEdge => {
     if (edge.constructs !== undefined) return chooseConstructor(edge);
     const local = withOverload(edge, declaredAs);
@@ -1815,7 +2097,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       );
     }
   }
-  return edges.map((edge) => reused.has(edge) ? edge : chooseOverload(edge));
+  return edges.map((edge) => reused.has(edge) ? edge : chooseExtension(edge) ?? chooseOverload(edge));
 }
 
 // Per-card facts read from source text. A card is immutable and an incremental update keeps the cards of

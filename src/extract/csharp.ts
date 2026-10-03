@@ -3,6 +3,7 @@ import { Extractor, argumentCount, childOfType, childrenOf, withoutTypeArguments
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
+import { receiverTypeOf, unplacedExtensionNames, writtenType } from "./csharp-types.js";
 
 // A C# identifier after `plain`: a letter or underscore, then letters, digits, marks and connectors.
 const IDENTIFIER_RE = /^[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$/u;
@@ -23,13 +24,21 @@ function parameterRange(list: Node, method: Node, constructor = false): Paramete
   let optional = 0;
   const variadic = list.children.some((child) => child?.type === "params");
   let extension = false;
+  let receiver: string | undefined;
   for (const child of childrenOf(list)) {
     if (child.type !== "parameter") continue;
-    if (required + optional === 0 && childrenOf(child).some((part) => part.type === "parameter_modifier" && part.text === "this")) extension = true;
+    if (required + optional === 0 && childrenOf(child).some((part) => part.type === "parameter_modifier" && part.text === "this")) {
+      extension = true;
+      // Read outside the method, so its own type parameters stay names (`this T x`, `this IEnumerable<T> x`).
+      receiver = writtenType(child.childForFieldName("type"), method.parent ?? method);
+    }
     if (childOfType(child, "equals_value_clause") !== null) optional += 1;
     else required += 1;
   }
-  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
+  const generic = childrenOf(childOfType(method, "type_parameter_list") ?? method).filter((child) => child.type === "type_parameter")
+    .map((parameter) => childrenOf(parameter).find((part) => part.type === "identifier")?.text).filter((name): name is string => name !== undefined).map(plain);
+  return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}),
+    ...(receiver === undefined ? {} : { receiver, ...(generic.length > 0 ? { generic } : {}) }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
 }
 
 // One C# identifier however it is spelled, as the compiler compares them: `@class` is `class`, a `\u0041` escape is `A`,
@@ -141,6 +150,37 @@ function typeParameterInScope(node: Node, name: string): boolean {
   return false;
 }
 
+// The names of the members a type's body declares, and a record's positional parameters, which are its properties.
+function memberNames(type: Node): string[] {
+  const names = new Set<string>();
+  const add = (node: Node | null | undefined) => { if (node != null && node.type === "identifier") names.add(plain(node.text)); };
+  for (const parameter of childrenOf(childOfType(type, "parameter_list") ?? type)) if (parameter.type === "parameter") add(parameter.childForFieldName("name"));
+  const body = type.childForFieldName("body") ?? childOfType(type, "declaration_list") ?? childOfType(type, "enum_member_declaration_list");
+  for (const member of body === null ? [] : childrenOf(body)) {
+    switch (member.type) {
+      case "field_declaration":
+      case "event_field_declaration":
+        for (const declarator of childrenOf(childOfType(member, "variable_declaration") ?? member)) if (declarator.type === "variable_declarator") add(declarator.childForFieldName("name") ?? childOfType(declarator, "identifier"));
+        break;
+      case "enum_member_declaration":
+      case "method_declaration":
+      case "property_declaration":
+      case "event_declaration":
+      case "class_declaration":
+      case "struct_declaration":
+      case "interface_declaration":
+      case "enum_declaration":
+      case "record_declaration":
+      case "record_struct_declaration":
+      case "delegate_declaration":
+        add(member.childForFieldName("name") ?? childOfType(member, "identifier"));
+        break;
+      default: break;
+    }
+  }
+  return [...names].sort();
+}
+
 // A parameter list written after the type's name and type parameters: a record's, or a class's or struct's
 // primary constructor (C# 12), which the recovery parse leaves out of the tree but not out of the node's text.
 function hasPrimaryConstructor(type: Node, name: Node): boolean {
@@ -249,6 +289,8 @@ export const csharpAdapter: LanguageAdapter = {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
             else if (bases[0] !== undefined) out.markBaseType(readable(bases[0]) ? aritiedName(bases[0]) : "?");
           }
+          const members = memberNames(node);
+          if (members.length > 0) out.markMembers(members);
           if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${forms.join(".")}:${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(typeName);
           for (const child of childrenOf(node)) visit(child);
@@ -312,7 +354,11 @@ export const csharpAdapter: LanguageAdapter = {
               out.addEdge("calls", fn.text, fn, undefined, undefined, args);
             } else if (fn.type === "member_access_expression") {
               const nameNode = fn.childForFieldName("name");
-              if (nameNode !== null) out.addEdge("calls", nameNode.text, nameNode, bindings.at(fn, node), undefined, args);
+              // The receiver's written type chooses the extension method the call binds when no member takes it.
+              const object = fn.childForFieldName("expression");
+              const receiver = object === null || args === undefined ? undefined : receiverTypeOf(object, fn);
+              if (nameNode !== null) out.addEdge("calls", nameNode.text, nameNode, bindings.at(fn, node), undefined, args, undefined,
+                receiver === undefined ? undefined : { types: new Array<null>(args!).fill(null), receiver });
             }
           }
           for (const child of childrenOf(node)) visit(child);
@@ -356,6 +402,7 @@ export const csharpAdapter: LanguageAdapter = {
       }
     };
     for (const child of childrenOf(tree.rootNode)) visit(child);
-    return { definitions: out.definitions, edges: out.edges };
+    const unplacedExtensions = unplacedExtensionNames(tree.rootNode, source);
+    return { definitions: out.definitions, edges: out.edges, ...(unplacedExtensions.length > 0 ? { unplacedExtensions } : {}) };
   },
 };

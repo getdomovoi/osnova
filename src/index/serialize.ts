@@ -38,10 +38,11 @@ import { loadVerification } from "./verification.js";
 import { lazyTextCard, previousTextFrom, rebindPublishedText, serializeText } from "./textStore.js";
 import type { PreviousText, TextLayout } from "./textStore.js";
 import { grammarFile } from "../grammar/languages.js";
+import { validWrittenCsharpType } from "./csharp-written.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.43.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.44.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -51,6 +52,11 @@ const symbolKinds = membersOf<SymbolKind>({
 const memberKinds = membersOf<MemberKind>({ instance: true, static: true, class: true, property: true, unknown: true });
 
 class ExtractionVersionError extends Error {}
+
+// A sorted list of distinct identifiers.
+function sortedNames(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((name, at) => typeof name === "string" && /^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*$/u.test(name) && (at === 0 || (value[at - 1] as string) < name));
+}
 
 function validParameters(value: unknown): boolean {
   const range = value as Partial<ParameterRange> | null;
@@ -62,6 +68,8 @@ function validParameters(value: unknown): boolean {
     // `erased` stands in for `types` when those prove nothing, one entry per parameter, a varargs one ending in `...`.
     (range.erased === undefined || (range.types === undefined && Array.isArray(range.erased) && range.erased.length > 0 && range.erased.some((type) => type !== null) &&
       range.erased.every((type) => type === null || (typeof type === "string" && /^~?[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*(?:\.[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*)*(?:\[\])*(?:\.\.\.)?$/u.test(type))))) &&
+    (range.receiver === undefined || (range.extension === true && validWrittenCsharpType(range.receiver))) &&
+    (range.generic === undefined || (range.receiver !== undefined && Array.isArray(range.generic) && range.generic.length > 0 && range.generic.every((name) => typeof name === "string" && /^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*$/u.test(name)))) &&
     (range.names === undefined || ((range.types !== undefined || range.erased !== undefined) && Array.isArray(range.names) && range.names.length > 0 &&
       range.names.every((name, at) => typeof name === "string" && /^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*$/u.test(name) && (at === 0 || range.names![at - 1]! < name))));
 }
@@ -110,6 +118,7 @@ interface SerializedSymbol {
   readonly values?: ReturnBinding | undefined;
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly parameters?: ParameterRange | undefined;
+  readonly members?: readonly string[] | undefined;
 }
 
 interface SerializedFile {
@@ -124,6 +133,7 @@ interface SerializedFile {
   readonly diagnostics: readonly IndexDiagnostic[];
   readonly reExports: readonly ReExport[];
   readonly routes?: readonly RouteSite[] | undefined;
+  readonly unplacedExtensions?: readonly string[] | undefined;
   readonly d: readonly number[];
 }
 
@@ -210,10 +220,12 @@ export function serializeSections(
         ...(symbol.values === undefined ? {} : { values: symbol.values }),
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
         ...(symbol.parameters === undefined ? {} : { parameters: symbol.parameters }),
+        ...(symbol.members === undefined ? {} : { members: symbol.members }),
       })),
       diagnostics: card.diagnostics ?? [],
       reExports: card.reExports ?? [],
       ...(card.routes === undefined || card.routes.length === 0 ? {} : { routes: card.routes }),
+      ...(card.unplacedExtensions === undefined || card.unplacedExtensions.length === 0 ? {} : { unplacedExtensions: card.unplacedExtensions }),
       d: card.symbols.flatMap((symbol) => [incomingCount.get(symbol.qualifiedName) ?? 0, outgoingCount.get(symbol.qualifiedName) ?? 0]),
     };
   });
@@ -360,6 +372,7 @@ function deserializeBody(
     if (binaryCard && (file.lineCount !== 0 || file.symbols.length !== 0)) throw new Error("osnova: corrupt binary card");
     if (!Array.isArray(file.reExports)) throw new Error("osnova: corrupt re-export metadata");
     const reExports = file.reExports.map(readReExport);
+    if (file.unplacedExtensions !== undefined && (!sortedNames(file.unplacedExtensions) || file.unplacedExtensions.length === 0)) throw new Error("osnova: corrupt extension metadata");
     if (file.routes !== undefined && (!Array.isArray(file.routes) || file.routes.some((route: unknown) => {
       const value = route as Partial<RouteSite> | null;
       return typeof value !== "object" || value === null || typeof value.method !== "string" || !/^[A-Z]+$/.test(value.method) ||
@@ -413,6 +426,7 @@ function deserializeBody(
       if (symbol.elements !== undefined && !validReturn(symbol.elements)) throw new Error("osnova: corrupt return metadata");
       if (symbol.values !== undefined && !validReturn(symbol.values)) throw new Error("osnova: corrupt return metadata");
       if (symbol.parameters !== undefined && !validParameters(symbol.parameters)) throw new Error("osnova: corrupt parameter metadata");
+      if (symbol.members !== undefined && !sortedNames(symbol.members)) throw new Error("osnova: corrupt member metadata");
       if (symbol.valueTypes !== undefined && (typeof symbol.valueTypes !== "object" || symbol.valueTypes === null || Array.isArray(symbol.valueTypes) || !Object.values(symbol.valueTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.elementTypes !== undefined && (typeof symbol.elementTypes !== "object" || symbol.elementTypes === null || Array.isArray(symbol.elementTypes) || !Object.values(symbol.elementTypes as Record<string, unknown>).every((item) => validReturn(item) && (item as { kind: string }).kind !== "this"))) throw new Error("osnova: corrupt field metadata");
       if (symbol.returnTuple !== undefined && (!Array.isArray(symbol.returnTuple) || !symbol.returnTuple.every((item: unknown) => item === null || validReturn(item)))) throw new Error("osnova: corrupt return metadata");
@@ -457,10 +471,11 @@ function deserializeBody(
         ...(symbol.values === undefined ? {} : { values: symbol.values }),
         ...(symbol.valueTypes === undefined ? {} : { valueTypes: symbol.valueTypes }),
         ...(symbol.parameters === undefined ? {} : { parameters: symbol.parameters }),
+        ...(symbol.members === undefined ? {} : { members: symbol.members }),
       };
     });
     symbols.forEach((symbol: OsnovaSymbol, i: number) => { degrees.set(symbol.qualifiedName, { incoming: file.d[2 * i]!, outgoing: file.d[2 * i + 1]! }); });
-    const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports, ...(routes === undefined ? {} : { routes }) };
+    const base = { path: filePath, language: file.language, hash: file.hash, size: file.size, lineCount: file.lineCount, symbols, diagnostics: file.diagnostics, reExports, ...(routes === undefined ? {} : { routes }), ...(file.unplacedExtensions === undefined ? {} : { unplacedExtensions: file.unplacedExtensions }) };
     if (textBytes !== undefined) {
       const text = textBytes.subarray(file.to, file.to + file.tl).toString("utf8");
       if (!binaryCard && (sha256Hex(text) !== file.hash || (text.length === 0 ? 0 : text.split("\n").length) !== file.lineCount)) throw new Error("osnova: corrupt file content");

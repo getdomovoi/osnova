@@ -78,6 +78,7 @@ export async function extractCard(
   let definitions: RawDefinition[] = [];
   let rawEdges: RawEdgeItem[] = [];
   let reExports: readonly ReExport[] = [];
+  let unplacedExtensions: readonly string[] = [];
   const diagnostics: IndexDiagnostic[] = [];
   const parser = await getParser(language).catch((error: unknown) => {
     throw new IndexingError({ phase: "parse", path: relPath, code: "grammar-unavailable" }, error);
@@ -93,6 +94,7 @@ export async function extractCard(
         const output = adapterFor(language).extract(tree, text);
         definitions = markShadowed(tree, output.definitions);
         reExports = output.reExports ?? [];
+        unplacedExtensions = output.unplacedExtensions ?? [];
         rawEdges = output.edges.map((edge: RawEdge) => ({
           kind: edge.kind,
           toName: edge.toName,
@@ -116,6 +118,7 @@ export async function extractCard(
     definitions = [];
     rawEdges = [];
     reExports = [];
+    unplacedExtensions = [];
     diagnostics.push({ phase: "parse", path: relPath, code: "extraction-failed" });
   }
 
@@ -155,6 +158,7 @@ export async function extractCard(
       ...(def.values === undefined ? {} : { values: def.values }),
       ...(def.valueTypes === undefined ? {} : { valueTypes: def.valueTypes }),
       ...(def.parameters === undefined ? {} : { parameters: def.parameters }),
+      ...(def.members === undefined ? {} : { members: def.members }),
     };
   });
 
@@ -173,6 +177,7 @@ export async function extractCard(
     diagnostics,
     reExports,
     ...(routes.length === 0 ? {} : { routes }),
+    ...(unplacedExtensions.length === 0 ? {} : { unplacedExtensions }),
   };
   return { card, rawEdges };
 }

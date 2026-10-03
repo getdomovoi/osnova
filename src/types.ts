@@ -93,6 +93,10 @@ export interface OsnovaSymbol {
   readonly values?: ReturnBinding | undefined;
   readonly valueTypes?: Readonly<Record<string, SymbolBinding>> | undefined;
   readonly parameters?: ParameterRange | undefined;
+  // A C# type: the names of the members its body declares (methods, properties, fields, events, enum members, nested
+  // types, and a record's positional parameters), sorted, since a member of the name keeps a call from binding an
+  // extension method.
+  readonly members?: readonly string[] | undefined;
 }
 
 // How many arguments a method's parameter list accepts. `max` is absent when a varargs or `params`
@@ -117,14 +121,22 @@ export interface ParameterRange {
   // Java, when `types` is absent: each parameter's erased type, a type variable replaced by its first bound (or
   // `java.lang.Object`) and type arguments dropped; null where the written type proves nothing.
   readonly erased?: readonly (string | null)[] | undefined;
+  // C#, on an extension method: the written type of its `this` parameter, as `ArgumentTypes.receiver` writes types,
+  // and the method's own type parameters, in order.
+  readonly receiver?: string | undefined;
+  readonly generic?: readonly string[] | undefined;
 }
 
 // Java: the written type of each argument of a call, erased (`java.util.List`, `int`, `java.lang.String[]`), or null
 // where the argument's type is not written down. `null` is the type of the `null` literal. `names` lists, sorted, the
 // simple names the types read from the caller's scope, which an inherited nested type can still shadow.
+// C#: `receiver` is the written type of a member call's receiver (`int`, `List<string>`, `DateTime?`, `string[]`, or
+// `this` for the enclosing type), which chooses the extension method the call binds; its argument types are not
+// recorded yet, so `types` holds null for each.
 export interface ArgumentTypes {
   readonly types: readonly (string | null)[];
   readonly names?: readonly string[] | undefined;
+  readonly receiver?: string | undefined;
 }
 
 // The declaration of an overloaded name that a call's argument count selects: `line` when exactly one
@@ -234,6 +246,9 @@ export interface FileCard {
   readonly diagnostics?: readonly IndexDiagnostic[] | undefined;
   readonly reExports?: readonly ReExport[] | undefined;
   readonly routes?: readonly RouteSite[] | undefined;
+  // C#: names of extension methods the file may declare that the index does not hold or cannot place (inside an
+  // `extension` block the grammar does not read, or in a file whose parse errors can move declarations), sorted.
+  readonly unplacedExtensions?: readonly string[] | undefined;
 }
 
 export interface OsnovaIndex {
