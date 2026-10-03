@@ -301,7 +301,9 @@ export function argumentTypesOf(list: Node, site: Node): (string | null)[] {
   });
 }
 
-const LITERAL_TYPES = new Set(["int", "uint", "long", "ulong"]);
+const LITERAL_SPELLINGS: Readonly<Record<string, string>> = { int: "int", "System.Int32": "int", uint: "uint", "System.UInt32": "uint", long: "long", "System.Int64": "long", ulong: "ulong", "System.UInt64": "ulong" };
+const INTEGRAL_SPELLINGS = new Set(["sbyte", "byte", "short", "ushort", "char", "nint", "nuint", "System.SByte", "System.Byte", "System.Int16", "System.UInt16", "System.Char", "System.IntPtr", "System.UIntPtr"]);
+const LITERAL_RANGE: Readonly<Record<string, readonly [bigint, bigint]>> = { int: [-2147483648n, 2147483647n], uint: [0n, 4294967295n], long: [-9223372036854775808n, 9223372036854775807n], ulong: [0n, 18446744073709551615n] };
 
 function argumentTypeOf(expression: Node, site: Node): string | null {
   // A parenthesized constant is the same constant.
@@ -309,6 +311,8 @@ function argumentTypeOf(expression: Node, site: Node): string | null {
   if (expression.type === "null_literal") return "#null";
   const negative = expression.type === "prefix_unary_expression" && expression.children[0]?.type === "-" && named(expression).length === 1;
   let literal = negative ? named(expression)[0]! : expression;
+  // The signed-minimum rule applies to the literal as the direct operand of the minus only.
+  const direct = literal.type === "integer_literal";
   while (literal.type === "parenthesized_expression" && named(literal).length === 1) literal = named(literal)[0]!;
   if (literal.type === "integer_literal") {
     const type = integerType(literal.text);
@@ -320,22 +324,29 @@ function argumentTypeOf(expression: Node, site: Node): string | null {
     if (!negative) return `#lit:${type}:${value}`;
     // Unary minus: int and long stay; a uint operand promotes to long; the literals 2147483648 and 9223372036854775808
     // negated are int.MinValue and long.MinValue; a ulong operand has no unary minus.
-    const negated = type === "int" || type === "long" ? type : type === "uint" ? (!suffixed && value === 2147483648n ? "int" : "long") : !suffixed && value === 9223372036854775808n ? "long" : null;
+    const negated = type === "int" || type === "long" ? type : type === "uint" ? (direct && !suffixed && value === 2147483648n ? "int" : "long") : direct && !suffixed && value === 9223372036854775808n ? "long" : null;
     return negated === null ? null : `#lit:${negated}:${-value}`;
   }
   if (negative) return null;
   // A cast of an integer literal to one of the literal types is that constant; to another type it is a constant whose
   // conversions this does not read. `default(T)` of a literal type is its zero.
   if (expression.type === "cast_expression") {
-    const target = writtenType(expression.childForFieldName("type"), site);
+    const written = writtenType(expression.childForFieldName("type"), site);
+    const target = written === undefined ? undefined : LITERAL_SPELLINGS[written];
     const operand = expression.childForFieldName("value") ?? named(expression).at(-1);
     const inner = operand === undefined || operand === null ? null : argumentTypeOf(operand, site);
-    if (inner !== null && inner.startsWith("#lit:")) return target !== undefined && LITERAL_TYPES.has(target) ? `#lit:${target}:${inner.slice(inner.lastIndexOf(":") + 1)}` : null;
-    if (target !== undefined && (LITERAL_TYPES.has(target) || ["sbyte", "byte", "short", "ushort", "char"].includes(target))) return null;
+    if (inner !== null && inner.startsWith("#lit:")) {
+      // The value stays only when the target holds it; an overflowing cast is an error or, unchecked, another value.
+      const value = BigInt(inner.slice(inner.lastIndexOf(":") + 1));
+      const range = target === undefined ? undefined : LITERAL_RANGE[target];
+      return range !== undefined && value >= range[0] && value <= range[1] ? `#lit:${target}:${value}` : null;
+    }
+    if (written !== undefined && (target !== undefined || INTEGRAL_SPELLINGS.has(written))) return null;
   }
   if (expression.type === "default_expression") {
-    const target = writtenType(expression.childForFieldName("type"), site);
-    if (target !== undefined && LITERAL_TYPES.has(target)) return `#lit:${target}:0`;
+    const written = writtenType(expression.childForFieldName("type"), site);
+    if (written !== undefined && LITERAL_SPELLINGS[written] !== undefined) return `#lit:${LITERAL_SPELLINGS[written]}:0`;
+    if (written !== undefined && INTEGRAL_SPELLINGS.has(written)) return null;
   }
   if (expression.type === "identifier") {
     const declared = declaredTypeOf(site, plain(expression.text));

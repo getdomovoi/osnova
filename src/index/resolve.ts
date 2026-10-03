@@ -984,7 +984,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const level = parts.slice(0, depth).join(".");
       const own = csharpInNamespace(site.card, level, segments);
       if (own !== undefined) return own;
-      if (rest.length === 0 && dotnetType(dotnetKey(level)) !== undefined) return externalType;
+      // A .NET type binds here; its member types, which a dotted name would go on to, are not read.
+      if (dotnetType(dotnetKey(level)) !== undefined) return rest.length === 0 ? externalType : unknownType;
       // A site on the first or last line of a namespace declaration that holds directives may lie outside it, beside
       // another declaration on that line, so the line cannot tell whether those directives apply.
       const scoped = usings.filter((using) => using.scope === level);
@@ -995,10 +996,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (declared.some((using) => using.conditional)) return unknownType;
       const imported = declared.length === 0 ? undefined : csharpImported(site.card, declared, first, depth > 0);
       if (imported === null) return unknownType;
-      const dotnetImported = rest.length === 0 && declared.some((using) => !using.static && dotnetType(dotnetKey(using.target)) !== undefined);
+      const dotnetImported = declared.some((using) => !using.static && dotnetType(dotnetKey(using.target)) !== undefined);
       // An indexed type and a .NET type imported at one level are ambiguous to the compiler.
       if (imported !== undefined) return dotnetImported ? unknownType : csharpNested(imported, rest);
-      if (dotnetImported) return externalType;
+      if (dotnetImported) return rest.length === 0 ? externalType : unknownType;
     }
     return externalType;
   };

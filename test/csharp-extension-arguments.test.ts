@@ -247,6 +247,34 @@ describe("a C# extension method chosen by the written argument types", () => {
     expect(edge?.toSymbol).toBeUndefined();
   });
 
+  it("applies the signed-minimum rule to a direct operand only, bounds cast values, and reads integral defaults", async () => {
+    await write({
+      "Ext.cs": "namespace Lib;\npublic enum E { M }\npublic static class Ext\n{\n    public static void A(this string s, int n) { }\n    public static void A(this string s, long n) { }\n    public static void P(this string s, byte n) { }\n    public static void P(this string s, long n) { }\n    public static void Z(this string s, E e) { }\n    public static void Z(this string s, object o) { }\n    public static void U(this string s, ulong n) { }\n    public static void U(this string s, object o) { }\n}\n",
+      "Use.cs": "using Lib;\nnamespace App;\npublic class Use\n{\n    public void Run()\n    {\n        unchecked\n        {\n            \"x\".A(-(2147483648));\n            \"x\".P((int)4294967296L);\n            \"x\".Z((uint)-4294967296L);\n            \"x\".U((long)18446744073709551615UL);\n            \"x\".Z(default(byte));\n            \"x\".Z(default(System.Int32));\n            \"x\".P((int)1L);\n            \"x\".P((long)(1));\n        }\n    }\n}\n",
+    });
+    const index = await build();
+    // -(2147483648) negates a uint, so it is long.
+    expect(picks(index, 9, "A")).toEqual([6]);
+    // Casts whose value overflows the target are unknown under either overflow context.
+    expect(picks(index, 10, "P")).toEqual([undefined]);
+    expect(picks(index, 11, "Z")).toEqual([undefined]);
+    expect(picks(index, 12, "U")).toEqual([undefined]);
+    // default of an integral type is the constant zero: it converts to E, which this does not read for byte.
+    expect(picks(index, 13, "Z")).toEqual([undefined]);
+    expect(picks(index, 14, "Z")).toEqual([9]);
+    expect(picks(index, 15, "P")).toEqual([7]);
+    expect(picks(index, 16, "P")).toEqual([8]);
+  });
+
+  it("stops at a .NET type of an enclosing namespace even for a dotted name", async () => {
+    await write({
+      "Repo.cs": "namespace RepoNested;\npublic class Environment {\n    public enum SpecialFolder { Desktop }\n}\n",
+      "Ext.cs": "using RepoNested;\nnamespace System.ReviewNested;\npublic static class Ext\n{\n    public static string Pick(this string s, RepoNested.Environment.SpecialFolder n) => \"repo\";\n    public static string Pick(this string s, object n) => \"object\";\n}\npublic class Use\n{\n    public string Run() => \"s\".Pick(Environment.SpecialFolder.Desktop);\n}\n",
+    });
+    const index = await build();
+    expect(index.edges.find((e) => e.kind === "calls" && e.toName === "Pick")?.toSymbol).toBeUndefined();
+  });
+
   it("gives an incremental update the same picks as a full rebuild", async () => {
     await write({ "Words.cs": words, "Use.cs": use(["5.ToWords(form);", "5.ToWords(culture);"]) });
     const cacheDir = path.join(temporary, "cache");
