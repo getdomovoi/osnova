@@ -3,8 +3,8 @@ import { Extractor, argumentCount, childOfType, childrenOf, withoutTypeArguments
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
-import { receiverTypeOf, unplacedExtensionNames, writtenType } from "./csharp-types.js";
-import { validWrittenCsharpType } from "../index/csharp-written.js";
+import { argumentTypesOf, receiverTypeOf, unplacedExtensionNames, writtenType } from "./csharp-types.js";
+import { validCsharpArgumentType, validWrittenCsharpType } from "../index/csharp-written.js";
 
 // A C# identifier after `plain`: a letter or underscore, then letters, digits, marks and connectors.
 const IDENTIFIER_RE = /^[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$/u;
@@ -39,8 +39,36 @@ function parameterRange(list: Node, method: Node, constructor = false): Paramete
   }
   const generic = childrenOf(childOfType(method, "type_parameter_list") ?? method).filter((child) => child.type === "type_parameter")
     .map((parameter) => childrenOf(parameter).find((part) => part.type === "identifier")?.text).filter((name): name is string => name !== undefined).map(plain);
+  const written = receiver === undefined ? undefined : parameterTypes(list);
   return { min: required, ...(variadic ? {} : { max: required + optional }), ...(extension ? { extension: true as const } : {}),
-    ...(receiver === undefined ? {} : { receiver, ...(generic.length > 0 ? { generic } : {}) }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
+    ...(receiver === undefined ? {} : { receiver, ...(generic.length > 0 ? { generic } : {}), ...(written === undefined ? {} : { written }) }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }), ...(constructor ? { constructs: true as const } : {}) };
+}
+
+// An extension method's parameters after `this`, each as `[ref |out |in |params ]<type>[=]`: the written type (`?` for one
+// this does not read, or a type parameter of the method), `=` when it has a default value. Undefined when the list
+// holds an error, which can hide a parameter or a modifier.
+function parameterTypes(list: Node): string[] | undefined {
+  if (list.hasError) return undefined;
+  const out: string[] = [];
+  const children = childrenOf(list).filter((child) => child.type !== "comment");
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i]!;
+    const type = (node: Node | null): string => { const read = node === null ? undefined : writtenType(node, node); return validWrittenCsharpType(read) ? read : "?"; };
+    if (child.type === "parameter") {
+      const modifiers = childrenOf(child).filter((part) => part.type === "parameter_modifier").map((part) => part.text);
+      if (modifiers.includes("this")) continue;
+      // `scoped` and `ref readonly` are read by no rule here.
+      if (modifiers.length > 1 || modifiers.some((modifier) => !["ref", "out", "in"].includes(modifier))) return undefined;
+      const declared = child.childForFieldName("type");
+      if (declared === null) return undefined;
+      out.push(`${modifiers.length === 1 ? `${modifiers[0]} ` : ""}${type(declared)}${childOfType(child, "equals_value_clause") !== null ? "=" : ""}`);
+    } else if (child.type === "array_type" && children[i + 1]?.type === "identifier") {
+      // `params T[] rest` is written as a bare `params` token, the array type and the name in the list itself.
+      out.push(`params ${type(child)}`);
+      i += 1;
+    } else return undefined;
+  }
+  return out;
 }
 
 // One C# identifier however it is spelled, as the compiler compares them: `@class` is `class`, a `\u0041` escape is `A`,
@@ -178,6 +206,10 @@ function memberNames(type: Node): string[] {
       case "record_struct_declaration":
       case "delegate_declaration":
         add(member.childForFieldName("name") ?? childOfType(member, "identifier"));
+        break;
+      // An implicit conversion the type declares, which can make an argument of another type applicable.
+      case "conversion_operator_declaration":
+        if (member.children.some((part) => part?.type === "implicit")) names.add("op_Implicit");
         break;
       default: break;
     }
@@ -365,8 +397,10 @@ export const csharpAdapter: LanguageAdapter = {
               // A type the metadata cannot hold (nested too deep, too long) is left unknown.
               const written = object === null || args === undefined ? undefined : receiverTypeOf(object, fn);
               const receiver = validWrittenCsharpType(written) ? written : undefined;
+              const list = node.childForFieldName("arguments");
+              const types = receiver === undefined || list === null ? undefined : argumentTypesOf(list, fn).map((type) => type === null || validCsharpArgumentType(type) ? type : null);
               if (nameNode !== null) out.addEdge("calls", nameNode.text, nameNode, bindings.at(fn, node), undefined, args, undefined,
-                receiver === undefined ? undefined : { types: new Array<null>(args!).fill(null), receiver });
+                receiver === undefined || types === undefined ? undefined : { types, receiver });
             }
           }
           for (const child of childrenOf(node)) visit(child);

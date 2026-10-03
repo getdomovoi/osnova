@@ -43,3 +43,26 @@ export function validWrittenCsharpType(value: unknown): value is string {
   };
   return type(0) && at === value.length;
 }
+
+// Checks one C# argument type as `ArgumentTypes.types` writes it: a written type, `#null`, `#named`, `#ref`,
+// `#lit:<int|uint|long|ulong>:<value>` or `=` and a dotted name of two or more identifiers.
+export function validCsharpArgumentType(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value === "#null" || value === "#named" || value === "#ref") return true;
+  if (/^#lit:(?:int|uint|long|ulong):-?\d{1,20}$/u.test(value)) return true;
+  if (value.startsWith("=")) {
+    const parts = value.slice(1).split(".");
+    return value.length <= 512 && parts.length >= 2 && parts.every((part) => IDENTIFIER.exec(part)?.[0] === part);
+  }
+  return validWrittenCsharpType(value);
+}
+
+// Checks one C# parameter as `ParameterRange.written` writes it: `[ref |out |in |params ]<type>[=]`, the type a written
+// type or `?`.
+export function validCsharpParameterType(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = /^(?:(?:ref|out|in|params) )?(.+?)(=?)$/u.exec(value);
+  if (match === null) return false;
+  const type = match[1]!;
+  return (type === "?" || (type !== "this" && validWrittenCsharpType(type))) && !(value.startsWith("params ") && match[2] === "=");
+}

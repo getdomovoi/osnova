@@ -284,6 +284,51 @@ export function receiverTypeOf(expression: Node, site: Node = expression, depth 
   }
 }
 
+// The written type of each argument of a call, for choosing among extension methods, in the order and number
+// `argumentCount` counts them: a written type as `receiverTypeOf` reads it, `#null` for the null literal,
+// `#lit:<type>:<value>` for an integer literal (with its sign), `=A.B` for a dotted name whose first segment is no
+// variable in scope (an enum member or a static member, which the index resolves), `#named` for a named argument and
+// `#ref` for one passed `ref`, `out` or `in`; null where the type is not written down.
+export function argumentTypesOf(list: Node, site: Node): (string | null)[] {
+  return childrenOf(list).filter((child) => child.isNamed && !COMMENTS.has(child.type)).map((argument) => {
+    if (argument.type !== "argument") return null;
+    if (childOfType(argument, "name_colon") !== null) return "#named";
+    if (argument.children.some((child) => child !== null && !child.isNamed && (child.type === "ref" || child.type === "out" || child.type === "in"))) return "#ref";
+    const expression = named(argument).at(-1);
+    return expression === undefined ? null : argumentTypeOf(expression, site);
+  });
+}
+
+function argumentTypeOf(expression: Node, site: Node): string | null {
+  if (expression.type === "null_literal") return "#null";
+  const negative = expression.type === "prefix_unary_expression" && expression.children[0]?.type === "-" && named(expression).length === 1;
+  const literal = negative ? named(expression)[0]! : expression;
+  if (literal.type === "integer_literal") {
+    const type = integerType(literal.text);
+    const digits = literal.text.replace(/_/g, "").toLowerCase().replace(/(?:ul|lu|u|l)$/, "");
+    let value: bigint;
+    try { value = BigInt(digits); } catch { return null; }
+    return type === undefined ? null : `#lit:${type}:${negative ? -value : value}`;
+  }
+  if (negative) return null;
+  if (expression.type === "member_access_expression") {
+    const parts: string[] = [];
+    let current: Node | null = expression;
+    while (current?.type === "member_access_expression") {
+      const name = current.childForFieldName("name");
+      if (name === null || name.type !== "identifier") return null;
+      parts.unshift(plain(name.text));
+      current = current.childForFieldName("expression");
+    }
+    if (current === null || current.type !== "identifier") return null;
+    const first = plain(current.text);
+    // A variable in scope makes the name a member access on a value, whose type the member's declaration gives.
+    if (declaredTypeOf(current, first) !== undefined) return null;
+    return `=${[first, ...parts].join(".")}`;
+  }
+  return receiverTypeOf(expression, site) ?? null;
+}
+
 // C# ends a line at CR, LF, NEL, U+2028 and U+2029: a line comment and a regular literal end there.
 const LINE_END = /[\r\n\u0085\u2028\u2029]/u;
 const lineEnd = (source: string, from: number): number => {
