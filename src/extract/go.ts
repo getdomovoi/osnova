@@ -38,6 +38,9 @@ function declaredNames(node: Node): string[] {
       return node.childrenForFieldName("name").flatMap((name) => name === null ? [] : [name.text]);
     case "parameter_list":
       return childrenOf(node).flatMap(declaredNames);
+    // A label makes no block: the statement it marks declares into the block that holds it.
+    case "labeled_statement":
+      return childrenOf(node).filter((child) => child.type !== "label_name").flatMap(declaredNames);
     default:
       return [];
   }
@@ -51,6 +54,11 @@ function locallyBound(site: Node, name: string): boolean {
     for (const child of childrenOf(scope)) {
       if (child.startIndex >= holder.startIndex) break;
       if (declaredNames(child).includes(name)) return true;
+    }
+    // A type switch's guard (`switch v := x.(type)`) declares `v` in each of its case clauses.
+    if (scope.type === "type_switch_statement" && holder.type === "type_case") {
+      const alias = scope.childForFieldName("alias");
+      if (alias !== null && childrenOf(alias).some((child) => child.type === "identifier" && child.text === name)) return true;
     }
   }
   return false;

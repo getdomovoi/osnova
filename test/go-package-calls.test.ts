@@ -108,4 +108,19 @@ describe("a plain Go call names a function of its own package", () => {
     expect(callAt(index, "u/caller.go", 5, "Target")?.toSymbol).not.toBe("u/external_test.go#Target");
     expect(callAt(index, "c/caller.go", 5, "Target")?.toSymbol).not.toBe("c/external_test.go#Target");
   });
+
+  it("treats a type-switch variable and a labelled declaration as locals that shadow the package function", async () => {
+    const index = await build({
+      "go.mod": "module example.com/app\n\ngo 1.22\n",
+      "switch.go": "package app\n\nfunc RunSwitch(x any) int {\n\tswitch Target := x.(type) {\n\tcase func() int:\n\t\treturn Target()\n\t}\n\treturn Target()\n}\n",
+      "label.go": "package app\n\nfunc RunLabel() int {\nL:\n\tTarget := func() int { return 2 }\n\tif Target() == 0 {\n\t\tgoto L\n\t}\n\treturn Target()\n}\n",
+      "helper.go": "package app\n\nfunc Target() int { return 1 }\n",
+      "other/other.go": "package other\n\nfunc Target() int { return 3 }\n",
+    });
+    expect(callAt(index, "switch.go", 6, "Target")?.toSymbol).toBeUndefined();
+    // After the switch the type-switch variable is out of scope.
+    expect(callAt(index, "switch.go", 8, "Target")?.toSymbol).toBe("helper.go#Target");
+    expect(callAt(index, "label.go", 6, "Target")?.toSymbol).toBeUndefined();
+    expect(callAt(index, "label.go", 9, "Target")?.toSymbol).toBeUndefined();
+  });
 });
