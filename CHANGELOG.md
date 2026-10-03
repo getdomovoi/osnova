@@ -6,6 +6,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 The extraction version moves to `structural-9.43`, so the first run after upgrading rebuilds the cache once.
 
+### Added
+
+- A Java call whose argument count fits several declarations now names the one its arguments' written types select, as javac chooses: strict invocation, then loose invocation with boxing, then variable arity, then the most specific declaration, over erased types with indexed supertypes and a small table of JDK supertypes. Call edges record `argumentTypes`, declarations whose written types prove nothing record `erased` types, and a typed choice carries `overload.types`, which `warp` prints as "chosen by argument types". The choice is made only when every base type of the receiver is known; an argument whose type is not written (a call result, a lambda) and could change it leaves the choice open, and a class's own type variables prove nothing. Scored against javac on the pinned gson checkout, decided call edges rose from 8133 to 9760 and in-repo sites covered from 72.3% to 86.7%, with no new false edge; undetermined overload edges fell from 2526 to 918. Two calls of one name on a line that bind different overloads are now two edges. The edge store moves to format 14.
+
 ### Changed
 
 - The type-checker oracle scorer (`benchmarks/oracle/score.mjs`) pairs each call edge with one checker call when a line calls the same name more than once (`a.get(b.get())`). It used to judge every edge at such a line against the first call, so a correct edge for the second call scored false. Rescored, zod has 0 false edges (was 4), gson 1 (was 4), ripgrep 27 (was 29) and humanizer 2 (was 3); recall moves by at most 2 sites per corpus. Every remaining false edge names another function, and the record's `method.sameLine` states the rule.

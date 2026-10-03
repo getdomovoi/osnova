@@ -191,16 +191,16 @@
         "external": 12202,
         "noVerdict": 0
       },
-      "claimedEdges": 8140,
-      "decided": 8133,
+      "claimedEdges": 9767,
+      "decided": 9760,
       "undecided": 7,
-      "truePositive": 8132,
+      "truePositive": 9759,
       "falsePositive": 1,
       "precision": 0.9999,
-      "falseEdgeRate": 0.00012,
+      "falseEdgeRate": 0.0001,
       "oracleInRepoSites": 11222,
-      "coveredInRepoSites": 8119,
-      "recall": 0.7235,
+      "coveredInRepoSites": 9724,
+      "recall": 0.8665,
       "falseEdgesWithCorrectTarget": 0,
       "falseByCause": [
         {
@@ -220,7 +220,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
         "determinism": "three runs byte-identical"
       },
-      "overloadUndetermined": 2526,
+      "overloadUndetermined": 918,
       "previous": {
         "osnova": {
           "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
@@ -456,7 +456,7 @@
   ],
   "limitations": [
     "The checker's own resolution is the reference; where it returns nothing the site is undecided and counts in neither rate. Dynamic dispatch the checker cannot see is invisible to both sides.",
-    "A checker names one declaration, the static one. Where a language has overloads (Java, C#), osnova keeps one symbol per qualified name and records which declaration a call binds only when the written argument count selects exactly one among the declarations of the resolved type, its written-partial parts and its declared base classes; an edge whose count fits several or none names the method but no declaration, is counted in overloadUndetermined and is not claimed. Rust cfg variants of one function still collapse to one record.",
+    "A checker names one declaration, the static one. Where a language has overloads (Java, C#), osnova keeps one symbol per qualified name and records which declaration a call binds when the written argument count selects exactly one among the declarations of the resolved type, its written-partial parts and its declared base classes, or, in Java when every base type is known, when the arguments' written types select one by javac's applicability phases and most-specific rule over erased types; an edge whose count fits several the written types cannot tell apart, or none, names the method but no declaration, is counted in overloadUndetermined and is not claimed. Rust cfg variants of one function still collapse to one record.",
     "The unit key is (file, line, name). Two calls of the same name on one line share the key; each claim there is paired with at most one of their checker entries (method.sameLine), so falseEdgesWithCorrectTarget, the false edges whose target is the checker's declaration for the other call, is 0. Recall still counts such a line as one site. Osnova records a call at the line of the callee name, the line the oracle uses; 0.11.0 recorded the first line of the call expression, which in a chain written one call per line could be lines above the name.",
     "Line tolerance of one absorbs multi-line call formatting and could mask a wrong target declared on an adjacent line.",
     "Each oracle sees one build configuration: cobra for darwin and windows, ripgrep for the host target with default features, gson on the classpath at JDK 27's language level, humanizer for net10.0 with .NET SDK 10.0.401 rather than the SDK 11 preview its global.json names. Code compiled only in other configurations is not enumerated.",
