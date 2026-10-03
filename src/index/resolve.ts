@@ -1437,7 +1437,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (same !== false) return same;
     if (p.kind === "dotnet") {
       if (p.key === "System.ValueType") return valueType(r) ?? null;
-      if (p.key === "System.Enum") return r.kind === "repo" ? r.symbol.kind === "enum" : r.kind === "external" ? null : false;
+      // A nullable enum boxes to its enum's boxed value, so it converts to System.Enum too.
+      if (p.key === "System.Enum") {
+        const enumType = r.kind === "nullable" ? r.inner : r;
+        return enumType.kind === "repo" ? enumType.symbol.kind === "enum" : enumType.kind === "external" ? null : false;
+      }
       if (p.key === "System.Array") return r.kind === "array" ? true : r.kind === "external" ? null : false;
       // The other listed .NET types are structs or sealed classes, which only their own values convert to.
       return r.kind === "external" ? null : false;
@@ -1487,7 +1491,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           if (!complete || parts.some((part) => !parsedCleanly(part.file))) return true;
           if (parts.some((part) => part.members?.includes(name) === true)) return true;
           // A record also has the members the compiler writes for it.
-          if (current.kind === "class" && parts.some((part) => /\brecord\b/u.test(part.signature)) && ["Deconstruct", "PrintMembers", "EqualityContract"].includes(name)) return true;
+          if ((current.kind === "class" || current.kind === "struct") && parts.some((part) => /\brecord\b/u.test(part.signature)) && ["Deconstruct", "PrintMembers", "EqualityContract"].includes(name)) return true;
           if (current.kind === "enum") return listed("System.Enum");
           if (current.kind === "struct") return listed("System.ValueType");
           if (current.kind === "interface") return current.baseType !== undefined || listed("System.Object");
@@ -1539,6 +1543,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const parts = namespace.length === 0 ? [] : namespace.split(".");
     let chosen: { method: OsnovaSymbol; imported: boolean } | undefined;
     let pending: OsnovaSymbol | undefined;
+    // A method an inner level already offered (its namespace's own level, then a `using` of it further out) is no
+    // new choice further out.
+    const offered = new Set<OsnovaSymbol>();
     for (let depth = parts.length; depth >= 0; depth -= 1) {
       const level = parts.slice(0, depth).join(".");
       const scoped = usings.filter((using) => using.scope === level);
@@ -1555,11 +1562,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         if (owner === undefined || owner.namespace === "?" || owner.conditional === true || method.conditional === true) return undefined;
         const home = owner.namespace ?? "";
         const local = home === level;
-        if (!local && !imported.has(home)) continue;
+        if ((!local && !imported.has(home)) || offered.has(method)) continue;
+        offered.add(method);
         const range = method.parameters!;
+        // A private extension method is visible only inside its class.
+        if (range.access === "private" && !edge.fromSymbol.startsWith(`${owner.qualifiedName}.`) && edge.fromSymbol !== owner.qualifiedName) continue;
         const declaredSite: CsharpSite = { card: files.get(method.file)!, enclosing: localOfQualifiedName(owner.qualifiedName).split("."), namespace: home, line: method.span.startLine };
         const target = range.receiver === undefined ? null : csharpTypeAt(declaredSite, range.receiver, range.generic ?? []);
-        const fits = target === null ? null : receiverConverts(receiver, target);
+        let fits = target === null ? null : receiverConverts(receiver, target);
+        // The receiver proves a call applicable only when it is the only argument and no type argument must be inferred:
+        // the other arguments' conversions, named arguments and generic constraints are not read.
+        if (fits === true && (count > 0 || (range.generic?.length ?? 0) > 0)) fits = null;
         if (fits !== false) here.push({ method, imported: !local, fits });
       }
       if (here.length === 0) continue;

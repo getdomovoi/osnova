@@ -154,3 +154,82 @@ describe("a C# extension method chosen by the receiver's written type", () => {
     expect(callsAt(full, "App/Use.cs", 5, "Bytes")).toEqual([{ toSymbol: undefined }]);
   });
 });
+
+describe("a C# extension method the compiler would not bind is not chosen", () => {
+  const twoLevels = (inner: string, outer: string, call: string, extra = "") => [
+    "using Outer;",
+    "namespace Outer {",
+    "    public static class OuterExt {",
+    `        ${outer}`,
+    "    }",
+    "}",
+    "namespace Inner {",
+    extra,
+    "    public static class InnerExt {",
+    `        ${inner}`,
+    "    }",
+    "    public class Use {",
+    `        public static object Run(E? e) => ${call};`,
+    "    }",
+    "    public enum E { A }",
+    "}",
+    "",
+  ].join("\n");
+  const targetAt = (index: Index, name: string) => index.edges.filter((edge) => edge.kind === "calls" && edge.fromFile === "P.cs" && edge.line === 13 && edge.toName === name).map((edge) => edge.toSymbol);
+
+  it("does not take an inner candidate whose other arguments, type inference, constraints or names may not fit", async () => {
+    for (const [inner, outer, call] of [
+      ["public static string Probe(this string s, int x) => \"inner\";", "public static string Probe(this string s, string x) => \"outer\";", "\"s\".Probe(\"x\")"],
+      ["public static string Probe<T>(this string s) => \"inner\";", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()"],
+      ["public static string Probe<T>(this string s, T x) where T : struct => \"inner\";", "public static string Probe(this string s, string x) => \"outer\";", "\"s\".Probe(\"x\")"],
+      ["public static string Probe(this string s, int a = 0) => \"inner\";", "public static string Probe(this string s, int b = 0) => \"outer\";", "\"s\".Probe(b: 1)"],
+    ]) {
+      await write({ "P.cs": twoLevels(inner!, outer!, call!) });
+      const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+      expect(targetAt(index, "Probe")).toEqual([undefined]);
+    }
+  });
+
+  it("counts a method offered again by an outer using as no new choice", async () => {
+    await write({
+      "Lib/Ext.cs": "namespace Lib;\npublic static class Ext\n{\n    public static string Cut(this string s, int length) => s;\n}\n",
+      // Inside Lib.Tests, namespace Lib's own level offers Ext.Cut, and `using Lib;` offers it again at the compilation unit.
+      "Lib/Tests/Use.cs": "using Lib;\nnamespace Lib.Tests;\npublic class Use\n{\n    public string Run() => \"abc\".Cut(2);\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Cut")?.toSymbol).toBe("Lib/Ext.cs#Ext.Cut");
+  });
+
+  it("skips a private extension method outside its class", async () => {
+    await write({ "P.cs": twoLevels("private static string Probe(this string s) => \"inner\";", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()") });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(targetAt(index, "Probe")).toEqual(["P.cs#OuterExt.Probe"]);
+  });
+
+  it("does not take an extension method inside an #if region", async () => {
+    await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
+    const index = await buildIndex(workspace, { cacheDir });
+    const line = index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe" && edge.fromFile === "P.cs");
+    expect(line?.toSymbol).toBeUndefined();
+  });
+
+  it("boxes a nullable enum to System.Enum", async () => {
+    await write({ "P.cs": twoLevels("public static string Probe(this System.Enum s) => \"inner\";", "public static string Probe(this object s) => \"outer\";", "e.Probe()") });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(targetAt(index, "Probe")).toEqual(["P.cs#InnerExt.Probe"]);
+  });
+
+  it("leaves a record struct's synthesized Deconstruct to member lookup", async () => {
+    await write({ "P.cs": "namespace Inner {\n    public record struct R(int X);\n    public static class InnerExt {\n        public static void Deconstruct(this R r, out int x) { x = 99; }\n    }\n    public class Use {\n        public static void Run() { new R(1).Deconstruct(out var x); }\n    }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    const call = index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Deconstruct");
+    expect(call?.toSymbol).not.toBe("P.cs#InnerExt.Deconstruct");
+  });
+
+  it("indexes a receiver type nested deeper than the metadata holds", async () => {
+    const type = "Box<".repeat(17) + "int" + ">".repeat(17);
+    await write({ "P.cs": `public class Box<T> {}\npublic class Use { public void Run(${type} x) { x.ToString(); } }\n` });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "ToString")?.argumentTypes).toBeUndefined();
+  });
+});

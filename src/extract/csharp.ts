@@ -4,6 +4,7 @@ import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
 import type { ParameterRange } from "../types.js";
 import { collectTypedBindings, csharpSpec } from "./typed-bindings.js";
 import { receiverTypeOf, unplacedExtensionNames, writtenType } from "./csharp-types.js";
+import { validWrittenCsharpType } from "../index/csharp-written.js";
 
 // A C# identifier after `plain`: a letter or underscore, then letters, digits, marks and connectors.
 const IDENTIFIER_RE = /^[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$/u;
@@ -30,7 +31,8 @@ function parameterRange(list: Node, method: Node, constructor = false): Paramete
     if (required + optional === 0 && childrenOf(child).some((part) => part.type === "parameter_modifier" && part.text === "this")) {
       extension = true;
       // Read outside the method, so its own type parameters stay names (`this T x`, `this IEnumerable<T> x`).
-      receiver = writtenType(child.childForFieldName("type"), method.parent ?? method);
+      const written = writtenType(child.childForFieldName("type"), method.parent ?? method);
+      receiver = validWrittenCsharpType(written) ? written : undefined;
     }
     if (childOfType(child, "equals_value_clause") !== null) optional += 1;
     else required += 1;
@@ -320,8 +322,9 @@ export const csharpAdapter: LanguageAdapter = {
             out.addDef(plain(nameNode.text), "method", node, undefined, bindings.memberKind(node), undefined, undefined, bindings.returns(node), undefined, undefined, undefined, bindings.elements(node), undefined, bindings.values(node));
             const parameters = node.childForFieldName("parameters");
             if (parameters !== null) out.setParameters(parameterRange(parameters, node, node.type === "constructor_declaration" && !childrenOf(node).some((child) => child.type === "modifier" && child.text === "static")));
-            // A constructor inside an `#if` region may not be compiled, which changes the constructors a creation can run.
-            if (node.type === "constructor_declaration" && headerInRegion(node)) out.markConditional();
+            // A constructor inside an `#if` region may not be compiled, which changes the constructors a creation can run;
+            // an extension method there may not be a candidate.
+            if ((node.type === "constructor_declaration" || out.definitions.at(-1)?.parameters?.extension === true) && headerInRegion(node)) out.markConditional();
             out.push(plain(nameNode.text));
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -356,7 +359,9 @@ export const csharpAdapter: LanguageAdapter = {
               const nameNode = fn.childForFieldName("name");
               // The receiver's written type chooses the extension method the call binds when no member takes it.
               const object = fn.childForFieldName("expression");
-              const receiver = object === null || args === undefined ? undefined : receiverTypeOf(object, fn);
+              // A type the metadata cannot hold (nested too deep, too long) is left unknown.
+              const written = object === null || args === undefined ? undefined : receiverTypeOf(object, fn);
+              const receiver = validWrittenCsharpType(written) ? written : undefined;
               if (nameNode !== null) out.addEdge("calls", nameNode.text, nameNode, bindings.at(fn, node), undefined, args, undefined,
                 receiver === undefined ? undefined : { types: new Array<null>(args!).fill(null), receiver });
             }
