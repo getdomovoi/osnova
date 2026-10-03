@@ -403,7 +403,7 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     for (const [from, to, expected] of [["@@@", deep, undefined], [deep, "@@@", "Outer.cs#Ext.Probe"], ["}", deep, undefined]] as const) {
       await write({ ...files, "Block.cs": from });
       const cache = path.join(temporary, `cache-${Math.random()}`);
-      const first = await buildIndex(workspace, { cacheDir: cache });
+      await buildIndex(workspace, { cacheDir: cache });
       const loaded = (await loadIndex(workspace, { cacheDir: cache }))!;
       await write({ "Block.cs": to });
       const updated = await applyChanges(loaded, workspace, ["Block.cs"]);
