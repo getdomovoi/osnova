@@ -404,7 +404,6 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
       await write({ ...files, "Block.cs": from });
       const cache = path.join(temporary, `cache-${Math.random()}`);
       const first = await buildIndex(workspace, { cacheDir: cache });
-      await serializeArtifact(first, cache);
       const loaded = (await loadIndex(workspace, { cacheDir: cache }))!;
       await write({ "Block.cs": to });
       const updated = await applyChanges(loaded, workspace, ["Block.cs"]);
