@@ -55,12 +55,27 @@ function goHeaderOf(card: FileCard): { readonly name: string; readonly constrain
       at = end < 0 ? text.length : end + 2;
     } else break;
   }
-  const header = { name: /^package\s+(\w+)/u.exec(text.slice(at))?.[1] ?? "", constrained };
+  // `package`, then the name after any whitespace or comments; a Go identifier is letters (any script), digits and `_`.
+  let name = "";
+  if (/^package(?![\p{L}\p{Nd}_])/u.test(text.slice(at))) {
+    at += "package".length;
+    for (;;) {
+      while (at < text.length && /\s/u.test(text[at]!)) at += 1;
+      if (text.startsWith("/*", at)) {
+        const end = text.indexOf("*/", at + 2);
+        at = end < 0 ? text.length : end + 2;
+      } else break;
+    }
+    name = /^[\p{L}_][\p{L}\p{Nd}_]*/u.exec(text.slice(at))?.[0] ?? "";
+  }
+  const header = { name, constrained };
   goHeaders.set(card, header);
   return header;
 }
-function goPackageOf(card: FileCard): string {
-  return goHeaderOf(card).name;
+// Whether two Go files declare one package: an unread clause matches nothing, not another unread clause.
+function sameGoPackage(a: FileCard, b: FileCard): boolean {
+  const name = goHeaderOf(a).name;
+  return name !== "" && name === goHeaderOf(b).name;
 }
 
 export function languageFamily(language: CardLanguage | undefined): string | undefined {
@@ -439,9 +454,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (card === undefined || languageFamily(card.language) !== family) { result.incomplete = true; return; }
       if (card.language === "go") {
         const dir = path.posix.dirname(currentFile);
-        const pkg = goPackageOf(card);
         for (const [file, other] of files) {
-          if (other.language !== "go" || path.posix.dirname(file) !== dir || goPackageOf(other) !== pkg) continue;
+          if (other.language !== "go" || path.posix.dirname(file) !== dir || !sameGoPackage(other, card)) continue;
           for (const symbol of other.symbols) if (symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")) result.symbols.set(exportKey(symbol), symbol);
         }
         return;
@@ -1331,7 +1345,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             const holderDir = path.posix.dirname(holder.file);
             const local = `${holder.qualifiedName.slice(holder.qualifiedName.indexOf("#") + 1)}.${member}`;
             return (symbolsByName.get(member) ?? []).filter((symbol) => symbol.kind === "method" && languageFamily(files.get(symbol.file)?.language) === family &&
-              symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === local && (card.language !== "go" || (path.posix.dirname(symbol.file) === holderDir && goPackageOf(files.get(symbol.file)!) === goPackageOf(files.get(holder.file)!))));
+              symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === local && (card.language !== "go" || (path.posix.dirname(symbol.file) === holderDir && sameGoPackage(files.get(symbol.file)!, files.get(holder.file)!))));
           };
           // Walk declared heritage when the owner itself lacks the member. Any base that cannot be
           // identified, a cycle, an own non-method field of that name, or two base chains that
@@ -1628,7 +1642,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
       const samePackage = plainGo ? candidates.filter((symbol) => {
         const other = files.get(symbol.file);
-        return other !== undefined && path.posix.dirname(symbol.file) === path.posix.dirname(fromFile) && goPackageOf(other) === goPackageOf(card);
+        return other !== undefined && path.posix.dirname(symbol.file) === path.posix.dirname(fromFile) && sameGoPackage(other, card);
       }) : [];
       // A declaration in another file built only in some configurations may not be compiled with the caller, which then
       // reaches a builtin or a declaration elsewhere; the index cannot tell which.

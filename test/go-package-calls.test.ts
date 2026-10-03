@@ -79,4 +79,33 @@ describe("a plain Go call names a function of its own package", () => {
     expect(callAt(index, "caller.go", 3, "len")?.toSymbol).toBeUndefined();
     expect(callAt(index, "caller.go", 3, "size")?.toSymbol).toBeUndefined();
   });
+
+  it("treats every name of a grouped parameter, result or range clause as a local that shadows the package function", async () => {
+    const index = await build({
+      "go.mod": "module example.com/app\n\ngo 1.22\n",
+      "params.go": "package app\n\nfunc RunParams(Other, Target func() int) int { return Target() }\n",
+      "results.go": "package app\n\nfunc RunResults() (Other, Target func() int) {\n\tTarget = func() int { return 2 }\n\tTarget()\n\treturn\n}\n",
+      "ranges.go": "package app\n\nfunc RunRange() int {\n\tfor _, Target := range []func() int{func() int { return 2 }} {\n\t\treturn Target()\n\t}\n\treturn Target()\n}\n",
+      "helper.go": "package app\n\nfunc Target() int { return 1 }\n",
+      "other/other.go": "package other\n\nfunc Target() int { return 3 }\n",
+    });
+    expect(callAt(index, "params.go", 3, "Target")?.toSymbol).toBeUndefined();
+    expect(callAt(index, "results.go", 5, "Target")?.toSymbol).toBeUndefined();
+    expect(callAt(index, "ranges.go", 5, "Target")?.toSymbol).toBeUndefined();
+    // After the loop the range variable is out of scope, so the package function is called.
+    expect(callAt(index, "ranges.go", 7, "Target")?.toSymbol).toBe("helper.go#Target");
+  });
+
+  it("reads a Unicode package name and one written after a comment, and never takes an unread name as a shared package", async () => {
+    const index = await build({
+      "go.mod": "module example.com/app\n\ngo 1.22\n",
+      "u/caller.go": "package α\n\nimport . \"example.com/app/other\"\n\nfunc Run() int { return Target() }\n",
+      "u/external_test.go": "package α_test\n\nfunc Target() int { return 1 }\n",
+      "c/caller.go": "package /* note */ app\n\nimport . \"example.com/app/other\"\n\nfunc Run() int { return Target() }\n",
+      "c/external_test.go": "package /* note */ app_test\n\nfunc Target() int { return 1 }\n",
+      "other/other.go": "package other\n\nfunc Target() int { return 2 }\n",
+    });
+    expect(callAt(index, "u/caller.go", 5, "Target")?.toSymbol).not.toBe("u/external_test.go#Target");
+    expect(callAt(index, "c/caller.go", 5, "Target")?.toSymbol).not.toBe("c/external_test.go#Target");
+  });
 });

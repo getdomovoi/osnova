@@ -59,8 +59,6 @@ interface Scope { readonly parent: Scope | null; readonly names: Map<string, Dec
 
 export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
-  // Whether a local, parameter or receiver of an enclosing function binds the name at the site.
-  local: (name: string, site: Node) => boolean;
   heritage: (classNode: Node) => SymbolBinding[];
   interfaces: (classNode: Node) => SymbolBinding[];
   returns: (fn: Node) => ReturnBinding | undefined;
@@ -488,7 +486,6 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
       return types.map((type) => { const name = spec.typeName(type); const owner = name === undefined ? undefined : ownerForType(name, fn); return asReturn(owner) ?? null; });
     },
     memberKind: (fn) => spec.memberKind(fn),
-    local: (name, site) => scopeBinds(scopes.get(site.id) ?? module, name, site.startIndex),
     unwrapped(fn) {
       const type = spec.returnType(fn);
       const inner = type === null ? null : spec.innerType?.(type) ?? null;
