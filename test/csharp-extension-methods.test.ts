@@ -344,6 +344,20 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     }
   });
 
+  it("reads a verbatim string that starts with a doubled quote as verbatim, not raw", async () => {
+    for (const marker of ['@""""', '@"""x"', '$@""""', '@$""""']) {
+      for (const block of ['extension(string s) {\n        public string Probe<T>(T value) => "inner";\n    }', 'public static string Pr\\u006Fbe(this string s, int value) => "inner";']) {
+        await write({
+          "Block.cs": `namespace Inner;\npublic static class Block {\n    public const string Marker = ${marker};\n    ${block}\n}\n`,
+          "Outer.cs": "namespace Outer;\npublic static class Ext {\n    public static string Probe(this string s, int value) => \"outer\";\n}\n",
+          "Program.cs": "using Outer;\nnamespace Inner;\npublic class Use { public static string Run() => \"s\".Probe(1); }\n",
+        });
+        const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+        expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBeUndefined();
+      }
+    }
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });

@@ -303,8 +303,9 @@ function blanked(source: string): string {
     if (c === "'" ) { let k = i + 1; while (k < source.length && source[k] !== "'" && !LINE_END.test(source[k]!)) k += source[k] === "\\" ? 2 : 1; blank(i, k + 1); i = k + 1; continue; }
     if (c === "\"") {
       const quotes = /^"+/.exec(source.slice(i))![0].length;
-      if (quotes >= 3) { const end = source.indexOf("\"".repeat(quotes), i + quotes); const stop = end < 0 ? source.length : end + quotes; blank(i, stop); i = stop; continue; }
       const verbatim = /[@][$]*$|[$]+@$/.test(source.slice(Math.max(0, i - 3), i));
+      // A raw string never has `@`: `@""""` is a verbatim string holding one doubled quote.
+      if (quotes >= 3 && !verbatim) { const end = source.indexOf("\"".repeat(quotes), i + quotes); const stop = end < 0 ? source.length : end + quotes; blank(i, stop); i = stop; continue; }
       let k = i + 1;
       while (k < source.length) {
         if (verbatim && source[k] === "\"" && source[k + 1] === "\"") { k += 2; continue; }
