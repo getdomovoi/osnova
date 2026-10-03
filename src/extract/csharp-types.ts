@@ -284,16 +284,23 @@ export function receiverTypeOf(expression: Node, site: Node = expression, depth 
   }
 }
 
+// C# ends a line at CR, LF, NEL, U+2028 and U+2029: a line comment and a regular literal end there.
+const LINE_END = /[\r\n\u0085\u2028\u2029]/u;
+const lineEnd = (source: string, from: number): number => {
+  const rest = LINE_END.exec(source.slice(from));
+  return rest === null ? source.length : from + rest.index;
+};
+
 // The source with comments and string and character literals blanked to spaces, offsets kept.
 function blanked(source: string): string {
   const out = source.split("");
-  const blank = (from: number, to: number) => { for (let k = from; k < to && k < out.length; k += 1) if (out[k] !== "\n") out[k] = " "; };
+  const blank = (from: number, to: number) => { for (let k = from; k < to && k < out.length; k += 1) if (!LINE_END.test(out[k]!)) out[k] = " "; };
   let i = 0;
   while (i < source.length) {
     const c = source[i]!;
-    if (c === "/" && source[i + 1] === "/") { const end = source.indexOf("\n", i); const stop = end < 0 ? source.length : end; blank(i, stop); i = stop; continue; }
+    if (c === "/" && source[i + 1] === "/") { const stop = lineEnd(source, i); blank(i, stop); i = stop; continue; }
     if (c === "/" && source[i + 1] === "*") { const end = source.indexOf("*/", i + 2); const stop = end < 0 ? source.length : end + 2; blank(i, stop); i = stop; continue; }
-    if (c === "'" ) { let k = i + 1; while (k < source.length && source[k] !== "'" && source[k] !== "\n") k += source[k] === "\\" ? 2 : 1; blank(i, k + 1); i = k + 1; continue; }
+    if (c === "'" ) { let k = i + 1; while (k < source.length && source[k] !== "'" && !LINE_END.test(source[k]!)) k += source[k] === "\\" ? 2 : 1; blank(i, k + 1); i = k + 1; continue; }
     if (c === "\"") {
       const quotes = /^"+/.exec(source.slice(i))![0].length;
       if (quotes >= 3) { const end = source.indexOf("\"".repeat(quotes), i + quotes); const stop = end < 0 ? source.length : end + quotes; blank(i, stop); i = stop; continue; }
@@ -302,7 +309,7 @@ function blanked(source: string): string {
       while (k < source.length) {
         if (verbatim && source[k] === "\"" && source[k + 1] === "\"") { k += 2; continue; }
         if (!verbatim && source[k] === "\\") { k += 2; continue; }
-        if (source[k] === "\"" || (!verbatim && source[k] === "\n")) break;
+        if (source[k] === "\"" || (!verbatim && LINE_END.test(source[k]!))) break;
         k += 1;
       }
       blank(i, k + 1); i = k + 1; continue;
@@ -355,7 +362,9 @@ function pastClose(text: string, open: number): number {
 // ERROR node, a
 // C# 14 `extension(...) { ... }` block (which this grammar reads as a constructor named `extension`, as local
 // functions or as an error), and the whole file when its tree holds an error that is neither an ERROR node nor a
-// placeholder identifier the parser inserted. Extra names only keep calls of those names unresolved.
+// placeholder identifier the parser inserted, or when the source holds a lone CR, NEL, U+2028 or U+2029, which this
+// grammar does not read as ending a line comment, so a declaration after one can vanish into the comment without an
+// error. Extra names only keep calls of those names unresolved.
 export function unplacedExtensionNames(root: Node, source: string): string[] {
   const text = blanked(source);
   const names = new Set<string>();
@@ -370,6 +379,7 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
     }
     if (errorNodes === 0 && !placeholderErrorsOnly(root)) addRange(0, text.length);
   }
+  if (/\r(?!\n)|[\u0085\u2028\u2029]/u.test(source)) addRange(0, text.length);
   // A block the grammar read as a constructor named `extension`.
   const pending = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
