@@ -33,9 +33,6 @@ export function scoreSites(oracle, claimed, { tolerance = 1 } = {}) {
     }
     return undefined;
   };
-  const holds = (entry, site) => entry.verdict === "in-repo" && entry.defs.some((def) =>
-    def.file === site.targetFile && site.targetStartLine !== undefined && site.targetStartLine !== null &&
-    def.line >= site.targetStartLine && def.line <= (site.targetEndLine ?? site.targetStartLine));
   const truth = new Set();
   for (const entry of oracle.entries) if (entry.verdict === "in-repo") truth.add(key(entry.file, entry.line, entry.name));
   const toolFiles = new Set(claimed.sites.map((s) => s.callerFile));
@@ -55,19 +52,53 @@ export function scoreSites(oracle, claimed, { tolerance = 1 } = {}) {
   }
   for (const [k, sites] of claimsAt) {
     const entries = byKey.get(k);
-    // Pair claims with the calls whose declarations they hold, as many as possible (augmenting paths; a key holds
-    // a handful of calls at most).
-    const pairedTo = new Array(entries.length).fill(-1);
-    const pair = (claim, seen) => {
-      for (let call = 0; call < entries.length; call += 1) {
-        if (seen.has(call) || !holds(entries[call], sites[claim])) continue;
-        seen.add(call);
-        if (pairedTo[call] === -1 || pair(pairedTo[call], seen)) { pairedTo[call] = claim; return true; }
+    // The calls each claim's target span holds, in call order, found by declaration file and line.
+    const declared = new Map();
+    entries.forEach((entry, call) => {
+      if (entry.verdict !== "in-repo") return;
+      for (const def of entry.defs) {
+        if (!declared.has(def.file)) declared.set(def.file, []);
+        declared.get(def.file).push([def.line, call]);
       }
-      return false;
-    };
+    });
+    for (const lines of declared.values()) lines.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const fits = sites.map((site) => {
+      const lines = declared.get(site.targetFile);
+      if (lines === undefined || site.targetStartLine === undefined || site.targetStartLine === null) return [];
+      const end = site.targetEndLine ?? site.targetStartLine;
+      let low = 0, high = lines.length;
+      while (low < high) { const mid = (low + high) >> 1; if (lines[mid][0] < site.targetStartLine) low = mid + 1; else high = mid; }
+      const calls = new Set();
+      for (let at = low; at < lines.length && lines[at][0] <= end; at += 1) calls.add(lines[at][1]);
+      return [...calls].sort((a, b) => a - b);
+    });
+    // Pair claims with those calls, as many as possible: a greedy pass, then an augmenting path for each claim left,
+    // searched with an explicit stack so a line of thousands of calls cannot exhaust the call stack.
+    const pairedTo = new Array(entries.length).fill(-1);
     const paired = new Set();
-    for (let claim = 0; claim < sites.length; claim += 1) if (pair(claim, new Set())) paired.add(claim);
+    sites.forEach((_, claim) => {
+      const free = fits[claim].find((call) => pairedTo[call] === -1);
+      if (free !== undefined) { pairedTo[free] = claim; paired.add(claim); }
+    });
+    for (let start = 0; start < sites.length; start += 1) {
+      if (paired.has(start)) continue;
+      const seen = new Set();
+      // Each frame is a claim, the next of its calls to try, and the call its parent frame reached it through.
+      const stack = [{ claim: start, next: 0, via: -1 }];
+      while (stack.length > 0) {
+        const frame = stack[stack.length - 1];
+        if (frame.next >= fits[frame.claim].length) { stack.pop(); continue; }
+        const call = fits[frame.claim][frame.next++];
+        if (seen.has(call)) continue;
+        seen.add(call);
+        if (pairedTo[call] !== -1) { stack.push({ claim: pairedTo[call], next: 0, via: call }); continue; }
+        // A free call ends the path: each claim on it takes the call that leads to the next one.
+        pairedTo[call] = frame.claim;
+        for (let at = stack.length - 1; at > 0; at -= 1) pairedTo[stack[at].via] = stack[at - 1].claim;
+        paired.add(start);
+        break;
+      }
+    }
     sites.forEach((site, claim) => {
       if (paired.has(claim)) {
         truePositive += 1;

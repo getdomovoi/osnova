@@ -65,6 +65,16 @@ describe("scoreSites", () => {
     const report = scoreSites(twice, { sites: [site(3, "get", "b.py", 9, 12), site(3, "get", "b.py", 9, 12)] }, { tolerance: 1 });
     expect(report).toMatchObject({ truePositive: 1, falsePositive: 1, coveredInRepoSites: 1 });
   });
+
+  it("pairs a line with thousands of calls of one name without exhausting the stack", () => {
+    // Claim i holds calls i-1 and i (claim 0 only call 0). Taken last to first, each claim first takes call i-1, so claim
+    // 0 finds call 0 taken and every claim moves along one chain as long as the line.
+    const count = 20000;
+    const entries = Array.from({ length: count }, (_, call) => ({ file: "a.py", line: 3, name: "f", verdict: "in-repo", defs: [{ file: "b.py", line: 10 * call + 5 }] }));
+    const sites = Array.from({ length: count }, (_, claim) => site(3, "f", "b.py", Math.max(0, 10 * claim - 5), 10 * claim + 5)).reverse();
+    const report = scoreSites({ oracle: "fixture", entries }, { sites }, { tolerance: 0 });
+    expect(report).toMatchObject({ truePositive: count, falsePositive: 0 });
+  });
 });
 
 describe("sites-python.py", () => {
