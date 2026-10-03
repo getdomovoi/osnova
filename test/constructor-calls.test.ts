@@ -781,6 +781,16 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("finds a C# #if after a next-line character, which C# reads as a line break", async () => {
+    await write({
+      "Nel.cs": "class X {}\u0085#if false\nclass T {public T(){}}\n#endif\n",
+      "Actual.cs": "namespace Q {class T {public T(){}}}\n",
+      "Use.cs": "using Q;\nclass C {public static object Run(){return new T();}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("reads the braces of each C# #if, #elif and #else branch on their own", async () => {
     await write({
       "Wrapped.cs": "class A {\n#if false\nclass H {\n#elif true\n}\nclass B {\n#else\n}\n#endif\npublic class T {public T(){}}\n}\n",

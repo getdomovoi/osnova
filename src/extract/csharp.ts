@@ -161,8 +161,9 @@ export const csharpAdapter: LanguageAdapter = {
     // a conditional namespace declaration, and a directive in one. The members of a conditional type are compiled with it,
     // so they are not marked on that account. A branch whose braces do not balance can change where the rest of the file nests, so then every
     // declaration and directive in the file is conditional, every type's namespace is unknown and every creation in it is
-    // blocked. The tree is walked only when a line holds `#` and `if` after any whitespace, a byte-order mark included.
-    const { regions, structural } = /^\s*#\s*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : { regions: [], structural: false };
+    // blocked. The tree is walked only when a line holds `#` and `if` after any whitespace, a byte-order mark included; C#
+    // also ends a line at U+0085, which `^` does not.
+    const { regions, structural } = /(?:^|\u0085)\s*#\s*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : { regions: [], structural: false };
     const inRegion = (node: Node): boolean => structural || regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
     const headerInRegion = (node: Node): boolean => {
       // A namespace's header ends with its name: a file-scoped one has no body to stop at.
