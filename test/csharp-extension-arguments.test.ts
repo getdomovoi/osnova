@@ -261,7 +261,8 @@ describe("a C# extension method chosen by the written argument types", () => {
     expect(picks(index, 12, "U")).toEqual([undefined]);
     // default of an integral type is the constant zero: it converts to E, which this does not read for byte.
     expect(picks(index, 13, "Z")).toEqual([undefined]);
-    expect(picks(index, 14, "Z")).toEqual([9]);
+    // System.Int32 is a resolved name, not a keyword, so its default is not read as a constant.
+    expect(picks(index, 14, "Z")).toEqual([undefined]);
     expect(picks(index, 15, "P")).toEqual([7]);
     expect(picks(index, 16, "P")).toEqual([8]);
   });
@@ -273,6 +274,22 @@ describe("a C# extension method chosen by the written argument types", () => {
     });
     const index = await build();
     expect(index.edges.find((e) => e.kind === "calls" && e.toName === "Pick")?.toSymbol).toBeUndefined();
+  });
+
+  it("reads only keyword spellings as literal types; a dotted or escaped spelling is a resolved name", async () => {
+    await write({
+      "Type.cs": "namespace App.System;\npublic class Int32 { }\n",
+      "Ext.cs": "namespace App;\npublic enum E { M }\npublic static class Ext\n{\n    public static string Pick(this string s, E n) => \"enum\";\n    public static string Pick(this string s, object n) => \"object\";\n}\npublic class @int { }\npublic static class Use\n{\n    public static string A() => \"s\".Pick(default(System.Int32));\n    public static string B() => \"s\".Pick(default(global::System.Int32));\n    public static string C() => \"s\".Pick((System.Int32)1);\n    public static string D() => \"s\".Pick(new @int());\n}\n",
+    });
+    const index = await build();
+    const picksIn = (line: number) => index.edges.filter((e) => e.kind === "calls" && e.fromFile === "Ext.cs" && e.line === line && e.toName === "Pick").map((e) => e.overload !== undefined && "line" in e.overload ? e.overload.line : e.toSymbol);
+    // App.System.Int32 is a repository class here, so the compiler picks object; the index claims nothing.
+    expect(picksIn(11)).toEqual([undefined]);
+    // global::System.Int32's default is the zero constant, which converts to E; not read, so nothing is claimed.
+    expect(picksIn(12)).toEqual([undefined]);
+    expect(picksIn(13)).toEqual([undefined]);
+    // A class named @int is not the keyword int.
+    expect(picksIn(14)).toEqual([undefined]);
   });
 
   it("gives an incremental update the same picks as a full rebuild", async () => {

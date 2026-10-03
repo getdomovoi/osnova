@@ -23,6 +23,8 @@ function typeParameterInScope(node: Node, name: string): boolean {
   return false;
 }
 
+const KEYWORD_TYPES = new Set(["bool", "byte", "sbyte", "char", "short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal", "string", "object", "dynamic", "var", "nint", "nuint", "void"]);
+
 // A type node written out, or undefined for a form this does not read (a tuple, pointer or function pointer type) or a
 // name that is a type parameter in scope at `site`.
 export function writtenType(type: Node | null, site: Node): string | undefined {
@@ -31,6 +33,8 @@ export function writtenType(type: Node | null, site: Node): string | undefined {
     case "predefined_type": return type.text.replace(/\s+/g, "");
     case "identifier": {
       const name = plain(type.text);
+      // `@int` names a type, not the keyword; it is written as nothing this reads.
+      if (type.text.startsWith("@") && KEYWORD_TYPES.has(name)) return undefined;
       return typeParameterInScope(site, name) ? undefined : name;
     }
     case "generic_name": {
@@ -301,8 +305,12 @@ export function argumentTypesOf(list: Node, site: Node): (string | null)[] {
   });
 }
 
-const LITERAL_SPELLINGS: Readonly<Record<string, string>> = { int: "int", "System.Int32": "int", uint: "uint", "System.UInt32": "uint", long: "long", "System.Int64": "long", ulong: "ulong", "System.UInt64": "ulong" };
-const INTEGRAL_SPELLINGS = new Set(["sbyte", "byte", "short", "ushort", "char", "nint", "nuint", "System.SByte", "System.Byte", "System.Int16", "System.UInt16", "System.Char", "System.IntPtr", "System.UIntPtr"]);
+// Only a keyword names a literal type at extraction; `System.Int32` and the like are resolved names, which a nearer
+// namespace, an alias or an indexed type can make something else, so a cast or default written with one stays unknown.
+const LITERAL_SPELLINGS: Readonly<Record<string, string>> = { int: "int", uint: "uint", long: "long", ulong: "ulong" };
+const INTEGRAL_SPELLINGS = new Set(["sbyte", "byte", "short", "ushort", "char", "nint", "nuint"]);
+const INTEGRAL_NAMES = new Set(["Int32", "UInt32", "Int64", "UInt64", "SByte", "Byte", "Int16", "UInt16", "Char", "IntPtr", "UIntPtr"]);
+const maybeIntegral = (written: string): boolean => INTEGRAL_SPELLINGS.has(written) || INTEGRAL_NAMES.has(written.slice(written.lastIndexOf(".") + 1).replace(/^.*::/u, ""));
 const LITERAL_RANGE: Readonly<Record<string, readonly [bigint, bigint]>> = { int: [-2147483648n, 2147483647n], uint: [0n, 4294967295n], long: [-9223372036854775808n, 9223372036854775807n], ulong: [0n, 18446744073709551615n] };
 
 function argumentTypeOf(expression: Node, site: Node): string | null {
@@ -341,12 +349,12 @@ function argumentTypeOf(expression: Node, site: Node): string | null {
       const range = target === undefined ? undefined : LITERAL_RANGE[target];
       return range !== undefined && value >= range[0] && value <= range[1] ? `#lit:${target}:${value}` : null;
     }
-    if (written !== undefined && (target !== undefined || INTEGRAL_SPELLINGS.has(written))) return null;
+    if (written === undefined || target !== undefined || maybeIntegral(written)) return null;
   }
   if (expression.type === "default_expression") {
     const written = writtenType(expression.childForFieldName("type"), site);
     if (written !== undefined && LITERAL_SPELLINGS[written] !== undefined) return `#lit:${LITERAL_SPELLINGS[written]}:0`;
-    if (written !== undefined && INTEGRAL_SPELLINGS.has(written)) return null;
+    if (written === undefined || maybeIntegral(written)) return null;
   }
   if (expression.type === "identifier") {
     const declared = declaredTypeOf(site, plain(expression.text));
