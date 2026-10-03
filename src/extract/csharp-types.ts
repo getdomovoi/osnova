@@ -332,10 +332,50 @@ function placeholderErrorsOnly(root: Node): boolean {
 // A C# identifier as written: `@`, letters, digits, connectors, marks, formatting characters and \\u or \\U escapes, which
 // `plain` decodes to the name the compiler sees.
 const ESCAPE = String.raw`\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}`;
-const IDENTIFIER = String.raw`@?(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*`;
-const BEFORE = String.raw`(?<![\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_.@\\])`;
-const IDENTIFIER_CALL = new RegExp(`${BEFORE}(${IDENTIFIER})\\s*(?:<[^<>{};()]*>)?\\s*\\(`, "gu");
-const THIS_DECLARATION = new RegExp(`${BEFORE}(${IDENTIFIER})\\s*(?:<[^<>{};()]*>)?\\s*\\(\\s*this\\b`, "gu");
+const WHOLE_IDENTIFIER = new RegExp(String.raw`^@?(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*$`, "u");
+const IDENTIFIER_PART = /[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_@\\]/u;
+
+// The identifier written before an opening parenthesis at `open`, past whitespace and one type parameter or type
+// argument list read with balanced angle brackets (`Probe<[A(1)] T>(`); undefined when none is there or the name is a
+// member access (`x.M(`).
+function nameBefore(text: string, open: number): string | undefined {
+  let at = open - 1;
+  while (at >= 0 && /\s/u.test(text[at]!)) at -= 1;
+  if (text[at] === ">") {
+    let depth = 0;
+    for (; at >= 0; at -= 1) {
+      if (text[at] === ">") depth += 1;
+      else if (text[at] === "<" && --depth === 0) break;
+      else if (text[at] === "{" || text[at] === "}" || text[at] === ";") return undefined;
+    }
+    if (at < 0) return undefined;
+    at -= 1;
+    while (at >= 0 && /\s/u.test(text[at]!)) at -= 1;
+  }
+  const end = at + 1;
+  // Back over identifier characters; one outside the Basic Multilingual Plane is a surrogate pair.
+  while (at >= 0) {
+    const low = text.charCodeAt(at);
+    const pair = low >= 0xdc00 && low <= 0xdfff && at > 0 && text.charCodeAt(at - 1) >= 0xd800 && text.charCodeAt(at - 1) <= 0xdbff;
+    const character = pair ? text.slice(at - 1, at + 1) : text[at]!;
+    if (!IDENTIFIER_PART.test(character)) break;
+    at -= pair ? 2 : 1;
+  }
+  const written = text.slice(at + 1, end);
+  if (written.length === 0 || !WHOLE_IDENTIFIER.test(written) || text[at] === ".") return undefined;
+  return written;
+}
+
+// Every name written before `(` in a range of the text, decoded; with `thisOnly`, only where `(` is followed by `this`.
+function namesBeforeParentheses(text: string, from: number, to: number, thisOnly: boolean): string[] {
+  const names: string[] = [];
+  for (let open = text.indexOf("(", from); open >= 0 && open < to; open = text.indexOf("(", open + 1)) {
+    if (thisOnly && !/^\(\s*this\b/u.test(text.slice(open, open + 64))) continue;
+    const written = nameBefore(text, open);
+    if (written !== undefined) names.push(written);
+  }
+  return names;
+}
 
 // Names of extension methods the file may declare that its tree does not place: every name declared as
 // `Name(this ...` when the tree holds an error that can move a declaration, and every name written before `(` inside a
@@ -344,12 +384,13 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
   const text = blanked(source);
   const names = new Set<string>();
   if (!placeholderErrorsOnly(root)) {
-    for (const match of text.matchAll(THIS_DECLARATION)) names.add(plain(match[1]!));
+    for (const written of namesBeforeParentheses(text, 0, text.length, true)) names.add(plain(written));
   }
   // A block header `extension(`, however its keyword is spelled; `@extension` is an identifier.
-  for (const match of text.matchAll(IDENTIFIER_CALL)) {
-    if (match[1]!.startsWith("@") || plain(match[1]!) !== "extension") continue;
-    const open = text.indexOf("{", match.index + match[0].length);
+  for (let header = text.indexOf("("); header >= 0; header = text.indexOf("(", header + 1)) {
+    const written = nameBefore(text, header);
+    if (written === undefined || written.startsWith("@") || plain(written) !== "extension") continue;
+    const open = text.indexOf("{", header);
     if (open < 0) continue;
     let depth = 0;
     let close = text.length;
@@ -357,7 +398,7 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
       if (text[k] === "{") depth += 1;
       else if (text[k] === "}" && --depth === 0) { close = k; break; }
     }
-    for (const call of text.slice(open, close).matchAll(IDENTIFIER_CALL)) names.add(plain(call[1]!));
+    for (const written of namesBeforeParentheses(text, open, close, false)) names.add(plain(written));
   }
   return [...names].sort();
 }
