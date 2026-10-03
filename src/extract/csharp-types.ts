@@ -93,7 +93,7 @@ function realType(text: string): string {
 // and its initializer, or null when the name is declared without a written type (an untyped lambda parameter, a
 // pattern or `out` variable, `value` in an accessor) or may be a member a base type supplies; undefined when no
 // declaration of the name is found, so the name may be a type or a member a `using static` imports.
-type Declared = { readonly type: Node; readonly initializer?: Node | undefined } | null;
+type Declared = { readonly type: Node; readonly initializer?: Node | undefined; readonly constant?: boolean | undefined } | null;
 
 function declaredIn(declaration: Node, name: string, site: Node, local: boolean): Declared | undefined {
   const type = declaration.childForFieldName("type") ?? named(declaration)[0] ?? null;
@@ -105,7 +105,9 @@ function declaredIn(declaration: Node, name: string, site: Node, local: boolean)
     if (local && declared.endIndex > site.startIndex) continue;
     if (type === null) return null;
     const value = childOfType(declarator, "equals_value_clause");
-    return { type, initializer: value === null ? undefined : named(value)[0] };
+    // A `const` local or field is a constant expression wherever it is named.
+    const constant = (declaration.parent?.children ?? []).some((part) => part !== null && (part.type === "const" || (part.type === "modifier" && part.text === "const")));
+    return { type, initializer: value === null ? undefined : named(value)[0], constant };
   }
   return undefined;
 }
@@ -299,18 +301,46 @@ export function argumentTypesOf(list: Node, site: Node): (string | null)[] {
   });
 }
 
+const LITERAL_TYPES = new Set(["int", "uint", "long", "ulong"]);
+
 function argumentTypeOf(expression: Node, site: Node): string | null {
+  // A parenthesized constant is the same constant.
+  while (expression.type === "parenthesized_expression" && named(expression).length === 1) expression = named(expression)[0]!;
   if (expression.type === "null_literal") return "#null";
   const negative = expression.type === "prefix_unary_expression" && expression.children[0]?.type === "-" && named(expression).length === 1;
-  const literal = negative ? named(expression)[0]! : expression;
+  let literal = negative ? named(expression)[0]! : expression;
+  while (literal.type === "parenthesized_expression" && named(literal).length === 1) literal = named(literal)[0]!;
   if (literal.type === "integer_literal") {
     const type = integerType(literal.text);
     const digits = literal.text.replace(/_/g, "").toLowerCase().replace(/(?:ul|lu|u|l)$/, "");
+    const suffixed = /(?:ul|lu|u|l)$/.test(literal.text.toLowerCase().replace(/_/g, ""));
     let value: bigint;
     try { value = BigInt(digits); } catch { return null; }
-    return type === undefined ? null : `#lit:${type}:${negative ? -value : value}`;
+    if (type === undefined) return null;
+    if (!negative) return `#lit:${type}:${value}`;
+    // Unary minus: int and long stay; a uint operand promotes to long; the literals 2147483648 and 9223372036854775808
+    // negated are int.MinValue and long.MinValue; a ulong operand has no unary minus.
+    const negated = type === "int" || type === "long" ? type : type === "uint" ? (!suffixed && value === 2147483648n ? "int" : "long") : !suffixed && value === 9223372036854775808n ? "long" : null;
+    return negated === null ? null : `#lit:${negated}:${-value}`;
   }
   if (negative) return null;
+  // A cast of an integer literal to one of the literal types is that constant; to another type it is a constant whose
+  // conversions this does not read. `default(T)` of a literal type is its zero.
+  if (expression.type === "cast_expression") {
+    const target = writtenType(expression.childForFieldName("type"), site);
+    const operand = expression.childForFieldName("value") ?? named(expression).at(-1);
+    const inner = operand === undefined || operand === null ? null : argumentTypeOf(operand, site);
+    if (inner !== null && inner.startsWith("#lit:")) return target !== undefined && LITERAL_TYPES.has(target) ? `#lit:${target}:${inner.slice(inner.lastIndexOf(":") + 1)}` : null;
+    if (target !== undefined && (LITERAL_TYPES.has(target) || ["sbyte", "byte", "short", "ushort", "char"].includes(target))) return null;
+  }
+  if (expression.type === "default_expression") {
+    const target = writtenType(expression.childForFieldName("type"), site);
+    if (target !== undefined && LITERAL_TYPES.has(target)) return `#lit:${target}:0`;
+  }
+  if (expression.type === "identifier") {
+    const declared = declaredTypeOf(site, plain(expression.text));
+    if (declared !== undefined && declared !== null && declared.constant === true) return null;
+  }
   if (expression.type === "member_access_expression") {
     const parts: string[] = [];
     let current: Node | null = expression;
@@ -322,8 +352,9 @@ function argumentTypeOf(expression: Node, site: Node): string | null {
     }
     if (current === null || current.type !== "identifier") return null;
     const first = plain(current.text);
-    // A variable in scope makes the name a member access on a value, whose type the member's declaration gives.
-    if (declaredTypeOf(current, first) !== undefined) return null;
+    // A variable in scope makes the name a member access on a value, whose type the member's declaration gives; a type
+    // parameter's static member is not an enum member.
+    if (declaredTypeOf(current, first) !== undefined || typeParameterInScope(current, first)) return null;
     return `=${[first, ...parts].join(".")}`;
   }
   return receiverTypeOf(expression, site) ?? null;

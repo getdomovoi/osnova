@@ -193,6 +193,60 @@ describe("a C# extension method chosen by the written argument types", () => {
     expect(picks(index, 9, "Plain")).toEqual([13]);
   });
 
+  it("types a negated literal as the compiler does", async () => {
+    await write({
+      "Ext.cs": "namespace Lib;\npublic static class Ext\n{\n    public static void A(this string s, int n) { }\n    public static void A(this string s, long n) { }\n    public static void B(this string s, uint n) { }\n    public static void B(this string s, long n) { }\n    public static void C(this string s, long n) { }\n    public static void C(this string s, object n) { }\n}\n",
+      "Use.cs": use(["\"x\".A(-2147483648);", "\"x\".B(-1u);", "\"x\".B(-2147483648u);", "\"x\".C(-9223372036854775808);", "\"x\".A(-(1));"], ["using Lib;"]),
+    });
+    const index = await build();
+    // -2147483648 is int.MinValue; a negated uint is long; -9223372036854775808 is long.MinValue.
+    expect(picks(index, 7, "A")).toEqual([4]);
+    expect(picks(index, 8, "B")).toEqual([7]);
+    expect(picks(index, 9, "B")).toEqual([7]);
+    expect(picks(index, 10, "C")).toEqual([8]);
+    expect(picks(index, 11, "A")).toEqual([4]);
+  });
+
+  it("keeps constant conversions for parenthesized, cast, default and const operands", async () => {
+    await write({
+      "Ext.cs": "namespace Lib;\npublic enum E { Zero }\npublic static class Ext\n{\n    public static void P(this string s, byte n) { }\n    public static void P(this string s, long n) { }\n    public static void Z(this string s, E e) { }\n    public static void Z(this string s, object o) { }\n}\n",
+      "Use.cs": "using Lib;\nnamespace App;\npublic class Use\n{\n    const int N = 1;\n    public void Run()\n    {\n        const int n = 1; const int zero = 0;\n        \"x\".P((1));\n        \"x\".P(((255)));\n        \"x\".P((int)1);\n        \"x\".P((byte)1);\n        \"x\".P(n);\n        \"x\".P(N);\n        \"x\".Z(zero);\n        \"x\".Z(default(int));\n        \"x\".Z((0));\n        \"x\".Z(1);\n    }\n}\n",
+    });
+    const index = await build();
+    expect(picks(index, 9, "P")).toEqual([5]);
+    expect(picks(index, 10, "P")).toEqual([5]);
+    expect(picks(index, 11, "P")).toEqual([5]);
+    // A byte constant converts to byte (identity) and to long; its other constant conversions are not read: unresolved.
+    expect(picks(index, 12, "P")).toEqual([undefined]);
+    // A const name is a constant whose value is not read.
+    expect(picks(index, 13, "P")).toEqual([undefined]);
+    expect(picks(index, 14, "P")).toEqual([undefined]);
+    expect(picks(index, 15, "Z")).toEqual([undefined]);
+    expect(picks(index, 16, "Z")).toEqual([7]);
+    expect(picks(index, 17, "Z")).toEqual([7]);
+    // 1 converts to object only.
+    expect(picks(index, 18, "Z")).toEqual([8]);
+  });
+
+  it("finds a .NET type of an enclosing namespace before an indexed type imported further out", async () => {
+    await write({
+      "Repo.cs": "namespace Repo;\npublic class DateTime { }\n",
+      "Ext.cs": "using Repo;\nnamespace System.Review;\npublic static class Ext\n{\n    public static string Pick(this string s, System.DateTime n) => \"dotnet\";\n    public static string Pick(this string s, Repo.DateTime n) => \"repo\";\n}\npublic class Use\n{\n    public string Run() { DateTime n = default; return \"s\".Pick(n); }\n}\n",
+    });
+    const index = await build();
+    const edge = index.edges.find((e) => e.kind === "calls" && e.fromFile === "Ext.cs" && e.toName === "Pick");
+    expect(edge?.overload).toEqual({ line: 5, types: true });
+  });
+
+  it("does not read a type parameter's static member as an enum member", async () => {
+    await write({
+      "Ext.cs": "namespace Lib;\npublic enum T { M }\npublic interface IHasM { static abstract int M { get; } }\npublic static class Ext\n{\n    public static string Pick(this string s, T n) => \"enum\";\n    public static string Pick(this string s, int n) => \"int\";\n}\npublic static class Use\n{\n    public static string Run<T>() where T : IHasM => \"s\".Pick(T.M);\n}\n",
+    });
+    const index = await build();
+    const edge = index.edges.find((e) => e.kind === "calls" && e.toName === "Pick");
+    expect(edge?.toSymbol).toBeUndefined();
+  });
+
   it("gives an incremental update the same picks as a full rebuild", async () => {
     await write({ "Words.cs": words, "Use.cs": use(["5.ToWords(form);", "5.ToWords(culture);"]) });
     const cacheDir = path.join(temporary, "cache");
