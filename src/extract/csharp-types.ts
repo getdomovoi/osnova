@@ -63,7 +63,8 @@ export function writtenType(type: Node | null, site: Node): string | undefined {
       const element = writtenType(type.childForFieldName("type"), site);
       const rank = childOfType(type, "array_rank_specifier");
       if (element === undefined || rank === null) return undefined;
-      const commas = childrenOf(rank).filter((child) => child.type === ",").length;
+      // The commas are anonymous tokens, which the named-children list leaves out.
+      const commas = rank.children.filter((child) => child?.type === ",").length;
       return `${element}[${",".repeat(commas)}]`;
     }
     default: return undefined;
@@ -328,7 +329,13 @@ function placeholderErrorsOnly(root: Node): boolean {
   return true;
 }
 
-const IDENTIFIER_CALL = /(?<![\p{L}\p{N}_.])([\p{L}_][\p{L}\p{N}_]*)\s*(?:<[^<>{};()]*>)?\s*\(/gu;
+// A C# identifier as written: `@`, letters, digits, connectors, marks, formatting characters and \\u or \\U escapes, which
+// `plain` decodes to the name the compiler sees.
+const ESCAPE = String.raw`\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}`;
+const IDENTIFIER = String.raw`@?(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*`;
+const BEFORE = String.raw`(?<![\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_.@\\])`;
+const IDENTIFIER_CALL = new RegExp(`${BEFORE}(${IDENTIFIER})\\s*(?:<[^<>{};()]*>)?\\s*\\(`, "gu");
+const THIS_DECLARATION = new RegExp(`${BEFORE}(${IDENTIFIER})\\s*(?:<[^<>{};()]*>)?\\s*\\(\\s*this\\b`, "gu");
 
 // Names of extension methods the file may declare that its tree does not place: every name declared as
 // `Name(this ...` when the tree holds an error that can move a declaration, and every name written before `(` inside a
@@ -337,9 +344,11 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
   const text = blanked(source);
   const names = new Set<string>();
   if (!placeholderErrorsOnly(root)) {
-    for (const match of text.matchAll(/(?<![\p{L}\p{N}_.])([\p{L}_][\p{L}\p{N}_]*)\s*(?:<[^<>{};()]*>)?\s*\(\s*this\b/gu)) names.add(match[1]!);
+    for (const match of text.matchAll(THIS_DECLARATION)) names.add(plain(match[1]!));
   }
-  for (const match of text.matchAll(/(?<![\p{L}\p{N}_.])extension\s*(?:<[^<>{};()]*>)?\s*\(/gu)) {
+  // A block header `extension(`, however its keyword is spelled; `@extension` is an identifier.
+  for (const match of text.matchAll(IDENTIFIER_CALL)) {
+    if (match[1]!.startsWith("@") || plain(match[1]!) !== "extension") continue;
     const open = text.indexOf("{", match.index + match[0].length);
     if (open < 0) continue;
     let depth = 0;
@@ -348,7 +357,7 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
       if (text[k] === "{") depth += 1;
       else if (text[k] === "}" && --depth === 0) { close = k; break; }
     }
-    for (const call of text.slice(open, close).matchAll(IDENTIFIER_CALL)) names.add(call[1]!);
+    for (const call of text.slice(open, close).matchAll(IDENTIFIER_CALL)) names.add(plain(call[1]!));
   }
   return [...names].sort();
 }

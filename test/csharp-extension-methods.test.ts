@@ -249,6 +249,27 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     }
   });
 
+  it("keeps the rank of a multidimensional array type", async () => {
+    await write({ "P.cs": "using Outer;\nnamespace Outer {\n    public static class OuterExt {\n        public static string Probe(this int[,] a) => \"outer\";\n    }\n}\nnamespace Inner {\n    public static class InnerExt {\n        public static string Probe(this int[] a) => \"inner\";\n    }\n    public class Use {\n        public static string Run() { int[ /*rank*/ , /*rank*/ ] a = new int[1, 1]; return a.Probe(); }\n    }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    const call = index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe");
+    expect(call?.argumentTypes?.receiver).toBe("int[,]");
+    expect(call?.toSymbol).toBe("P.cs#OuterExt.Probe");
+  });
+
+  it("reads an extension block's names as the compiler does, escapes and formatting characters included", async () => {
+    for (const name of ["Pr\\u006Fbe", "Pr\u200Cobe"]) {
+      await write({
+        "Block.cs": `namespace Inner;\npublic static class Block {\n    ext\\u0065nsion(string s) {\n        public string ${name}() => "inner";\n    }\n}\n`,
+        "Outer.cs": "namespace Outer;\npublic static class Ext {\n    public static string Probe(this string s) => \"outer\";\n}\n",
+        "Program.cs": "using Outer;\nnamespace Inner;\npublic class Use { public static string Run() => \"s\".Probe(); }\n",
+      });
+      const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+      expect(index.files.get("Block.cs")?.unplacedExtensions).toContain("Probe");
+      expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBeUndefined();
+    }
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });
