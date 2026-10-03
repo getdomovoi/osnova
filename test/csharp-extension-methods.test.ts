@@ -206,6 +206,30 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     expect(targetAt(index, "Probe")).toEqual(["P.cs#OuterExt.Probe"]);
   });
 
+  it("lets another partial declaration of the class call its private extension method", async () => {
+    await write({
+      "Ext.cs": "namespace Inner;\npublic static partial class Ext {\n    private static string Probe(this string s) => \"inner\";\n}\n",
+      "Outer.cs": "namespace Outer;\npublic static class OuterExt {\n    public static string Probe(this string s) => \"outer\";\n}\n",
+      "Program.cs": "using Outer;\nnamespace Inner;\npublic static partial class Ext {\n    public static string Run() => \"s\".Probe();\n    public class Nested { public static string Go() => \"s\".Probe(); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    for (const line of [4, 5]) expect(index.edges.find((edge) => edge.kind === "calls" && edge.fromFile === "Program.cs" && edge.line === line && edge.toName === "Probe")?.toSymbol).toBe("Ext.cs#Ext.Probe");
+  });
+
+  it("leaves a delegate's own members to member lookup", async () => {
+    await write({ "P.cs": "namespace Inner {\n    public delegate void D();\n    public static class InnerExt {\n        public static void Invoke(this D d) { }\n        public static int GetInvocationList(this D d) => 0;\n    }\n    public class Use {\n        public static void Run(D d) { d.Invoke(); d.GetInvocationList(); }\n    }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    for (const name of ["Invoke", "GetInvocationList"]) expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === name)?.toSymbol).toBeUndefined();
+  });
+
+  it("does not box a ref struct receiver to object or ValueType", async () => {
+    for (const inner of ["object", "System.ValueType"]) {
+      await write({ "P.cs": `using Outer;\nnamespace Outer {\n    public static class OuterExt {\n        public static string Probe(this Inner.R r) => "outer";\n    }\n}\nnamespace Inner {\n    public ref struct R { }\n    public static class InnerExt {\n        public static string Probe(this ${inner} r) => "inner";\n    }\n    public class Use {\n        public static string Run() { R r = new R(); return r.Probe(); }\n    }\n}\n` });
+      const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${inner}`) });
+      expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBe("P.cs#OuterExt.Probe");
+    }
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });

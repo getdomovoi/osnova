@@ -1428,10 +1428,13 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const base = csharpBaseOf(type, new Set());
     return base === undefined ? null : base;
   };
+  const refStruct = (type: OsnovaSymbol): boolean => type.kind === "struct" && partsOf(type).parts.some((part) => /\bref\b[^{(:]*\bstruct\b/u.test(part.signature));
   // Whether a receiver of type `r` converts to an extension method's `this` parameter of type `p` by identity, reference
   // or boxing conversion: null when the index cannot tell.
   const receiverConverts = (r: CsharpType, p: CsharpType): boolean | null => {
     if (p.kind === "parameter" || r.kind === "parameter") return null;
+    // A ref struct never boxes, so it converts to no class or interface type.
+    if (r.kind === "repo" && refStruct(r.symbol)) return sameCsharpType(r, p);
     if (p.kind === "dotnet" && p.key === "System.Object") return true;
     const same = sameCsharpType(r, p);
     if (same !== false) return same;
@@ -1492,6 +1495,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           if (parts.some((part) => part.members?.includes(name) === true)) return true;
           // A record also has the members the compiler writes for it.
           if ((current.kind === "class" || current.kind === "struct") && parts.some((part) => /\brecord\b/u.test(part.signature)) && ["Deconstruct", "PrintMembers", "EqualityContract"].includes(name)) return true;
+          // A delegate has Invoke and the members of System.Delegate, which no table lists.
+          if (current.kind !== "class" && current.kind !== "struct" && current.kind !== "interface" && current.kind !== "enum") return true;
           if (current.kind === "enum") return listed("System.Enum");
           if (current.kind === "struct") return listed("System.ValueType");
           if (current.kind === "interface") return current.baseType !== undefined || listed("System.Object");
@@ -1541,6 +1546,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const scope = csharpScopeOf();
     const usings = scope.byFile.get(card.path) ?? [];
     const parts = namespace.length === 0 ? [] : namespace.split(".");
+    // Whether the caller is inside a type, in any of its partial declarations, nested types included.
+    const callerInside = (type: OsnovaSymbol): boolean => {
+      for (let depth = 1; depth <= enclosing.length; depth += 1) {
+        const holder = declaredAs(card.path, qualifiedNameOf(card.path, enclosing.slice(0, depth).join("."))).find(isHolder);
+        if (holder !== undefined && typeKey(holder) === typeKey(type)) return true;
+      }
+      return false;
+    };
     let chosen: { method: OsnovaSymbol; imported: boolean } | undefined;
     let pending: OsnovaSymbol | undefined;
     // A method an inner level already offered (its namespace's own level, then a `using` of it further out) is no
@@ -1566,7 +1579,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         offered.add(method);
         const range = method.parameters!;
         // A private extension method is visible only inside its class.
-        if (range.access === "private" && !edge.fromSymbol.startsWith(`${owner.qualifiedName}.`) && edge.fromSymbol !== owner.qualifiedName) continue;
+        if (range.access === "private" && !callerInside(owner)) continue;
         const declaredSite: CsharpSite = { card: files.get(method.file)!, enclosing: localOfQualifiedName(owner.qualifiedName).split("."), namespace: home, line: method.span.startLine };
         const target = range.receiver === undefined ? null : csharpTypeAt(declaredSite, range.receiver, range.generic ?? []);
         let fits = target === null ? null : receiverConverts(receiver, target);
