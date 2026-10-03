@@ -86,4 +86,28 @@ describe("exports that merge a type and a value under one name", () => {
     const edge = callEdge(index, "main.ts#run", "Shape");
     expect(edge?.toSymbol).toBeUndefined();
   });
+
+  it("forwards an interface merged with a constant through an export-all barrel, so its subtypes keep their members", async () => {
+    const index = await build({
+      "core/schemas.ts": [
+        "export interface CoreLiteral { readonly def: number }",
+        "export const CoreLiteral: { new (): CoreLiteral } = null as never;",
+        "",
+      ].join("\n"),
+      "core/index.ts": ["export * from \"./schemas.js\";", ""].join("\n"),
+      "classic.ts": [
+        "import * as core from \"./core/index.js\";",
+        "export interface ZodType { parse(input: string): number }",
+        "export interface ZodLiteral extends ZodType, core.CoreLiteral {}",
+        "export function literal(): ZodLiteral { return null as never; }",
+        "export function run(): number {",
+        "  const schema = literal();",
+        "  return schema.parse(\"x\");",
+        "}",
+        "",
+      ].join("\n"),
+    });
+
+    expect(callEdge(index, "classic.ts#run", "parse")?.toSymbol).toBe("classic.ts#ZodType.parse");
+  });
 });
