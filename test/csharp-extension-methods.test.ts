@@ -306,6 +306,27 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     }
   });
 
+  it("covers every name an unreadable extension declaration may hold", async () => {
+    const cases: [string, string][] = [];
+    for (const attribute of ["[A(new int[] { 1, 2 })]", "[A(new int[] {})]", "[A(new object[] { new int[] { 1, 2 } })]"]) {
+      cases.push([`    extension(string s) {\n        public string Probe<${attribute} T>(T value) => "inner";\n    }`, "\"s\".Probe(1)"]);
+      cases.push([`    extension(int x) { public int Unrelated() => x; }\n    public static string Pr\\u006Fbe<${attribute} T>(this string s, T value) => "inner";`, "\"s\".Probe(1)"]);
+    }
+    cases.push(["    extension([A(new int[] { 1, 2 })] string s) {\n        public string Probe<T>(T value) => \"inner\";\n    }", "\"s\".Probe(1)"]);
+    cases.push(["    extension(int x) { public int Unrelated() => x; }\n    public static string Pr\\u006Fbe(/* c */ [A(1)] this string s, int value) => \"inner\";", "\"s\".Probe(1)"]);
+    cases.push(["    extension(string s) {\n        public System.Func<string> Probe {\n            get { return () => \"inner\"; }\n        }\n    }", "\"s\".Probe()"]);
+    for (const [block, call] of cases) {
+      await write({
+        "Block.cs": `namespace Inner;\npublic class A : System.Attribute { public A(object value) {} }\npublic static class Block {\n${block}\n}\n`,
+        "Outer.cs": "namespace Outer;\npublic static class Ext {\n    public static string Probe(this string s, int value) => \"outer\";\n    public static string Probe(this string s) => \"outer\";\n}\n",
+        "Program.cs": `using Outer;\nnamespace Inner;\npublic class Use { public static string Run() => ${call}; }\n`,
+      });
+      const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+      expect(index.files.get("Block.cs")?.unplacedExtensions).toContain("Probe");
+      expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBeUndefined();
+    }
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });

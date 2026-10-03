@@ -329,105 +329,61 @@ function placeholderErrorsOnly(root: Node): boolean {
   return true;
 }
 
-// A C# identifier as written: `@`, letters, digits, connectors, marks, formatting characters and \\u or \\U escapes, which
-// `plain` decodes to the name the compiler sees.
+// A C# identifier as written holds letters, digits, connectors, marks, formatting characters and \\u or \\U escapes,
+// which `plain` decodes to the name the compiler sees.
 const ESCAPE = String.raw`\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}`;
-const WHOLE_IDENTIFIER = new RegExp(String.raw`^@?(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*$`, "u");
-const IDENTIFIER_PART = /[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_@\\]/u;
 
-// Back from `at` over a bracketed region that ends there (`]` or `)`), to just before its opening bracket; -1 when it
-// does not balance before a `{`, `}` or `;`.
-function skipBracketed(text: string, at: number): number {
-  const close = text[at]!;
-  const open = close === "]" ? "[" : "(";
-  let depth = 0;
-  for (; at >= 0; at -= 1) {
-    const c = text[at]!;
-    if (c === "{" || c === "}" || c === ";") return -1;
-    if (c === "]" || c === ")") { if (c === close) depth += 1; else { at = skipBracketed(text, at); if (at < 0) return -1; at += 1; } }
-    else if (c === open && --depth === 0) return at - 1;
-  }
-  return -1;
-}
-
-// The identifier written before an opening parenthesis at `open`, past whitespace and one type parameter or type
-// argument list (`Probe<[A(1 < 2)] T>(`), whose attributes and parenthesized arguments are skipped whole: undefined
-// when nothing that can be a name is there (a member access `x.M(`, or punctuation), null when the text cannot be read.
-function nameBefore(text: string, open: number): string | null | undefined {
-  let at = open - 1;
-  while (at >= 0 && /\s/u.test(text[at]!)) at -= 1;
-  if (text[at] === ">") {
-    let depth = 0;
-    for (; at >= 0; at -= 1) {
-      const c = text[at]!;
-      if (c === "]" || c === ")") { at = skipBracketed(text, at); if (at < 0) return null; at += 1; continue; }
-      if (c === ">") depth += 1;
-      else if (c === "<" && --depth === 0) break;
-      else if (c === "{" || c === "}" || c === ";") return null;
-    }
-    if (at < 0) return null;
-    at -= 1;
-    while (at >= 0 && /\s/u.test(text[at]!)) at -= 1;
-  }
-  const end = at + 1;
-  // Back over identifier characters; one outside the Basic Multilingual Plane is a surrogate pair.
-  while (at >= 0) {
-    const low = text.charCodeAt(at);
-    const pair = low >= 0xdc00 && low <= 0xdfff && at > 0 && text.charCodeAt(at - 1) >= 0xd800 && text.charCodeAt(at - 1) <= 0xdbff;
-    const character = pair ? text.slice(at - 1, at + 1) : text[at]!;
-    if (!IDENTIFIER_PART.test(character)) break;
-    at -= pair ? 2 : 1;
-  }
-  const written = text.slice(at + 1, end);
-  if (written.length === 0) return undefined;
-  if (text[at] === ".") return undefined;
-  return WHOLE_IDENTIFIER.test(written) ? written : null;
-}
-
-// Every identifier in a range of the text, decoded: the names a declaration header the reader cannot read may hold.
+// Every identifier written in a range of the text.
 function identifiersIn(text: string, from: number, to: number): string[] {
   return [...text.slice(from, to).matchAll(new RegExp(String.raw`@?(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*`, "gu"))].map((match) => match[0]);
 }
 
-// Every name written before `(` in a range of the text; with `thisOnly`, only where `(` is followed by `this`. Where
-// the name cannot be read, every identifier since the previous `{`, `}` or `;` stands for it.
-function namesBeforeParentheses(text: string, from: number, to: number, thisOnly: boolean): string[] {
-  const names: string[] = [];
-  const receiver = /\(\s*this\b/uy;
-  for (let open = text.indexOf("(", from); open >= 0 && open < to; open = text.indexOf("(", open + 1)) {
-    receiver.lastIndex = open;
-    if (thisOnly && !receiver.test(text)) continue;
-    const written = nameBefore(text, open);
-    if (written === null) {
-      const boundary = Math.max(text.lastIndexOf(";", open), text.lastIndexOf("{", open), text.lastIndexOf("}", open), from - 1);
-      names.push(...identifiersIn(text, boundary + 1, open));
-    } else if (written !== undefined) names.push(written);
+// The index just past the bracket that closes the one at `open` (`(` or `{`), counting every bracket kind, or the
+// end of the text when it does not close.
+function pastClose(text: string, open: number): number {
+  let depth = 0;
+  for (let at = open; at < text.length; at += 1) {
+    const c = text[at]!;
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if ((c === ")" || c === "]" || c === "}") && --depth === 0) return at + 1;
   }
-  return names;
+  return text.length;
 }
 
-// Names of extension methods the file may declare that its tree does not place: every name declared as
-// `Name(this ...` when the tree holds an error that can move a declaration, and every name written before `(` inside a
-// C# 14 `extension(...) { ... }` block, which this grammar does not read.
+// Names of extension members the file may declare that its tree does not place. Where the tree cannot be read as
+// declarations, every identifier written there stands for a name it may declare, so none is missed: the node around an
+// ERROR node, a
+// C# 14 `extension(...) { ... }` block (which this grammar reads as a constructor named `extension`, as local
+// functions or as an error), and the whole file when its tree holds an error that is neither an ERROR node nor a
+// placeholder identifier the parser inserted. Extra names only keep calls of those names unresolved.
 export function unplacedExtensionNames(root: Node, source: string): string[] {
   const text = blanked(source);
   const names = new Set<string>();
-  if (!placeholderErrorsOnly(root)) {
-    for (const written of namesBeforeParentheses(text, 0, text.length, true)) names.add(plain(written));
-  }
-  // A block header `extension(`, however its keyword is spelled; `@extension` is an identifier.
-  for (let header = text.indexOf("("); header >= 0; header = text.indexOf("(", header + 1)) {
-    const written = nameBefore(text, header);
-    if (written === undefined || written === null || written.startsWith("@") || plain(written) !== "extension") continue;
-    const open = text.indexOf("{", header);
-    if (open < 0) continue;
-    let depth = 0;
-    let close = text.length;
-    for (let k = open; k < text.length; k += 1) {
-      if (text[k] === "{") depth += 1;
-      else if (text[k] === "}" && --depth === 0) { close = k; break; }
+  const addRange = (from: number, to: number) => { for (const written of identifiersIn(text, from, to)) names.add(plain(written)); };
+  if (root.hasError) {
+    let errorNodes = 0;
+    const pending = [root];
+    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+      // The node around an error, so a name the error splits (`Pr\u006Fbe`, whose escape this grammar cannot read) is read whole.
+      if (node.type === "ERROR") { errorNodes += 1; const around = node.parent ?? node; addRange(around.startIndex, around.endIndex); continue; }
+      for (let i = 0; i < node.childCount; i += 1) { const child = node.child(i); if (child !== null && child.hasError) pending.push(child); }
     }
-    for (const written of namesBeforeParentheses(text, open, close, false)) names.add(plain(written));
+    if (errorNodes === 0 && !placeholderErrorsOnly(root)) addRange(0, text.length);
+  }
+  // A block the grammar read as a constructor named `extension`.
+  const pending = [root];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node.type === "constructor_declaration" && plain(node.childForFieldName("name")?.text ?? "") === "extension") { addRange(node.startIndex, node.endIndex); continue; }
+    pending.push(...childrenOf(node));
+  }
+  // A block header: the token `extension`, however it is spelled (`@extension` is an identifier, `x.extension` a member),
+  // through the end of the body after its parameter list, attributes and initializers included.
+  for (const match of text.matchAll(new RegExp(String.raw`(?<![\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_.@\\])(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*`, "gu"))) {
+    if (plain(match[0]) !== "extension") continue;
+    const parameters = text.indexOf("(", match.index);
+    const afterParameters = parameters < 0 ? text.length : pastClose(text, parameters);
+    const body = text.indexOf("{", afterParameters);
+    addRange(match.index, body < 0 ? text.length : pastClose(text, body));
   }
   return [...names].sort();
 }
