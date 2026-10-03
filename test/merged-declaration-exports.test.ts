@@ -110,4 +110,22 @@ describe("exports that merge a type and a value under one name", () => {
 
     expect(callEdge(index, "classic.ts#run", "parse")?.toSymbol).toBe("classic.ts#ZodType.parse");
   });
+
+  it("does not read `new X()` on an interface merged with a constant as an instance of the interface", async () => {
+    const index = await build({
+      "util.ts": [
+        "export interface X { m(): number }",
+        "export class T { m(): number { return 2; } }",
+        "export const X: { new (): T } = T;",
+        "",
+      ].join("\n"),
+      "main.ts": [
+        "import { X } from \"./util.js\";",
+        "export function run(): number { const x = new X(); return x.m(); }",
+        "",
+      ].join("\n"),
+    });
+
+    expect(callEdge(index, "main.ts#run", "m")?.toSymbol).not.toBe("util.ts#X.m");
+  });
 });

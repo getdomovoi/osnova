@@ -94,7 +94,8 @@ export const goAdapter: LanguageAdapter = {
           const fn = node.childForFieldName("function");
           if (fn !== null) {
             if (fn.type === "identifier") {
-              if (!GO_TYPE_NAMES.has(fn.text)) out.addEdge("calls", fn.text, fn);
+              // A local variable or parameter holding a function shadows a package function of the same name.
+              if (!GO_TYPE_NAMES.has(fn.text)) out.addEdge("calls", fn.text, fn, bindings.local(fn.text, node) ? { kind: "blocked", reason: "local-value" } : undefined);
             } else if (fn.type === "selector_expression") {
               const field = fn.childForFieldName("field");
               if (field !== null && !GO_TYPE_NAMES.has(field.text)) {
@@ -103,7 +104,7 @@ export const goAdapter: LanguageAdapter = {
             } else if (fn.type === "parenthesized_expression") {
               const inner = childrenOf(fn)[0];
               if (inner !== undefined && inner.type === "identifier" && !GO_TYPE_NAMES.has(inner.text)) {
-                out.addEdge("calls", inner.text, inner);
+                out.addEdge("calls", inner.text, inner, bindings.local(inner.text, node) ? { kind: "blocked", reason: "local-value" } : undefined);
               }
             }
           }

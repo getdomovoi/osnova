@@ -18,7 +18,9 @@ const HERITAGE_KINDS: ReadonlySet<string> = new Set(["class", "interface", "stru
 const TYPED_FAMILY = new Set(["go", "rust", "java", "c_sharp"]);
 // Builtin type names a receiver annotation or literal can carry: never a holder the index could define.
 const BUILTIN_TYPES = new Set(["string", "number", "boolean", "bigint", "symbol", "Array", "Map", "Set", "WeakMap", "WeakSet", "Promise", "RegExp", "Date", "Error", "Object", "Function", "str", "list", "dict", "set", "tuple", "int", "float", "bool", "bytes"]);
-const goPackages = new WeakMap<FileCard, string>();
+const goHeaders = new WeakMap<FileCard, { readonly name: string; readonly constrained: boolean }>();
+// File-name suffixes that build a Go file only for one operating system or architecture (`_windows.go`, `_linux_arm64_test.go`).
+const GO_TARGET_SUFFIX = /_(aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|nacl|netbsd|openbsd|plan9|solaris|wasip1|windows|zos|386|amd64|amd64p32|arm|arm64|arm64be|armbe|loong64|mips|mips64|mips64le|mips64p32|mips64p32le|mipsle|ppc|ppc64|ppc64le|riscv|riscv64|s390|s390x|sparc|sparc64|wasm)(_test)?\.go$/u;
 const javaPackages = new WeakMap<FileCard, string>();
 export function parsedWithoutErrors(card: FileCard | undefined): boolean {
   return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors");
@@ -32,13 +34,33 @@ export function javaPackageOf(card: FileCard | undefined): string {
   javaPackages.set(card, name);
   return name;
 }
-// The package clause separates an external _test package from the production package in one directory.
-function goPackageOf(card: FileCard): string {
-  const cached = goPackages.get(card);
+// The package clause, read past the comments before it, separates an external _test package from the production package
+// in one directory. A `//go:build` or `// +build` comment before the clause, or a target file-name suffix, builds the file
+// only in some configurations.
+function goHeaderOf(card: FileCard): { readonly name: string; readonly constrained: boolean } {
+  const cached = goHeaders.get(card);
   if (cached !== undefined) return cached;
-  const name = card.text.match(/^\s*package\s+(\w+)/m)?.[1] ?? "";
-  goPackages.set(card, name);
-  return name;
+  const text = card.text;
+  let at = 0;
+  let constrained = GO_TARGET_SUFFIX.test(card.path);
+  for (;;) {
+    while (at < text.length && /\s/u.test(text[at]!)) at += 1;
+    if (text.startsWith("//", at)) {
+      const end = text.indexOf("\n", at);
+      const line = text.slice(at, end < 0 ? text.length : end);
+      if (/^\/\/(go:build\s|\s*\+build\s)/u.test(line)) constrained = true;
+      at = end < 0 ? text.length : end + 1;
+    } else if (text.startsWith("/*", at)) {
+      const end = text.indexOf("*/", at + 2);
+      at = end < 0 ? text.length : end + 2;
+    } else break;
+  }
+  const header = { name: /^package\s+(\w+)/u.exec(text.slice(at))?.[1] ?? "", constrained };
+  goHeaders.set(card, header);
+  return header;
+}
+function goPackageOf(card: FileCard): string {
+  return goHeaderOf(card).name;
 }
 
 export function languageFamily(language: CardLanguage | undefined): string | undefined {
@@ -1295,6 +1317,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           let basis: ReceiverBasis = binding.basis;
           const owners = candidates.filter(isHolder);
           owner = new Set(owners.map((symbol) => symbol.qualifiedName)).size === 1 ? owners[0] : undefined;
+          // An interface cannot be constructed: `new X()` on a name merged with a constant runs the constant's construct
+          // signature, whose instance type the index does not read.
+          if (owner !== undefined && basis === "constructor" && declarationsOf(owner).every((declaration) => declaration.kind === "interface")) owner = undefined;
           const membersOf = (holder: OsnovaSymbol, member: string = binding.member): OsnovaSymbol[] => {
             const callableKinds: readonly string[] = holder.kind === "module"
               ? ["method", "function", "constant"]
@@ -1605,11 +1630,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const other = files.get(symbol.file);
         return other !== undefined && path.posix.dirname(symbol.file) === path.posix.dirname(fromFile) && goPackageOf(other) === goPackageOf(card);
       }) : [];
+      // A declaration in another file built only in some configurations may not be compiled with the caller, which then
+      // reaches a builtin or a declaration elsewhere; the index cannot tell which.
+      const conditionalPackage = sameFile.length === 0 && samePackage.some((symbol) => goHeaderOf(files.get(symbol.file)!).constrained);
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
       const preferred = sameFile.length > 0 ? sameFile : samePackage.length > 0 ? samePackage : imported.length > 0 ? imported : candidates;
       const names = [...new Set(preferred.map((symbol) => symbol.qualifiedName))].sort();
-      const resolved = names.length === 1 ? preferred[0] : undefined;
-      const resolution: EdgeResolution = names.length > 1
+      const resolved = names.length === 1 && !conditionalPackage ? preferred[0] : undefined;
+      const resolution: EdgeResolution = conditionalPackage ? { status: "unresolved", reason: "binding-blocked" }
+        : names.length > 1
         ? { status: "ambiguous", candidates: names }
         // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of
         // the family defines is a builtin or a standard-library name: external, like an unbound global.

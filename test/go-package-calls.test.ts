@@ -47,4 +47,36 @@ describe("a plain Go call names a function of its own package", () => {
     });
     expect(callAt(index, "command.go", 6, "MarkFlagRequired")).toMatchObject({ toSymbol: "flags.go#MarkFlagRequired" });
   });
+
+  it("leaves a call through a local function value to that value, not the package function of its name", async () => {
+    const index = await build({
+      "go.mod": "module example.com/app\n\ngo 1.22\n",
+      "caller.go": "package app\n\nfunc Run() int {\n\tTarget := func() int { return 2 }\n\treturn Target()\n}\n",
+      "helper.go": "package app\n\nfunc Target() int { return 1 }\n",
+      "other/other.go": "package other\n\nfunc Target() int { return 3 }\n",
+    });
+    expect(callAt(index, "caller.go", 5, "Target")?.toSymbol).toBeUndefined();
+  });
+
+  it("reads the package clause past a comment that spells another one", async () => {
+    const index = await build({
+      "go.mod": "module example.com/app\n\ngo 1.22\n",
+      "caller.go": "package app\n\nimport . \"example.com/app/other\"\n\nfunc Run() int { return Target() }\n",
+      "external_test.go": "/*\npackage app\n*/\npackage app_test\n\nfunc Target() int { return 1 }\n",
+      "other/other.go": "package other\n\nfunc Target() int { return 2 }\n",
+    });
+    expect(callAt(index, "caller.go", 5, "Target")?.toSymbol).not.toBe("external_test.go#Target");
+  });
+
+  it("does not let a declaration built only in some configurations decide a plain call", async () => {
+    const index = await build({
+      "go.mod": "module example.com/app\n\ngo 1.22\n",
+      "caller.go": "package app\n\nfunc Run() int { return len([]int{1, 2}) + size() }\n",
+      "helper.go": "//go:build osnova_never\n\npackage app\n\nfunc len(s []int) int { return 99 }\n",
+      "size_windows.go": "package app\n\nfunc size() int { return 1 }\n",
+      "other/other.go": "package other\n\nfunc len(s []int) int { return 88 }\n",
+    });
+    expect(callAt(index, "caller.go", 3, "len")?.toSymbol).toBeUndefined();
+    expect(callAt(index, "caller.go", 3, "size")?.toSymbol).toBeUndefined();
+  });
 });
