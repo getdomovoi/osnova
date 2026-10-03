@@ -376,6 +376,21 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     }
   });
 
+  it("chooses no extension method while a C# file's extraction failed, and lexes deep nesting without recursion limits", async () => {
+    // 4096 nested interpolations overflow the extractor's recursive walk, so the file contributes no symbols; it may
+    // still declare the extension method the call binds.
+    let marker = '"x"';
+    for (let i = 0; i < 4096; i += 1) marker = `$"{${marker}}"`;
+    await write({
+      "Block.cs": `namespace Inner;\npublic static class Block {\n    public static string Marker => ${marker};\n    extension(string s) { public string Probe<T>(T value) => "inner"; }\n}\n`,
+      "Outer.cs": "namespace Outer;\npublic static class Ext {\n    public static string Probe(this string s, int value) => \"outer\";\n}\n",
+      "Program.cs": "using Outer;\nnamespace Inner;\npublic class Use { public static string Run() => \"s\".Probe(1); }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+    expect(index.diagnostics?.some((diagnostic) => diagnostic.path === "Block.cs" && diagnostic.code === "extraction-failed")).toBe(true);
+    expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBeUndefined();
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });

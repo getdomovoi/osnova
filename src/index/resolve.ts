@@ -26,7 +26,7 @@ const goHeaders = new WeakMap<FileCard, { readonly name: string; readonly constr
 const GO_TARGET_SUFFIX = /_(aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|nacl|netbsd|openbsd|plan9|solaris|wasip1|windows|zos|386|amd64|amd64p32|arm|arm64|arm64be|armbe|loong64|mips|mips64|mips64le|mips64p32|mips64p32le|mipsle|ppc|ppc64|ppc64le|riscv|riscv64|s390|s390x|sparc|sparc64|wasm)(_test)?\.go$/u;
 const javaPackages = new WeakMap<FileCard, string>();
 export function parsedWithoutErrors(card: FileCard | undefined): boolean {
-  return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors");
+  return !(card?.diagnostics ?? []).some((diagnostic) => diagnostic.code === "syntax-errors" || diagnostic.code === "extraction-failed" || diagnostic.code === "empty-parse");
 }
 
 export function javaPackageOf(card: FileCard | undefined): string {
@@ -1514,9 +1514,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     return found;
   };
   let unplacedNames: Set<string> | undefined;
+  // A C# file whose extraction failed may declare an extension method of any name.
+  let unreadFile: boolean | undefined;
   const unplacedExtension = (name: string): boolean => {
     unplacedNames ??= new Set([...files.values()].flatMap((card) => card.unplacedExtensions ?? []));
-    return unplacedNames.has(name);
+    unreadFile ??= [...files.values()].some((card) => card.language === "c_sharp" && (card.diagnostics ?? []).some((diagnostic) => diagnostic.code === "extraction-failed" || diagnostic.code === "empty-parse"));
+    return unreadFile || unplacedNames.has(name);
   };
   const chooseExtension = (edge: OsnovaEdge): OsnovaEdge | undefined => {
     const written = edge.argumentTypes?.receiver;

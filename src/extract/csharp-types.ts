@@ -302,7 +302,9 @@ function blanked(source: string): { text: string; raw: [number, number][]; unter
   // Code from `i`; inside an interpolation hole (`closers` > 0: the braces that close it), up to the run of `}` that
   // closes it, whose index it returns. A `:` outside any bracket (not `::`) starts the hole's format text, which is
   // not code and runs to that run.
-  const code = (start: number, closers: number): number => {
+  const code = (start: number, closers: number, nesting = 0): number => {
+    // Past this nesting of literals in holes, the file is read unblanked rather than recursed into.
+    if (nesting > 256) { unterminated = true; return source.length; }
     let depth = 0;
     let brackets = 0;
     let i = start;
@@ -323,14 +325,14 @@ function blanked(source: string): { text: string; raw: [number, number][]; unter
       if (c === "/" && source[i + 1] === "/") { const stop = lineEnd(source, i); blank(i, stop); i = stop; continue; }
       if (c === "/" && source[i + 1] === "*") { const end = source.indexOf("*/", i + 2); if (end < 0) unterminated = true; const stop = end < 0 ? source.length : end + 2; blank(i, stop); i = stop; continue; }
       if (c === "'") { let k = i + 1; while (k < source.length && source[k] !== "'" && !LINE_END.test(source[k]!)) k += source[k] === "\\" ? 2 : 1; if (source[k] !== "'") unterminated = true; blank(i, k + 1); i = k + 1; continue; }
-      if (c === "\"") { i = literal(i); continue; }
+      if (c === "\"") { i = literal(i, nesting); continue; }
       i += 1;
     }
     if (closers > 0) unterminated = true;
     return i;
   };
   // The string whose first quote is at `i`, blanked whole; the index just past it.
-  const literal = (i: number): number => {
+  const literal = (i: number, nesting: number): number => {
     let begin = i;
     while (begin > 0 && (source[begin - 1] === "$" || source[begin - 1] === "@")) begin -= 1;
     const prefix = source.slice(begin, i);
@@ -347,7 +349,7 @@ function blanked(source: string): { text: string; raw: [number, number][]; unter
           const run = /^\{+/.exec(source.slice(k))![0].length;
           k += run;
           if (run < dollars) continue;
-          k = code(k, dollars);
+          k = code(k, dollars, nesting + 1);
           k += /^\}*/.exec(source.slice(k))![0].length;
           continue;
         }
@@ -364,7 +366,7 @@ function blanked(source: string): { text: string; raw: [number, number][]; unter
         if (!verbatim && c === "\\") { k += 2; continue; }
         if (dollars > 0 && c === "{") {
           if (source[k + 1] === "{") { k += 2; continue; }
-          k = code(k + 1, 1) + 1;
+          k = code(k + 1, 1, nesting + 1) + 1;
           continue;
         }
         if (c === "\"") { k += 1; break; }
