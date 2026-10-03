@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "e89889adbb312e6bcb5f44341f41de53602e4f04",
+    "commit": "76e3cccdc772282675247faec691517abdc029fd",
     "version": "0.12.0",
     "unreleased": "C# object creation names the constructor it runs"
   },
