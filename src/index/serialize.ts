@@ -61,9 +61,9 @@ function validParameters(value: unknown): boolean {
     (range.types === undefined || (Array.isArray(range.types) && range.types.every((type) => typeof type === "string"))) &&
     // `erased` stands in for `types` when those prove nothing, one entry per parameter, a varargs one ending in `...`.
     (range.erased === undefined || (range.types === undefined && Array.isArray(range.erased) && range.erased.length > 0 && range.erased.some((type) => type !== null) &&
-      range.erased.every((type) => type === null || (typeof type === "string" && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\[\])*(?:\.\.\.)?$/u.test(type))))) &&
+      range.erased.every((type) => type === null || (typeof type === "string" && /^~?[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*(?:\.[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*)*(?:\[\])*(?:\.\.\.)?$/u.test(type))))) &&
     (range.names === undefined || ((range.types !== undefined || range.erased !== undefined) && Array.isArray(range.names) && range.names.length > 0 &&
-      range.names.every((name, at) => typeof name === "string" && /^[A-Za-z_$][\w$]*$/u.test(name) && (at === 0 || range.names![at - 1]! < name))));
+      range.names.every((name, at) => typeof name === "string" && /^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*$/u.test(name) && (at === 0 || range.names![at - 1]! < name))));
 }
 
 class ArtifactVersionError extends Error {

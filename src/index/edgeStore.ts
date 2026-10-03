@@ -52,8 +52,8 @@ interface EdgeHeader {
 
 type Tuple = [kind: number, fromFile: number, fromSymbol: string, toName: string, line: number, toSymbol: string | null, toFile: number, evidence: number, binding: number, route: number, args: number, overload: number, constructs: number, argumentTypes: number];
 
-// A written argument type: a primitive, `null`, or a dotted name, with `[]` per array dimension.
-const ARGUMENT_TYPE = /^(?:null|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\[\])*)$/u;
+// A written argument type: a primitive, `null`, or a dotted name of Java identifiers, with `[]` per array dimension.
+const ARGUMENT_TYPE = /^(?:null|[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*(?:\.[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*)*(?:\[\])*)$/u;
 export function validateArgumentTypes(value: unknown): ArgumentTypes {
   if (typeof value === "object" && value !== null) {
     const entry = value as { types?: unknown; names?: unknown };
@@ -63,7 +63,7 @@ export function validateArgumentTypes(value: unknown): ArgumentTypes {
     if ((keys === "types" || keys === "names,types") && Array.isArray(types) && types.length > 0 && types.some((type) => type !== null) &&
       types.every((type) => type === null || (typeof type === "string" && ARGUMENT_TYPE.test(type))) &&
       (names === undefined || (Array.isArray(names) && names.length > 0 &&
-        names.every((name, i) => typeof name === "string" && /^[A-Za-z_$][\w$]*$/u.test(name) && (i === 0 || name > (names[i - 1] as string)))))) {
+        names.every((name, i) => typeof name === "string" && /^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*$/u.test(name) && (i === 0 || name > (names[i - 1] as string)))))) {
       return names === undefined ? { types: types as (string | null)[] } : { types: types as (string | null)[], names: names as string[] };
     }
   }

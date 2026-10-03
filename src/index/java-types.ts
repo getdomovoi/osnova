@@ -101,8 +101,9 @@ function subtype(world: JavaTypeWorld, s: string, t: string): boolean | null {
     if (seen.size > 64) return null;
     if (type === t) return true;
     const supers = world.indexed(type) ? world.supertypes(type) : JDK_SUPERTYPES[type];
-    // A type outside the index (a library or JDK type) cannot extend a type the index declares.
-    if (supers === undefined) { if (!world.indexed(t)) unknown = true; continue; }
+    // A type outside the index and the table has unknown supertypes: an ignored or generated source, or a compiled
+    // class, can extend a type the index declares.
+    if (supers === undefined) { unknown = true; continue; }
     for (const next of supers) {
       if (next === null) unknown = true;
       else pending.push(next);
@@ -116,7 +117,13 @@ const isArray = (type: string): boolean => type.endsWith("[]");
 // Whether an argument of type `a` is applicable to a parameter of type `p` in phase 1 (strict) or 2 (loose).
 function fits(world: JavaTypeWorld, a: string | null, p: string | null, phase: 1 | 2): boolean | null {
   if (a === null || p === null) return null;
-  if (a === "null") return !PRIMITIVES.has(p);
+  if (a === "null") return !PRIMITIVES.has(p.replace(/^~/u, ""));
+  // A type marked `~` is parameterized by type arguments its erasure drops: an erasure that does not fit proves the
+  // type does not, one that fits proves nothing.
+  if (a.startsWith("~") || p.startsWith("~")) {
+    const erased = fits(world, a.replace(/^~/u, ""), p.replace(/^~/u, ""), phase);
+    return erased === true ? null : erased;
+  }
   if (PRIMITIVES.has(a) && PRIMITIVES.has(p)) return a === p || WIDENS[a]!.includes(p);
   if (PRIMITIVES.has(a)) return phase === 1 || isArray(p) ? false : subtype(world, BOXED[a]!, p);
   if (PRIMITIVES.has(p)) {

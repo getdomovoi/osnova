@@ -182,3 +182,111 @@ describe("a Java overload chosen by the written argument types", () => {
     expect(serializeArtifact(changed).equals(serializeArtifact(full))).toBe(true);
   });
 });
+
+describe("a typed Java overload choice javac would not make is refused", () => {
+  const typedAt = (index: Index, file: string, line: number) =>
+    overloadsAt(index, file, line).filter((overload) => overload !== undefined && "types" in overload);
+
+  it("indexes a class named with a non-ASCII letter that passes itself as an argument", async () => {
+    await write({ "p/A.java": "package p;\nclass Café {\n  void pick(Object x) {}\n  void run() { this.pick(this); }\n}\n" });
+    const index = await buildIndex(workspace, { cacheDir });
+    const edge = index.edges.find((candidate) => candidate.kind === "calls" && candidate.toName === "pick");
+    expect(edge?.argumentTypes?.types).toEqual(["p.Café"]);
+    const loaded = await loadIndex(workspace, { cacheDir });
+    expect(loaded).toBeDefined();
+    expect(serializeArtifact(loaded!).equals(serializeArtifact(index))).toBe(true);
+  });
+
+  it("does not let erasure make a generic parameter applicable", async () => {
+    await write({
+      "p/A.java": [
+        "package p;",
+        "import java.util.List;",
+        "import java.util.Collection;",
+        "import java.util.ArrayList;",
+        "class A {",
+        "  void pick(List<Integer> x) {}",
+        "  void pick(Collection<String> x) {}",
+        "  void lit(Class<String> x) {}",
+        "  void lit(Object x) {}",
+        "  <T extends Number> void dep(T x, List<T> y) {}",
+        "  void dep(Object x, Collection<String> y) {}",
+        "  A(List<Integer> x) {}",
+        "  A(Collection<String> x) {}",
+        "  void run() {",
+        "    ArrayList<String> x = new ArrayList<>();",
+        "    pick(x);",
+        "    lit(Integer.class);",
+        "    List<String> y = null;",
+        "    dep(1, y);",
+        "    new A(x);",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    for (const line of [16, 17, 19, 20]) expect(typedAt(index, "p/A.java", line)).toEqual([]);
+  });
+
+  it("still chooses through a Class<T> parameter whose type variable appears once", async () => {
+    await write({ "p/Gson.java": gson });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(overloadsAt(index, "p/Gson.java", 12)).toEqual([{ line: 6, types: true }]);
+    expect(overloadsAt(index, "p/Gson.java", 15)).toEqual([{ line: 8, types: true }]);
+  });
+
+  it("ends a resource's scope with the try body", async () => {
+    await write({
+      "p/A.java": [
+        "package p;",
+        "import java.io.Reader;",
+        "import java.io.StringReader;",
+        "class A {",
+        "  Integer value = 1;",
+        "  void pick(Integer x) {}",
+        "  void pick(Reader x) {}",
+        "  void run() {",
+        "    try (StringReader value = new StringReader(\"\")) { pick(value); }",
+        "    catch (Exception e) { pick(value); }",
+        "    finally { pick(value); }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(overloadsAt(index, "p/A.java", 9, "pick")).toEqual([{ line: 7, types: true }]);
+    expect(overloadsAt(index, "p/A.java", 10, "pick")).toEqual([{ line: 6, types: true }]);
+    expect(overloadsAt(index, "p/A.java", 11, "pick")).toEqual([{ line: 6, types: true }]);
+  });
+
+  it("does not choose when an implemented interface declares a method of the name", async () => {
+    await write({
+      "p/I.java": "package p;\ninterface I {\n  default void pick(String x) {}\n}\n",
+      "p/A.java": "package p;\nclass A implements I {\n  public void pick(Object x) {}\n  public void pick(Integer x) {}\n  void run() { this.pick(\"x\"); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(typedAt(index, "p/A.java", 5)).toEqual([]);
+  });
+
+  it("does not choose when an abstract class leaves an interface method of the name open", async () => {
+    await write({
+      "p/I.java": "package p;\ninterface I {\n  void pick(String x);\n}\n",
+      "p/A.java": "package p;\nabstract class A implements I {\n  public void pick(Object x) {}\n  public void pick(Integer x) {}\n  void run() { this.pick(\"x\"); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(typedAt(index, "p/A.java", 5)).toEqual([]);
+  });
+
+  it("does not assume a type outside the index cannot implement an indexed interface", async () => {
+    await write({
+      ".gitignore": "lib/\n",
+      "lib/External.java": "package lib;\npublic class External implements p.I {}\n",
+      "p/I.java": "package p;\npublic interface I {}\n",
+      "p/A.java": "package p;\nimport lib.External;\nclass A {\n  void pick(I x) {}\n  void pick(Object x) {}\n  void run(External x) { this.pick(x); }\n}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(typedAt(index, "p/A.java", 6)).toEqual([]);
+  });
+});

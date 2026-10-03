@@ -91,14 +91,14 @@ const COMMENT_NODES = new Set(["comment", "line_comment", "block_comment"]);
 function canonicalType(written: string, scope: TypeScope, typeVariables: ReadonlySet<string>, names: Set<string>): string | undefined {
   const text = written.replace(/@[\w.$]+(?:\s*\([^)]*\))?/g, " ").replace(/\s*\.\s*/g, ".");
   let proven = true;
-  const canonical = text.replace(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g, (name) => {
+  const canonical = text.replace(/[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*(?:\.[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*)*/gu, (name) => {
     if (PRIMITIVES.has(name) || name === "extends" || name === "super") return name;
     const [first = "", ...rest] = name.split(".");
     const tail = rest.length > 0 ? `.${rest.join(".")}` : "";
     if (typeVariables.has(first) || scope.unproven.has(first)) { proven = false; return name; }
     const imported = scope.imports.get(first);
     if (imported !== undefined) { names.add(first); return `${imported}${tail}`; }
-    if (rest.length > 0 && /^[a-z]/.test(first)) return name;
+    if (rest.length > 0 && /^\p{Ll}/u.test(first)) return name;
     if (JAVA_LANG.has(first)) { names.add(first); return `java.lang.${name}`; }
     if (scope.open) { proven = false; return name; }
     names.add(first);
@@ -116,7 +116,7 @@ function erasedType(written: string, scope: TypeScope, bounds: Bounds, names: Se
   text = text.replace(/\s+/g, "");
   const dimensions = /(?:\[\])*$/.exec(text)?.[0] ?? "";
   const base = text.slice(0, text.length - dimensions.length);
-  if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(base)) return undefined;
+  if (!/^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*(?:\.[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*)*$/u.test(base)) return undefined;
   if (PRIMITIVES.has(base)) return base === "void" ? undefined : `${base}${dimensions}`;
   if (bounds.has(base)) {
     const bound = bounds.get(base);
@@ -152,11 +152,34 @@ function parameterRange(list: Node, method: Node, scope: TypeScope, typeVariable
   const proven = types.every((type): type is string => type !== undefined);
   // When the written types prove nothing, the erased ones may still tell overloads apart by argument types.
   const erasedNames = new Set<string>();
-  const erased = proven ? [] : childrenOf(list).filter((child) => child.type === "formal_parameter" || child.type === "spread_parameter").map((child) => {
+  const parameters = childrenOf(list).filter((child) => child.type === "formal_parameter" || child.type === "spread_parameter");
+  const writtenOf = (child: Node): string => {
     const type = child.childForFieldName("type") ?? childrenOf(child).find((part) => part.type !== "modifiers" && part.type !== "variable_declarator" && part.type !== "identifier");
+    return `${type?.text ?? ""}${child.childForFieldName("dimensions")?.text ?? ""}`.replace(/@[\w.$]+(?:\s*\([^)]*\))?/g, " ").replace(/\s+/g, "");
+  };
+  const written = parameters.map(writtenOf);
+  // A type variable of the method's own with no bound, written once among the parameters, fits any type argument.
+  const free = (name: string): boolean => bounds.has(name) && bounds.get(name) === undefined &&
+    written.reduce((sum, text) => sum + (text.match(new RegExp(`(?<![\\p{L}\\p{N}_$.])${name.replace(/\$/g, "\\$")}(?![\\p{L}\\p{N}_$])`, "gu"))?.length ?? 0), 0) === 1;
+  // A parameter type its erasure does not stand for: a type argument other than `?` or a free type variable, or a type
+  // variable whose bound is parameterized or is another type variable.
+  const inexact = (text: string): boolean => {
+    let rest = text;
+    for (let previous = ""; previous !== rest;) {
+      previous = rest;
+      let constrained = false;
+      rest = rest.replace(/<([^<>]*)>/gu, (_, list: string) => { if (!list.split(",").every((argument) => argument === "?" || free(argument))) constrained = true; return ""; });
+      if (constrained) return true;
+    }
+    const base = rest.replace(/(?:\[\]|\.\.\.)+$/u, "");
+    const bound = bounds.get(base);
+    return typeof bound === "string" && (bound.includes("<") || bounds.has(bound.replace(/\s+/g, "").replace(/(?:\[\])+$/u, "")));
+  };
+  const erased = proven ? [] : parameters.map((child, at) => {
     const dimensions = (child.childForFieldName("dimensions")?.text ?? "").replace(/\s+/g, "");
+    const type = child.childForFieldName("type") ?? childrenOf(child).find((part) => part.type !== "modifiers" && part.type !== "variable_declarator" && part.type !== "identifier");
     const one = erasedType(`${type?.text ?? ""}${dimensions}`, scope, bounds, erasedNames, 0, classVariables);
-    return one === undefined ? null : `${one}${child.type === "spread_parameter" ? "..." : ""}`;
+    return one === undefined ? null : `${inexact(written[at]!) ? "~" : ""}${one}${child.type === "spread_parameter" ? "..." : ""}`;
   });
   const keepErased = erased.some((type) => type !== null);
   return { min: count, ...(varargs ? {} : { max: count }), ...(overrides ? { overrides: true as const } : {}), ...(access === undefined ? {} : { access }),
@@ -247,6 +270,8 @@ function declaredTypeOf(site: Node, name: string): Declared | undefined {
         break;
       }
       case "try_with_resources_statement": {
+        // A resource is in scope in the try body, not in a catch or finally clause.
+        if (holder.id !== scope.childForFieldName("body")?.id) break;
         for (const resource of childrenOf(childOfType(scope, "resource_specification") ?? scope)) {
           if (resource.type !== "resource" || resource.startIndex >= holder.startIndex || resource.childForFieldName("name")?.text !== name) continue;
           const type = resource.childForFieldName("type");

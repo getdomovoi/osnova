@@ -1040,8 +1040,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // and so on. A base declaration the holder cannot call (private, or package-private in another Java
   // package) is left out. Interfaces add nothing to a class's overloads here: C# does not inherit their
   // members into a class, and Java's default methods are left out. `complete` is false when a declared
-  // base cannot be identified, so declarations further up may be missing.
-  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean };
+  // base cannot be identified, so declarations further up may be missing. `interfacesClear` (Java) is true when every
+  // written supertype up the chain is followed and every method of the name an interface they reach declares is
+  // implemented or overridden in the chain, so no interface method (a default one, or an abstract one an abstract
+  // class leaves open) adds a choice.
+  type OverloadLevels = { levels: OsnovaSymbol[][]; complete: boolean; interfacesClear?: boolean };
   const levelCache = new Map<string, OverloadLevels>();
   const overloadLevelsOf = (holder: OsnovaSymbol, member: string): OverloadLevels => {
     const key = `${holder.qualifiedName}\u0000${member}`;
@@ -1057,6 +1060,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const home = javaPackageOf(files.get(holder.file));
     let current: OsnovaSymbol | undefined = holder;
     let complete = true;
+    const java = files.get(holder.file)?.language === "java";
+    const interfaces: OsnovaSymbol[] = [];
+    let followed = true;
     while (current !== undefined) {
       if (visited.has(typeKey(current)) || levels.length > 8) return { levels, complete: false };
       visited.add(typeKey(current));
@@ -1073,6 +1079,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       }));
       const bases = new Map<string, OsnovaSymbol>();
       for (const part of parts) {
+        if (java) {
+          if ((part.heritage?.length ?? 0) + (part.interfaces?.length ?? 0) !== (part.supertypes ?? 0)) followed = false;
+          for (const binding of part.interfaces ?? []) {
+            const base = baseOf(part, binding);
+            if (base === undefined) followed = false;
+            else interfaces.push(base);
+          }
+        }
         for (const binding of part.heritage ?? []) {
           const base = baseOf(part, binding);
           if (base === undefined) return { levels, complete: false };
@@ -1083,7 +1097,30 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (bases.size > 1) return { levels, complete: false };
       current = [...bases.values()][0];
     }
-    return { levels, complete };
+    return { levels, complete, ...(java ? { interfacesClear: followed && interfacesAddNone(interfaces, member, levels.flat()) } : {}) };
+  };
+  // Whether every method named `member` that a Java interface in `pending`, or one it extends, declares has a
+  // declaration in `chain` with the same proven parameter types, every written superinterface followed.
+  const interfacesAddNone = (pending: OsnovaSymbol[], member: string, chain: readonly OsnovaSymbol[]): boolean => {
+    const signature = (symbol: OsnovaSymbol): string | undefined =>
+      symbol.parameters?.types !== undefined && javaNamesProven(symbol) ? symbol.parameters.types.join(",") : undefined;
+    const implemented = new Set(chain.map(signature).filter((key): key is string => key !== undefined));
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const type = pending.pop()!;
+      if (seen.has(typeKey(type))) continue;
+      seen.add(typeKey(type));
+      if (seen.size > 32 || files.get(type.file)?.language !== "java") return false;
+      if (declaredAs(type.file, `${type.qualifiedName}.${member}`).some((symbol) => symbol.kind === "method" && !implemented.has(signature(symbol) ?? "\u0000"))) return false;
+      const written = [...(type.heritage ?? []), ...(type.interfaces ?? [])];
+      if (written.length !== (type.supertypes ?? 0)) return false;
+      for (const binding of written) {
+        const base = baseOf(type, binding);
+        if (base === undefined) return false;
+        pending.push(base);
+      }
+    }
+    return true;
   };
   // A simple name a Java parameter type read from its file's scope can still mean another type: a nested
   // type that the declaring type or an enclosing type inherits shadows it, and a type of the same package
@@ -1188,10 +1225,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const range = symbol.parameters!;
     const variable = range.max === undefined;
     const count = range.min + (variable ? 1 : 0);
+    // A written type with a type argument other than `?` is marked `~`: its erasure fitting does not prove it fits.
+    // An `erased` entry comes marked already.
     const erase = (type: string): string => {
-      let text = type;
+      let text = type.replace(/<\?(?:,\?)*>/gu, "");
+      const parameterized = text.includes("<");
       for (let previous = ""; previous !== text;) { previous = text; text = text.replace(/<[^<>]*>/g, ""); }
-      return text.endsWith("...") ? `${text.slice(0, -3)}[]` : text;
+      text = text.endsWith("...") ? `${text.slice(0, -3)}[]` : text;
+      return parameterized ? `~${text}` : text;
     };
     const written = range.types ?? range.erased;
     if (written === undefined || written.length !== count || !javaNamesProven(symbol)) return { parameters: new Array<null>(count).fill(null), variable };
@@ -1266,7 +1307,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       : edge.toSymbol.slice(0, edge.toSymbol.lastIndexOf("."));
     const holder = declaredAs(holderName.slice(0, holderName.indexOf("#")), holderName).find(isHolder);
     if (holder === undefined) return local;
-    const { levels, complete } = overloadLevelsOf(holder, own[0]!.name);
+    const { levels, complete, interfacesClear } = overloadLevelsOf(holder, own[0]!.name);
     if (levels.some((level) => level.some((symbol) => symbol.parameters === undefined))) return local;
     const count = edge.arguments;
     // Java overrides a method by its parameter types, and @Override also marks an interface method's
@@ -1298,7 +1339,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const isOwn = (symbol: OsnovaSymbol): boolean => symbol.file === edge.toFile && symbol.qualifiedName === edge.toSymbol;
     const elsewhere = listed.filter((symbol) => !isOwn(symbol));
     // When every level is known, the written argument types may single out one of several declarations that take the count.
-    const typed = language === "java" && complete && slots >= 2 ? chooseJavaByTypes(edge, listed) : undefined;
+    const typed = language === "java" && complete && interfacesClear === true && slots >= 2 ? chooseJavaByTypes(edge, listed) : undefined;
     if (typed !== undefined) {
       const { overload: _discarded, ...plain } = edge;
       return isOwn(typed) ? { ...plain, overload: { line: typed.span.startLine, types: true } }
