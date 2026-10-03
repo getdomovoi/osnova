@@ -147,7 +147,7 @@ describe("cli", () => {
     const report = JSON.parse(out.lines.join("\n")) as { languages: { language: string; byMethod: Record<string, number> }[] };
     expect(Object.fromEntries(report.languages.map((row) => [row.language, row.byMethod]))).toEqual({
       c: { "same-file-name": 1, "unique-name": 2 },
-      go: { "same-file-name": 1, "unique-name": 1 },
+      go: { "lexical-definition": 1, "same-file-name": 1 },
       java: { "imported-file-name": 1, "receiver-hint": 1, "same-file-name": 1 },
       python: { "import-binding": 2, "lexical-definition": 1, "receiver-hint": 1 },
       ruby: { "same-file-name": 1, "unique-name": 1 },

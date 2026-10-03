@@ -1593,12 +1593,20 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         return false;
       };
+      // A plain Go name never names a method either, and it is declared by the caller's own package (the files of its
+      // directory with its package clause) before any other file.
+      const plainGo = card.language === "go" && !raw.toName.includes(".");
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
         languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
-        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)));
+        (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)) &&
+        (!plainGo || symbol.kind !== "method"));
       const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
+      const samePackage = plainGo ? candidates.filter((symbol) => {
+        const other = files.get(symbol.file);
+        return other !== undefined && path.posix.dirname(symbol.file) === path.posix.dirname(fromFile) && goPackageOf(other) === goPackageOf(card);
+      }) : [];
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
-      const preferred = sameFile.length > 0 ? sameFile : imported.length > 0 ? imported : candidates;
+      const preferred = sameFile.length > 0 ? sameFile : samePackage.length > 0 ? samePackage : imported.length > 0 ? imported : candidates;
       const names = [...new Set(preferred.map((symbol) => symbol.qualifiedName))].sort();
       const resolved = names.length === 1 ? preferred[0] : undefined;
       const resolution: EdgeResolution = names.length > 1
@@ -1606,7 +1614,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of
         // the family defines is a builtin or a standard-library name: external, like an unbound global.
         : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
-          : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : imported.length > 0 ? "imported-file-name" : "unique-name" };
+          : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : samePackage.length > 0 ? "lexical-definition" : imported.length > 0 ? "imported-file-name" : "unique-name" };
       const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }) };
       edges.push(
         resolved === undefined
