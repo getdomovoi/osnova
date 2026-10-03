@@ -261,6 +261,32 @@ describe("a typed Java overload choice javac would not make is refused", () => {
     expect(overloadsAt(index, "p/A.java", 11, "pick")).toEqual([{ line: 6, types: true }]);
   });
 
+  it("keeps a resource in scope in a later resource's initializer, nested or not", async () => {
+    const body = (inner: string) => [
+      "package p;",
+      "import java.io.Reader;",
+      "import java.io.StringReader;",
+      "class A {",
+      "  Integer value = 1;",
+      "  StringReader pick(Integer x) { return null; }",
+      "  StringReader pick(Reader x) { return null; }",
+      "  void run() {",
+      inner,
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    await write({
+      "p/A.java": body("    try (StringReader value = new StringReader(\"\"); StringReader other = this.pick(value)) {} catch (Exception e) { pick(value); }"),
+      "p/B.java": body("    try (StringReader outer = new StringReader(\"\")) { try (StringReader value = new StringReader(\"\"); StringReader other = this.pick(value)) {} }").replace("class A", "class B"),
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    // The resource's StringReader selects pick(Reader) in the later initializer; the catch clause sees the Integer field.
+    expect(overloadsAt(index, "p/A.java", 9, "pick")).toEqual(expect.arrayContaining([{ line: 7, types: true }, { line: 6, types: true }]));
+    expect(overloadsAt(index, "p/A.java", 9, "pick")).toHaveLength(2);
+    expect(overloadsAt(index, "p/B.java", 9, "pick")).toEqual([{ line: 7, types: true }]);
+  });
+
   it("does not choose when an implemented interface declares a method of the name", async () => {
     await write({
       "p/I.java": "package p;\ninterface I {\n  default void pick(String x) {}\n}\n",

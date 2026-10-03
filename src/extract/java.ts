@@ -270,10 +270,10 @@ function declaredTypeOf(site: Node, name: string): Declared | undefined {
         break;
       }
       case "try_with_resources_statement": {
-        // A resource is in scope in the try body, not in a catch or finally clause.
-        if (holder.id !== scope.childForFieldName("body")?.id) break;
+        // A resource is in scope in the later resources and the try body, not in a catch or finally clause.
+        if (holder.id !== scope.childForFieldName("body")?.id && holder.type !== "resource_specification") break;
         for (const resource of childrenOf(childOfType(scope, "resource_specification") ?? scope)) {
-          if (resource.type !== "resource" || resource.startIndex >= holder.startIndex || resource.childForFieldName("name")?.text !== name) continue;
+          if (resource.type !== "resource" || resource.endIndex > site.startIndex || resource.childForFieldName("name")?.text !== name) continue;
           const type = resource.childForFieldName("type");
           return type === null ? null : { type, dimensions: "", varargs: false };
         }
