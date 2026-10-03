@@ -389,16 +389,16 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 8501,
-      "decided": 8227,
+      "claimedEdges": 8437,
+      "decided": 8163,
       "undecided": 274,
-      "truePositive": 8225,
+      "truePositive": 8161,
       "falsePositive": 2,
       "precision": 0.9998,
-      "falseEdgeRate": 0.00024,
+      "falseEdgeRate": 0.00025,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 8223,
-      "recall": 0.6954,
+      "coveredInRepoSites": 8159,
+      "recall": 0.69,
       "falseByCause": [
         {
           "cause": "local function in top-level statements",
