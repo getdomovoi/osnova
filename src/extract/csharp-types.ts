@@ -294,24 +294,39 @@ const lineEnd = (source: string, from: number): number => {
 // The source with comments and string and character literals blanked to spaces, offsets kept: a string's `$` and `@`
 // prefix and `u8` suffix with it, and an interpolated string with its holes, as the tree's literal nodes hold them. A
 // hole is lexed as code, so a literal or comment inside it does not end the string.
-function blanked(source: string): { text: string; raw: [number, number][] } {
+function blanked(source: string): { text: string; raw: [number, number][]; unterminated: boolean } {
   const out = source.split("");
   const raw: [number, number][] = [];
+  let unterminated = false;
   const blank = (from: number, to: number) => { for (let k = from; k < to && k < out.length; k += 1) if (!LINE_END.test(out[k]!)) out[k] = " "; };
-  // Code from `i`; inside an interpolation hole (`hole`), up to the `}` that closes it, whose index it returns.
-  const code = (start: number, hole: boolean): number => {
+  // Code from `i`; inside an interpolation hole (`closers` > 0: the braces that close it), up to the run of `}` that
+  // closes it, whose index it returns. A `:` outside any bracket (not `::`) starts the hole's format text, which is
+  // not code and runs to that run.
+  const code = (start: number, closers: number): number => {
     let depth = 0;
+    let brackets = 0;
     let i = start;
+    const closing = (at: number): boolean => source.startsWith("}".repeat(closers), at);
     while (i < source.length) {
       const c = source[i]!;
-      if (hole && c === "{") { depth += 1; i += 1; continue; }
-      if (hole && c === "}") { if (depth === 0) return i; depth -= 1; i += 1; continue; }
+      if (closers > 0) {
+        if (c === "{") { depth += 1; i += 1; continue; }
+        if (c === "}") { if (depth === 0 && closing(i)) return i; if (depth > 0) depth -= 1; i += 1; continue; }
+        if (c === "(" || c === "[") brackets += 1;
+        else if ((c === ")" || c === "]") && brackets > 0) brackets -= 1;
+        else if (c === ":" && depth === 0 && brackets === 0 && source[i + 1] !== ":" && source[i - 1] !== ":") {
+          let k = i + 1;
+          while (k < source.length && !closing(k)) k += 1;
+          return k;
+        }
+      }
       if (c === "/" && source[i + 1] === "/") { const stop = lineEnd(source, i); blank(i, stop); i = stop; continue; }
-      if (c === "/" && source[i + 1] === "*") { const end = source.indexOf("*/", i + 2); const stop = end < 0 ? source.length : end + 2; blank(i, stop); i = stop; continue; }
-      if (c === "'") { let k = i + 1; while (k < source.length && source[k] !== "'" && !LINE_END.test(source[k]!)) k += source[k] === "\\" ? 2 : 1; blank(i, k + 1); i = k + 1; continue; }
+      if (c === "/" && source[i + 1] === "*") { const end = source.indexOf("*/", i + 2); if (end < 0) unterminated = true; const stop = end < 0 ? source.length : end + 2; blank(i, stop); i = stop; continue; }
+      if (c === "'") { let k = i + 1; while (k < source.length && source[k] !== "'" && !LINE_END.test(source[k]!)) k += source[k] === "\\" ? 2 : 1; if (source[k] !== "'") unterminated = true; blank(i, k + 1); i = k + 1; continue; }
       if (c === "\"") { i = literal(i); continue; }
       i += 1;
     }
+    if (closers > 0) unterminated = true;
     return i;
   };
   // The string whose first quote is at `i`, blanked whole; the index just past it.
@@ -332,12 +347,13 @@ function blanked(source: string): { text: string; raw: [number, number][] } {
           const run = /^\{+/.exec(source.slice(k))![0].length;
           k += run;
           if (run < dollars) continue;
-          k = code(k, true);
+          k = code(k, dollars);
           k += /^\}*/.exec(source.slice(k))![0].length;
           continue;
         }
         k += 1;
       }
+      if (k >= source.length) unterminated = true;
       k = Math.min(source.length, k + quotes);
       raw.push([begin, k]);
     } else {
@@ -348,20 +364,21 @@ function blanked(source: string): { text: string; raw: [number, number][] } {
         if (!verbatim && c === "\\") { k += 2; continue; }
         if (dollars > 0 && c === "{") {
           if (source[k + 1] === "{") { k += 2; continue; }
-          k = code(k + 1, true) + 1;
+          k = code(k + 1, 1) + 1;
           continue;
         }
         if (c === "\"") { k += 1; break; }
-        if (!verbatim && LINE_END.test(c)) break;
+        if (!verbatim && LINE_END.test(c)) { unterminated = true; break; }
         k += 1;
       }
+      if (k >= source.length && source[k - 1] !== "\"") unterminated = true;
     }
     if (/^[uU]8/u.test(source.slice(k, k + 2))) k += 2;
     blank(begin, k);
     return k;
   };
-  code(0, false);
-  return { text: out.join(""), raw };
+  code(0, 0);
+  return { text: out.join(""), raw, unterminated };
 }
 
 // Whether the blanked text blanks exactly what the tree reads as comments and literals (an interpolated string with its
@@ -426,7 +443,7 @@ function pastClose(text: string, open: number): number {
 // grammar does not read as ending a line comment, so a declaration after one can vanish into the comment without an
 // error. Extra names only keep calls of those names unresolved.
 export function unplacedExtensionNames(root: Node, source: string): string[] {
-  const { text, raw } = blanked(source);
+  const { text, raw, unterminated } = blanked(source);
   const skipped: [number, number][] = [...raw];
   const names = new Set<string>();
   const addRange = (from: number, to: number) => { for (const written of identifiersIn(text, from, to)) names.add(plain(written)); };
@@ -436,7 +453,7 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
     const pending = [root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
       // The node around an error, so a name the error splits (`Pr\u006Fbe`, whose escape this grammar cannot read) is read whole.
-      if (node.type === "ERROR") { errorNodes += 1; const parent = node.parent ?? node; skipped.push([parent.startIndex, parent.endIndex]); addRange(parent.startIndex, parent.endIndex); continue; }
+      if (node.type === "ERROR") { errorNodes += 1; const parent = node.parent ?? node; skipped.push([parent.startIndex, parent.endIndex]); addRaw(parent.startIndex, parent.endIndex); continue; }
       for (let i = 0; i < node.childCount; i += 1) { const child = node.child(i); if (child !== null && child.hasError) pending.push(child); }
     }
     if (errorNodes === 0 && !placeholderErrorsOnly(root)) addRange(0, text.length);
@@ -451,8 +468,9 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
     if (type === "constructor_declaration" && plain(node.childForFieldName("name")?.text ?? "") === "extension") { addRange(node.startIndex, node.endIndex); continue; }
     pending.push(...childrenOf(node));
   }
-  // Where the two readings of comments and literals differ, either may hide code, so every identifier written counts.
-  if (!blankingAgrees(literal, source, text, skipped)) addRaw(0, source.length);
+  // Where the two readings of comments and literals differ, or a literal or comment never ends, either may hide code,
+  // so every identifier written counts.
+  if (unterminated || !blankingAgrees(literal, source, text, skipped)) addRaw(0, source.length);
   // A block header: the token `extension`, however it is spelled (`@extension` is an identifier, `x.extension` a member),
   // through the end of the body after its parameter list, attributes and initializers included.
   for (const match of text.matchAll(new RegExp(String.raw`(?<![\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_.@\\])(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*`, "gu"))) {

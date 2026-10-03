@@ -359,7 +359,9 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
   });
 
   it("lexes literals and comments inside interpolation holes as the compiler does", async () => {
-    const markers = ['$"{@""""}"', '$"{"""x"""}"', '$"{$@""""}"', '$@"{"""x"""}"', '$$"""{{1 /* """ */}}"""', '$"{string.Join(", ", new[] { "a" })}"', '$"{(1 > 0 ? "}" : "{")}"'];
+    const markers = ['$"{@""""}"', '$"{"""x"""}"', '$"{$@""""}"', '$@"{"""x"""}"', '$$"""{{1 /* """ */}}"""', '$"{string.Join(", ", new[] { "a" })}"', '$"{(1 > 0 ? "}" : "{")}"',
+      // Format text after the hole's top-level colon is not code: a comment or quote opener there opens nothing.
+      '$$"""{{1:/*}}"""', '$"{1://}"', '$$"""{{1://}}"""', "$$\"\"\"{{1:'}}\"\"\"", '$"""{1:/*}"""', '$$$"""{{{1:/*}}}"""', '$$$"""{{{$"{1:/*}"}}}"""', '$"{global::System.Math.Abs(-1):D3}"', '$"{(1 > 0 ? 1 : 2):N0}"', '$"{new[] { 1 }[0]:x}"'];
     const blocks = ['extension(string s) {\n        public string Probe<T>(T value) => "inner";\n    }', 'public static string Pr\\u006Fbe(this string s, int value) => "inner";'];
     for (const marker of markers) {
       for (const block of blocks) {
