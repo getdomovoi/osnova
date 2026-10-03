@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "ae201be74b3a510fb9f5949ae7188849823bfae3",
+    "commit": "3b89f59100a227307a469f6b0367075999b67c6a",
     "version": "0.12.0",
     "unreleased": "C# object creation names the constructor it runs"
   },
@@ -389,16 +389,16 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 8426,
-      "decided": 8152,
-      "undecided": 274,
-      "truePositive": 8150,
+      "claimedEdges": 8727,
+      "decided": 8452,
+      "undecided": 275,
+      "truePositive": 8450,
       "falsePositive": 2,
       "precision": 0.9998,
-      "falseEdgeRate": 0.00025,
+      "falseEdgeRate": 0.00024,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 8148,
-      "recall": 0.6891,
+      "coveredInRepoSites": 8447,
+      "recall": 0.7143,
       "falseByCause": [
         {
           "cause": "local function in top-level statements",

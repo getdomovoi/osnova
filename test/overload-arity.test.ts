@@ -140,7 +140,7 @@ describe("C# overloads chosen by argument count", () => {
     const index = await buildIndex(workspace, { cacheDir });
     const ranges = index.files.get("src/Box.cs")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
     expect(ranges).toEqual([
-      [3, { min: 1, max: 2, extension: true, receiver: "string" }], [4, { min: 4, max: 4, extension: true, receiver: "string" }],
+      [3, { min: 1, max: 2, extension: true, receiver: "string", written: ["int="] }], [4, { min: 4, max: 4, extension: true, receiver: "string", written: ["char", "int", "int"] }],
       [7, { min: 1, max: 1 }], [8, { min: 2 }], [9, { min: 0, max: 0 }],
     ]);
   });

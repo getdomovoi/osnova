@@ -1,6 +1,6 @@
 import type { ArgumentTypes, Construction, EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OverloadChoice, OverloadDeclaration, ReceiverBasis, ReceiverMode, RouteInfo } from "../types.js";
 import { sha256Hex } from "./scan.js";
-import { validWrittenCsharpType } from "./csharp-written.js";
+import { validCsharpArgumentType, validWrittenCsharpType } from "./csharp-written.js";
 
 // The position in this list is the stored encoding of an edge's kind, so the order is written down
 // rather than left to the order of a literal. A new kind takes the next number; renumbering one
@@ -61,9 +61,9 @@ export function validateArgumentTypes(value: unknown): ArgumentTypes {
     const keys = Object.keys(entry).sort().join(",");
     const types = entry.types;
     const names = entry.names;
-    // A C# member call records its receiver's written type and, for now, no argument type.
-    if (keys === "receiver,types" && validWrittenCsharpType(entry.receiver) && Array.isArray(types) && types.every((type) => type === null)) {
-      return { types: types as null[], receiver: entry.receiver };
+    // A C# member call records its receiver's written type and each argument's.
+    if (keys === "receiver,types" && validWrittenCsharpType(entry.receiver) && Array.isArray(types) && types.every((type) => type === null || validCsharpArgumentType(type))) {
+      return { types: types as (string | null)[], receiver: entry.receiver };
     }
     if ((keys === "types" || keys === "names,types") && Array.isArray(types) && types.length > 0 && types.some((type) => type !== null) &&
       types.every((type) => type === null || (typeof type === "string" && ARGUMENT_TYPE.test(type))) &&

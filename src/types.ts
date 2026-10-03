@@ -127,14 +127,19 @@ export interface ParameterRange {
   // and the method's own type parameters, in order.
   readonly receiver?: string | undefined;
   readonly generic?: readonly string[] | undefined;
+  // C#, on an extension method: each parameter after `this`, as `[ref |out |in |params ]<type>[=]`, the written type
+  // (`?` where it is not read, or names a type parameter of the method) and `=` for a default value; absent when the
+  // parameter list holds an error.
+  readonly written?: readonly string[] | undefined;
 }
 
 // Java: the written type of each argument of a call, erased (`java.util.List`, `int`, `java.lang.String[]`), or null
 // where the argument's type is not written down. `null` is the type of the `null` literal. `names` lists, sorted, the
 // simple names the types read from the caller's scope, which an inherited nested type can still shadow.
 // C#: `receiver` is the written type of a member call's receiver (`int`, `List<string>`, `DateTime?`, `string[]`, or
-// `this` for the enclosing type), which chooses the extension method the call binds; its argument types are not
-// recorded yet, so `types` holds null for each.
+// `this` for the enclosing type), which chooses the extension method the call binds, and `types` each argument's: a
+// written type, `#null`, `#lit:<type>:<value>` for an integer literal, `=A.B` for a dotted name (an enum member or a
+// static member), `#named` or `#ref` for an argument no rule here reads, or null.
 export interface ArgumentTypes {
   readonly types: readonly (string | null)[];
   readonly names?: readonly string[] | undefined;

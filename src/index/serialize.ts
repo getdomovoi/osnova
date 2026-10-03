@@ -38,11 +38,11 @@ import { loadVerification } from "./verification.js";
 import { lazyTextCard, previousTextFrom, rebindPublishedText, serializeText } from "./textStore.js";
 import type { PreviousText, TextLayout } from "./textStore.js";
 import { grammarFile } from "../grammar/languages.js";
-import { validWrittenCsharpType } from "./csharp-written.js";
+import { validCsharpParameterType, validWrittenCsharpType } from "./csharp-written.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.44.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.45.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -69,6 +69,7 @@ function validParameters(value: unknown): boolean {
     (range.erased === undefined || (range.types === undefined && Array.isArray(range.erased) && range.erased.length > 0 && range.erased.some((type) => type !== null) &&
       range.erased.every((type) => type === null || (typeof type === "string" && /^~?[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*(?:\.[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*)*(?:\[\])*(?:\.\.\.)?$/u.test(type))))) &&
     (range.receiver === undefined || (range.extension === true && validWrittenCsharpType(range.receiver))) &&
+    (range.written === undefined || (range.receiver !== undefined && Array.isArray(range.written) && range.written.every(validCsharpParameterType))) &&
     (range.generic === undefined || (range.receiver !== undefined && Array.isArray(range.generic) && range.generic.length > 0 && range.generic.every((name) => typeof name === "string" && /^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*$/u.test(name)))) &&
     (range.names === undefined || ((range.types !== undefined || range.erased !== undefined) && Array.isArray(range.names) && range.names.length > 0 &&
       range.names.every((name, at) => typeof name === "string" && /^[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Mn}\p{Mc}\p{Nd}\p{Cf}]*$/u.test(name) && (at === 0 || range.names![at - 1]! < name))));

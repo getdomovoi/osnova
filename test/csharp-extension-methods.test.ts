@@ -95,13 +95,20 @@ describe("a C# extension method chosen by the receiver's written type", () => {
     expect(callsAt(index, "App/Use.cs", 6, "Tag")).toEqual([{ toSymbol: "App/Ext.cs#InnerExt.Tag" }]);
   });
 
-  it("does not choose between two candidates at one level that both take the receiver", async () => {
+  it("picks the better of two candidates at one level that both take the receiver, as the compiler does", async () => {
     await write({
-      "Lib/Ext.cs": "namespace Lib;\npublic static class Ext\n{\n    public static void Show(this string s) { }\n    public static void Show(this object o) { }\n}\n",
-      "Lib/Use.cs": "namespace Lib;\npublic class Use\n{\n    public void Run() { \"x\".Show(); }\n}\n",
+      "Lib/Ext.cs": "namespace Lib;\npublic static class Ext\n{\n    public static void Show(this string s) { }\n    public static void Show(this object o) { }\n    public static void Both(this object o, int n) { }\n    public static void Both(this object o, long n) { }\n    public static void Tie(this string s) { }\n    public static void Tie(this string s, int n = 0) { }\n    public static void Same(this object o, string s) { }\n    public static void Same(this string o, object s) { }\n}\n",
+      "Lib/Use.cs": "namespace Lib;\npublic class Use\n{\n    public void Run() { \"x\".Show(); \"x\".Both(1); \"x\".Tie(); \"x\".Same(\"y\"); }\n}\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
-    expect(callsAt(index, "Lib/Use.cs", 4, "Show")).toEqual([{ toSymbol: undefined }]);
+    // string is an exact match where object is not.
+    expect(callsAt(index, "Lib/Use.cs", 4, "Show")).toEqual([{ toSymbol: "Lib/Ext.cs#Ext.Show", overload: { line: 4, types: true } }]);
+    // int converts to long and not back, so int is the better conversion target.
+    expect(callsAt(index, "Lib/Use.cs", 4, "Both")).toEqual([{ toSymbol: "Lib/Ext.cs#Ext.Both", overload: { line: 6, types: true } }]);
+    // Identical parameter types for the given arguments: the one that substitutes no default wins.
+    expect(callsAt(index, "Lib/Use.cs", 4, "Tie")).toEqual([{ toSymbol: "Lib/Ext.cs#Ext.Tie", overload: { line: 8, types: true } }]);
+    // Each is better for one argument and worse for the other: ambiguous, so no claim.
+    expect(callsAt(index, "Lib/Use.cs", 4, "Same")).toEqual([{ toSymbol: undefined }]);
   });
 
   it("follows the receiver's class chain to the this parameter's class", async () => {

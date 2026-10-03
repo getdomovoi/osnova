@@ -7,7 +7,7 @@ import type { Lockfiles } from "./external.js";
 import { TsConfigs, probeNodeFile } from "./tsconfig.js";
 import { chooseByArgumentTypes } from "./java-types.js";
 import type { JavaTypeWorld } from "./java-types.js";
-import { DOTNET_EXTENSIONS, DOTNET_MEMBERS } from "./dotnet-table.js";
+import { DOTNET_EXTENSIONS, DOTNET_MEMBERS, DOTNET_TYPES } from "./dotnet-table.js";
 
 const HOLDER_KINDS = new Set(["class", "interface", "module", "struct", "enum", "trait"]);
 const isHolder = (symbol: OsnovaSymbol): boolean => HOLDER_KINDS.has(symbol.kind);
@@ -912,7 +912,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const types = scope.types.get(typeKeyIn(namespace, first)) ?? [];
     if (types.length > 0) return csharpNested(csharpFound(card, types, "lexical-definition"), rest);
     const deeper = namespace.length === 0 ? first.name : `${namespace}.${first.name}`;
-    if (rest.length > 0 && first.arity === 0 && scope.namespaces.has(deeper)) return csharpInNamespace(card, deeper, rest) ?? unknownType;
+    if (rest.length > 0 && first.arity === 0 && scope.namespaces.has(deeper)) {
+      const inner = csharpInNamespace(card, deeper, rest);
+      if (inner !== undefined) return inner;
+      // A namespace the index declares merges with .NET's of the same name (`System`, for a polyfill), whose type the
+      // rest of the name may be.
+      const key = `${deeper}.${rest.map((segment) => segment.arity === 0 ? segment.name : `${segment.name}\`${segment.arity}`).join(".")}`;
+      return dotnetType(key) !== undefined ? externalType : unknownType;
+    }
     return undefined;
   };
   // The namespaces enclosing a directive, innermost first, which its target is read relative to.
@@ -971,10 +978,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (scope.unplaced.has(first.name)) return unknownType;
     const usings = scope.byFile.get(site.card.path) ?? [];
     const parts = site.namespace.length === 0 ? [] : site.namespace.split(".");
+    // A .NET type found at a level, as the namespace's own or through its directives, binds there like an indexed one.
+    const dotnetKey = (namespace: string): string => `${namespace.length === 0 ? "" : `${namespace}.`}${first.name}${first.arity === 0 ? "" : `\`${first.arity}`}`;
     for (let depth = parts.length; depth >= 0; depth -= 1) {
       const level = parts.slice(0, depth).join(".");
       const own = csharpInNamespace(site.card, level, segments);
       if (own !== undefined) return own;
+      // A .NET type binds here; its member types, which a dotted name would go on to, are not read.
+      if (dotnetType(dotnetKey(level)) !== undefined) return rest.length === 0 ? externalType : unknownType;
       // A site on the first or last line of a namespace declaration that holds directives may lie outside it, beside
       // another declaration on that line, so the line cannot tell whether those directives apply.
       const scoped = usings.filter((using) => using.scope === level);
@@ -985,7 +996,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (declared.some((using) => using.conditional)) return unknownType;
       const imported = declared.length === 0 ? undefined : csharpImported(site.card, declared, first, depth > 0);
       if (imported === null) return unknownType;
-      if (imported !== undefined) return csharpNested(imported, rest);
+      const dotnetImported = declared.some((using) => !using.static && dotnetType(dotnetKey(using.target)) !== undefined);
+      // An indexed type and a .NET type imported at one level are ambiguous to the compiler.
+      if (imported !== undefined) return dotnetImported ? unknownType : csharpNested(imported, rest);
+      if (dotnetImported) return rest.length === 0 ? externalType : unknownType;
     }
     return externalType;
   };
@@ -1353,9 +1367,57 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     args.push(base.slice(start, base.length - 1));
     return { name: base.slice(0, open), args, suffixes };
   };
-  const valueType = (type: CsharpType): boolean | null =>
-    type.kind === "dotnet" ? !DOTNET_REFERENCE.has(type.key) : type.kind === "repo" ? type.symbol.kind === "struct" || type.symbol.kind === "enum"
-      : type.kind === "nullable" ? true : type.kind === "array" ? false : null;
+  // A public top-level .NET type by its full name with generic arity: its kind (c class, C sealed class, s struct, r ref
+  // struct, e enum, i interface, d delegate), whether it declares an implicit conversion, and its base class.
+  type DotnetType = { readonly kind: string; readonly implicit: boolean; readonly base?: string | undefined };
+  let dotnetTypes: Map<string, DotnetType> | undefined;
+  const dotnetType = (key: string): DotnetType | undefined => {
+    if (dotnetTypes === undefined) {
+      dotnetTypes = new Map();
+      for (const [namespace, entries] of DOTNET_TYPES) {
+        for (const entry of entries.split(" ")) {
+          const match = /^([^:]+):([cCsreid])(\+?)(?:<(.+))?$/u.exec(entry);
+          if (match !== null) dotnetTypes.set(namespace.length === 0 ? match[1]! : `${namespace}.${match[1]}`, { kind: match[2]!, implicit: match[3] === "+", base: match[4] });
+        }
+      }
+    }
+    return dotnetTypes.get(key);
+  };
+  // The .NET type a simple name no indexed type supplies stands for at a site: at each namespace level from the innermost
+  // out, a type of that namespace, then the types the level's `using` directives import (the SDK's implicit usings and
+  // every `global using` at the compilation unit). Undefined when no .NET type of the name is visible; null when the
+  // index cannot tell (two imports supply it, an alias or a `using static` may). A third-party package is taken to
+  // declare no type of the name in a namespace the site sees.
+  const dotnetNamed = (site: CsharpSite, name: string): string | null | undefined => {
+    const scope = csharpScopeOf();
+    if (scope.aliases.has(name)) return null;
+    const usings = scope.byFile.get(site.card.path) ?? [];
+    const parts = site.namespace.length === 0 ? [] : site.namespace.split(".");
+    for (let depth = parts.length; depth >= 0; depth -= 1) {
+      const level = parts.slice(0, depth).join(".");
+      const own = level.length === 0 ? name : `${level}.${name}`;
+      if (dotnetType(own) !== undefined) return own;
+      const scoped = usings.filter((using) => using.scope === level);
+      // A site on the line a namespace declaration opens or closes on may be inside it or not.
+      if (depth > 0 && scoped.some((using) => site.line === using.from || site.line === using.to)) return null;
+      const directives = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...scope.global]
+        : scoped.filter((using) => using.from < site.line && site.line < using.to);
+      if (directives.some((using) => using.conditional || using.static)) return null;
+      const imported = new Set(directives.map((using) => using.target));
+      if (depth === 0) for (const implicit of IMPLICIT_USINGS) imported.add(implicit);
+      const hits = [...imported].filter((namespace) => dotnetType(`${namespace}.${name}`) !== undefined);
+      if (hits.length > 1) return null;
+      if (hits.length === 1) return `${hits[0]}.${name}`;
+    }
+    return undefined;
+  };
+  const valueType = (type: CsharpType): boolean | null => {
+    if (type.kind === "dotnet") {
+      const info = dotnetType(type.key);
+      return info === undefined ? !DOTNET_REFERENCE.has(type.key) : info.kind === "s" || info.kind === "r" || info.kind === "e";
+    }
+    return type.kind === "repo" ? type.symbol.kind === "struct" || type.symbol.kind === "enum" : type.kind === "nullable" ? true : type.kind === "array" ? false : null;
+  };
   // A written type read at a site; null when the index cannot tell which type it names. `generic` lists type parameter
   // names that stand for themselves (an extension method's own).
   const csharpTypeAt = (site: CsharpSite, written: string, generic: readonly string[] = [], depth = 0): CsharpType | null => {
@@ -1383,9 +1445,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // A name no indexed type supplies is a library type: a listed .NET type when it names one (`DateTime` under the
         // SDK's implicit `using System;`, or `System.DateTime`).
         const simple = parts.name.replace(/^global::/u, "");
-        const key = parts.args.length === 0 ? (simple.startsWith("System.") ? simple : `System.${simple}`) : undefined;
-        type = key !== undefined && (DOTNET_MEMBERS.has(key) || key === "System.Type") && !simple.slice(0, simple.lastIndexOf(".") + 1).replace(/^System\.$/u, "").length
-          ? { kind: "dotnet", key } : { kind: "external", name: simple, args: args as CsharpType[] };
+        const dotted = simple.includes(".");
+        const key = parts.args.length > 0 ? undefined
+          : dotted ? (dotnetType(simple) !== undefined && !csharpScopeOf().aliases.has(simple.slice(0, simple.indexOf("."))) ? simple : undefined) : dotnetNamed(site, simple);
+        if (key === null) return null;
+        type = key !== undefined ? { kind: "dotnet", key } : { kind: "external", name: simple, args: args as CsharpType[] };
       } else type = null;
     }
     for (const suffix of parts.suffixes) {
@@ -1435,32 +1499,116 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     return base === undefined ? null : base;
   };
   const refStruct = (type: OsnovaSymbol): boolean => type.kind === "struct" && partsOf(type).parts.some((part) => part.refStruct === true);
-  // Whether a receiver of type `r` converts to an extension method's `this` parameter of type `p` by identity, reference
-  // or boxing conversion: null when the index cannot tell.
-  const receiverConverts = (r: CsharpType, p: CsharpType): boolean | null => {
+  // Implicit numeric conversions between the .NET numeric types (nint and nuint are IntPtr and UIntPtr).
+  const NUMERIC_WIDENING: Readonly<Record<string, readonly string[]>> = {
+    "System.SByte": ["System.Int16", "System.Int32", "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal"],
+    "System.Byte": ["System.Int16", "System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal"],
+    "System.Int16": ["System.Int32", "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal"],
+    "System.UInt16": ["System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal"],
+    "System.Int32": ["System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal"],
+    "System.UInt32": ["System.Int64", "System.UInt64", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal"],
+    "System.Int64": ["System.Single", "System.Double", "System.Decimal"],
+    "System.UInt64": ["System.Single", "System.Double", "System.Decimal"],
+    "System.IntPtr": ["System.Int64", "System.Single", "System.Double", "System.Decimal"],
+    "System.UIntPtr": ["System.UInt64", "System.Single", "System.Double", "System.Decimal"],
+    "System.Char": ["System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal"],
+    "System.Single": ["System.Double"],
+  };
+  // The values an int constant converts to by an implicit constant conversion.
+  const CONSTANT_RANGE: Readonly<Record<string, readonly [bigint, bigint]>> = {
+    "System.SByte": [-128n, 127n], "System.Byte": [0n, 255n], "System.Int16": [-32768n, 32767n], "System.UInt16": [0n, 65535n],
+    "System.UInt32": [0n, 4294967295n], "System.UInt64": [0n, 18446744073709551615n],
+  };
+  const LITERAL_KEYS: Readonly<Record<string, string>> = { int: "System.Int32", uint: "System.UInt32", long: "System.Int64", ulong: "System.UInt64" };
+  const widens = (from: CsharpType, to: CsharpType): boolean => from.kind === "dotnet" && to.kind === "dotnet" && (NUMERIC_WIDENING[from.key]?.includes(to.key) ?? false);
+  const refStructType = (type: CsharpType): boolean => (type.kind === "repo" && refStruct(type.symbol)) || (type.kind === "dotnet" && dotnetType(type.key)?.kind === "r");
+  // Whether a type or one of its base classes may declare an implicit conversion, which can convert where no standard
+  // conversion does: null when the index cannot tell.
+  const mayConvertImplicitly = (type: CsharpType): boolean | null => {
+    switch (type.kind) {
+      case "array": return false;
+      case "nullable": return mayConvertImplicitly(type.inner);
+      case "external":
+      case "parameter": return null;
+      case "dotnet": {
+        const seen = new Set<string>();
+        for (let key: string | undefined = type.key; key !== undefined && !seen.has(key); key = dotnetType(key)?.base) {
+          seen.add(key);
+          const info = dotnetType(key);
+          if (info === undefined) return null;
+          if (info.implicit) return true;
+        }
+        return false;
+      }
+      case "repo": {
+        const seen = new Set<string>();
+        let current: OsnovaSymbol | null | undefined = type.symbol;
+        while (current !== undefined) {
+          if (current === null || seen.has(typeKey(current)) || seen.size > 16) return null;
+          seen.add(typeKey(current));
+          const { parts, complete } = partsOf(current);
+          if (!complete || parts.some((part) => !parsedCleanly(part.file))) return null;
+          if (parts.some((part) => part.members?.includes("op_Implicit") === true)) return true;
+          if (current.kind !== "class") return current.kind === "struct" || current.kind === "enum" || current.kind === "interface" ? false : null;
+          current = csharpClassBaseOf(current);
+        }
+        return false;
+      }
+    }
+  };
+  // Whether a value of type `r` converts to type `p` by identity, implicit reference or boxing conversion: null when the
+  // index cannot tell.
+  const referenceOrBoxing = (r: CsharpType, p: CsharpType): boolean | null => {
     if (p.kind === "parameter" || r.kind === "parameter") return null;
-    // A ref struct never boxes, so it converts to no class or interface type.
-    if (r.kind === "repo" && refStruct(r.symbol)) return sameCsharpType(r, p);
-    if (p.kind === "dotnet" && p.key === "System.Object") return true;
     const same = sameCsharpType(r, p);
     if (same !== false) return same;
+    // A ref struct never boxes, so it converts to no class or interface type.
+    if (refStructType(r)) return false;
     if (p.kind === "dotnet") {
+      if (p.key === "System.Object") return r.kind === "external" ? null : true;
       if (p.key === "System.ValueType") return valueType(r) ?? null;
       // A nullable enum boxes to its enum's boxed value, so it converts to System.Enum too.
       if (p.key === "System.Enum") {
         const enumType = r.kind === "nullable" ? r.inner : r;
-        return enumType.kind === "repo" ? enumType.symbol.kind === "enum" : enumType.kind === "external" ? null : false;
+        return enumType.kind === "repo" ? enumType.symbol.kind === "enum" : enumType.kind === "dotnet" ? dotnetType(enumType.key)?.kind === "e" : enumType.kind === "external" ? null : false;
       }
       if (p.key === "System.Array") return r.kind === "array" ? true : r.kind === "external" ? null : false;
-      // The other listed .NET types are structs or sealed classes, which only their own values convert to.
-      return r.kind === "external" ? null : false;
+      const info = dotnetType(p.key);
+      if (info === undefined || r.kind === "external") return null;
+      // Which interfaces a type implements is not read.
+      if (info.kind === "i") return null;
+      // Only a class derives from a class: up a .NET class's bases, or an indexed class's.
+      if (info.kind === "c") {
+        if (r.kind === "dotnet") {
+          const seen = new Set<string>();
+          for (let key = dotnetType(r.key)?.base; key !== undefined && !seen.has(key); key = dotnetType(key)?.base) {
+            if (key === p.key) return true;
+            seen.add(key);
+          }
+          return dotnetType(r.key) === undefined ? null : false;
+        }
+        if (r.kind === "repo") {
+          if (r.symbol.kind !== "class") return r.symbol.kind === "struct" || r.symbol.kind === "enum" || r.symbol.kind === "interface" ? false : null;
+          const seen = new Set<string>();
+          let current: OsnovaSymbol | null | undefined = r.symbol;
+          while (current !== undefined) {
+            if (current === null || seen.has(typeKey(current)) || seen.size > 16) return null;
+            seen.add(typeKey(current));
+            current = csharpClassBaseOf(current);
+          }
+          return false;
+        }
+        return false;
+      }
+      // A sealed class, struct, enum or delegate: only its own values.
+      return false;
     }
     if (p.kind === "nullable") return r.kind === "external" ? null : false;
     if (p.kind === "array") {
       if (r.kind !== "array") return r.kind === "external" ? null : false;
       if (r.rank !== p.rank) return false;
       // Array covariance converts reference elements only.
-      return valueType(r.element) === false && valueType(p.element) === false ? receiverConverts(r.element, p.element) : sameCsharpType(r.element, p.element);
+      return valueType(r.element) === false && valueType(p.element) === false ? referenceOrBoxing(r.element, p.element) : sameCsharpType(r.element, p.element);
     }
     if (p.kind === "repo") {
       if (r.kind !== "repo") return r.kind === "external" ? null : false;
@@ -1478,6 +1626,98 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       return r.symbol.kind === "class" || r.symbol.kind === "struct" || r.symbol.kind === "enum" ? false : null;
     }
     return null;
+  };
+  // An extension method's receiver converts to its `this` parameter by identity, reference or boxing conversion only.
+  const receiverConverts = referenceOrBoxing;
+  // Whether a value of type `r` converts implicitly to `p` as an argument: a standard conversion (identity, numeric,
+  // nullable, reference or boxing), or null when a user-defined implicit conversion may apply.
+  const argumentConverts = (r: CsharpType, p: CsharpType): boolean | null => {
+    let standard = referenceOrBoxing(r, p);
+    if (standard === true) return true;
+    if (widens(r, p)) return true;
+    if (p.kind === "nullable") {
+      // A value, or a nullable value, converts to a nullable of a type it converts to by identity or numeric conversion.
+      const inner = r.kind === "nullable" ? r.inner : r;
+      const same = sameCsharpType(inner, p.inner);
+      if (same === true || widens(inner, p.inner)) return true;
+      if (same === null) standard = null;
+    }
+    if (standard === false && (mayConvertImplicitly(r) !== false || mayConvertImplicitly(p) !== false)) return null;
+    return standard;
+  };
+  // One argument as written at a call: a type, the null literal, or an integer literal with its value.
+  type CsharpArgument = { readonly kind: "type"; readonly type: CsharpType } | { readonly kind: "null" } | { readonly kind: "literal"; readonly key: string; readonly value: bigint };
+  const csharpArgumentAt = (site: CsharpSite, written: string | null): CsharpArgument | null => {
+    if (written === null || written === "#named" || written === "#ref") return null;
+    if (written === "#null") return { kind: "null" };
+    const literal = /^#lit:(int|uint|long|ulong):(-?\d+)$/u.exec(written);
+    if (literal !== null) return { kind: "literal", key: LITERAL_KEYS[literal[1]!]!, value: BigInt(literal[2]!) };
+    if (written.startsWith("=")) {
+      // `E.M`: an enum member when E names an enum that declares M; a static member's type is not read.
+      const dotted = written.slice(1);
+      const owner = csharpTypeAt(site, dotted.slice(0, dotted.lastIndexOf(".")));
+      const member = dotted.slice(dotted.lastIndexOf(".") + 1);
+      if (owner?.kind === "repo" && owner.symbol.kind === "enum" && parsedCleanly(owner.symbol.file) && owner.symbol.members?.includes(member) === true) return { kind: "type", type: owner };
+      if (owner?.kind === "dotnet" && dotnetType(owner.key)?.kind === "e") return { kind: "type", type: owner };
+      return null;
+    }
+    const type = csharpTypeAt(site, written);
+    return type === null ? null : { kind: "type", type };
+  };
+  // Whether an argument converts implicitly to a parameter type: null when the index cannot tell.
+  const argumentFits = (argument: CsharpArgument, p: CsharpType): boolean | null => {
+    if (p.kind === "parameter") return null;
+    if (argument.kind === "type") return argumentConverts(argument.type, p);
+    if (argument.kind === "null") return p.kind === "nullable" ? true : valueType(p) === null ? null : !valueType(p);
+    const q = p.kind === "nullable" ? p.inner : p;
+    const natural: CsharpType = { kind: "dotnet", key: argument.key };
+    if (q.kind === "dotnet") {
+      if (q.key === argument.key || widens(natural, q)) return true;
+      const range = CONSTANT_RANGE[q.key];
+      if (argument.key === "System.Int32" && range !== undefined && argument.value >= range[0] && argument.value <= range[1]) return true;
+      if (argument.key === "System.Int64" && q.key === "System.UInt64" && argument.value >= 0n) return true;
+      if (p.kind !== "nullable" && (q.key === "System.Object" || q.key === "System.ValueType")) return true;
+      const info = dotnetType(q.key);
+      // The constant zero converts to any enum type.
+      if (info?.kind === "e") return argument.value === 0n;
+      if (info === undefined || info.kind === "i") return null;
+      return mayConvertImplicitly(q) !== false ? null : false;
+    }
+    if (q.kind === "repo") {
+      if (q.symbol.kind === "enum") return argument.value === 0n;
+      return mayConvertImplicitly(q) !== false ? null : false;
+    }
+    return q.kind === "array" ? false : null;
+  };
+  // Whether an argument's type is identical to a parameter type, which makes its conversion better than any other.
+  const exactly = (argument: CsharpArgument, p: CsharpType): boolean | null =>
+    argument.kind === "type" ? sameCsharpType(argument.type, p) : argument.kind === "literal" ? sameCsharpType({ kind: "dotnet", key: argument.key }, p) : false;
+  const SIGNED_BETTER: Readonly<Record<string, readonly string[]>> = {
+    "System.SByte": ["System.Byte", "System.UInt16", "System.UInt32", "System.UInt64"],
+    "System.Int16": ["System.UInt16", "System.UInt32", "System.UInt64"],
+    "System.Int32": ["System.UInt32", "System.UInt64"],
+    "System.Int64": ["System.UInt64"],
+  };
+  // Which of two parameter types an argument converts to better: 1 for `p`, -1 for `q`, 0 for neither, null when the
+  // index cannot tell.
+  const betterConversion = (argument: CsharpArgument, p: CsharpType, q: CsharpType): number | null => {
+    const same = sameCsharpType(p, q);
+    if (same === true) return 0;
+    if (same === null) return null;
+    const exactP = exactly(argument, p);
+    const exactQ = exactly(argument, q);
+    if (exactP === null || exactQ === null) return null;
+    if (exactP !== exactQ) return exactP ? 1 : -1;
+    const pq = argumentConverts(p, q);
+    const qp = argumentConverts(q, p);
+    if (pq === null || qp === null) return null;
+    if (pq && !qp) return 1;
+    if (qp && !pq) return -1;
+    if (p.kind === "dotnet" && q.kind === "dotnet") {
+      if (SIGNED_BETTER[p.key]?.includes(q.key) === true) return 1;
+      if (SIGNED_BETTER[q.key]?.includes(p.key) === true) return -1;
+    }
+    return 0;
   };
   // Whether member lookup on a receiver of this type can find a member named `name`, which keeps the call from binding
   // an extension method: false only when every member of the type and its bases is known.
@@ -1561,6 +1801,29 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       }
       return false;
     };
+    // Each argument as written, resolved at the call site; the receiver is the first argument of an extension call.
+    const argumentsAt = (edge.argumentTypes?.types ?? []).slice(0, count).map((written) => csharpArgumentAt(site, written));
+    const named = (edge.argumentTypes?.types ?? []).some((written) => written === "#named");
+    type Candidate = { method: OsnovaSymbol; imported: boolean; fits: boolean | null; parameters: (CsharpType | null)[]; defaults: number };
+    // Whether candidate `m` is a better function member than `n` for these arguments: a better conversion for one
+    // argument and none worse, or, with identical parameter types, no default argument substituted where `n` needs one.
+    const betterMember = (m: Candidate, n: Candidate): boolean | null => {
+      if (argumentsAt.some((argument) => argument === null)) return null;
+      const all: CsharpArgument[] = [{ kind: "type", type: receiver }, ...argumentsAt.map((argument) => argument!)];
+      let anyBetter = false;
+      for (let i = 0; i < all.length; i += 1) {
+        const p = m.parameters[i];
+        const q = n.parameters[i];
+        if (p === null || p === undefined || q === null || q === undefined) return null;
+        const which = betterConversion(all[i]!, p, q);
+        if (which === null) return null;
+        if (which < 0) return false;
+        if (which > 0) anyBetter = true;
+      }
+      if (anyBetter) return true;
+      for (let i = 0; i < all.length; i += 1) if (sameCsharpType(m.parameters[i]!, n.parameters[i]!) !== true) return false;
+      return m.defaults === 0 && n.defaults > 0;
+    };
     let chosen: { method: OsnovaSymbol; imported: boolean } | undefined;
     let pending: OsnovaSymbol | undefined;
     // A method an inner level already offered (its namespace's own level, then a `using` of it further out) is no
@@ -1576,7 +1839,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (depth === 0) for (const name of IMPLICIT_USINGS) imported.add(name);
       // A .NET namespace this level imports may declare an extension method of the name.
       if ([...imported].some((name) => DOTNET_EXTENSIONS.get(name)?.has(edge.toName) === true)) return undefined;
-      const here: { method: OsnovaSymbol; imported: boolean; fits: boolean | null }[] = [];
+      const here: Candidate[] = [];
       for (const method of candidates) {
         const owner = classOf(method);
         if (owner === undefined || owner.namespace === "?" || owner.conditional === true || method.conditional === true) return undefined;
@@ -1588,19 +1851,63 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // A private extension method is visible only inside its class.
         if (range.access === "private" && !callerInside(owner)) continue;
         const declaredSite: CsharpSite = { card: files.get(method.file)!, enclosing: localOfQualifiedName(owner.qualifiedName).split("."), namespace: home, line: method.span.startLine };
-        const target = range.receiver === undefined ? null : csharpTypeAt(declaredSite, range.receiver, range.generic ?? []);
+        const generic = range.generic ?? [];
+        const target = range.receiver === undefined ? null : csharpTypeAt(declaredSite, range.receiver, generic);
         let fits = target === null ? null : receiverConverts(receiver, target);
-        // The receiver proves a call applicable only when it is the only argument and no type argument must be inferred:
-        // the other arguments' conversions, named arguments and generic constraints are not read.
-        if (fits === true && (count > 0 || (range.generic?.length ?? 0) > 0)) fits = null;
-        if (fits !== false) here.push({ method, imported: !local, fits });
+        // A type argument to infer, a named argument, or a parameter list this did not read leaves the call unproven;
+        // each written argument must convert to its parameter, and a `ref` or `out` parameter takes only an argument
+        // written with that modifier.
+        let unknown = fits === null || generic.length > 0 || named || range.written === undefined;
+        const parameters: (CsharpType | null)[] = [target];
+        let defaults = 0;
+        for (let i = 0; fits !== false && i < Math.max(count, range.written?.length ?? 0); i += 1) {
+          const entry = range.written?.[i];
+          const part = entry === undefined ? null : /^(?:(ref|out|in|params) )?(.+?)(=?)$/u.exec(entry);
+          // An argument beyond the parameters, or a `params` parameter, means the expanded form, which is not read.
+          if (part === null || part[1] === "params") { unknown = true; break; }
+          if (i >= count) {
+            if (part[3] === "=") defaults += 1;
+            else unknown = true;
+            continue;
+          }
+          const written = edge.argumentTypes?.types[i] ?? null;
+          if (written === "#ref") { unknown = true; parameters.push(null); continue; }
+          if (part[1] === "ref" || part[1] === "out") { fits = false; break; }
+          const p = part[2] === "?" ? null : csharpTypeAt(declaredSite, part[2]!, generic);
+          const argument = argumentsAt[i] ?? null;
+          if (p === null || p.kind === "parameter" || argument === null) { unknown = true; parameters.push(p); continue; }
+          const fit = argumentFits(argument, p);
+          if (fit === false) { fits = false; break; }
+          if (fit === null) unknown = true;
+          parameters.push(p);
+        }
+        if (fits !== false) here.push({ method, imported: !local, fits: unknown ? null : true, parameters, defaults });
       }
       if (here.length === 0) continue;
-      if (pending !== undefined || here.length > 1) return undefined;
-      // One candidate the index cannot prove applicable binds only when no other level offers one.
-      if (here[0]!.fits === true) { chosen = here[0]!; break; }
-      pending = here[0]!.method;
-      chosen = here[0]!;
+      if (pending !== undefined) return undefined;
+      if (here.some((candidate) => candidate.fits !== true)) {
+        // One candidate the index cannot prove applicable binds only when no other level offers one.
+        if (here.length > 1) return undefined;
+        pending = here[0]!.method;
+        chosen = here[0]!;
+        continue;
+      }
+      if (here.length === 1) { chosen = here[0]!; break; }
+      // Several applicable: the one that is a better function member than every other, as the compiler picks it.
+      let winner: Candidate | undefined;
+      for (const candidate of here) {
+        let beatsAll = true;
+        for (const other of here) {
+          if (other === candidate) continue;
+          const better = betterMember(candidate, other);
+          if (better === null) return undefined;
+          if (!better) { beatsAll = false; break; }
+        }
+        if (beatsAll) { winner = candidate; break; }
+      }
+      if (winner === undefined) return undefined;
+      chosen = winner;
+      break;
     }
     if (chosen === undefined) return undefined;
     const method = chosen.method;
