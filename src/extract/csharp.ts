@@ -77,28 +77,47 @@ function memberTypeAccess(type: Node): "private" | "protected" | undefined {
   return type.parent?.parent?.type === "interface_declaration" ? undefined : "private";
 }
 
-// The byte ranges from each `#if` to its `#endif` (or the end of the file), and the position of each brace token
-// outside strings, with whether it opens, both in document order.
-function conditionalRegions(root: Node): { regions: Array<[number, number]>; braces: Array<[number, boolean]> } {
-  const directives: Node[] = [];
-  const braces: Array<[number, boolean]> = [];
+// The byte ranges from each `#if` to its `#endif` (or the end of the file), and whether any branch of one has braces
+// (outside strings) that do not balance. Each `#if`, `#elif` and `#else` branch is read on its own, in document order,
+// since only one is compiled: a branch that closes a brace opened before it (`#if X } class B { #endif` matches its
+// counts) or leaves one open can change where the rest of the file nests. A nested `#if` counts within its own branch.
+function conditionalRegions(root: Node): { regions: Array<[number, number]>; structural: boolean } {
+  const events: Node[] = [];
   const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.type === "if_directive" || node.type === "endif_directive") directives.push(node);
-    else if ((node.type === "{" || node.type === "}") && !/string|interpolation|character/u.test(node.parent?.type ?? "")) braces.push([node.startIndex, node.type === "{"]);
+    if (node.type === "if_directive" || node.type === "elif_directive" || node.type === "else_directive" || node.type === "endif_directive") events.push(node);
+    else if ((node.type === "{" || node.type === "}") && !/string|interpolation|character/u.test(node.parent?.type ?? "")) events.push(node);
     for (let index = node.childCount - 1; index >= 0; index -= 1) {
       const child = node.child(index);
       if (child !== null) pending.push(child);
     }
   }
   const regions: Array<[number, number]> = [];
-  const open: number[] = [];
-  for (const directive of directives.sort((a, b) => a.startIndex - b.startIndex)) {
-    if (directive.type === "if_directive") open.push(directive.startIndex);
-    else if (open.length > 0) regions.push([open.pop()!, directive.endIndex]);
+  // Each open `#if`, innermost last: where it starts and the brace depth of its current branch.
+  const open: Array<{ start: number; depth: number }> = [];
+  let structural = false;
+  for (const event of events.sort((a, b) => a.startIndex - b.startIndex)) {
+    const top = open[open.length - 1];
+    if (event.type === "if_directive") open.push({ start: event.startIndex, depth: 0 });
+    else if (event.type === "elif_directive" || event.type === "else_directive") {
+      if (top === undefined) continue;
+      if (top.depth !== 0) structural = true;
+      top.depth = 0;
+    } else if (event.type === "endif_directive") {
+      if (top === undefined) continue;
+      if (top.depth !== 0) structural = true;
+      regions.push([top.start, event.endIndex]);
+      open.pop();
+    } else if (top !== undefined) {
+      top.depth += event.type === "{" ? 1 : -1;
+      if (top.depth < 0) structural = true;
+    }
   }
-  for (const start of open) regions.push([start, root.endIndex]);
-  return { regions, braces: braces.sort((a, b) => a[0] - b[0]) };
+  for (const { start, depth } of open) {
+    if (depth !== 0) structural = true;
+    regions.push([start, root.endIndex]);
+  }
+  return { regions, structural };
 }
 
 // Whether a parse error swallowed a `namespace` keyword or an identifier escape (`\u0050`), which the bundled grammar
@@ -140,21 +159,10 @@ export const csharpAdapter: LanguageAdapter = {
     // The index does not know the build's symbols, so whatever an `#if` region could change is conditional: a type,
     // delegate or constructor that starts in one or whose header (before its body) overlaps one, a type or directive inside
     // a conditional namespace declaration, and a directive in one. The members of a conditional type are compiled with it,
-    // so they are not marked on that account. A region whose braces do not balance can change where the rest of the file nests, so then every
+    // so they are not marked on that account. A branch whose braces do not balance can change where the rest of the file nests, so then every
     // declaration and directive in the file is conditional, every type's namespace is unknown and every creation in it is
     // blocked. The tree is walked only when a line holds `#` and `if` after any whitespace, a byte-order mark included.
-    const { regions, braces } = /^\s*#\s*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : { regions: [], braces: [] };
-    // Read in order, a balanced region never closes a brace opened before it: `#if X } class B { #endif` matches its
-    // counts but moves what follows into another type.
-    const structural = regions.some(([from, to]) => {
-      let depth = 0;
-      for (const [at, open] of braces) {
-        if (at < from || at > to) continue;
-        depth += open ? 1 : -1;
-        if (depth < 0) return true;
-      }
-      return depth !== 0;
-    });
+    const { regions, structural } = /^\s*#\s*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : { regions: [], structural: false };
     const inRegion = (node: Node): boolean => structural || regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
     const headerInRegion = (node: Node): boolean => {
       // A namespace's header ends with its name: a file-scoped one has no body to stop at.
@@ -173,6 +181,9 @@ export const csharpAdapter: LanguageAdapter = {
     // The generic arity of each enclosing type, outermost first: `Outer<T>.Inner` and `Outer<T, U>.Inner`
     // are different types with the same local name.
     const arities: number[] = [];
+    // The declaration form of each enclosing type, outermost first: a `partial class T` and a `partial struct T` or
+    // `partial record T` cannot be parts of one type.
+    const forms: string[] = [];
     const visit = (node: Node): void => {
       switch (node.type) {
         case "namespace_declaration":
@@ -210,6 +221,7 @@ export const csharpAdapter: LanguageAdapter = {
                   : "class";
           out.addDef(typeName, kind, node, undefined, undefined, node.type === "class_declaration" || node.type === "record_declaration" || node.type === "record_struct_declaration" ? bindings.heritage(node) : undefined, undefined, undefined, undefined, bindings.fieldTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, undefined, bindings.elementTypes(childrenOf(node.childForFieldName("body") ?? node)), undefined, bindings.valueTypes(childrenOf(node.childForFieldName("body") ?? node)));
           arities.push(childrenOf(childOfType(node, "type_parameter_list") ?? node).filter((child) => child.type === "type_parameter").length);
+          forms.push(node.type.replace(/_declaration$/u, "").replace("_", "-"));
           if (hasPrimaryConstructor(node, nameNode)) out.markPrimary();
           if (arities[arities.length - 1]! > 0) out.markArity(arities[arities.length - 1]!);
           // A top-level type records its namespace; a member type records whether a derived type can see it.
@@ -236,11 +248,12 @@ export const csharpAdapter: LanguageAdapter = {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
             else if (bases[0] !== undefined) out.markBaseType(readable(bases[0]) ? aritiedName(bases[0]) : "?");
           }
-          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${namespaces.join(".")}\`${arities.join(".")}`);
+          if (childrenOf(node).some((child) => child.type === "modifier" && child.text === "partial")) out.markPartial(`${forms.join(".")}:${namespaces.join(".")}\`${arities.join(".")}`);
           out.push(typeName);
           for (const child of childrenOf(node)) visit(child);
           out.pop();
           arities.pop();
+          forms.pop();
           return;
         }
         case "delegate_declaration": {

@@ -315,8 +315,8 @@ describe("C# partial parts are one type only within one namespace and arity", ()
     });
     const index = await buildIndex(workspace, { cacheDir });
     expect(choiceAt(index, "A.cs", 4, "Put")).toEqual({ toSymbol: "B.cs#Box.Put", arguments: 0, overload: { line: 3, from: "A.cs#Box.Put" } });
-    expect(index.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("N.M`0");
-    expect(index.files.get("G.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("N.M`1");
+    expect(index.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class:N.M`0");
+    expect(index.files.get("G.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class:N.M`1");
   });
 });
 
@@ -357,9 +357,9 @@ describe("partial identity in the cache", () => {
     const built = await buildIndex(workspace, { cacheDir });
     const loaded = await loadIndex(workspace, { cacheDir });
     expect(loaded).not.toBeNull();
-    expect(built.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class`0");
-    expect(loaded?.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class`0");
-    expect(loaded?.files.get("B.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("Ünïcode.Ü`1");
+    expect(built.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class:class`0");
+    expect(loaded?.files.get("A.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class:class`0");
+    expect(loaded?.files.get("B.cs")?.symbols.find((symbol) => symbol.name === "Box")?.partial).toBe("class:Ünïcode.Ü`1");
     expect(loaded?.files.get("B.cs")?.diagnostics ?? []).toEqual([]);
   });
 });
@@ -374,10 +374,10 @@ describe("nested C# partial types", () => {
     const index = await buildIndex(workspace, { cacheDir });
     const calls = callsAt(index, "A.cs", 5, "Put").map((edge) => [edge.arguments, edge.toSymbol, edge.overload]).sort((a, b) => Number(a[0]) - Number(b[0]));
     expect(calls).toEqual([[0, "C.cs#Outer.Inner.Put", { line: 4, from: "A.cs#Outer.Inner.Put" }], [1, "A.cs#Outer.Inner.Put", undefined]]);
-    expect(index.files.get("A.cs")?.symbols.find((symbol) => symbol.qualifiedName === "A.cs#Outer.Inner")?.partial).toBe("N`1.0");
-    expect(index.files.get("B.cs")?.symbols.find((symbol) => symbol.qualifiedName === "B.cs#Outer.Inner")?.partial).toBe("N`2.0");
+    expect(index.files.get("A.cs")?.symbols.find((symbol) => symbol.qualifiedName === "A.cs#Outer.Inner")?.partial).toBe("class.class:N`1.0");
+    expect(index.files.get("B.cs")?.symbols.find((symbol) => symbol.qualifiedName === "B.cs#Outer.Inner")?.partial).toBe("class.class:N`2.0");
     const loaded = await loadIndex(workspace, { cacheDir });
-    expect(loaded?.files.get("A.cs")?.symbols.find((symbol) => symbol.qualifiedName === "A.cs#Outer.Inner")?.partial).toBe("N`1.0");
+    expect(loaded?.files.get("A.cs")?.symbols.find((symbol) => symbol.qualifiedName === "A.cs#Outer.Inner")?.partial).toBe("class.class:N`1.0");
   });
 });
 

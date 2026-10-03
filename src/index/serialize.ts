@@ -392,7 +392,7 @@ function deserializeBody(
       if (symbol.namespace !== undefined && (typeof symbol.namespace !== "string" || !/^[^\s.]+(?:\.[^\s.]+)*$/u.test(symbol.namespace) || !["class", "interface", "struct", "enum", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt namespace metadata");
       if (symbol.arity !== undefined && (!Number.isSafeInteger(symbol.arity) || symbol.arity < 1 || !["class", "interface", "struct", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt generic arity metadata");
       if (symbol.supertypes !== undefined && (!Number.isSafeInteger(symbol.supertypes) || symbol.supertypes < 1)) throw new Error("osnova: corrupt supertype count");
-      if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[^\s`]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
+      if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^(?:class|interface|struct|enum|record|record-struct)(?:\.(?:class|interface|struct|enum|record|record-struct))*:[^\s`:]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
       const validBinding = (item: unknown): boolean => typeof item === "object" && item !== null &&
         (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||

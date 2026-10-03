@@ -781,6 +781,35 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("reads the braces of each C# #if, #elif and #else branch on their own", async () => {
+    await write({
+      "Wrapped.cs": "class A {\n#if false\nclass H {\n#elif true\n}\nclass B {\n#else\n}\n#endif\npublic class T {public T(){}}\n}\n",
+      "Spaces.cs": "namespace N {\n#if false\nnamespace H {\n#elif true\n}\nnamespace M {\n#else\n}\n#endif\npublic class U {public U(){}}\n}\n",
+      "Global.cs": "class T {public T(){}}\nclass U {public U(){}}\n",
+      "Use.cs": "class C:A {public static object Run(){return new T();}}\n",
+      "UseSpaces.cs": "namespace N {class D {public static object Run(){return new U();}}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "UseSpaces.cs", 1)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("does not merge C# partial declarations of different forms when one is inside #if", async () => {
+    await write({
+      "A.cs": "#if false\npartial class T {}\n#endif\n",
+      "B.cs": "partial struct T {}\n",
+      "Same.cs": "partial struct S {}\n#if false\npartial class S {}\n#endif\n",
+      "OuterA.cs": "partial class H {\n#if false\npublic partial class V {}\n#endif\n}\n",
+      "OuterB.cs": "partial class H {public partial struct V {}}\n",
+      "RecordA.cs": "#if false\npartial class R {}\n#endif\n",
+      "RecordB.cs": "partial record R {}\n",
+      "Use.cs": "class C {public static object Run(){new S(); new H.V(); new R(); return new T();}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.fromFile === "Use.cs" && edge.constructs !== undefined).map((edge) => [edge.toName, edge.toSymbol]);
+    expect(creations.sort()).toEqual([["H.V", undefined], ["R", undefined], ["S", undefined], ["T", undefined]]);
+  });
+
   it("keeps a C# type a class wrapper in #if may move out of every other file's lookup", async () => {
     await write({
       "Wrapped.cs": "#if false\nclass H {\n#endif\nclass T {public T(){}}\n#if false\n}\n#endif\n",
