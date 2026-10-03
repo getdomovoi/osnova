@@ -77,25 +77,28 @@ function memberTypeAccess(type: Node): "private" | "protected" | undefined {
   return type.parent?.parent?.type === "interface_declaration" ? undefined : "private";
 }
 
-// The byte ranges from each `#if` to its `#endif` (or the end of the file), in document order.
-function conditionalRegions(root: Node): Array<[number, number]> {
-  const regions: Array<[number, number]> = [];
-  const open: number[] = [];
-  const pending: Node[] = [root];
+// The byte ranges from each `#if` to its `#endif` (or the end of the file), in document order, and the position of
+// each brace token outside strings, with whether it opens.
+function conditionalRegions(root: Node): { regions: Array<[number, number]>; braces: Array<[number, boolean]> } {
   const directives: Node[] = [];
+  const braces: Array<[number, boolean]> = [];
+  const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (node.type === "if_directive" || node.type === "endif_directive") directives.push(node);
+    else if ((node.type === "{" || node.type === "}") && !/string|interpolation|character/u.test(node.parent?.type ?? "")) braces.push([node.startIndex, node.type === "{"]);
     for (let index = node.childCount - 1; index >= 0; index -= 1) {
       const child = node.child(index);
       if (child !== null) pending.push(child);
     }
   }
+  const regions: Array<[number, number]> = [];
+  const open: number[] = [];
   for (const directive of directives.sort((a, b) => a.startIndex - b.startIndex)) {
     if (directive.type === "if_directive") open.push(directive.startIndex);
     else if (open.length > 0) regions.push([open.pop()!, directive.endIndex]);
   }
   for (const start of open) regions.push([start, root.endIndex]);
-  return regions;
+  return { regions, braces };
 }
 
 // Whether a parse error swallowed a `namespace` keyword or an identifier escape (`\u0050`), which the bundled grammar
@@ -134,17 +137,27 @@ export const csharpAdapter: LanguageAdapter = {
     // A namespace header or an escaped identifier the grammar could not read leaves the file's namespaces unknown, so no
     // creation in it can be bound by scope.
     const scopeLost = parseLostScope(tree.rootNode);
-    // The byte ranges of `#if` regions, whose declarations and directives may not be compiled.
-    // Most files have none, so the tree is walked for them only when a line starts with `#if` (spaces and tabs allowed
-    // around the `#`).
-    const regions = /^[ \t]*#[ \t]*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : [];
-    const conditional = (node: Node): boolean => regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
-    // A declaration header (before the body) that holds an `#if` region may write a base or type parameters that are
-    // not compiled.
-    const conditionalHeader = (node: Node): boolean => {
-      const end = (node.childForFieldName("body") ?? childOfType(node, "declaration_list"))?.startIndex ?? node.endIndex;
-      return regions.some(([from, to]) => from <= end && to >= node.startIndex);
+    // The index does not know the build's symbols, so whatever an `#if` region could change is conditional: a type,
+    // delegate or constructor that starts in one or whose header (before its body) overlaps one, a type or directive inside
+    // a conditional namespace declaration, and a directive in one. The members of a conditional type are compiled with it,
+    // so they are not marked on that account. A region whose braces do not balance can change where the rest of the file nests, so then every
+    // declaration and directive in the file is conditional and every creation in it is blocked. The tree is walked only
+    // when a line holds `#` and `if` after any whitespace, a byte-order mark included.
+    const { regions, braces } = /^\s*#\s*if\b/mu.test(source) ? conditionalRegions(tree.rootNode) : { regions: [], braces: [] };
+    const structural = regions.some(([from, to]) => {
+      const inside = braces.filter(([at]) => at >= from && at <= to);
+      return inside.filter(([, open]) => open).length !== inside.filter(([, open]) => !open).length;
+    });
+    const inRegion = (node: Node): boolean => structural || regions.some(([from, to]) => node.startIndex >= from && node.startIndex <= to);
+    const headerInRegion = (node: Node): boolean => {
+      // A namespace's header ends with its name: a file-scoped one has no body to stop at.
+      const end = node.type.endsWith("namespace_declaration") ? node.childForFieldName("name")?.endIndex ?? node.startIndex
+        : (node.childForFieldName("body") ?? childOfType(node, "declaration_list") ?? childOfType(node, "block"))?.startIndex ?? node.endIndex;
+      return inRegion(node) || regions.some(([from, to]) => from <= end && to >= node.startIndex);
     };
+    // Whether each enclosing namespace declaration is conditional, innermost last.
+    const owners: boolean[] = [];
+    const ownerConditional = (): boolean => owners.length > 0 && owners[owners.length - 1]!;
     const bindings = collectTypedBindings(tree.rootNode, csharpSpec);
 
     const namespaces: string[] = [];
@@ -162,7 +175,9 @@ export const csharpAdapter: LanguageAdapter = {
             namespaces.push(namespaceName(name));
             blocks.push(`${node.startPosition.row + 1}-${node.endPosition.row + 1}`);
           }
+          owners.push(ownerConditional() || headerInRegion(node));
           for (const child of childrenOf(node)) visit(child);
+          owners.pop();
           if (name !== null) {
             namespaces.pop();
             blocks.pop();
@@ -206,7 +221,7 @@ export const csharpAdapter: LanguageAdapter = {
           // base is unknown. An enum's base is its underlying integral type, which holds no member types.
           const headerBroken = childrenOf(node).some((child) => child.type === "ERROR" || (child.type === "base_list" && child.hasError));
           if (headerBroken) out.markUnparsedHeader();
-          if (conditional(node) || conditionalHeader(node)) out.markConditional();
+          if (ownerConditional() || headerInRegion(node)) out.markConditional();
           if (node.type !== "enum_declaration" && headerBroken) out.markBaseType("?");
           else if (node.type !== "enum_declaration" && childOfType(node, "base_list") !== null) {
             if (node.type === "interface_declaration" && bases.length > 1) out.markBaseType("?");
@@ -229,7 +244,7 @@ export const csharpAdapter: LanguageAdapter = {
           if (arities.length === 0 && (scopeLost || namespaces.length > 0)) out.markNamespace(scopeLost ? "?" : namespaces.join("."));
           const access = arities.length > 0 ? memberTypeAccess(node) : undefined;
           if (access !== undefined) out.markAccess(access);
-          if (conditional(node)) out.markConditional();
+          if (ownerConditional() || inRegion(node)) out.markConditional();
           return;
         }
         case "method_declaration":
@@ -240,7 +255,7 @@ export const csharpAdapter: LanguageAdapter = {
             const parameters = node.childForFieldName("parameters");
             if (parameters !== null) out.setParameters(parameterRange(parameters, node, node.type === "constructor_declaration" && !childrenOf(node).some((child) => child.type === "modifier" && child.text === "static")));
             // A constructor inside an `#if` region may not be compiled, which changes the constructors a creation can run.
-            if (node.type === "constructor_declaration" && conditional(node)) out.markConditional();
+            if (node.type === "constructor_declaration" && headerInRegion(node)) out.markConditional();
             out.push(plain(nameNode.text));
             for (const child of childrenOf(node)) visit(child);
             out.pop();
@@ -288,7 +303,7 @@ export const csharpAdapter: LanguageAdapter = {
           const args = node.childForFieldName("arguments");
           if (typeNode !== null) {
             // A type parameter's constructor depends on the type argument, so the call is blocked rather than matched by name.
-            if (scopeLost || (typeNode.type === "identifier" && typeParameterInScope(node, typeNode.text))) out.addEdge("calls", typeNode.type === "identifier" ? plain(typeNode.text) : aritiedName(typeNode), typeNode, { kind: "blocked", reason: "unsupported" });
+            if (scopeLost || structural || (typeNode.type === "identifier" && typeParameterInScope(node, typeNode.text))) out.addEdge("calls", typeNode.type === "identifier" ? plain(typeNode.text) : aritiedName(typeNode), typeNode, { kind: "blocked", reason: "unsupported" });
             else out.addEdge("calls", aritiedName(typeNode), typeNode, undefined, undefined, args === null ? 0 : argumentCount(args), "instance");
           }
           for (const child of childrenOf(node)) visit(child);
@@ -306,7 +321,7 @@ export const csharpAdapter: LanguageAdapter = {
           const target = parts[0] === undefined ? undefined : aritiedName(parts[0]);
           const scope = namespaces.length === 0 ? "" : ` in ${namespaces.join(".")}@${blocks[blocks.length - 1]!}`;
           // A directive inside an `#if` region is marked `#if `, since it may not be compiled.
-          const imported = target === undefined ? undefined : `${conditional(node) ? "#if " : ""}${keywords.has("global") ? "global " : ""}${keywords.has("static") ? "static " : ""}${target}${scope}`;
+          const imported = target === undefined ? undefined : `${ownerConditional() || inRegion(node) ? "#if " : ""}${keywords.has("global") ? "global " : ""}${keywords.has("static") ? "static " : ""}${target}${scope}`;
           const name = alias === undefined ? imported : aliasName === undefined ? undefined : `${plain(aliasName.text)} =`;
           if (name !== undefined) out.addEdge("imports", name, node);
           return;

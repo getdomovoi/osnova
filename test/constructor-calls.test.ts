@@ -756,6 +756,21 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Use.cs", 6)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("treats every C# declaration in a file with #if as conditional, however the directive is spaced or wraps", async () => {
+    await write({
+      "Bom.cs": "﻿#if false\nclass T {public T(){}}\n#endif\n",
+      "Nbsp.cs": " #if false\nclass U {public U(){}}\n#endif\n",
+      "Wrapped.cs": "#if false\nnamespace P {\n#endif\nclass V {public V(){}}\n#if false\n}\n#endif\n",
+      "Actual.cs": "namespace Q {class T {public T(){}} class U {public U(){}} class V {public V(){}}}\n",
+      "Use.cs": "using Q;\nclass C {public static object Run(){new T(); new U(); return new V();}}\n",
+      "Prefix.cs": "class D {\n[System.Obsolete]\n#if false\npublic D() {}\n#endif\npublic void M() {}\n}\nclass Caller {public static object Run(){return new D();}}\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const creations = index.edges.filter((edge) => edge.fromFile === "Use.cs" && edge.constructs !== undefined).map((edge) => [edge.toName, edge.toSymbol]);
+    expect(creations).toEqual([["T", undefined], ["U", undefined], ["V", undefined]]);
+    expect(creationAt(index, "Prefix.cs", 8)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("finds a C# primary constructor behind a comment", async () => {
     await write({ "Types.cs": "class C /* primary */ (int x) {\n  public C(string text) : this(0) {}\n  public static void Use() { new C(1); }\n}\n" });
     const index = await buildIndex(workspace, { cacheDir });

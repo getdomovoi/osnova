@@ -726,6 +726,17 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // holds no members and is not a creation target the index can prove.
   const csharpTypeLike = (symbol: OsnovaSymbol): boolean => isHolder(symbol) || (symbol.kind === "type" && files.get(symbol.file)?.language === "c_sharp");
   const typeKeyIn = (namespace: string, segment: CsharpSegment): string => `${namespace}\u0000${segment.name}\u0000${segment.arity}`;
+  // Whether more than one C# type of any namespace, nesting or arity has this name: then a type inside an `#if` region,
+  // which may not be compiled, could stand in for the one the compiler binds.
+  const csharpContestedCache = new Map<string, boolean>();
+  const csharpContested = (name: string): boolean => {
+    const cached = csharpContestedCache.get(name);
+    if (cached !== undefined) return cached;
+    const types = (symbolsByName.get(name) ?? []).filter((symbol) => files.get(symbol.file)?.language === "c_sharp" && (isHolder(symbol) || symbol.kind === "type"));
+    const contested = new Set(types.map(typeKey)).size > 1;
+    csharpContestedCache.set(name, contested);
+    return contested;
+  };
   let csharpScope: CsharpScope | undefined;
   const csharpScopeOf = (): CsharpScope => {
     if (csharpScope !== undefined) return csharpScope;
@@ -750,7 +761,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       for (const symbol of symbols) {
         if (!csharpTypeLike(symbol) || files.get(symbol.file)?.language !== "c_sharp" || localOfQualifiedName(symbol.qualifiedName).includes(".")) continue;
         const namespace = symbol.namespace ?? "";
-        if (namespace === "?" || symbol.unparsedHeader === true || symbol.conditional === true) {
+        if (namespace === "?" || symbol.unparsedHeader === true || (symbol.conditional === true && csharpContested(symbol.name))) {
           scope.unplaced.add(symbol.name);
           continue;
         }
@@ -777,7 +788,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const { parts, complete } = partsOf(type);
     const named = parts.flatMap((part) => declaredAs(part.file, `${part.qualifiedName}.${segment.name}`)).filter(csharpTypeLike);
     // A member type whose header did not parse may have any arity.
-    if (named.some((symbol) => symbol.unparsedHeader === true || symbol.conditional === true)) return null;
+    if (named.some((symbol) => symbol.unparsedHeader === true || (symbol.conditional === true && csharpContested(segment.name)))) return null;
     const found = named.find((symbol) => arityOf(symbol) === segment.arity && csharpVisible(symbol, view));
     return found ?? (complete ? undefined : null);
   };
@@ -1552,7 +1563,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // Two types declared under one qualified name in one file (local classes in different blocks of a method, or
         // partial types of different namespaces or arities) are not one type, and the index cannot tell them apart. A
         // C# delegate's constructor is not indexed, and the name it shares may also hold another type's constructors.
-        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || found.type.conditional === true || !singleType(found.type) ||
+        const typeFound: CreatedType = found.status === "resolved" && (found.type.kind === "type" || found.type.unparsedHeader === true || (found.type.conditional === true && csharpContested(found.type.name)) || !singleType(found.type) ||
           constructorsOf(found.type).constructors.some((constructor) => constructor.conditional === true)) ? unknownType : found;
         const target = typeFound.status === "resolved" ? constructedBy(typeFound.type, raw.constructs) : undefined;
         const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), constructs: raw.constructs };
