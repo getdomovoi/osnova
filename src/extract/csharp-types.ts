@@ -291,33 +291,91 @@ const lineEnd = (source: string, from: number): number => {
   return rest === null ? source.length : from + rest.index;
 };
 
-// The source with comments and string and character literals blanked to spaces, offsets kept.
-function blanked(source: string): string {
+// The source with comments and string and character literals blanked to spaces, offsets kept: a string's `$` and `@`
+// prefix and `u8` suffix with it, and an interpolated string with its holes, as the tree's literal nodes hold them. A
+// hole is lexed as code, so a literal or comment inside it does not end the string.
+function blanked(source: string): { text: string; raw: [number, number][] } {
   const out = source.split("");
+  const raw: [number, number][] = [];
   const blank = (from: number, to: number) => { for (let k = from; k < to && k < out.length; k += 1) if (!LINE_END.test(out[k]!)) out[k] = " "; };
-  let i = 0;
-  while (i < source.length) {
-    const c = source[i]!;
-    if (c === "/" && source[i + 1] === "/") { const stop = lineEnd(source, i); blank(i, stop); i = stop; continue; }
-    if (c === "/" && source[i + 1] === "*") { const end = source.indexOf("*/", i + 2); const stop = end < 0 ? source.length : end + 2; blank(i, stop); i = stop; continue; }
-    if (c === "'" ) { let k = i + 1; while (k < source.length && source[k] !== "'" && !LINE_END.test(source[k]!)) k += source[k] === "\\" ? 2 : 1; blank(i, k + 1); i = k + 1; continue; }
-    if (c === "\"") {
-      const quotes = /^"+/.exec(source.slice(i))![0].length;
-      const verbatim = /[@][$]*$|[$]+@$/.test(source.slice(Math.max(0, i - 3), i));
-      // A raw string never has `@`: `@""""` is a verbatim string holding one doubled quote.
-      if (quotes >= 3 && !verbatim) { const end = source.indexOf("\"".repeat(quotes), i + quotes); const stop = end < 0 ? source.length : end + quotes; blank(i, stop); i = stop; continue; }
-      let k = i + 1;
-      while (k < source.length) {
-        if (verbatim && source[k] === "\"" && source[k + 1] === "\"") { k += 2; continue; }
-        if (!verbatim && source[k] === "\\") { k += 2; continue; }
-        if (source[k] === "\"" || (!verbatim && LINE_END.test(source[k]!))) break;
+  // Code from `i`; inside an interpolation hole (`hole`), up to the `}` that closes it, whose index it returns.
+  const code = (start: number, hole: boolean): number => {
+    let depth = 0;
+    let i = start;
+    while (i < source.length) {
+      const c = source[i]!;
+      if (hole && c === "{") { depth += 1; i += 1; continue; }
+      if (hole && c === "}") { if (depth === 0) return i; depth -= 1; i += 1; continue; }
+      if (c === "/" && source[i + 1] === "/") { const stop = lineEnd(source, i); blank(i, stop); i = stop; continue; }
+      if (c === "/" && source[i + 1] === "*") { const end = source.indexOf("*/", i + 2); const stop = end < 0 ? source.length : end + 2; blank(i, stop); i = stop; continue; }
+      if (c === "'") { let k = i + 1; while (k < source.length && source[k] !== "'" && !LINE_END.test(source[k]!)) k += source[k] === "\\" ? 2 : 1; blank(i, k + 1); i = k + 1; continue; }
+      if (c === "\"") { i = literal(i); continue; }
+      i += 1;
+    }
+    return i;
+  };
+  // The string whose first quote is at `i`, blanked whole; the index just past it.
+  const literal = (i: number): number => {
+    let begin = i;
+    while (begin > 0 && (source[begin - 1] === "$" || source[begin - 1] === "@")) begin -= 1;
+    const prefix = source.slice(begin, i);
+    const dollars = prefix.split("$").length - 1;
+    const verbatim = prefix.includes("@");
+    const quotes = /^"+/.exec(source.slice(i))![0].length;
+    let k: number;
+    if (quotes >= 3 && !verbatim) {
+      // A raw string: its holes open with as many braces as it has `$`, and it closes at its own run of quotes.
+      const close = "\"".repeat(quotes);
+      k = i + quotes;
+      while (k < source.length && !source.startsWith(close, k)) {
+        if (dollars > 0 && source[k] === "{") {
+          const run = /^\{+/.exec(source.slice(k))![0].length;
+          k += run;
+          if (run < dollars) continue;
+          k = code(k, true);
+          k += /^\}*/.exec(source.slice(k))![0].length;
+          continue;
+        }
         k += 1;
       }
-      blank(i, k + 1); i = k + 1; continue;
+      k = Math.min(source.length, k + quotes);
+      raw.push([begin, k]);
+    } else {
+      k = i + 1;
+      while (k < source.length) {
+        const c = source[k]!;
+        if (verbatim && c === "\"" && source[k + 1] === "\"") { k += 2; continue; }
+        if (!verbatim && c === "\\") { k += 2; continue; }
+        if (dollars > 0 && c === "{") {
+          if (source[k + 1] === "{") { k += 2; continue; }
+          k = code(k + 1, true) + 1;
+          continue;
+        }
+        if (c === "\"") { k += 1; break; }
+        if (!verbatim && LINE_END.test(c)) break;
+        k += 1;
+      }
     }
-    i += 1;
+    if (/^[uU]8/u.test(source.slice(k, k + 2))) k += 2;
+    blank(begin, k);
+    return k;
+  };
+  code(0, false);
+  return { text: out.join(""), raw };
+}
+
+// Whether the blanked text blanks exactly what the tree reads as comments and literals (an interpolated string with its
+// holes): two readings of the file's lexical structure, which must agree before either is trusted to hide no code.
+const LITERALS = new Set(["comment", "string_literal", "verbatim_string_literal", "raw_string_literal", "character_literal", "interpolated_string_expression"]);
+// Spans where the tree is no second reading are not compared: raw string literals, which this grammar does not read,
+// and the nodes around ERROR nodes.
+function blankingAgrees(literal: Uint8Array, source: string, text: string, skipped: readonly (readonly [number, number])[]): boolean {
+  for (const [from, to] of skipped) literal.fill(2, from, to);
+  for (let i = 0; i < source.length; i += 1) {
+    if (literal[i] === 2 || /\s/u.test(source[i]!)) continue;
+    if ((text[i] === " ") !== (literal[i] === 1)) return false;
   }
-  return out.join("");
+  return true;
 }
 
 // Whether every parse error in the tree is a placeholder identifier the parser inserted (a zero-width leaf), which
@@ -363,30 +421,38 @@ function pastClose(text: string, open: number): number {
 // ERROR node, a
 // C# 14 `extension(...) { ... }` block (which this grammar reads as a constructor named `extension`, as local
 // functions or as an error), and the whole file when its tree holds an error that is neither an ERROR node nor a
-// placeholder identifier the parser inserted, or when the source holds a lone CR, NEL, U+2028 or U+2029, which this
+// placeholder identifier the parser inserted, or when the blanked text and the tree disagree on what is a comment or a
+// literal, or when the source holds a lone CR, NEL, U+2028 or U+2029, which this
 // grammar does not read as ending a line comment, so a declaration after one can vanish into the comment without an
 // error. Extra names only keep calls of those names unresolved.
 export function unplacedExtensionNames(root: Node, source: string): string[] {
-  const text = blanked(source);
+  const { text, raw } = blanked(source);
+  const skipped: [number, number][] = [...raw];
   const names = new Set<string>();
   const addRange = (from: number, to: number) => { for (const written of identifiersIn(text, from, to)) names.add(plain(written)); };
+  const addRaw = (from: number, to: number) => { for (const written of identifiersIn(source, from, to)) names.add(plain(written)); };
   if (root.hasError) {
     let errorNodes = 0;
     const pending = [root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
       // The node around an error, so a name the error splits (`Pr\u006Fbe`, whose escape this grammar cannot read) is read whole.
-      if (node.type === "ERROR") { errorNodes += 1; const around = node.parent ?? node; addRange(around.startIndex, around.endIndex); continue; }
+      if (node.type === "ERROR") { errorNodes += 1; const parent = node.parent ?? node; skipped.push([parent.startIndex, parent.endIndex]); addRange(parent.startIndex, parent.endIndex); continue; }
       for (let i = 0; i < node.childCount; i += 1) { const child = node.child(i); if (child !== null && child.hasError) pending.push(child); }
     }
     if (errorNodes === 0 && !placeholderErrorsOnly(root)) addRange(0, text.length);
   }
   if (/\r(?!\n)|[\u0085\u2028\u2029]/u.test(source)) addRange(0, text.length);
-  // A block the grammar read as a constructor named `extension`.
+  // One walk: the tree's comments and literals, and each block the grammar read as a constructor named `extension`.
+  const literal = new Uint8Array(source.length);
   const pending = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.type === "constructor_declaration" && plain(node.childForFieldName("name")?.text ?? "") === "extension") { addRange(node.startIndex, node.endIndex); continue; }
+    const type = node.type;
+    if (LITERALS.has(type)) { literal.fill(1, node.startIndex, node.endIndex); continue; }
+    if (type === "constructor_declaration" && plain(node.childForFieldName("name")?.text ?? "") === "extension") { addRange(node.startIndex, node.endIndex); continue; }
     pending.push(...childrenOf(node));
   }
+  // Where the two readings of comments and literals differ, either may hide code, so every identifier written counts.
+  if (!blankingAgrees(literal, source, text, skipped)) addRaw(0, source.length);
   // A block header: the token `extension`, however it is spelled (`@extension` is an identifier, `x.extension` a member),
   // through the end of the body after its parameter list, attributes and initializers included.
   for (const match of text.matchAll(new RegExp(String.raw`(?<![\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_.@\\])(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*`, "gu"))) {
