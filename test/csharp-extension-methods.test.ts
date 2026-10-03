@@ -286,6 +286,26 @@ describe("a C# extension method the compiler would not bind is not chosen", () =
     }
   });
 
+  it("reads a scanned name past operators in attribute arguments and long comments before this", async () => {
+    const long = "/* " + "long comment ".repeat(15) + " */";
+    const blocks: string[] = [];
+    for (const attribute of ["[A(1 < 2)]", "[A(2 > 1)]", "[A(1 << 2)]"]) {
+      blocks.push(`    extension(string s) {\n        public string Probe<${attribute} T>(T value) => "inner";\n    }`);
+      blocks.push(`    extension(int x) { public int Unrelated() => x; }\n    public static string Pr\\u006Fbe<${attribute} T>(this string s, T value) => "inner";`);
+    }
+    blocks.push(`    extension(int x) { public int Unrelated() => x; }\n    public static string Pr\\u006Fbe( ${long} this string s, int value) => "inner";`);
+    for (const block of blocks) {
+      await write({
+        "Block.cs": `namespace Inner;\npublic class A : System.Attribute { public A(object value) {} }\npublic static class Block {\n${block}\n}\n`,
+        "Outer.cs": "namespace Outer;\npublic static class Ext {\n    public static string Probe(this string s, int value) => \"outer\";\n}\n",
+        "Program.cs": "using Outer;\nnamespace Inner;\npublic class Use { public static string Run() => \"s\".Probe(1); }\n",
+      });
+      const index = await buildIndex(workspace, { cacheDir: path.join(temporary, `cache-${Math.random()}`) });
+      expect(index.files.get("Block.cs")?.unplacedExtensions).toContain("Probe");
+      expect(index.edges.find((edge) => edge.kind === "calls" && edge.toName === "Probe")?.toSymbol).toBeUndefined();
+    }
+  });
+
   it("does not take an extension method inside an #if region", async () => {
     await write({ "P.cs": twoLevels("#if NEVER\n        public static string Probe(this string s) => \"inner\";\n#endif", "public static string Probe(this string s) => \"outer\";", "\"s\".Probe()").replace("public static object Run", "public static object Run") });
     const index = await buildIndex(workspace, { cacheDir });

@@ -335,20 +335,37 @@ const ESCAPE = String.raw`\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}`;
 const WHOLE_IDENTIFIER = new RegExp(String.raw`^@?(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*$`, "u");
 const IDENTIFIER_PART = /[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}_@\\]/u;
 
+// Back from `at` over a bracketed region that ends there (`]` or `)`), to just before its opening bracket; -1 when it
+// does not balance before a `{`, `}` or `;`.
+function skipBracketed(text: string, at: number): number {
+  const close = text[at]!;
+  const open = close === "]" ? "[" : "(";
+  let depth = 0;
+  for (; at >= 0; at -= 1) {
+    const c = text[at]!;
+    if (c === "{" || c === "}" || c === ";") return -1;
+    if (c === "]" || c === ")") { if (c === close) depth += 1; else { at = skipBracketed(text, at); if (at < 0) return -1; at += 1; } }
+    else if (c === open && --depth === 0) return at - 1;
+  }
+  return -1;
+}
+
 // The identifier written before an opening parenthesis at `open`, past whitespace and one type parameter or type
-// argument list read with balanced angle brackets (`Probe<[A(1)] T>(`); undefined when none is there or the name is a
-// member access (`x.M(`).
-function nameBefore(text: string, open: number): string | undefined {
+// argument list (`Probe<[A(1 < 2)] T>(`), whose attributes and parenthesized arguments are skipped whole: undefined
+// when nothing that can be a name is there (a member access `x.M(`, or punctuation), null when the text cannot be read.
+function nameBefore(text: string, open: number): string | null | undefined {
   let at = open - 1;
   while (at >= 0 && /\s/u.test(text[at]!)) at -= 1;
   if (text[at] === ">") {
     let depth = 0;
     for (; at >= 0; at -= 1) {
-      if (text[at] === ">") depth += 1;
-      else if (text[at] === "<" && --depth === 0) break;
-      else if (text[at] === "{" || text[at] === "}" || text[at] === ";") return undefined;
+      const c = text[at]!;
+      if (c === "]" || c === ")") { at = skipBracketed(text, at); if (at < 0) return null; at += 1; continue; }
+      if (c === ">") depth += 1;
+      else if (c === "<" && --depth === 0) break;
+      else if (c === "{" || c === "}" || c === ";") return null;
     }
-    if (at < 0) return undefined;
+    if (at < 0) return null;
     at -= 1;
     while (at >= 0 && /\s/u.test(text[at]!)) at -= 1;
   }
@@ -362,17 +379,29 @@ function nameBefore(text: string, open: number): string | undefined {
     at -= pair ? 2 : 1;
   }
   const written = text.slice(at + 1, end);
-  if (written.length === 0 || !WHOLE_IDENTIFIER.test(written) || text[at] === ".") return undefined;
-  return written;
+  if (written.length === 0) return undefined;
+  if (text[at] === ".") return undefined;
+  return WHOLE_IDENTIFIER.test(written) ? written : null;
 }
 
-// Every name written before `(` in a range of the text, decoded; with `thisOnly`, only where `(` is followed by `this`.
+// Every identifier in a range of the text, decoded: the names a declaration header the reader cannot read may hold.
+function identifiersIn(text: string, from: number, to: number): string[] {
+  return [...text.slice(from, to).matchAll(new RegExp(String.raw`@?(?:[\p{L}\p{Nl}_]|${ESCAPE})(?:[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Cf}]|${ESCAPE})*`, "gu"))].map((match) => match[0]);
+}
+
+// Every name written before `(` in a range of the text; with `thisOnly`, only where `(` is followed by `this`. Where
+// the name cannot be read, every identifier since the previous `{`, `}` or `;` stands for it.
 function namesBeforeParentheses(text: string, from: number, to: number, thisOnly: boolean): string[] {
   const names: string[] = [];
+  const receiver = /\(\s*this\b/uy;
   for (let open = text.indexOf("(", from); open >= 0 && open < to; open = text.indexOf("(", open + 1)) {
-    if (thisOnly && !/^\(\s*this\b/u.test(text.slice(open, open + 64))) continue;
+    receiver.lastIndex = open;
+    if (thisOnly && !receiver.test(text)) continue;
     const written = nameBefore(text, open);
-    if (written !== undefined) names.push(written);
+    if (written === null) {
+      const boundary = Math.max(text.lastIndexOf(";", open), text.lastIndexOf("{", open), text.lastIndexOf("}", open), from - 1);
+      names.push(...identifiersIn(text, boundary + 1, open));
+    } else if (written !== undefined) names.push(written);
   }
   return names;
 }
@@ -389,7 +418,7 @@ export function unplacedExtensionNames(root: Node, source: string): string[] {
   // A block header `extension(`, however its keyword is spelled; `@extension` is an identifier.
   for (let header = text.indexOf("("); header >= 0; header = text.indexOf("(", header + 1)) {
     const written = nameBefore(text, header);
-    if (written === undefined || written.startsWith("@") || plain(written) !== "extension") continue;
+    if (written === undefined || written === null || written.startsWith("@") || plain(written) !== "extension") continue;
     const open = text.indexOf("{", header);
     if (open < 0) continue;
     let depth = 0;
