@@ -208,9 +208,11 @@ function promoted(left: string, right: string): string | undefined {
 // parameter, a multi-catch, a pattern variable) or it may be an inherited field; undefined means no declaration was found.
 type Declared = { readonly type: Node; readonly dimensions: string; readonly varargs: boolean; readonly initializer?: Node | undefined } | null;
 function declaredTypeOf(site: Node, name: string): Declared | undefined {
+  // A local's scope starts at its declared name, so a site inside its own initializer, or a later declarator's, sees it.
   const fromDeclarator = (declaration: Node): Declared | undefined => {
     for (const declarator of childrenOf(declaration)) {
-      if (declarator.type !== "variable_declarator" || declarator.childForFieldName("name")?.text !== name) continue;
+      const declared = declarator.childForFieldName("name");
+      if (declarator.type !== "variable_declarator" || declared?.text !== name || declared.endIndex > site.startIndex) continue;
       const type = declaration.childForFieldName("type");
       if (type === null) return null;
       return { type, dimensions: (declarator.childForFieldName("dimensions")?.text ?? "").replace(/\s+/g, ""), varargs: false, initializer: declarator.childForFieldName("value") ?? undefined };
@@ -244,7 +246,7 @@ function declaredTypeOf(site: Node, name: string): Declared | undefined {
       case "constructor_body":
       case "switch_block_statement_group": {
         for (const child of childrenOf(scope)) {
-          if (child.startIndex >= holder.startIndex) break;
+          if (child.startIndex > holder.startIndex) break;
           if (child.type === "local_variable_declaration") { const found = fromDeclarator(child); if (found !== undefined) return found; }
         }
         break;
@@ -259,7 +261,7 @@ function declaredTypeOf(site: Node, name: string): Declared | undefined {
       }
       case "for_statement": {
         const init = scope.childForFieldName("init");
-        if (init !== null && init.type === "local_variable_declaration" && holder.id !== init.id) { const found = fromDeclarator(init); if (found !== undefined) return found; }
+        if (init !== null && init.type === "local_variable_declaration") { const found = fromDeclarator(init); if (found !== undefined) return found; }
         break;
       }
       case "enhanced_for_statement": {
@@ -270,10 +272,12 @@ function declaredTypeOf(site: Node, name: string): Declared | undefined {
         break;
       }
       case "try_with_resources_statement": {
-        // A resource is in scope in the later resources and the try body, not in a catch or finally clause.
+        // A resource is in scope from its declared name: in its own initializer, the later resources and the try body, not
+        // in a catch or finally clause.
         if (holder.id !== scope.childForFieldName("body")?.id && holder.type !== "resource_specification") break;
         for (const resource of childrenOf(childOfType(scope, "resource_specification") ?? scope)) {
-          if (resource.type !== "resource" || resource.endIndex > site.startIndex || resource.childForFieldName("name")?.text !== name) continue;
+          const declared = resource.childForFieldName("name");
+          if (resource.type !== "resource" || declared?.text !== name || declared.endIndex > site.startIndex) continue;
           const type = resource.childForFieldName("type");
           return type === null ? null : { type, dimensions: "", varargs: false };
         }

@@ -287,6 +287,30 @@ describe("a typed Java overload choice javac would not make is refused", () => {
     expect(overloadsAt(index, "p/B.java", 9, "pick")).toEqual([{ line: 7, types: true }]);
   });
 
+  it("starts a local's scope at its declared name, inside its own initializer", async () => {
+    await write({
+      "p/A.java": [
+        "package p;",
+        "import java.io.Reader;",
+        "import java.io.StringReader;",
+        "class A {",
+        "  Integer value = 1;",
+        "  StringReader pick(Integer x) { return null; }",
+        "  StringReader pick(Reader x) { return null; }",
+        "  void run() {",
+        "    try (StringReader value = false ? this.pick(value) : new StringReader(\"\")) {} catch (Exception e) {}",
+        "    { StringReader value = false ? this.pick(value) : new StringReader(\"\"); }",
+        "    { StringReader first = new StringReader(\"\"), value = false ? this.pick(value) : first; }",
+        "    for (StringReader value = false ? this.pick(value) : new StringReader(\"\"); ; ) { break; }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    for (const line of [9, 10, 11, 12]) expect(overloadsAt(index, "p/A.java", line, "pick")).toEqual([{ line: 7, types: true }]);
+  });
+
   it("does not choose when an implemented interface declares a method of the name", async () => {
     await write({
       "p/I.java": "package p;\ninterface I {\n  default void pick(String x) {}\n}\n",
