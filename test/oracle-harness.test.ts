@@ -45,6 +45,26 @@ describe("scoreSites", () => {
     const report = scoreSites(oracle, { sites: [site(4, "foo", "b.py", 9, 12)] }, { tolerance: 0 });
     expect(report).toMatchObject({ truePositive: 0, undecided: 1 });
   });
+
+  // `a.get(b.get())`: one line calls the same name twice, and the checker resolves each call.
+  const twice = {
+    oracle: "fixture", entries: [
+      { file: "a.py", line: 3, name: "get", verdict: "in-repo", defs: [{ file: "b.py", line: 10 }] },
+      { file: "a.py", line: 3, name: "get", verdict: "in-repo", defs: [{ file: "b.py", line: 30 }] },
+      { file: "a.py", line: 5, name: "put", verdict: "external", defs: [] },
+      { file: "a.py", line: 5, name: "put", verdict: "in-repo", defs: [{ file: "b.py", line: 50 }] },
+    ],
+  };
+
+  it("judges each claim at a line that calls one name twice against the call it can stand for", () => {
+    const report = scoreSites(twice, { sites: [site(3, "get", "b.py", 9, 12), site(3, "get", "b.py", 29, 31), site(5, "put", "b.py", 49, 52)] }, { tolerance: 1 });
+    expect(report).toMatchObject({ truePositive: 3, falsePositive: 0, oracleInRepoSites: 2, coveredInRepoSites: 2 });
+  });
+
+  it("lets one checker call stand for one claim only", () => {
+    const report = scoreSites(twice, { sites: [site(3, "get", "b.py", 9, 12), site(3, "get", "b.py", 9, 12)] }, { tolerance: 1 });
+    expect(report).toMatchObject({ truePositive: 1, falsePositive: 1, coveredInRepoSites: 1 });
+  });
 });
 
 describe("sites-python.py", () => {

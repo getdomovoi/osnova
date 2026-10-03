@@ -8,27 +8,34 @@
 //   undecided  the checker gave no verdict for the site, or did not enumerate it
 // Recall is over the checker's in-repository sites: a site is covered when some claimed edge at it is true.
 // `tolerance` lets a claimed call line sit up to that many lines from the checker's line for the same callee name.
+// A line that calls one name more than once (`a.get(b.get())`) has one checker entry per call under one site key;
+// each claimed edge there stands for at most one of those calls, paired so that as many claims as possible hold.
 import { promises as fs } from "node:fs";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 
 export function scoreSites(oracle, claimed, { tolerance = 1 } = {}) {
   const key = (file, line, name) => `${file}:${line}:${name}`;
+  // The decided checker entries at each site key, one per call.
   const byKey = new Map();
   for (const entry of oracle.entries) {
     if (entry.verdict === "undecided") continue;
     const k = key(entry.file, entry.line, entry.name);
-    if (!byKey.has(k)) byKey.set(k, entry);
+    if (byKey.has(k)) byKey.get(k).push(entry);
+    else byKey.set(k, [entry]);
   }
   const lookup = (file, line, name) => {
     for (let d = 0; d <= tolerance; d += 1) {
       for (const candidate of d === 0 ? [line] : [line - d, line + d]) {
-        const hit = byKey.get(key(file, candidate, name));
-        if (hit) return hit;
+        const k = key(file, candidate, name);
+        if (byKey.has(k)) return k;
       }
     }
     return undefined;
   };
+  const holds = (entry, site) => entry.verdict === "in-repo" && entry.defs.some((def) =>
+    def.file === site.targetFile && site.targetStartLine !== undefined && site.targetStartLine !== null &&
+    def.line >= site.targetStartLine && def.line <= (site.targetEndLine ?? site.targetStartLine));
   const truth = new Set();
   for (const entry of oracle.entries) if (entry.verdict === "in-repo") truth.add(key(entry.file, entry.line, entry.name));
   const toolFiles = new Set(claimed.sites.map((s) => s.callerFile));
@@ -37,26 +44,45 @@ export function scoreSites(oracle, claimed, { tolerance = 1 } = {}) {
   const covered = new Set(), coveredInToolFiles = new Set();
   let truePositive = 0, falsePositive = 0, undecided = 0, noLine = 0;
   const falseSamples = [];
+  // The claimed edges at each site key, in input order.
+  const claimsAt = new Map();
   for (const site of claimed.sites) {
     if (site.line === undefined || site.line === null) { noLine += 1; undecided += 1; continue; }
-    const entry = lookup(site.callerFile, site.line, site.calleeName);
-    if (entry === undefined) { undecided += 1; continue; }
-    const hit = entry.verdict === "in-repo" && entry.defs.some((def) =>
-      def.file === site.targetFile && site.targetStartLine !== undefined && site.targetStartLine !== null &&
-      def.line >= site.targetStartLine && def.line <= (site.targetEndLine ?? site.targetStartLine));
-    if (hit) {
-      truePositive += 1;
-      const k = key(entry.file, entry.line, entry.name);
-      covered.add(k);
-      if (toolFiles.has(entry.file)) coveredInToolFiles.add(k);
-    } else {
+    const k = lookup(site.callerFile, site.line, site.calleeName);
+    if (k === undefined) { undecided += 1; continue; }
+    if (claimsAt.has(k)) claimsAt.get(k).push(site);
+    else claimsAt.set(k, [site]);
+  }
+  for (const [k, sites] of claimsAt) {
+    const entries = byKey.get(k);
+    // Pair claims with the calls whose declarations they hold, as many as possible (augmenting paths; a key holds
+    // a handful of calls at most).
+    const pairedTo = new Array(entries.length).fill(-1);
+    const pair = (claim, seen) => {
+      for (let call = 0; call < entries.length; call += 1) {
+        if (seen.has(call) || !holds(entries[call], sites[claim])) continue;
+        seen.add(call);
+        if (pairedTo[call] === -1 || pair(pairedTo[call], seen)) { pairedTo[call] = claim; return true; }
+      }
+      return false;
+    };
+    const paired = new Set();
+    for (let claim = 0; claim < sites.length; claim += 1) if (pair(claim, new Set())) paired.add(claim);
+    sites.forEach((site, claim) => {
+      if (paired.has(claim)) {
+        truePositive += 1;
+        covered.add(k);
+        if (toolFiles.has(entries[0].file)) coveredInToolFiles.add(k);
+        return;
+      }
       falsePositive += 1;
       if (falseSamples.length < 40) falseSamples.push({
         site: `${site.callerFile}:${site.line} ${site.calleeName}`,
         claimedTarget: `${site.targetFile}#${site.targetName} (${site.targetStartLine}-${site.targetEndLine})`,
-        oracleVerdict: entry.verdict, oracleDefs: entry.defs.map((d) => `${d.file}:${d.line}`),
+        oracleVerdict: [...new Set(entries.map((entry) => entry.verdict))].join("|"),
+        oracleDefs: entries.flatMap((entry) => entry.defs.map((d) => `${d.file}:${d.line}`)),
       });
-    }
+    });
   }
   const decided = truePositive + falsePositive;
   return {
