@@ -399,6 +399,9 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
     }
   }
   const deepAttributes = deepest > 3;
+  // A deep attribute may also hide a `path` value that moves a module's children; the name itself is always written
+  // out, so a file with both leaves every crate root unproven.
+  if (deepAttributes && /(?<![\p{L}\p{N}\p{M}_])path\s*=/u.test(code)) unbalanced = true;
   if (/#!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*?(?<![\p{L}\p{N}\p{M}_])path\s*=/u.test(code)) unbalanced = true;
   const innerAttributes = /^\s*((?:#!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)/;
   const pattern = /((?:#\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}\p{M}_#])mod\s+(?:r#)?([\p{L}\p{N}\p{M}_]+)\s*([;{])|([{}()[\]])/gu;

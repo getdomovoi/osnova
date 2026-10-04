@@ -818,6 +818,21 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
   });
 
+  // Round 11: an attribute deeper than three bracket levels may hide a path.
+  it.each([
+    ["an outer attribute", "#[cfg_attr(all(), doc = stringify!([[[x]]]), path = \"bin\")]\nmod outer { pub mod tool; }\n"],
+    ["an inner attribute", "mod outer {\n    #![cfg_attr(all(), doc = stringify!([[[x]]]), path = \"bin\")]\n    pub mod tool;\n}\n"],
+    ["a path before a deep attribute", "#[path = \"bin\"]\n#[doc = stringify!([[[x]]])]\nmod outer { pub mod tool; }\n"],
+  ])("never takes a child moved by a path behind %s with deep brackets for a crate root", async (_label, prefix) => {
+    const edge = await target({
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n",
+      "src/main.rs": prefix + "pub fn f() -> &'static str { \"ROOT\" }\nfn main() {}\n",
+      "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",
