@@ -1004,6 +1004,33 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
   });
 
+  // Round 18: a module a macro declares, which leaves no `mod name;` for the scan to read.
+  const noAuto = app + "autobins=false\nautotests=false\nautoexamples=false\nautobenches=false\n";
+  it.each([
+    ["tests", "macro_rules! declare {($name:ident)=>{mod $name;}}\ndeclare!(tool);\n"],
+    ["examples", "macro_rules! declare {($name:ident)=>{mod $name;}}\ndeclare!(tool);\n"],
+    ["benches", "macro_rules! declare {($keyword:ident,$name:ident)=>{$keyword $name;}}\ndeclare!(mod,tool);\n"],
+    ["src/bin", "macro_rules! declare {($keyword:ident,$name:ident)=>{$keyword $name;}}\ndeclare!(mod,tool);\n"],
+  ])("never takes a file under %s that a macro may declare as a module for a crate root", async (dir, declare) => {
+    const edge = await target({
+      "Cargo.toml": noAuto + `[[bin]]\nname="app"\npath="${dir}/root.rs"\n`,
+      [`${dir}/root.rs`]: declare + "pub fn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { tool::run() }\n" + run,
+      [`${dir}/tool.rs`]: "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, `${dir}/tool.rs`, 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe(`${dir}/tool.rs#f`);
+  });
+
+  it("never takes an undeclared file Cargo does not build for a crate root", async () => {
+    const edge = await target({
+      "Cargo.toml": noAuto + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n",
+      "tests/root.rs": "pub fn f() -> &'static str { \"ROOT\" }\n" + "fn run() -> &'static str { \"\" }\n" + run,
+      "tests/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "tests/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).toBeUndefined();
+  });
+
   it("still reads crate:: in a test module that autotests = false keeps out of the targets", async () => {
     const edge = await target({
       "Cargo.toml": app + "autotests = false # one integration crate\n[[test]]\nname = \"integration\"\npath = \"tests/tests.rs\"\n[package.metadata.deb]\nextended-description = \"\"\"\n[[test]]\npath = \"tests/util.rs\"\n\"\"\"\n",

@@ -178,6 +178,8 @@ export interface WorkspaceContext {
   readonly rustUncertainOwner: ReadonlySet<string>;
   /** Cargo targets another file also declares as a module: compiled in two crates, so their module identity is unproven. */
   readonly rustTwoCrates: ReadonlySet<string>;
+  /** Rust files Cargo may build as a target's crate root; an undeclared file outside it is a module out of sight or no code. */
+  readonly rustMayBeTargets: ReadonlySet<string>;
   /** Some `#[path]` value or delimiter could not be read, so any file may be a module: no crate root is proven. */
   readonly rustOwnershipUnreadable: boolean;
 }
@@ -315,7 +317,8 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   // A Cargo target is compiled as its own crate root even when another file declares it as a module (whether or not
   // that declaration's cfg is on): it has two crate contexts, so no path from it (or a module below it) is proven.
   // The declaring file may still walk into it as its module.
-  const rustTwoCrates = new Set([...ownership.declaredBy.keys()].filter((file) => rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets)));
+  const rustMayBeTargets = new Set([...rustScans.keys()].filter((file) => rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets)));
+  const rustTwoCrates = new Set([...ownership.declaredBy.keys()].filter((file) => rustMayBeTargets.has(file)));
   const cargoUnread = [...cargoTargets.values()].some((targets) => targets.unread);
   const rustDeclaredBy = ownership.declaredBy;
   return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
@@ -324,6 +327,7 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
     rustDeclaredBy,
     rustUncertainOwner: ownership.uncertain,
     rustTwoCrates,
+    rustMayBeTargets,
     rustOwnershipUnreadable: ownership.unreadable || cargoUnread || !settled,
     rustTargetRoots };
 }
@@ -587,6 +591,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
   }
   const declarations: RustModuleDeclaration[] = [];
   let unbalanced = false;
+  let declaredMods = 0;
   // An inline module's frame keeps its name, and whether a `#[path]` or `#[cfg]` makes its children's place unknown.
   const stack: ({ name: string; opaque: boolean; path: string | null | undefined } | null)[] = [];
   // Every attribute, read whole: `#`, optional `!`, any spacing, then a bracketed token tree of any depth. The
@@ -621,6 +626,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       continue;
     }
     const name = match[2]!;
+    declaredMods += 1;
     if (match[3] === "{") {
       const frameValue = /(?:^|[\s(,[])(?:r#)?path\s*=\s*"S(\d+)"/.exec(match[1] ?? "")?.[1];
       const frameText = frameValue === undefined ? undefined : strings[Number(frameValue)];
@@ -652,6 +658,9 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
   const handledPaths = declarations.filter((declaration) => !declaration.other && declaration.inline.length === 0 && declaration.pathValue !== undefined)
     .reduce((count, declaration) => count + declaration.pathCount, 0);
   if (pathsInAttributes > handledPaths) unbalanced = true;
+  // `mod` is a keyword, so one outside a `mod name;` or `mod name {` is a declaration a macro assembles (`mod $name;`,
+  // `$keyword $name;` called with `mod`): it may name any file, and nothing read is trusted.
+  if ((code.match(/(?<![\p{L}\p{N}\p{M}_#])mod(?![\p{L}\p{N}\p{M}_])/gu)?.length ?? 0) > declaredMods) unbalanced = true;
   return { declarations, unbalanced: unbalanced || stack.length > 0, code };
 }
 
@@ -783,11 +792,11 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   if (head === undefined) return undefined;
   const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
   const libraryOf = (crate: string): string => context.cargoSrc.get(crate) ?? path.posix.join(crate, "src/lib.rs");
-  // A crate root sits where Cargo looks for one (rustRootPlace) and nothing declares it as a module. A file a
+  // A crate root is a file Cargo may build as a target (rustMayBeTarget) that nothing declares as a module. A file a
   // declaration the scan could not follow may name has no known owner, and its paths name nothing.
   if (context.rustUncertainOwner.has(fromFile)) return undefined;
   const isRoot = (file: string): boolean => !context.rustDeclaredBy.has(file) && !context.rustUncertainOwner.has(file) && !context.rustOwnershipUnreadable
-    && rustRootPlace(file, context.rustTargetRoots, context.cargoRoots);
+    && context.rustMayBeTargets.has(file);
   // A file's module identity, root first: each file of the chain, its module path from the crate root, and the
   // directory of its child modules. Only a chain of single `mod name;` declarations up to a root proves it, and a
   // file a `#[path]` loads keeps its place in the tree but has children the index cannot place (dir undefined).
