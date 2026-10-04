@@ -1031,6 +1031,33 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).toBeUndefined();
   });
 
+  // Round 19: a module declaration `include!` brings in, and a target table without a path.
+  it.each([
+    ["a pathless target table", noAuto + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n[[test]]\nname=\"separate\"\n"],
+    ["discovery on", app + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n"],
+  ])("never takes a file an included declaration may name for a crate root, with %s", async (_label, manifest) => {
+    const edge = await target({
+      "Cargo.toml": manifest,
+      "tests/root.rs": "include!(\"decl.inc\");\npub fn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { tool::run() }\n" + run,
+      "tests/decl.inc": "mod tool;\n",
+      "tests/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\nfn main() {}\n",
+      "tests/separate.rs": "fn main() {}\n",
+    }, "tests/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("tests/tool.rs#f");
+  });
+
+  it("takes only the file a pathless target table names by its target name", async () => {
+    const edge = await target({
+      "Cargo.toml": noAuto + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n[[test]]\nname=\"separate\"\n",
+      "tests/root.rs": "pub fn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { \"\" }\n" + run,
+      "tests/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+      "tests/separate.rs": "fn f() {}\nfn main() {\n    crate::f()\n}\n",
+    }, "tests/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).toBeUndefined();
+  });
+
   it("still reads crate:: in a test module that autotests = false keeps out of the targets", async () => {
     const edge = await target({
       "Cargo.toml": app + "autotests = false # one integration crate\n[[test]]\nname = \"integration\"\npath = \"tests/tests.rs\"\n[package.metadata.deb]\nextended-description = \"\"\"\n[[test]]\npath = \"tests/util.rs\"\n\"\"\"\n",

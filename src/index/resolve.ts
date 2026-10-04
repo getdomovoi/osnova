@@ -336,10 +336,9 @@ type CargoTargetKind = "lib" | "bin" | "test" | "example" | "bench";
 
 /** What a Cargo manifest says about its targets, as far as the index reads TOML. */
 interface CargoTargets {
-  /** The files target tables name with `path`, relative to the manifest's directory. */
+  /** The files target tables name, relative to the manifest's directory: a `path`, or for a table without one the files
+   * Cargo infers from the target's name. */
   readonly paths: readonly string[];
-  /** Kinds with a table that names no file: Cargo infers it from the target name, so any default file of the kind may be one. */
-  readonly pathless: ReadonlySet<CargoTargetKind>;
   /** Kinds whose automatic discovery `autobins = false` (and its siblings) turns off. */
   readonly autoOff: ReadonlySet<CargoTargetKind>;
   /** `build = false`, or the script `build = ".."` names; undefined leaves build.rs as the script. */
@@ -356,7 +355,8 @@ function readCargoTargets(text: string): CargoTargets {
   const kinds = new Set<string>(["lib", "bin", "test", "example", "bench"]);
   const autoKeys = new Map<string, CargoTargetKind>([["autolib", "lib"], ["autobins", "bin"], ["autotests", "test"], ["autoexamples", "example"], ["autobenches", "bench"]]);
   const paths: string[] = [];
-  const pathless = new Set<CargoTargetKind>();
+  const pathless: { kind: CargoTargetKind; name: string | undefined }[] = [];
+  let packageName: string | undefined;
   const autoOff = new Set<CargoTargetKind>();
   let build: false | string | undefined;
   let unread = false;
@@ -426,7 +426,13 @@ function readCargoTargets(text: string): CargoTargets {
   let table: string[] = [];
   let targetKind: CargoTargetKind | undefined;
   let targetHasPath = false;
-  const closeTable = (): void => { if (targetKind !== undefined && !targetHasPath) pathless.add(targetKind); targetKind = undefined; targetHasPath = false; };
+  let targetName: string | undefined;
+  const closeTable = (): void => {
+    if (targetKind !== undefined && !targetHasPath) pathless.push({ kind: targetKind, name: targetName });
+    targetKind = undefined;
+    targetHasPath = false;
+    targetName = undefined;
+  };
   let index = text.startsWith("\ufeff") ? 1 : 0;
   while (index < text.length) {
     const char = text[index]!;
@@ -466,7 +472,10 @@ function readCargoTargets(text: string): CargoTargets {
       targetHasPath = true;
       // An absolute path names a file by a root the index does not compare against its relative paths.
       if (whole && !rustAbsolutePath(string.value)) paths.push(string.value); else unread = true;
+    } else if (targetKind !== undefined && key.segments.length === 1 && key.segments[0] === "name") {
+      if (whole) targetName = string.value; else unread = true;
     } else if (kinds.has(full[0]!) && (full.length === 1 || full[full.length - 1] === "path")) unread = true;
+    else if (full.length === 2 && full[0] === "package" && full[1] === "name") { if (whole) packageName = string.value; }
     else if (full.length === 2 && full[0] === "package" && autoKeys.has(full[1]!)) { if (raw === "false") autoOff.add(autoKeys.get(full[1]!)!); }
     else if (full.length === 2 && full[0] === "package" && full[1] === "build") {
       if (raw === "false") build = false;
@@ -476,16 +485,25 @@ function readCargoTargets(text: string): CargoTargets {
     index = lineEnd(end);
   }
   closeTable();
-  return { paths, pathless, autoOff, build, unread };
+  // A table without a path names the file Cargo infers from the target's name; a binary named after the package may
+  // also be src/main.rs. A target other than the library must have a name.
+  const directories: Record<CargoTargetKind, string> = { lib: "src", bin: "src/bin", test: "tests", example: "examples", bench: "benches" };
+  for (const { kind, name } of pathless) {
+    if (kind === "lib") { paths.push("src/lib.rs"); continue; }
+    if (name === undefined || name.includes("/") || name.includes("\\")) { unread = true; continue; }
+    paths.push(`${directories[kind]}/${name}.rs`, `${directories[kind]}/${name}/main.rs`);
+    if (kind === "bin" && (packageName === undefined || name === packageName)) paths.push("src/main.rs");
+  }
+  return { paths, autoOff, build, unread };
 }
 
 function rustAbsolutePath(value: string): boolean {
   return value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/.test(value);
 }
 
-// Whether Cargo may compile a file as a target's crate root. Inside a package, only an explicit target path, the build
-// script, and the files of each kind's default layout whose discovery is on (or whose kind has a table without a
-// path) are targets; a file outside every manifest keeps whatever rustRootPlace allows.
+// Whether Cargo may compile a file as a target's crate root. Inside a package, only a file a target table names (by
+// its path, or by its name when it has none), the build script, and the files of each kind's default layout whose
+// discovery is on are targets; a file outside every manifest keeps whatever rustRootPlace allows.
 function rustMayBeTarget(file: string, targetRoots: ReadonlySet<string>, cargoRoots: readonly string[], manifests: ReadonlyMap<string, CargoTargets>): boolean {
   if (targetRoots.has(file)) return true;
   if (!rustRootPlace(file, targetRoots, cargoRoots)) return false;
@@ -501,7 +519,7 @@ function rustMayBeTarget(file: string, targetRoots: ReadonlySet<string>, cargoRo
       : /^tests\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "test"
       : /^examples\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "example"
       : /^benches\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bench" : undefined;
-    return kind !== undefined && (!targets.autoOff.has(kind) || targets.pathless.has(kind));
+    return kind !== undefined && !targets.autoOff.has(kind);
   });
 }
 
@@ -661,6 +679,8 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
   // `mod` is a keyword, so one outside a `mod name;` or `mod name {` is a declaration a macro assembles (`mod $name;`,
   // `$keyword $name;` called with `mod`): it may name any file, and nothing read is trusted.
   if ((code.match(/(?<![\p{L}\p{N}\p{M}_#])mod(?![\p{L}\p{N}\p{M}_])/gu)?.length ?? 0) > declaredMods) unbalanced = true;
+  // `include!` pastes in a file the scan does not read, and its declarations may name any file.
+  if (/(?<![\p{L}\p{N}\p{M}_])(?:r#)?include\s*!/u.test(code)) unbalanced = true;
   return { declarations, unbalanced: unbalanced || stack.length > 0, code };
 }
 
