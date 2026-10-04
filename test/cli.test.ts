@@ -231,6 +231,8 @@ describe("cli", () => {
     expect(run("footing", "two", "--max-code-units", "16385")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units cannot exceed 16384\n" });
     expect(run("footing", "two", "--max-code-units", "0")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units must be a safe integer >= 1\n" });
     expect(run("groundwork", "--max-dirs", "0")).toEqual({ status: 2, stderr: "osnova: osnova groundwork: --max-dirs must be a safe integer >= 1\n" });
+    expect(run("warp", "two", "--bogus")).toEqual({ status: 2, stderr: "osnova: osnova warp: Unknown option '--bogus'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"--bogus\"\n" });
+    expect(run("settle", "extra")).toEqual({ status: 2, stderr: "osnova: osnova settle: Unexpected argument 'extra'. This command does not take positional arguments\n" });
   }, 60_000);
 
   it("rejects a stray directory positional and points at --workspace", async () => {

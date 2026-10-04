@@ -218,7 +218,18 @@ export async function runCli(
     io.stdout(USAGE);
     return command.length === 0 ? EXIT_ERROR : EXIT_OK;
   }
+  try {
+    return await runCommand(command, rest, io);
+  } catch (error) {
+    // node:util parseArgs reports unknown options and stray positionals without the command that was typed.
+    if (error instanceof Error && "code" in error && typeof error.code === "string" && error.code.startsWith("ERR_PARSE_ARGS_")) {
+      throw new TypeError(`osnova ${command}: ${error.message}`, { cause: error });
+    }
+    throw error;
+  }
+}
 
+async function runCommand(command: string, rest: string[], io: CliIo): Promise<number> {
   switch (command) {
     case "build": {
       const parsed = parseArgs({
