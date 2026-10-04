@@ -634,7 +634,9 @@ describe("Rust module files, round-4 rustc reproductions", () => {
   });
 
   it("reads crate:: from a test module declared by the test crate's root as that root", async () => {
+    // ripgrep's matcher crate: with automatic test discovery on, test_matcher.rs would also be its own test crate.
     const edge = await target({
+      "Cargo.toml": "[package]\nname = \"matcher\"\nversion = \"0.1.0\"\nautotests = false\n\n[[test]]\nname = \"integration\"\npath = \"tests/tests.rs\"\n",
       "src/lib.rs": "pub fn f() {}\n",
       "tests/tests.rs": "mod test_matcher;\nmod util;\n",
       "tests/util.rs": "pub fn helper() -> u32 { 1 }\n",
@@ -884,6 +886,53 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     }, "src/bin/tool.rs", 3, "f");
     expect(edge).toBeDefined();
     expect(edge?.toSymbol).not.toBe(`${owner}#f`);
+  });
+
+  // Round 15: a target Cargo finds by its layout or a table without a path, and target tables in other spellings.
+  const tool = "pub fn f() -> &'static str { \"TOOL\" }\nfn run() -> &'static str {\n    crate::f()\n}\nfn main() { let _ = run(); }\n";
+  const owned = (file: string) => `#[cfg(any())]\n#[path="../${file}"]mod child;\npub fn f() -> &'static str { "OWNER" }\nfn main() {}\n`;
+  const app = "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\n";
+  const ownerBin = "[[bin]]\nname=\"owner\"\npath=\"custom/owner.rs\"\n";
+  it.each([
+    ["src/bin/tool.rs", app + ownerBin],
+    ["src/bin/tool/main.rs", app + ownerBin],
+    ["tests/tool.rs", app + ownerBin],
+    ["examples/tool.rs", app + ownerBin],
+    ["benches/tool.rs", app + ownerBin],
+    ["src/main.rs", app + ownerBin],
+    ["src/lib.rs", app + ownerBin],
+    ["build.rs", app + ownerBin],
+    ["src/bin/tool.rs", app + "autobins=false\n[[bin]]\nname=\"tool\"\n" + ownerBin],
+    ["src/bin/tool.rs", app + "autobins=false\n[[bin]] # valid comment\nname=\"tool\"\npath=\"src/bin/tool.rs\"\n" + ownerBin],
+    ["src/bin/tool.rs", app + "autobins=false\n[[ bin ]]\nname=\"tool\"\npath=\"src/bin/tool.rs\"\n" + ownerBin],
+    ["src/bin/tool.rs", app + "autobins=false\n[[\"bin\"]]\nname=\"tool\"\npath=\"src/bin/tool.rs\"\n" + ownerBin],
+    ["src/bin/tool.rs", app + "autobins=false\n[[bin]]\nname=\"tool\"\n\"path\"=\"src/bin/tool.rs\"\n" + ownerBin],
+    ["src/bin/tool.rs", app + "autobins=false\n[[bin]]\nname=\"tool\"\npath=\"src/bin/too\\u006c.rs\"\n" + ownerBin],
+    ["src/bin/tool.rs", "bin = [{ name = \"tool\", path = \"src/bin/tool.rs\" }, { name = \"owner\", path = \"custom/owner.rs\" }]\n" + app + "autobins=false\n"],
+    ["src/bin/tool.rs", app + "autobins=false\n[[bin]]\nname=\"tool\"\npath=\"\"\"src/bin/tool.rs\"\"\"\n" + ownerBin],
+  ])("never reads crate:: in the Cargo target %s that a disabled declaration also names (manifest %#)", async (file, manifest) => {
+    const edge = await target({ "Cargo.toml": manifest, "custom/owner.rs": owned(file), [file]: tool }, file, 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
+  });
+
+  it("still reads crate:: in a test module that autotests = false keeps out of the targets", async () => {
+    const edge = await target({
+      "Cargo.toml": app + "autotests = false # one integration crate\n[[test]]\nname = \"integration\"\npath = \"tests/tests.rs\"\n[package.metadata.deb]\nextended-description = \"\"\"\n[[test]]\npath = \"tests/util.rs\"\n\"\"\"\n",
+      "tests/tests.rs": "mod util;\nfn f() -> &'static str { \"ROOT\" }\nfn main() { let _ = util::run(); }\n",
+      "tests/util.rs": "pub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "tests/util.rs", 2, "f");
+    expect(edge?.toSymbol).toBe("tests/tests.rs#f");
+  });
+
+  it("still reads crate:: in a module under a src/tests directory, which is no target", async () => {
+    const edge = await target({
+      "Cargo.toml": app,
+      "src/lib.rs": "mod tests;\nfn f() -> &'static str { \"ROOT\" }\n",
+      "src/tests/mod.rs": "mod parse;\n",
+      "src/tests/parse.rs": "pub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/tests/parse.rs", 2, "f");
+    expect(edge?.toSymbol).toBe("src/lib.rs#f");
   });
 
   it("still follows a cfg-gated module whose name nothing else binds", async () => {

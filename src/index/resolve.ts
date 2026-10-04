@@ -170,12 +170,14 @@ export interface WorkspaceContext {
   /** Per Rust file, the `mod name;` declarations it writes at its top level: `file`, or `path` when an attribute
    * sets its path; `nested` for one written only inside an inline module. */
   readonly rustModuleFiles: ReadonlyMap<string, ReadonlyMap<string, "file" | "path" | "nested">>;
-  /** Rust crate roots a Cargo.toml target section names with `path = ".."`. */
+  /** Rust crate roots a Cargo.toml names: target `path` values and a `build` script. */
   readonly rustTargetRoots: ReadonlySet<string>;
   /** Rust module file to the files whose top-level `mod name;` declares it. */
   readonly rustDeclaredBy: ReadonlyMap<string, readonly RustModuleLink[]>;
   /** Rust files a declaration may name that the scan could not follow: no root, and no module the walk enters. */
   readonly rustUncertainOwner: ReadonlySet<string>;
+  /** Cargo targets another file also declares as a module: compiled in two crates, so their module identity is unproven. */
+  readonly rustTwoCrates: ReadonlySet<string>;
   /** Some `#[path]` value or delimiter could not be read, so any file may be a module: no crate root is proven. */
   readonly rustOwnershipUnreadable: boolean;
 }
@@ -235,12 +237,10 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   // unknown declarer, so they are neither a root nor a module the walk may enter. A `path` value that cannot be
   // read could name any file, and leaves every crate root unproven.
   const rustScans = new Map([...files.values()].filter((card) => card.language === "rust").map((card) => [card.path, scanRustModules(card.text)]));
-  const rustTargetRoots = new Set([...files.values()].flatMap((card) => {
-    if (path.posix.basename(card.path) !== "Cargo.toml") return [];
-    const dir = path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path);
-    return [...card.text.matchAll(/^\s*\[\[?(?:lib|bin|test|example|bench)\]\]?\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)]
-      .flatMap((section) => [...(section[1] ?? "").matchAll(/^\s*path\s*=\s*(?:"([^"]+)"|'([^']+)')/gm)].map((entry) => path.posix.normalize(path.posix.join(dir, (entry[1] ?? entry[2])!))));
-  }));
+  const cargoTargets = new Map([...files.values()].filter((card) => path.posix.basename(card.path) === "Cargo.toml")
+    .map((card) => [path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path), readCargoTargets(card.text)]));
+  const rustTargetRoots = new Set([...cargoTargets].flatMap(([dir, targets]) => [...targets.paths, ...(typeof targets.build === "string" ? [targets.build] : [])]
+    .map((target) => path.posix.normalize(path.posix.join(dir, target)))));
   const rustModuleFiles = new Map<string, Map<string, "file" | "path" | "nested">>();
   const linkRust = (beside: (file: string) => boolean) => {
     const declaredBy = new Map<string, RustModuleLink[]>();
@@ -290,17 +290,184 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   // again from the roots that first pass proves.
   const firstPass = linkRust((file) => path.posix.basename(file) === "mod.rs" || rustRootPlace(file, rustTargetRoots, cargoRoots));
   const ownership = linkRust((file) => path.posix.basename(file) === "mod.rs" || (rustRootPlace(file, rustTargetRoots, cargoRoots) && !firstPass.declaredBy.has(file) && !firstPass.uncertain.has(file)));
-  // A file a manifest lists as a target is compiled as its own crate root even when another file declares it as a
-  // module (whether or not that declaration's cfg is on): it has two crate contexts, and its paths name neither.
-  for (const file of rustTargetRoots) if (ownership.declaredBy.delete(file)) ownership.uncertain.add(file);
+  // A Cargo target is compiled as its own crate root even when another file declares it as a module (whether or not
+  // that declaration's cfg is on): it has two crate contexts, so no path from it (or a module below it) is proven.
+  // The declaring file may still walk into it as its module.
+  const rustTwoCrates = new Set([...ownership.declaredBy.keys()].filter((file) => rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets)));
+  const cargoUnread = [...cargoTargets.values()].some((targets) => targets.unread);
   const rustDeclaredBy = ownership.declaredBy;
   return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
     rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])),
     rustModuleFiles,
     rustDeclaredBy,
     rustUncertainOwner: ownership.uncertain,
-    rustOwnershipUnreadable: ownership.unreadable,
+    rustTwoCrates,
+    rustOwnershipUnreadable: ownership.unreadable || cargoUnread,
     rustTargetRoots };
+}
+
+type CargoTargetKind = "lib" | "bin" | "test" | "example" | "bench";
+
+/** What a Cargo manifest says about its targets, as far as the index reads TOML. */
+interface CargoTargets {
+  /** The files target tables name with `path`, relative to the manifest's directory. */
+  readonly paths: readonly string[];
+  /** Kinds with a table that names no file: Cargo infers it from the target name, so any default file of the kind may be one. */
+  readonly pathless: ReadonlySet<CargoTargetKind>;
+  /** Kinds whose automatic discovery `autobins = false` (and its siblings) turns off. */
+  readonly autoOff: ReadonlySet<CargoTargetKind>;
+  /** `build = false`, or the script `build = ".."` names; undefined leaves build.rs as the script. */
+  readonly build: false | string | undefined;
+  /** Target syntax the reader does not interpret: an inline target table, a multi-line or undecodable path. */
+  readonly unread: boolean;
+}
+
+// A small TOML reader for the target keys of a Cargo manifest: table headers (bare, quoted, spaced, with a trailing
+// comment), dotted and quoted keys, and string values with their escapes. Multi-line strings and arrays are skipped
+// whole, so their text is never read as a header. Anything about targets it cannot read sets `unread`.
+function readCargoTargets(text: string): CargoTargets {
+  const kinds = new Set<string>(["lib", "bin", "test", "example", "bench"]);
+  const autoKeys = new Map<string, CargoTargetKind>([["autolib", "lib"], ["autobins", "bin"], ["autotests", "test"], ["autoexamples", "example"], ["autobenches", "bench"]]);
+  const paths: string[] = [];
+  const pathless = new Set<CargoTargetKind>();
+  const autoOff = new Set<CargoTargetKind>();
+  let build: false | string | undefined;
+  let unread = false;
+  const lineEnd = (at: number): number => { const end = text.indexOf("\n", at); return end < 0 ? text.length : end; };
+  const blank = (from: number, to: number): boolean => /^[ \t\r]*(?:#.*)?$/.test(text.slice(from, to));
+  // One basic ("..") or literal ('..') single-line string starting at `at`: its decoded value and the index after it.
+  const stringAt = (at: number): { value: string; end: number } | undefined => {
+    if (text[at] === "'") { const end = text.indexOf("'", at + 1); return end < 0 || text.slice(at + 1, end).includes("\n") ? undefined : { value: text.slice(at + 1, end), end: end + 1 }; }
+    if (text[at] !== '"') return undefined;
+    let value = "";
+    for (let index = at + 1; index < text.length; index += 1) {
+      const char = text[index]!;
+      if (char === '"') return { value, end: index + 1 };
+      if (char === "\n") return undefined;
+      if (char !== "\\") { value += char; continue; }
+      const escape = text[index + 1];
+      const simple: Record<string, string> = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\", e: "\u001b" };
+      if (escape !== undefined && simple[escape] !== undefined) { value += simple[escape]; index += 1; continue; }
+      const digits = escape === "u" ? 4 : escape === "U" ? 8 : escape === "x" ? 2 : 0;
+      const hex = text.slice(index + 2, index + 2 + digits);
+      if (digits === 0 || !/^[0-9A-Fa-f]+$/.test(hex) || hex.length !== digits || Number.parseInt(hex, 16) > 0x10ffff) return undefined;
+      value += String.fromCodePoint(Number.parseInt(hex, 16));
+      index += 1 + digits;
+    }
+    return undefined;
+  };
+  // A dotted key (`a."b".'c'`) starting at `at`, with the index after it.
+  const keyAt = (at: number): { segments: string[]; end: number } | undefined => {
+    const segments: string[] = [];
+    let index = at;
+    for (;;) {
+      while (text[index] === " " || text[index] === "\t") index += 1;
+      const quoted = stringAt(index);
+      const bare = quoted === undefined ? /^[A-Za-z0-9_-]+/.exec(text.slice(index, lineEnd(index)))?.[0] : undefined;
+      if (quoted === undefined && bare === undefined) return undefined;
+      segments.push(quoted?.value ?? bare!);
+      index = quoted?.end ?? index + bare!.length;
+      while (text[index] === " " || text[index] === "\t") index += 1;
+      if (text[index] !== ".") return { segments, end: index };
+      index += 1;
+    }
+  };
+  // The end of the value starting at `at`: past nested arrays and inline tables and every kind of string, up to a
+  // comment or the end of its line.
+  const valueEnd = (at: number): number => {
+    let depth = 0;
+    let index = at;
+    while (index < text.length) {
+      const char = text[index]!;
+      const triple = text.startsWith('"""', index) ? '"""' : text.startsWith("'''", index) ? "'''" : undefined;
+      if (triple !== undefined) {
+        let close = index + 3;
+        while (close < text.length && !text.startsWith(triple, close)) close += triple === '"""' && text[close] === "\\" ? 2 : 1;
+        index = Math.min(text.length, close + 3);
+        while (text[index] === triple[0]) index += 1;
+        continue;
+      }
+      if (char === '"' || char === "'") { const string = stringAt(index); index = string?.end ?? lineEnd(index); continue; }
+      if (char === "#") { if (depth === 0) return index; index = lineEnd(index); continue; }
+      if (char === "\n" && depth === 0) return index;
+      if (char === "[" || char === "{") depth += 1;
+      if (char === "]" || char === "}") depth -= 1;
+      index += 1;
+    }
+    return index;
+  };
+  let table: string[] = [];
+  let targetKind: CargoTargetKind | undefined;
+  let targetHasPath = false;
+  const closeTable = (): void => { if (targetKind !== undefined && !targetHasPath) pathless.add(targetKind); targetKind = undefined; targetHasPath = false; };
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === " " || char === "\t" || char === "\r" || char === "\n") { index += 1; continue; }
+    if (char === "#") { index = lineEnd(index); continue; }
+    if (char === "[") {
+      const array = text[index + 1] === "[";
+      const end = lineEnd(index);
+      const key = keyAt(index + (array ? 2 : 1));
+      const close = array ? "]]" : "]";
+      closeTable();
+      if (key === undefined || !text.startsWith(close, key.end) || !blank(key.end + close.length, end)) {
+        if (/\b(?:lib|bin|test|example|bench)\b/.test(text.slice(index, end))) unread = true;
+        table = ["\0"];
+      } else {
+        table = key.segments;
+        const head = table[0]!;
+        if (table.length === 1 && kinds.has(head)) {
+          if ((head === "lib") === array) unread = true;
+          else targetKind = head as CargoTargetKind;
+        }
+      }
+      index = end;
+      continue;
+    }
+    const key = keyAt(index);
+    let at = key?.end ?? index;
+    if (key === undefined || text[at] !== "=") { index = lineEnd(index); continue; }
+    at += 1;
+    while (text[at] === " " || text[at] === "\t") at += 1;
+    const end = valueEnd(at);
+    const raw = text.slice(at, end).trim();
+    const full = [...table, ...key.segments];
+    const string = stringAt(at);
+    const whole = string !== undefined && blank(string.end, end);
+    if (targetKind !== undefined && key.segments.length === 1 && key.segments[0] === "path") {
+      targetHasPath = true;
+      if (whole) paths.push(string.value); else unread = true;
+    } else if (kinds.has(full[0]!) && (full.length === 1 || full[full.length - 1] === "path")) unread = true;
+    else if (full.length === 2 && full[0] === "package" && autoKeys.has(full[1]!)) { if (raw === "false") autoOff.add(autoKeys.get(full[1]!)!); }
+    else if (full.length === 2 && full[0] === "package" && full[1] === "build") {
+      if (raw === "false") build = false;
+      else if (whole) build = string.value;
+      else if (raw !== "true") unread = true;
+    }
+    index = lineEnd(end);
+  }
+  closeTable();
+  return { paths, pathless, autoOff, build, unread };
+}
+
+// Whether Cargo may compile a file as a target's crate root. Inside a package, only an explicit target path, the build
+// script, and the files of each kind's default layout whose discovery is on (or whose kind has a table without a
+// path) are targets; a file outside every manifest keeps whatever rustRootPlace allows.
+function rustMayBeTarget(file: string, targetRoots: ReadonlySet<string>, cargoRoots: readonly string[], manifests: ReadonlyMap<string, CargoTargets>): boolean {
+  if (targetRoots.has(file)) return true;
+  if (!rustRootPlace(file, targetRoots, cargoRoots)) return false;
+  const owner = [...manifests.keys()].filter((dir) => dir === "" || file.startsWith(`${dir}/`)).sort((a, b) => b.length - a.length)[0];
+  if (owner === undefined) return true;
+  const targets = manifests.get(owner)!;
+  const relative = owner === "" ? file : file.slice(owner.length + 1);
+  if (relative === "build.rs") return targets.build === undefined;
+  const kind: CargoTargetKind | undefined = relative === "src/lib.rs" ? "lib"
+    : relative === "src/main.rs" || /^src\/bin\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bin"
+    : /^tests\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "test"
+    : /^examples\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "example"
+    : /^benches\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bench" : undefined;
+  return kind !== undefined && (!targets.autoOff.has(kind) || targets.pathless.has(kind));
 }
 
 // Where a Rust crate root may sit: a Cargo target path, lib.rs or main.rs in a src directory, build.rs beside a
@@ -599,7 +766,7 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     const links: RustModuleLink[] = [];
     let current = file;
     for (let hops = 0; ; hops += 1) {
-      if (hops > 32 || context.rustUncertainOwner.has(current)) return undefined;
+      if (hops > 32 || context.rustUncertainOwner.has(current) || context.rustTwoCrates.has(current)) return undefined;
       if (isRoot(current)) break;
       const declarers = context.rustDeclaredBy.get(current);
       if (declarers === undefined || declarers.length !== 1) return undefined;
