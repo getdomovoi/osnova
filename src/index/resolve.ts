@@ -326,6 +326,12 @@ function resolveGoPackage(spec: string, knownFiles: ReadonlySet<string>, context
 // other head against the workspace crate of that package name. The
 // longest file prefix wins, so an inline module inside a file still lands on that file.
 function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): string | undefined {
+  return resolveRustPath(fromFile, spec, knownFiles, context)?.file;
+}
+
+// The file a Rust path lands on, and the segments left after it: the inline modules of that file the path
+// continues through (`use super::inner::Deep` with `mod inner { .. }` in the file gives inline ["inner"]).
+function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): { file: string; inline: string[] } | undefined {
   const segments = spec.split("::").filter((part) => part.length > 0);
   const head = segments[0];
   if (head === undefined) return undefined;
@@ -352,7 +358,7 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
     start = dir;
     rest = segments.slice(index);
     // `self` alone is this file; `self::inner::X` with no file for `inner` names an inline module of this file.
-    if (dir === ownDir && (rest.length === 0 || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return fromFile;
+    if (dir === ownDir && (rest.length === 0 || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return { file: fromFile, inline: rest };
   } else {
     // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
     const crate = context.cargoPackages.get(head);
@@ -372,7 +378,7 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
   for (let take = rest.length; take >= 0; take -= 1) {
     const modulePath = path.posix.join(start, ...rest.slice(0, take));
     const candidates = take === 0 ? [`${modulePath}/lib.rs`, `${modulePath}/main.rs`, `${modulePath}/mod.rs`] : [`${modulePath}.rs`, `${modulePath}/mod.rs`];
-    for (const candidate of candidates) if (knownFiles.has(candidate)) return candidate;
+    for (const candidate of candidates) if (knownFiles.has(candidate)) return { file: candidate, inline: rest.slice(take) };
   }
   return undefined;
 }
@@ -424,6 +430,31 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     symbolsByQualifiedName.set(file, byName);
   }
   const declaredAs = (file: string, qualifiedName: string): readonly OsnovaSymbol[] => symbolsByQualifiedName.get(file)?.get(qualifiedName) ?? [];
+  // The inline-module path of a Rust symbol: the leading qualified-name parts that are declared modules.
+  const moduleOf = (file: string, qualifiedName: string | undefined): string => {
+    if (qualifiedName === undefined) return "";
+    const parts = qualifiedName.slice(qualifiedName.indexOf("#") + 1).split(".");
+    const modules: string[] = [];
+    for (let take = 1; take < parts.length; take += 1) {
+      const parent = declaredAs(file, `${file}#${parts.slice(0, take).join(".")}`)[0];
+      if (parent?.kind !== "module") break;
+      modules.push(parts[take - 1]!);
+    }
+    return modules.join(".");
+  };
+  // A local reference names an item of the file. In Rust the referencing site's inline module comes first, then
+  // the file's root, then, with no module known, a module item that is the file's only declaration of the name.
+  const declaredLocal = (file: string, name: string, module = ""): readonly OsnovaSymbol[] => {
+    const root = declaredAs(file, qualifiedNameOf(file, name));
+    if (files.get(file)?.language !== "rust" || name.includes(".")) return root;
+    if (module !== "") {
+      const inner = declaredAs(file, qualifiedNameOf(file, `${module}.${name}`));
+      if (inner.length > 0) return inner;
+    }
+    if (root.length > 0 || module !== "") return root;
+    const nested = (symbolsByName.get(name) ?? []).filter((symbol) => symbol.file === file && symbol.qualifiedName === qualifiedNameOf(file, `${moduleOf(file, symbol.qualifiedName)}.${name}`) && moduleOf(file, symbol.qualifiedName) !== "");
+    return new Set(nested.map((symbol) => symbol.qualifiedName)).size === 1 ? nested : [];
+  };
 
   const knownFiles = new Set(files.keys());
   const context = workspaceContext(files);
@@ -445,8 +476,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // hide the other, and a call to the value would find only the type.
   const exportKey = (symbol: OsnovaSymbol): string => `${symbol.qualifiedName}\u0000${symbol.kind}`;
   const exportCache = new Map<string, ExportResult>();
-  const exported = (file: string, name: string): ExportResult => {
-    const key = JSON.stringify([file, name]);
+  // The inline-module segments a Rust import continues through inside the target file (see resolveRustPath).
+  const inlinePath = (language: CardLanguage, fromFile: string, spec: string): readonly string[] =>
+    language === "rust" ? resolveRustPath(fromFile, spec, knownFiles, context)?.inline ?? [] : [];
+  const exported = (file: string, name: string, inline: readonly string[] = []): ExportResult => {
+    const key = JSON.stringify([file, name, inline]);
     const cached = exportCache.get(key);
     if (cached !== undefined) return cached;
     const result: ExportResult = { symbols: new Map(), routes: new Map(), namespaces: [], incomplete: false, cycle: false };
@@ -474,8 +508,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         result.incomplete = true;
         return;
       }
+      // A Rust item inside an inline module is reached only by a path through that module.
+      const localName = [...(via.length === 0 ? inline : []), currentName].join(".");
       const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName) ||
-        (TYPED_FAMILY.has(card.language) && symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")));
+        (TYPED_FAMILY.has(card.language) && symbol.name === currentName && symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === localName));
       const spaces = links.filter((link) => link.kind === "namespace" && link.exportedName === currentName);
       for (const link of spaces) {
         if (link.kind !== "namespace") continue;
@@ -556,11 +592,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const holderCard = files.get(holder.file);
     if (holderCard === undefined) return null;
     let bases: readonly OsnovaSymbol[] = [];
-    if (base.kind === "local") bases = declaredAs(holder.file, qualifiedNameOf(holder.file, base.name));
+    if (base.kind === "local") bases = declaredLocal(holder.file, base.name, moduleOf(holder.file, holder.qualifiedName));
     else {
       const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles, context);
       if (target === undefined) return null;
-      const found = exported(target, base.importedName);
+      const found = exported(target, base.importedName, inlinePath(holderCard.language, holder.file, base.source));
       if (found.incomplete) return null;
       bases = [...found.symbols.values()];
     }
@@ -571,14 +607,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const holderCard = files.get(file);
     if (holderCard === undefined) return null;
     if (ref.kind === "local") {
-      const local = [...declaredAs(file, qualifiedNameOf(file, ref.name))];
+      const local = [...declaredLocal(file, ref.name)];
       if (local.length > 0 || !TYPED_FAMILY.has(holderCard.language)) return local;
       const family = languageFamily(holderCard.language);
       return (symbolsByName.get(ref.name) ?? []).filter((symbol) => (isHolder(symbol) || symbol.kind === "function") && languageFamily(files.get(symbol.file)?.language) === family);
     }
     const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles, context);
     if (target === undefined) return null;
-    const found = exported(target, ref.importedName);
+    const found = exported(target, ref.importedName, inlinePath(holderCard.language, file, ref.source));
     return found.incomplete ? null : [...found.symbols.values()];
   };
   const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
@@ -2019,7 +2055,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles, context);
           if (target === undefined) resolution = unresolvedImport(card.language, fromFile, reference.source);
           else {
-            exportResult = exported(target, reference.importedName);
+            exportResult = exported(target, reference.importedName, inlinePath(card.language, fromFile, reference.source));
             if (exportResult.incomplete) resolution = { status: "unresolved", reason: "re-export-incomplete" };
             else {
               candidates = [...exportResult.symbols.values()].filter((symbol) =>
@@ -2031,7 +2067,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             }
           }
         } else if (reference.kind === "local") {
-          candidates = [...declaredAs(fromFile, qualifiedNameOf(fromFile, reference.name))];
+          candidates = [...declaredLocal(fromFile, reference.name, card.language === "rust" ? moduleOf(fromFile, fromSymbol) : "")];
           // A same-file function named like a builtin (`export function string()`) is not the type a receiver carries.
           if (binding.kind === "member" && BUILTIN_TYPES.has(reference.name) && !candidates.some(isHolder)) candidates = [];
           // The file declares this name in more than one scope, and the index keeps one record per
@@ -2176,7 +2212,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             const target = resolveImportTarget(card.language, fromFile, ref.source, knownFiles, context);
             if (target === undefined) return [];
             if (ref.importedName === "*") return [target];
-            const found = exported(target, ref.importedName);
+            const found = exported(target, ref.importedName, inlinePath(card.language, fromFile, ref.source));
             return found.incomplete ? [] : [...new Set(found.namespaces.map((space) => space.file))];
           };
           const selectOf = (ref: { index?: number | undefined; unwrapped?: true | undefined }, elements = false): number | "returns" | "unwrapped" | "elements" | "values" =>
@@ -2346,8 +2382,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         if (raw.kind === "extends" || raw.kind === "implements") candidates = candidates.filter((symbol) => HERITAGE_KINDS.has(symbol.kind));
         if (raw.kind === "routes") candidates = candidates.filter((symbol) => ROUTE_TARGET_KINDS.has(symbol.kind));
         const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
-        const resolved = names.length === 1 ? candidates[0] : undefined;
+        const resolved = names.length === 1 && candidates[0]!.shadowed !== true ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
+        // The member reached is one of several declarations of its name in one scope (cfg-gated Rust twins in an
+        // impl): the index keeps one record, so no edge can name the one a build compiles.
+        else if (names.length === 1 && candidates[0]!.shadowed === true) resolution = { status: "unresolved", reason: "shadowed-declaration" };
         else if (resolved === undefined && resolution.status === "resolved") resolution = { status: "unresolved", reason: "bound-symbol-missing" };
         // A value reference is recorded only when it names an indexed callable or class; a bound name that
         // reaches a constant, a type or an import the index cannot follow leaves no edge.
@@ -2385,22 +2424,32 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         : raw.toName;
       // A plain Rust name never names an impl method or a variant: `Ok(x)` is the prelude's, not `ParseResult::Ok`,
       // however unique that is. A function nested in a function or method (`fn imp` inside `fn is_readable_stdin`) still counts.
+      // A method of an impl for a type outside the index (`impl From<X> for std::io::Error`) has no declared parent
+      // at all; it is a member of that foreign type, never a plain name. An inline module is a namespace, not a
+      // holder: its items are plain names inside it, which `moduleOf` sorts out below.
+      // Only the immediate parent decides: a trait impl's methods sit under the undeclared `Type.Trait`, and an
+      // outer declaration of the same name (an associated `type Error` leaked to the file root) says nothing.
       const memberOfHolder = (symbol: OsnovaSymbol): boolean => {
         const parts = symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).split(".");
-        for (let take = parts.length - 1; take > 0; take -= 1) {
-          const parent = declaredAs(symbol.file, `${symbol.file}#${parts.slice(0, take).join(".")}`)[0];
-          if (parent !== undefined) return isHolder(parent);
-        }
-        return false;
+        if (parts.length < 2) return false;
+        const parent = declaredAs(symbol.file, `${symbol.file}#${parts.slice(0, -1).join(".")}`)[0];
+        if (parent === undefined) return true;
+        return parent.kind === "module" ? false : isHolder(parent);
       };
       // A plain Go name never names a method either, and it is declared by the caller's own package (the files of its
       // directory with its package clause) before any other file.
       const plainGo = card.language === "go" && !raw.toName.includes(".");
+      const plainRust = card.language === "rust" && !raw.toName.includes(".");
+      // An item of an inline module is in scope only inside that module; from anywhere else it needs a path. A
+      // caller inside the module sees the module's item before the file's.
+      const callerModule = plainRust ? moduleOf(fromFile, fromSymbol) : "";
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
         languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
         (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)) &&
+        (!plainRust || moduleOf(symbol.file, symbol.qualifiedName) === "" || (symbol.file === fromFile && moduleOf(symbol.file, symbol.qualifiedName) === callerModule)) &&
         (!plainGo || symbol.kind !== "method"));
-      const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
+      const sameModule = plainRust && callerModule !== "" ? candidates.filter((symbol) => symbol.file === fromFile && moduleOf(symbol.file, symbol.qualifiedName) === callerModule) : [];
+      const sameFile = sameModule.length > 0 ? sameModule : candidates.filter((symbol) => symbol.file === fromFile);
       const samePackage = plainGo ? candidates.filter((symbol) => {
         const other = files.get(symbol.file);
         return other !== undefined && path.posix.dirname(symbol.file) === path.posix.dirname(fromFile) && sameGoPackage(other, card);
@@ -2411,8 +2460,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
       const preferred = sameFile.length > 0 ? sameFile : samePackage.length > 0 ? samePackage : imported.length > 0 ? imported : candidates;
       const names = [...new Set(preferred.map((symbol) => symbol.qualifiedName))].sort();
-      const resolved = names.length === 1 && !conditionalPackage ? preferred[0] : undefined;
+      // The chosen declaration is one of several the file declares for the name (cfg-gated Rust twins): the index
+      // keeps one record per qualified name, so no edge can name the one a build compiles.
+      const shadowedTarget = names.length === 1 && preferred[0]!.shadowed === true;
+      const resolved = names.length === 1 && !conditionalPackage && !shadowedTarget ? preferred[0] : undefined;
       const resolution: EdgeResolution = conditionalPackage ? { status: "unresolved", reason: "binding-blocked" }
+        : shadowedTarget ? { status: "unresolved", reason: "shadowed-declaration" }
         : names.length > 1
         ? { status: "ambiguous", candidates: names }
         // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of

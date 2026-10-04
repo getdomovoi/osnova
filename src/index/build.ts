@@ -92,7 +92,7 @@ export async function extractCard(
           diagnostics.push({ phase: "parse", path: relPath, code: "syntax-errors" });
         }
         const output = adapterFor(language).extract(tree, text);
-        definitions = markShadowed(tree, output.definitions);
+        definitions = markShadowed(tree, output.definitions, language === "rust");
         reExports = output.reExports ?? [];
         unplacedExtensions = output.unplacedExtensions ?? [];
         rawEdges = output.edges.map((edge: RawEdge) => ({

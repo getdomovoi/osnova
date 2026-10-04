@@ -101,11 +101,29 @@ export const rustAdapter: LanguageAdapter = {
           }
           return;
         }
+        case "mod_item": {
+          // An inline module is a scope of its own: `check` in `mod tests` and `check` at the file root are two
+          // records, and a plain name inside the module names the module's one first. `mod util;` declares a
+          // module file, which is no record here.
+          const nameNode = node.childForFieldName("name");
+          if (nameNode !== null && node.childForFieldName("body") !== null) {
+            out.addDef(nameNode.text, "module", node);
+            out.push(nameNode.text);
+            for (const child of childrenOf(node)) visit(child);
+            out.pop();
+          }
+          return;
+        }
         case "call_expression": {
           const fn = node.childForFieldName("function");
           if (fn !== null) {
             if (fn.type === "identifier") {
-              out.addEdge("calls", fn.text, fn);
+              // A closure, parameter or pattern binding called by name shadows every item of the name. A name a `use`
+              // brings in from another crate or std is that import's, external when the crate is not in the workspace;
+              // a `crate::`, `self::` or `super::` use keeps the plain-name lookup, which already prefers imported files.
+              const imported = bindings.imported(fn.text, node);
+              const external = imported?.kind === "import" && !/^(crate|self|super)(::|$)/.test(imported.source) ? imported : undefined;
+              out.addEdge("calls", fn.text, fn, patternBound(node, fn.text) ? { kind: "blocked", reason: "local-value" } : external);
             } else if (fn.type === "scoped_identifier" || fn.type === "scoped_type_identifier") {
               const nameNode = fn.childForFieldName("name");
               const name = nameNode?.text ?? lastSegment(fn.text);
@@ -158,6 +176,43 @@ export const rustAdapter: LanguageAdapter = {
     return { definitions: out.definitions, edges: out.edges, reExports };
   },
 };
+
+function patternNames(pattern: Node | null, into: Set<string>): void {
+  if (pattern === null) return;
+  if (pattern.type === "identifier") { into.add(pattern.text); return; }
+  for (const child of childrenOf(pattern)) patternNames(child, into);
+}
+
+// Whether a plain name at `site` is bound by a pattern in an enclosing scope. A pattern binds only after it:
+// a `let` that ends before the site in an enclosing block; the parameters of an enclosing function or
+// closure; a match arm's pattern for its guard and value; a `for` pattern for its body; an `if let` or
+// `while let` pattern for the later conditions and the body, never for its own value (`if let Some(f) = f()`
+// calls the item `f`). Every identifier in a pattern counts, so a unit variant in a match pattern also blocks
+// the name; that is a refusal, never a wrong edge.
+function patternBound(site: Node, name: string): boolean {
+  const names = new Set<string>();
+  const at = site.startIndex;
+  const after = (node: Node | null, end: number): void => { if (node !== null && end <= at) patternNames(node, names); };
+  for (let current: Node | null = site.parent; current !== null; current = current.parent) {
+    if (current.type === "block" || current.type === "source_file") {
+      for (const child of childrenOf(current)) if (child.type === "let_declaration") after(child.childForFieldName("pattern"), child.endIndex);
+    } else if (current.type === "function_item" || current.type === "closure_expression") {
+      const parameters = current.childForFieldName("parameters");
+      if (parameters !== null) for (const parameter of childrenOf(parameters)) after(parameter.type === "parameter" ? parameter.childForFieldName("pattern") : parameter, parameters.endIndex);
+    } else if (current.type === "match_arm") {
+      const pattern = current.childForFieldName("pattern");
+      after(pattern, pattern?.endIndex ?? Infinity);
+    } else if (current.type === "for_expression") {
+      after(current.childForFieldName("pattern"), current.childForFieldName("value")?.endIndex ?? Infinity);
+    } else if (current.type === "if_expression" || current.type === "while_expression") {
+      const condition = current.childForFieldName("condition");
+      const lets = condition?.type === "let_condition" ? [condition] : condition?.type === "let_chain" ? childrenOf(condition).filter((part) => part.type === "let_condition") : [];
+      for (const part of lets) after(part.childForFieldName("pattern"), part.endIndex);
+    }
+    if (names.has(name)) return true;
+  }
+  return false;
+}
 
 function hasImplAncestor(node: Node): boolean {
   let cur: Node | null = node.parent;

@@ -222,8 +222,8 @@ describe("Rust workspace crates and inline modules", () => {
     });
     expect(calls(index, "crates/searcher/src/lib.rs#strip", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
     expect(calls(index, "crates/searcher/src/lib.rs#SinkMatch.byte", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
-    expect(calls(index, "crates/searcher/src/lib.rs#check", "byte")).toEqual(["crates/searcher/src/lib.rs#SinkMatch.byte"]);
-    expect(calls(index, "crates/searcher/src/lib.rs#check", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
+    expect(calls(index, "crates/searcher/src/lib.rs#tests.check", "byte")).toEqual(["crates/searcher/src/lib.rs#SinkMatch.byte"]);
+    expect(calls(index, "crates/searcher/src/lib.rs#tests.check", "as_byte")).toEqual(["crates/matcher/src/term.rs#LineTerminator.as_byte"]);
   });
 
   it("follows a facade crate's pub extern crate alias to the aliased workspace crate", async () => {
@@ -249,7 +249,7 @@ describe("Rust workspace crates and inline modules", () => {
       "crates/core/src/own.rs": "pub struct Own;\nimpl Own { pub fn new() -> Own { Own } pub fn go(&self) {} }\nmod inner { pub struct Deep; impl Deep { pub fn dig(&self) {} } }\n#[cfg(test)]\nmod tests {\n    use super::{Own, inner::Deep};\n    use super::super::decoy::ColorSpecs;\n    fn t(d: &Deep, c: &ColorSpecs) { let o = Own::new(); o.go(); d.dig(); c.paint(); }\n}\n",
     });
     const inOwn = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/src/own.rs" && edge.line === 8).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
-    expect(inOwn).toEqual(["dig=crates/core/src/own.rs#Deep.dig", "go=crates/core/src/own.rs#Own.go", "new=crates/core/src/own.rs#Own.new", "paint=crates/core/src/decoy.rs#ColorSpecs.paint"]);
+    expect(inOwn).toEqual(["dig=crates/core/src/own.rs#inner.Deep.dig", "go=crates/core/src/own.rs#Own.go", "new=crates/core/src/own.rs#Own.new", "paint=crates/core/src/decoy.rs#ColorSpecs.paint"]);
     expect(calls(index, "crates/core/src/main.rs#make", "new")).toEqual(["crates/printer/src/color.rs#ColorSpecs.new"]);
     expect(calls(index, "crates/core/src/main.rs#draw", "paint")).toEqual(["crates/printer/src/color.rs#ColorSpecs.paint", "crates/printer/src/color.rs#ColorSpecs.paint"]);
     const inTests = [...index.edges].filter((edge) => edge.kind === "calls" && edge.fromFile === "crates/core/src/other.rs" && edge.line === 4).map((edge) => `${edge.toName}=${edge.toSymbol}`).sort();
