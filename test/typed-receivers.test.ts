@@ -243,6 +243,7 @@ describe("Rust workspace crates and inline modules", () => {
         "fn make() -> ColorSpecs { ColorSpecs::new() }",
         "fn draw(c: &ColorSpecs, a: &Args) { c.paint(); a.colors.paint(); }",
         "mod other;",
+        "mod own;",
         "",
       ].join("\n"),
       "crates/core/src/other.rs": "#[cfg(test)]\nmod tests {\n    use grep_printer::ColorSpecs;\n    fn t() { let m = ColorSpecs::new(); m.paint(); }\n}\n",

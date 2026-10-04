@@ -696,6 +696,47 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("src/alias.rs#f");
   });
 
+  // Round 7: a module's identity comes only from its declaration chain, never from the folder layout.
+  it.each([
+    ["super:: from a file child of an inline module", {
+      "src/main.rs": "mod outer { pub fn f() -> &'static str { \"OUTER\" } pub mod child; }\nfn run() -> &'static str { outer::child::run() }\nfn main() { let _ = run(); }\n",
+      "src/outer/child.rs": "pub fn run() -> &'static str {\n    super::f()\n}\n",
+      "src/outer.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/outer/child.rs", 2, "src/outer.rs#f", "src/main.rs#outer.f"],
+    ["super:: past a stray mod.rs to the declaring parent", {
+      "src/main.rs": "mod outer;\nfn run() -> &'static str { outer::child::run() }\nfn main() { let _ = run(); }\n",
+      "src/outer.rs": "pub fn f() -> &'static str { \"OUTER\" }\npub mod child;\n",
+      "src/outer/child.rs": "pub fn run() -> &'static str {\n    super::f()\n}\n",
+      "src/outer/mod.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/outer/child.rs", 2, "src/outer/mod.rs#f", "src/outer.rs#f"],
+    ["self:: from a file a path attribute loads", {
+      "src/main.rs": "#[path=\"chosen.rs\"] mod m;\nfn run() -> &'static str { m::run() }\nfn main() { let _ = run(); }\n",
+      "src/chosen.rs": "pub mod child;\npub fn run() -> &'static str {\n    self::child::f()\n}\n",
+      "src/child.rs": "pub fn f() -> &'static str { \"CHILD\" }\n",
+      "src/chosen/child.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/chosen.rs", 3, "src/chosen/child.rs#f", "src/child.rs#f"],
+    ["self:: from a root a single-quoted Cargo path names", {
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n[[bin]]\nname=\"chosen\"\npath='src/chosen.rs'\n",
+      "src/chosen.rs": "mod child;\nfn run() -> &'static str {\n    self::child::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/child.rs": "pub fn f() -> &'static str { \"CHILD\" }\n",
+      "src/chosen/child.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/chosen.rs", 3, "src/chosen/child.rs#f", "src/child.rs#f"],
+    ["self:: from a standalone file that is no known root", {
+      "entry.rs": "mod child;\nfn run() -> &'static str {\n    self::child::f()\n}\nfn main() { let _ = run(); }\n",
+      "child.rs": "pub fn f() -> &'static str { \"CHILD\" }\n",
+      "entry/child.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "entry.rs", 3, "entry/child.rs#f", "child.rs#f"],
+    ["a cfg-gated module next to a macro that may define the name", {
+      "src/main.rs": "#[cfg(any())] mod alias;\nmacro_rules! define { () => { pub mod alias { pub fn f() -> &'static str { \"MACRO\" } } } }\ndefine!();\nfn run() -> &'static str {\n    crate::alias::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/alias.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/main.rs", 5, "src/alias.rs#f", undefined],
+  ] as const)("never resolves %s to the folder-layout guess", async (_label, files, file, line, wrong, right) => {
+    const edge = await target({ ...files }, file, line, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe(wrong);
+    if (edge?.toSymbol !== undefined) expect(edge.toSymbol).toBe(right);
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",

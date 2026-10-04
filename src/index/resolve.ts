@@ -173,7 +173,7 @@ export interface WorkspaceContext {
   /** Rust crate roots a Cargo.toml target section names with `path = ".."`. */
   readonly rustTargetRoots: ReadonlySet<string>;
   /** Rust module file to the files whose top-level `mod name;` declares it. */
-  readonly rustDeclaredBy: ReadonlyMap<string, readonly string[]>;
+  readonly rustDeclaredBy: ReadonlyMap<string, readonly RustModuleLink[]>;
   /** Rust files a declaration may name that the scan could not follow: no root, and no module the walk enters. */
   readonly rustUncertainOwner: ReadonlySet<string>;
   /** Some `#[path]` value or delimiter could not be read, so any file may be a module: no crate root is proven. */
@@ -238,18 +238,18 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
     if (path.posix.basename(card.path) !== "Cargo.toml") return [];
     const dir = path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path);
     return [...card.text.matchAll(/^\s*\[\[?(?:lib|bin|test|example|bench)\]\]?\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)]
-      .flatMap((section) => [...(section[1] ?? "").matchAll(/^\s*path\s*=\s*"([^"]+)"/gm)].map((entry) => path.posix.normalize(path.posix.join(dir, entry[1]!))));
+      .flatMap((section) => [...(section[1] ?? "").matchAll(/^\s*path\s*=\s*(?:"([^"]+)"|'([^']+)')/gm)].map((entry) => path.posix.normalize(path.posix.join(dir, (entry[1] ?? entry[2])!))));
   }));
   const rustModuleFiles = new Map<string, Map<string, "file" | "path" | "nested">>();
   const linkRust = (beside: (file: string) => boolean) => {
-    const declaredBy = new Map<string, string[]>();
+    const declaredBy = new Map<string, RustModuleLink[]>();
     const uncertain = new Set<string>();
     let unreadable = false;
-    const add = (child: string, declarer: string, certain: boolean) => {
+    const add = (child: string, link: RustModuleLink, certain: boolean) => {
       if (!files.has(child)) return;
       if (!certain) { uncertain.add(child); return; }
       const list = declaredBy.get(child);
-      if (list === undefined) declaredBy.set(child, [declarer]); else if (!list.includes(declarer)) list.push(declarer);
+      if (list === undefined) declaredBy.set(child, [link]); else list.push(link);
     };
     for (const [file, scan] of rustScans) {
       const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
@@ -263,9 +263,9 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
         // directory (from the module directory of the file) inside one.
         const pathTarget = declaration.pathValue === undefined ? undefined : path.posix.normalize(path.posix.join(declaration.inline.length === 0 ? dir : nestedDir, declaration.pathValue));
         if (declaration.other) {
-          for (const candidate of [...conventional, ...(pathTarget === undefined ? [] : [pathTarget, path.posix.normalize(path.posix.join(dir, declaration.pathValue!))])]) add(candidate, file, false);
-        } else if (pathTarget !== undefined) add(pathTarget, file, !declaration.cfgPath);
-        else for (const candidate of conventional) add(candidate, file, true);
+          for (const candidate of [...conventional, ...(pathTarget === undefined ? [] : [pathTarget, path.posix.normalize(path.posix.join(dir, declaration.pathValue!))])]) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, false);
+        } else if (pathTarget !== undefined) add(pathTarget, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, !declaration.cfgPath);
+        else for (const candidate of conventional) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, true);
       }
     }
     return { declaredBy, uncertain, unreadable };
@@ -305,6 +305,14 @@ function rustRootPlace(file: string, targetRoots: ReadonlySet<string>, cargoRoot
   const targetDir = (candidate: string): boolean => ["tests", "examples", "benches"].includes(path.posix.basename(candidate)) || (path.posix.basename(candidate) === "bin" && path.posix.basename(parentOf(candidate)) === "src");
   return targetRoots.has(file) || ((name === "lib.rs" || name === "main.rs") && path.posix.basename(dir) === "src") || (name === "build.rs" && cargoRoots.includes(dir))
     || targetDir(dir) || (name === "main.rs" && dir !== "" && targetDir(parentOf(dir)));
+}
+
+/** One `mod name;` that names a file: the declaring file, the inline modules around it, and whether a `#[path]` set it. */
+interface RustModuleLink {
+  readonly declarer: string;
+  readonly inline: readonly string[];
+  readonly name: string;
+  readonly viaPath: boolean;
 }
 
 interface RustModuleDeclaration {
@@ -396,10 +404,12 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
   return { declarations, unbalanced: unbalanced || stack.length > 0, code };
 }
 
-// Whether blanked Rust code may bind a name other than by `mod name;`: any glob `use` may bring it in, and any
+// Whether blanked Rust code may bind a name other than by `mod name;`: any glob `use` or macro call may bring it in, and any
 // mention of it that is not a path head (`name::`) or a `mod name` declaration may be an item, a `use` or an alias.
 function rustNameBoundOtherwise(code: string, name: string): boolean {
   for (const statement of code.matchAll(/(?<![\p{L}\p{N}_])use\s[^;]*;/gu)) if (statement[0].includes("*")) return true;
+  // A macro call may expand to an item of the name, which no text mention shows.
+  if (/[\p{L}\p{N}_]\s*!\s*[({[]/u.test(code)) return true;
   return new RegExp(`(?<![\\p{L}\\p{N}_])(?<!(?<![\\p{L}\\p{N}_])mod\\s+(?:r#)?)(?:r#)?${name}(?![\\p{L}\\p{N}_])(?!\\s*::)`, "u").test(code);
 }
 
@@ -521,36 +531,57 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   const head = segments[0];
   if (head === undefined) return undefined;
   const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
-  const fromDir = parentOf(fromFile);
   const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
-  const base = path.posix.basename(fromFile);
   // A crate root sits where Cargo looks for one (rustRootPlace) and nothing declares it as a module. A file a
-  // declaration the scan could not follow may name has no known owner: it is neither, and its paths name nothing.
-  // Its child modules live beside it, as a mod.rs file's do.
+  // declaration the scan could not follow may name has no known owner, and its paths name nothing.
   if (context.rustUncertainOwner.has(fromFile)) return undefined;
   const isRoot = (file: string): boolean => !context.rustDeclaredBy.has(file) && !context.rustUncertainOwner.has(file) && !context.rustOwnershipUnreadable
     && rustRootPlace(file, context.rustTargetRoots, context.cargoRoots);
-  // A file whose rootness is unproven while it sits where a root may (an unreadable `#[path]` elsewhere) has no
-  // known module directory: paths that start from it (self::, super::, a child module's name) name nothing.
-  const rootKnown = base === "mod.rs" || isRoot(fromFile) || context.rustDeclaredBy.has(fromFile) || !rustRootPlace(fromFile, context.rustTargetRoots, context.cargoRoots);
-  const ownDir = base === "mod.rs" || isRoot(fromFile) ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
+  // A file's module identity, root first: each file of the chain, its module path from the crate root, and the
+  // directory of its child modules. Only a chain of single `mod name;` declarations up to a root proves it, and a
+  // file a `#[path]` loads keeps its place in the tree but has children the index cannot place (dir undefined).
+  // Folder layout alone proves nothing: `super::` and `self::` walk this tree, never directories.
+  type Place = { file: string; modules: string[]; dir: string | undefined };
+  const identityOf = (file: string): Place[] | undefined => {
+    const links: RustModuleLink[] = [];
+    let current = file;
+    for (let hops = 0; ; hops += 1) {
+      if (hops > 32 || context.rustUncertainOwner.has(current)) return undefined;
+      if (isRoot(current)) break;
+      const declarers = context.rustDeclaredBy.get(current);
+      if (declarers === undefined || declarers.length !== 1) return undefined;
+      links.push(declarers[0]!);
+      current = declarers[0]!.declarer;
+    }
+    const places: Place[] = [{ file: current, modules: [], dir: parentOf(current) }];
+    for (let index = links.length - 1; index >= 0; index -= 1) {
+      const link = links[index]!;
+      const parent = places[places.length - 1]!;
+      const child = index === 0 ? file : links[index - 1]!.declarer;
+      const dir = link.viaPath || parent.dir === undefined ? undefined : path.posix.join(parent.dir, ...link.inline, link.name);
+      if (dir !== undefined && child !== `${dir}.rs` && child !== `${dir}/mod.rs`) return undefined;
+      places.push({ file: child, modules: [...parent.modules, ...link.inline, link.name], dir });
+    }
+    return places;
+  };
   const inlineModule = (file: string, names: readonly string[]): boolean => context.rustInlineModules.has(`${file}#${names.join(".")}`);
   const firstKnown = (files: readonly string[]): string | undefined => files.find((file) => knownFiles.has(file));
   // From a module file, each segment is an inline module the file declares, or a module file the file declares
   // with `mod name;` and the index holds beside its children. A module whose path an attribute sets, and a file
   // child of an inline module, live where the index cannot follow: the path names nothing. A segment that is
   // neither (an alias, an item) is left for the item lookup in the current module, which finds it or nothing.
-  const walk = (file: string, dir: string, rest: readonly string[]): { file: string; inline: string[] } | undefined => {
+  const walk = (file: string, dir: string | undefined, rest: readonly string[], start: readonly string[] = []): { file: string; inline: string[] } | undefined => {
     let current = file;
     let currentDir = dir;
-    let inline: string[] = [];
+    let inline: string[] = [...start];
     for (let index = 0; index < rest.length; index += 1) {
       const segment = rest[index]!;
       if (inlineModule(current, [...inline, segment])) { inline.push(segment); continue; }
       const declaration = context.rustModuleFiles.get(current)?.get(segment);
       const declared = inline.length === 0 ? declaration : undefined;
       if (declared === "path" || (inline.length > 0 && declaration !== undefined)) return undefined;
-      const modulePath = path.posix.join(currentDir, segment);
+      if (declared === "file" && currentDir === undefined) return undefined;
+      const modulePath = path.posix.join(currentDir ?? "", segment);
       const next = declared === "file" ? firstKnown([`${modulePath}.rs`, `${modulePath}/mod.rs`]) : undefined;
       if (next !== undefined && context.rustUncertainOwner.has(next)) return undefined;
       if (next === undefined) return { file: current, inline: [...inline, ...rest.slice(index)] };
@@ -561,30 +592,30 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     return { file: current, inline };
   };
   if (head === "crate") {
-    // The crate root this file belongs to: follow the files that declare it with `mod name;` up to one nothing
-    // declares, which must be a root (lib.rs, main.rs, build.rs, a file directly under tests/, examples/, benches/
-    // or src/bin/, or a Cargo target path). Two declaring files, a chain that loops, or an undeclared file that is
-    // no root leave the crate unknown, and the path names nothing.
-    let root: string | undefined = fromFile;
-    for (let hops = 0; root !== undefined && context.rustDeclaredBy.has(root); hops += 1) {
-      const declarers: readonly string[] = context.rustDeclaredBy.get(root)!;
-      root = declarers.length === 1 && hops < 32 ? declarers[0] : undefined;
-    }
-    if (root === undefined || !isRoot(root)) return undefined;
-    return walk(root, parentOf(root), segments.slice(1));
+    const places = identityOf(fromFile);
+    return places === undefined ? undefined : walk(places[0]!.file, places[0]!.dir, segments.slice(1));
   }
   if (head === "self" || head === "super") {
-    if (!rootKnown) return undefined;
-    let dir = ownDir;
+    // The module `super::` names is the file's module path less one name per `super`; it lives in the deepest file
+    // of the chain whose path starts it, inside that file's inline modules for the rest.
+    const places = identityOf(fromFile);
+    if (places === undefined) return undefined;
     let index = 0;
-    while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = parentOf(dir); index += 1; }
-    const file = dir === ownDir ? fromFile : firstKnown([path.posix.join(dir, "mod.rs"), ...(dir === "" ? [] : [`${dir}.rs`]), path.posix.join(dir, "lib.rs"), path.posix.join(dir, "main.rs")]);
-    return file === undefined ? undefined : walk(file, dir, segments.slice(index));
+    let up = 0;
+    while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") up += 1; index += 1; }
+    const own = places[places.length - 1]!.modules;
+    if (up > own.length) return undefined;
+    const target = own.slice(0, own.length - up);
+    const holder = [...places].reverse().find((place) => place.modules.length <= target.length && place.modules.every((name, at) => name === target[at]));
+    if (holder === undefined) return undefined;
+    const inline = target.slice(holder.modules.length);
+    return walk(holder.file, inline.length === 0 ? holder.dir : undefined, segments.slice(index), inline);
   }
   const headDeclaration = context.rustModuleFiles.get(fromFile)?.get(head);
   if (context.cargoPackages.get(head) === undefined && (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path")) {
     // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
-    return rootKnown ? walk(fromFile, ownDir, segments) : undefined;
+    const places = identityOf(fromFile);
+    return places === undefined ? undefined : walk(fromFile, places[places.length - 1]!.dir, segments);
   }
   // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
   const crate = context.cargoPackages.get(head);
