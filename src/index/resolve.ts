@@ -385,7 +385,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
     const pathValue = value === undefined ? undefined : strings[Number(value)];
     declarations.push({
       name,
-      inline: stack.every((entry) => entry !== null) ? stack as string[] : [],
+      inline: stack.every((entry) => entry !== null) ? [...stack] as string[] : [],
       other: stack.some((entry) => entry === null),
       cfg: /(?:^|[^\p{L}\p{N}_])cfg(?:_attr)?\s*\(/u.test(attributes),
       hasPath: /(?:^|[\s(,[])path\s*=/.test(attributes),
@@ -396,14 +396,11 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
   return { declarations, unbalanced: unbalanced || stack.length > 0, code };
 }
 
-// Whether blanked Rust code binds a name other than by `mod name;`: as the last name or the alias of a `use` or
-// `extern crate`, or as a type, trait, inline module or macro-free item of the type namespace.
+// Whether blanked Rust code may bind a name other than by `mod name;`: any glob `use` may bring it in, and any
+// mention of it that is not a path head (`name::`) or a `mod name` declaration may be an item, a `use` or an alias.
 function rustNameBoundOtherwise(code: string, name: string): boolean {
-  const id = `(?:r#)?${name}(?![\\p{L}\\p{N}_])`;
-  for (const statement of code.matchAll(/(?<![\p{L}\p{N}_])(?:use|extern\s+crate)\s[^;]*;/gu)) {
-    if (new RegExp(`(?:\\bas\\s+|::\\s*|[{,]\\s*|(?:use|crate)\\s+)${id}\\s*(?=[,};])`, "u").test(statement[0])) return true;
-  }
-  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:struct|enum|union|trait|type|mod)\\s+${id}\\s*[^;\\s]`, "u").test(code);
+  for (const statement of code.matchAll(/(?<![\p{L}\p{N}_])use\s[^;]*;/gu)) if (statement[0].includes("*")) return true;
+  return new RegExp(`(?<![\\p{L}\\p{N}_])(?<!(?<![\\p{L}\\p{N}_])mod\\s+(?:r#)?)(?:r#)?${name}(?![\\p{L}\\p{N}_])(?!\\s*::)`, "u").test(code);
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -533,6 +530,9 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   if (context.rustUncertainOwner.has(fromFile)) return undefined;
   const isRoot = (file: string): boolean => !context.rustDeclaredBy.has(file) && !context.rustUncertainOwner.has(file) && !context.rustOwnershipUnreadable
     && rustRootPlace(file, context.rustTargetRoots, context.cargoRoots);
+  // A file whose rootness is unproven while it sits where a root may (an unreadable `#[path]` elsewhere) has no
+  // known module directory: paths that start from it (self::, super::, a child module's name) name nothing.
+  const rootKnown = base === "mod.rs" || isRoot(fromFile) || context.rustDeclaredBy.has(fromFile) || !rustRootPlace(fromFile, context.rustTargetRoots, context.cargoRoots);
   const ownDir = base === "mod.rs" || isRoot(fromFile) ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
   const inlineModule = (file: string, names: readonly string[]): boolean => context.rustInlineModules.has(`${file}#${names.join(".")}`);
   const firstKnown = (files: readonly string[]): string | undefined => files.find((file) => knownFiles.has(file));
@@ -574,6 +574,7 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     return walk(root, parentOf(root), segments.slice(1));
   }
   if (head === "self" || head === "super") {
+    if (!rootKnown) return undefined;
     let dir = ownDir;
     let index = 0;
     while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = parentOf(dir); index += 1; }
@@ -583,7 +584,7 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   const headDeclaration = context.rustModuleFiles.get(fromFile)?.get(head);
   if (context.cargoPackages.get(head) === undefined && (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path")) {
     // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
-    return walk(fromFile, ownDir, segments);
+    return rootKnown ? walk(fromFile, ownDir, segments) : undefined;
   }
   // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
   const crate = context.cargoPackages.get(head);

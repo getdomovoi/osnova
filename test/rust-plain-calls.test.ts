@@ -665,6 +665,37 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("src/alias.rs#f");
   });
 
+  // Round 6.
+  it("reads crate:: in a file child of an inline module named like a binary directory as its parent crate's", async () => {
+    const edge = await target({
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n",
+      "src/main.rs": "fn f() -> &'static str { \"ROOT\" }\nmod bin { pub mod tool; }\nfn run() -> &'static str { bin::tool::run() }\nfn main() { let _ = run(); }\n",
+      "src/bin/tool.rs": "fn f() -> &'static str { \"LOCAL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
+    if (edge?.toSymbol !== undefined) expect(edge.toSymbol).toBe("src/main.rs#f");
+  });
+
+  it("never reads self:: from a file whose rootness an unreadable path leaves unproven", async () => {
+    const edge = await target({
+      "src/main.rs": "#[path=\"chosen\\x2ers\"] mod extra;\nmod child;\nfn run() -> &'static str {\n    self::child::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/chosen.rs": "pub fn unused() {}\n",
+      "src/child.rs": "pub fn f() -> &'static str { \"CHILD\" }\n",
+      "src/main/child.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/main.rs", 4, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/main/child.rs#f");
+  });
+
+  it.each([
+    ["a unit struct of the name", "#[cfg(any())] mod alias;\n#[allow(non_camel_case_types)] struct alias;\nimpl alias { fn f() -> &'static str { \"METHOD\" } }\n", {}],
+    ["a glob that may bring the name in", "#[cfg(any())] mod alias;\nmod actual;\nuse actual::*;\n", { "src/actual.rs": "pub mod alias { pub fn f() -> &'static str { \"ACTUAL\" } }\n" }],
+  ] as const)("never follows a cfg-gated module next to %s", async (_label, prefix, extra) => {
+    const edge = await target({ "src/main.rs": prefix + "fn run() -> &'static str {\n    crate::alias::f()\n}\nfn main() { let _ = run(); }\n", "src/alias.rs": "pub fn f() -> &'static str { \"STRAY\" }\n", ...extra }, "src/main.rs", prefix.split("\n").length + 1, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/alias.rs#f");
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",
