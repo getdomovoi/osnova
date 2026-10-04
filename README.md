@@ -93,7 +93,7 @@ Resolved is not the same as right, so the call edges are also scored against eac
 | click | pyright 1.1.414 | 2883 | 0 | 0% | 90.4% |
 | zod | TypeScript 5.9.3 | 24278 | 0 | 0% | 87.9% |
 | cobra | go/types, Go 1.27.1 | 2117 | 0 | 0% | 93.6% |
-| ripgrep | rust-analyzer 1.98.1 | 6053 | 0 | 0% | 86.1% |
+| ripgrep | rust-analyzer 1.98.1 | 6081 | 0 | 0% | 86.5% |
 | humanizer | Roslyn 5.9.0 | 8452 | 2 | 0.02% | 71.4% |
 | gson | javac 27 | 9710 | 1 | 0.01% | 86.2% |
 
