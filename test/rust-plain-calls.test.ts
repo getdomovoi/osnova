@@ -833,6 +833,25 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
   });
 
+  // Round 12: a path attribute in any spelling the scanner might miss.
+  it.each([
+    ["a space after the hash", "# [path = \"bin\"]\nmod outer { pub mod tool; }\n"],
+    ["a comment after the hash", "#/* c */[path = \"bin\"]\nmod outer { pub mod tool; }\n"],
+    ["many spaces before a deep attribute", "#        [cfg_attr(all(), doc = stringify!([[[x]]]), path = \"bin\")]\nmod outer { pub mod tool; }\n"],
+    ["many spaces in a deep inner attribute", "mod outer {\n    #!        [cfg_attr(all(), doc = stringify!([[[x]]]), path = \"bin\")]\n    pub mod tool;\n}\n"],
+    ["a raw identifier", "#[r#path = \"bin\"]\nmod outer { pub mod tool; }\n"],
+    ["NEXT LINE before the equals sign", "#[path\u0085= \"bin\"]\nmod outer { pub mod tool; }\n"],
+    ["a direction mark before the equals sign", "#[path\u200e= \"bin\"]\nmod outer { pub mod tool; }\n"],
+  ])("never takes a child moved by a path attribute with %s for a crate root", async (_label, prefix) => {
+    const edge = await target({
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n",
+      "src/main.rs": prefix + "pub fn f() -> &'static str { \"ROOT\" }\nfn main() {}\n",
+      "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",

@@ -329,6 +329,8 @@ interface RustModuleDeclaration {
   readonly hasPath: boolean;
   readonly cfgPath: boolean;
   readonly pathValue: string | undefined;
+  /** The `path` identifiers in this declaration's attributes. */
+  readonly pathCount: number;
   /** The `#[path]` values of enclosing inline modules, by frame; null when one cannot be read. */
   readonly framePaths: readonly { readonly at: number; readonly value: string | null }[];
 }
@@ -378,33 +380,38 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       const literal = /^'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^\\'\n])'/u.exec(text.slice(index, index + 16));
       if (literal !== null) { code += " "; index += literal[0].length; continue; }
     }
-    code += char;
+    // Rust also treats NEXT LINE, the two direction marks and the line and paragraph separators as whitespace.
+    code += "\u0085\u200e\u200f\u2028\u2029".includes(char) ? " " : char;
     index += 1;
   }
   const declarations: RustModuleDeclaration[] = [];
   let unbalanced = false;
   // An inline module's frame keeps its name, and whether a `#[path]` or `#[cfg]` makes its children's place unknown.
   const stack: ({ name: string; opaque: boolean; path: string | null | undefined } | null)[] = [];
-  // An attribute's token tree may nest brackets; three levels are read. A deeper one may hide a gate, so then every
-  // declaration of the file counts as cfg-gated. An inner `#![path = ..]` moves an inline module's children where the
-  // index does not compute, so it leaves every crate root unproven, as an unbalanced file does.
+  // Every attribute, read whole: `#`, optional `!`, any spacing, then a bracketed token tree of any depth. The
+  // declaration pattern below reads three levels of nesting; a deeper attribute may hide a gate, so then every
+  // declaration of the file counts as cfg-gated. Each `path` identifier inside an attribute is counted: one the
+  // resolver does not handle (anywhere but a plain `#[path = ".."]` on a top-level `mod name;`) may move a module's
+  // children where the index does not compute, so it leaves every crate root unproven.
+  const pathIdentifier = /(?<![\p{L}\p{N}\p{M}_])(?:r#)?path(?![\p{L}\p{N}\p{M}_])/gu;
   let deepest = 0;
+  let pathsInAttributes = 0;
   for (let at = code.indexOf("#"); at >= 0; at = code.indexOf("#", at + 1)) {
-    const open = /^#!?\s*\[/.exec(code.slice(at, at + 8));
-    if (open === null) continue;
+    let open = at + 1;
+    while (/\s/.test(code[open] ?? "")) open += 1;
+    if (code[open] === "!") { open += 1; while (/\s/.test(code[open] ?? "")) open += 1; }
+    if (code[open] !== "[") continue;
     let depth = 0;
-    for (let index = at + open[0].length - 1; index < code.length; index += 1) {
-      if (code[index] === "[") deepest = Math.max(deepest, depth += 1);
-      else if (code[index] === "]" && (depth -= 1) === 0) break;
+    let close = open;
+    for (; close < code.length; close += 1) {
+      if (code[close] === "[") deepest = Math.max(deepest, depth += 1);
+      else if (code[close] === "]" && (depth -= 1) === 0) break;
     }
+    pathsInAttributes += code.slice(open, close + 1).match(pathIdentifier)?.length ?? 0;
   }
   const deepAttributes = deepest > 3;
-  // A deep attribute may also hide a `path` value that moves a module's children; the name itself is always written
-  // out, so a file with both leaves every crate root unproven.
-  if (deepAttributes && /(?<![\p{L}\p{N}\p{M}_])path\s*=/u.test(code)) unbalanced = true;
-  if (/#!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*?(?<![\p{L}\p{N}\p{M}_])path\s*=/u.test(code)) unbalanced = true;
-  const innerAttributes = /^\s*((?:#!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)/;
-  const pattern = /((?:#\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}\p{M}_#])mod\s+(?:r#)?([\p{L}\p{N}\p{M}_]+)\s*([;{])|([{}()[\]])/gu;
+  const innerAttributes = /^\s*((?:#\s*!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)/;
+  const pattern = /((?:#\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}\p{M}_#])mod\s+(?:r#)?([\p{L}\p{N}\p{M}_]+)\s*([;{])|([{}()[\]])/gu;
   for (const match of code.matchAll(pattern)) {
     const delimiter = match[4];
     if (delimiter !== undefined) {
@@ -414,16 +421,16 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
     }
     const name = match[2]!;
     if (match[3] === "{") {
-      const frameValue = /(?:^|[\s(,[])path\s*=\s*"S(\d+)"/.exec(match[1] ?? "")?.[1];
+      const frameValue = /(?:^|[\s(,[])(?:r#)?path\s*=\s*"S(\d+)"/.exec(match[1] ?? "")?.[1];
       const frameText = frameValue === undefined ? undefined : strings[Number(frameValue)];
-      const framePath = /(?:^|[\s(,[])path\s*=/.test(match[1] ?? "") ? (frameText === undefined || frameText.includes("\u0000") ? null : frameText) : undefined;
+      const framePath = /(?:^|[\s(,[])(?:r#)?path\s*=/.test(match[1] ?? "") ? (frameText === undefined || frameText.includes("\u0000") ? null : frameText) : undefined;
       // Inner attributes at the start of the body apply to the module too.
       const inner = innerAttributes.exec(code.slice((match.index ?? 0) + match[0].length))?.[1] ?? "";
-      stack.push({ name, path: framePath, opaque: deepAttributes || /(?:^|[\s(,[])path\s*=|(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(`${match[1] ?? ""} ${inner}`) });
+      stack.push({ name, path: framePath, opaque: deepAttributes || /(?:^|[\s(,[])(?:r#)?path\s*=|(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(`${match[1] ?? ""} ${inner}`) });
       continue;
     }
     const attributes = match[1] ?? "";
-    const value = /(?:^|[\s(,[])path\s*=\s*"S(\d+)"/.exec(attributes)?.[1];
+    const value = /(?:^|[\s(,[])(?:r#)?path\s*=\s*"S(\d+)"/.exec(attributes)?.[1];
     const pathValue = value === undefined ? undefined : strings[Number(value)];
     declarations.push({
       name,
@@ -431,11 +438,15 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       other: stack.some((entry) => entry === null || entry.opaque),
       framePaths: stack.flatMap((entry, at) => entry !== null && entry.path !== undefined ? [{ at, value: entry.path }] : []),
       cfg: deepAttributes || /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(attributes),
-      hasPath: /(?:^|[\s(,[])path\s*=/.test(attributes),
-      cfgPath: /(?:^|[^\p{L}\p{N}\p{M}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])path\s*=/.test(attributes),
+      hasPath: /(?:^|[\s(,[])(?:r#)?path\s*=/.test(attributes),
+      pathCount: attributes.match(pathIdentifier)?.length ?? 0,
+      cfgPath: /(?:^|[^\p{L}\p{N}\p{M}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])(?:r#)?path\s*=/.test(attributes),
       pathValue: pathValue === undefined || pathValue.includes("\u0000") ? undefined : pathValue,
     });
   }
+  const handledPaths = declarations.filter((declaration) => !declaration.other && declaration.inline.length === 0 && declaration.pathValue !== undefined)
+    .reduce((count, declaration) => count + declaration.pathCount, 0);
+  if (pathsInAttributes > handledPaths) unbalanced = true;
   return { declarations, unbalanced: unbalanced || stack.length > 0, code };
 }
 
