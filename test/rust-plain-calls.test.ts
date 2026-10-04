@@ -916,6 +916,48 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
   });
 
+  // Round 16: a target's own child modules, an absolute target path, and a parent package behind a nested manifest.
+  it.each([
+    ["custom/tool.rs", "custom/child.rs", "crate::f()", "[[bin]]\nname=\"tool\"\npath=\"custom/tool.rs\"\n"],
+    ["custom/tool.rs", "custom/child.rs", "super::f()", "[[bin]]\nname=\"tool\"\npath=\"custom/tool.rs\"\n"],
+    ["src/bin/tool.rs", "src/bin/child.rs", "crate::f()", "[[bin]]\nname=\"tool\"\npath=\"src/bin/tool.rs\"\n"],
+    ["tests/tool.rs", "tests/child.rs", "crate::f()", "[[test]]\nname=\"tool\"\npath=\"tests/tool.rs\"\n"],
+  ])("never reads a path in a child of the Cargo target %s through another declarer of the child", async (toolFile, childFile, call, toolTable) => {
+    const up = (file: string) => `../${file}`;
+    const edge = await target({
+      "Cargo.toml": app + "autobins=false\nautotests=false\n" + toolTable + ownerBin,
+      [toolFile]: "mod child;\npub fn f() -> &'static str { \"TOOL\" }\nfn run() -> &'static str { child::run() }\nfn main() { let _ = run(); }\n",
+      [childFile]: `pub fn run() -> &'static str {\n    ${call}\n}\n`,
+      "custom/owner.rs": `#[cfg(any())]\n#[path="${up(toolFile)}"]mod tool;\n#[cfg(any())]\n#[path="${up(childFile)}"]mod other;\npub fn f() -> &'static str { "OWNER" }\nfn main() {}\n`,
+    }, childFile, 2, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
+  });
+
+  it("never reads crate:: in a target an absolute manifest path names", async () => {
+    const edge = await target({
+      "Cargo.toml": app + "autobins=false\n[[bin]]\nname=\"tool\"\npath=\"/work/app/custom/tool.rs\"\n" + ownerBin,
+      "custom/owner.rs": owned("custom/tool.rs").replace("../custom/tool.rs", "tool.rs"),
+      "custom/tool.rs": tool,
+    }, "custom/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
+  });
+
+  it.each(["src/bin/tool.rs", "src/bin/tool/main.rs", "tests/tool.rs", "src/main.rs", "src/lib.rs"])("never reads crate:: in the parent package's target %s behind a nested manifest", async (file) => {
+    const edge = await target({
+      "Cargo.toml": app + ownerBin,
+      "src/bin/Cargo.toml": "[package]\nname=\"nested\"\nversion=\"0.1.0\"\nedition=\"2024\"\n",
+      "src/bin/src/lib.rs": "pub fn unrelated() {}\n",
+      "tests/Cargo.toml": "[package]\nname=\"nested_tests\"\nversion=\"0.1.0\"\nedition=\"2024\"\n",
+      "src/Cargo.toml": "[package]\nname=\"nested_src\"\nversion=\"0.1.0\"\nedition=\"2024\"\n",
+      "custom/owner.rs": owned(file),
+      [file]: tool,
+    }, file, 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
+  });
+
   it("still reads crate:: in a test module that autotests = false keeps out of the targets", async () => {
     const edge = await target({
       "Cargo.toml": app + "autotests = false # one integration crate\n[[test]]\nname = \"integration\"\npath = \"tests/tests.rs\"\n[package.metadata.deb]\nextended-description = \"\"\"\n[[test]]\npath = \"tests/util.rs\"\n\"\"\"\n",

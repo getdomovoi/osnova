@@ -242,21 +242,25 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   const rustTargetRoots = new Set([...cargoTargets].flatMap(([dir, targets]) => [...targets.paths, ...(typeof targets.build === "string" ? [targets.build] : [])]
     .map((target) => path.posix.normalize(path.posix.join(dir, target)))));
   const rustModuleFiles = new Map<string, Map<string, "file" | "path" | "nested">>();
-  const linkRust = (beside: (file: string) => boolean) => {
+  const linkRust = (placements: (file: string) => readonly ("beside" | "named")[]) => {
     const declaredBy = new Map<string, RustModuleLink[]>();
     const uncertain = new Set<string>();
+    const seen = new Set<string>();
     let unreadable = false;
     const add = (child: string, link: RustModuleLink, certain: boolean) => {
       if (!files.has(child)) return;
       if (!certain) { uncertain.add(child); return; }
+      const key = [child, link.declarer, link.name, link.viaPath, ...link.inline].join("\0");
+      if (seen.has(key)) return;
+      seen.add(key);
       const list = declaredBy.get(child);
       if (list === undefined) declaredBy.set(child, [link]); else list.push(link);
     };
     for (const [file, scan] of rustScans) {
       const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
-      const childDir = beside(file) ? dir : path.posix.join(dir, path.posix.basename(file).replace(/\.rs$/, ""));
       if (scan.unbalanced) unreadable = true;
-      for (const declaration of scan.declarations) {
+      for (const placement of placements(file)) for (const declaration of scan.declarations) {
+        const childDir = placement === "beside" ? dir : path.posix.join(dir, path.posix.basename(file).replace(/\.rs$/, ""));
         const nestedDir = path.posix.join(childDir, ...declaration.inline);
         const conventional = [path.posix.join(nestedDir, `${declaration.name}.rs`), path.posix.join(nestedDir, declaration.name, "mod.rs")];
         if (declaration.hasPath && declaration.pathValue === undefined) { unreadable = true; continue; }
@@ -288,8 +292,14 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   // A file's child modules sit beside it when it is mod.rs or a crate root, else in the directory named after it.
   // Whether it is a root depends on what declares it, so the links are built once from where roots may sit and
   // again from the roots that first pass proves.
-  const firstPass = linkRust((file) => path.posix.basename(file) === "mod.rs" || rustRootPlace(file, rustTargetRoots, cargoRoots));
-  const ownership = linkRust((file) => path.posix.basename(file) === "mod.rs" || (rustRootPlace(file, rustTargetRoots, cargoRoots) && !firstPass.declaredBy.has(file) && !firstPass.uncertain.has(file)));
+  // A declared file Cargo may also compile as a target has its children in both places, and each links to it.
+  const firstPass = linkRust((file) => path.posix.basename(file) === "mod.rs" || rustRootPlace(file, rustTargetRoots, cargoRoots) ? ["beside"] : ["named"]);
+  const ownership = linkRust((file) => {
+    if (path.posix.basename(file) === "mod.rs") return ["beside"];
+    if (!rustRootPlace(file, rustTargetRoots, cargoRoots)) return ["named"];
+    if (!firstPass.declaredBy.has(file) && !firstPass.uncertain.has(file)) return ["beside"];
+    return rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets) ? ["beside", "named"] : ["named"];
+  });
   // A Cargo target is compiled as its own crate root even when another file declares it as a module (whether or not
   // that declaration's cfg is on): it has two crate contexts, so no path from it (or a module below it) is proven.
   // The declaring file may still walk into it as its module.
@@ -437,12 +447,13 @@ function readCargoTargets(text: string): CargoTargets {
     const whole = string !== undefined && blank(string.end, end);
     if (targetKind !== undefined && key.segments.length === 1 && key.segments[0] === "path") {
       targetHasPath = true;
-      if (whole) paths.push(string.value); else unread = true;
+      // An absolute path names a file by a root the index does not compare against its relative paths.
+      if (whole && !rustAbsolutePath(string.value)) paths.push(string.value); else unread = true;
     } else if (kinds.has(full[0]!) && (full.length === 1 || full[full.length - 1] === "path")) unread = true;
     else if (full.length === 2 && full[0] === "package" && autoKeys.has(full[1]!)) { if (raw === "false") autoOff.add(autoKeys.get(full[1]!)!); }
     else if (full.length === 2 && full[0] === "package" && full[1] === "build") {
       if (raw === "false") build = false;
-      else if (whole) build = string.value;
+      else if (whole && !rustAbsolutePath(string.value)) build = string.value;
       else if (raw !== "true") unread = true;
     }
     index = lineEnd(end);
@@ -451,23 +462,30 @@ function readCargoTargets(text: string): CargoTargets {
   return { paths, pathless, autoOff, build, unread };
 }
 
+function rustAbsolutePath(value: string): boolean {
+  return value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/.test(value);
+}
+
 // Whether Cargo may compile a file as a target's crate root. Inside a package, only an explicit target path, the build
 // script, and the files of each kind's default layout whose discovery is on (or whose kind has a table without a
 // path) are targets; a file outside every manifest keeps whatever rustRootPlace allows.
 function rustMayBeTarget(file: string, targetRoots: ReadonlySet<string>, cargoRoots: readonly string[], manifests: ReadonlyMap<string, CargoTargets>): boolean {
   if (targetRoots.has(file)) return true;
   if (!rustRootPlace(file, targetRoots, cargoRoots)) return false;
-  const owner = [...manifests.keys()].filter((dir) => dir === "" || file.startsWith(`${dir}/`)).sort((a, b) => b.length - a.length)[0];
-  if (owner === undefined) return true;
-  const targets = manifests.get(owner)!;
-  const relative = owner === "" ? file : file.slice(owner.length + 1);
-  if (relative === "build.rs") return targets.build === undefined;
-  const kind: CargoTargetKind | undefined = relative === "src/lib.rs" ? "lib"
-    : relative === "src/main.rs" || /^src\/bin\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bin"
-    : /^tests\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "test"
-    : /^examples\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "example"
-    : /^benches\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bench" : undefined;
-  return kind !== undefined && (!targets.autoOff.has(kind) || targets.pathless.has(kind));
+  // A nested package's manifest does not stop the packages above it from discovering their own layout.
+  const owners = [...manifests.keys()].filter((dir) => dir === "" || file.startsWith(`${dir}/`));
+  if (owners.length === 0) return true;
+  return owners.some((owner) => {
+    const targets = manifests.get(owner)!;
+    const relative = owner === "" ? file : file.slice(owner.length + 1);
+    if (relative === "build.rs") return targets.build === undefined;
+    const kind: CargoTargetKind | undefined = relative === "src/lib.rs" ? "lib"
+      : relative === "src/main.rs" || /^src\/bin\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bin"
+      : /^tests\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "test"
+      : /^examples\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "example"
+      : /^benches\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bench" : undefined;
+    return kind !== undefined && (!targets.autoOff.has(kind) || targets.pathless.has(kind));
+  });
 }
 
 // Where a Rust crate root may sit: a Cargo target path, lib.rs or main.rs in a src directory, build.rs beside a
