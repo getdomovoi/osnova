@@ -178,6 +178,8 @@ export interface WorkspaceContext {
   readonly rustUncertainOwner: ReadonlySet<string>;
   /** Some `#[path]` value or delimiter could not be read, so any file may be a module: no crate root is proven. */
   readonly rustOwnershipUnreadable: boolean;
+  /** Per Rust file, its top-level modules behind a `#[cfg]`: one may be absent, leaving a package of the name to bind. */
+  readonly rustCfgModules: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -264,16 +266,9 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
         // directory (from the module directory of the file) inside one.
         const pathTarget = declaration.pathValue === undefined ? undefined : path.posix.normalize(path.posix.join(declaration.inline.length === 0 ? dir : nestedDir, declaration.pathValue));
         if (declaration.other) {
-          // An enclosing inline module's `#[path]` moves its children: they may sit under that path, from the file's
-          // directory or its module directory, followed by the inline modules inside it.
-          for (const frame of declaration.framePaths) {
-            if (frame.value === null) { unreadable = true; continue; }
-            for (const base of [dir, childDir]) {
-              const moved = path.posix.join(base, frame.value, ...declaration.inline.slice(frame.at + 1));
-              add(path.posix.normalize(path.posix.join(moved, `${declaration.name}.rs`)), { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, false);
-              add(path.posix.normalize(path.posix.join(moved, declaration.name, "mod.rs")), { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, false);
-            }
-          }
+          // An enclosing inline module's `#[path]` moves its children to a place the index does not compute (paths
+          // compose through every enclosing module): any file may be that child, so no crate root is proven.
+          if (declaration.framePaths.length > 0) { unreadable = true; continue; }
           for (const candidate of [...conventional, ...(pathTarget === undefined ? [] : [pathTarget, path.posix.normalize(path.posix.join(dir, declaration.pathValue!))])]) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, false);
         } else if (pathTarget !== undefined) add(pathTarget, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, !declaration.cfgPath);
         else for (const candidate of conventional) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, true);
@@ -304,6 +299,7 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
     rustDeclaredBy,
     rustUncertainOwner: ownership.uncertain,
     rustOwnershipUnreadable: ownership.unreadable,
+    rustCfgModules: new Map([...rustScans].map(([file, scan]) => [file, scan.cfgModules])),
     rustTargetRoots };
 }
 
@@ -343,7 +339,7 @@ interface RustModuleDeclaration {
 // The `mod name;` declarations of Rust source. Comments (block comments nest), strings, raw strings and char
 // literals are blanked first; delimiter depth covers braces, parentheses and brackets, so a macro body of any
 // delimiter is never the top level. `unbalanced` when the delimiters do not pair up, and nothing read is trusted.
-function scanRustModules(text: string): { declarations: RustModuleDeclaration[]; unbalanced: boolean; code: string } {
+function scanRustModules(text: string): { declarations: RustModuleDeclaration[]; unbalanced: boolean; code: string; cfgModules: Set<string> } {
   const strings: string[] = [];
   let code = "";
   for (let index = 0; index < text.length;) {
@@ -389,6 +385,8 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
     index += 1;
   }
   const declarations: RustModuleDeclaration[] = [];
+  /** Top-level modules (inline or file) behind a `#[cfg]` or `#[cfg_attr]`: they may be absent from a build. */
+  const cfgModules = new Set<string>();
   // An inline module's frame keeps its name, and whether a `#[path]` or `#[cfg]` makes its children's place unknown.
   const stack: ({ name: string; opaque: boolean; path: string | null | undefined } | null)[] = [];
   let unbalanced = false;
@@ -401,6 +399,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       continue;
     }
     const name = match[2]!;
+    if (stack.length === 0 && /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(match[1] ?? "")) cfgModules.add(name);
     if (match[3] === "{") {
       const frameValue = /(?:^|[\s(,[])path\s*=\s*"S(\d+)"/.exec(match[1] ?? "")?.[1];
       const frameText = frameValue === undefined ? undefined : strings[Number(frameValue)];
@@ -422,7 +421,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       pathValue: pathValue === undefined || pathValue.includes("\u0000") ? undefined : pathValue,
     });
   }
-  return { declarations, unbalanced: unbalanced || stack.length > 0, code };
+  return { declarations, unbalanced: unbalanced || stack.length > 0, code, cfgModules };
 }
 
 // Whether blanked Rust code may bind a name other than by `mod name;`: any glob `use` or macro call may bring it in, and any
@@ -633,6 +632,9 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     return walk(holder.file, inline.length === 0 ? holder.dir : undefined, segments.slice(index), inline);
   }
   const headDeclaration = context.rustModuleFiles.get(fromFile)?.get(head);
+  // A cfg-gated module of a workspace package's name may be absent, and the package then binds the name: neither is
+  // proven, so the path names nothing.
+  if (context.cargoPackages.has(head) && context.rustCfgModules.get(fromFile)?.has(head) === true) return undefined;
   if (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path" || headDeclaration === "nested") {
     // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
     const places = identityOf(fromFile);

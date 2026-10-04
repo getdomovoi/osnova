@@ -769,6 +769,31 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe(wrong);
   });
 
+  // Round 9: regressions against the base branch.
+  it.each([
+    ["an inline module", { "src/main.rs": "#[cfg(any())] mod other { pub fn f() -> &'static str { \"DISABLED\" } }\nfn run() -> &'static str {\n    other::f()\n}\nfn main() {}\n" }, "src/main.rs#other.f"],
+    ["a module file", { "src/main.rs": "#[cfg(any())] mod other;\nfn run() -> &'static str {\n    other::f()\n}\nfn main() {}\n", "src/other.rs": "pub fn f() -> &'static str { \"DISABLED\" }\n" }, "src/other.rs#f"],
+  ] as const)("never names a cfg-disabled %s over the workspace package of its name", async (_label, files, wrong) => {
+    const edge = await target({ "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\n", "other/Cargo.toml": "[package]\nname=\"other\"\nversion=\"0.1.0\"\nedition=\"2024\"\n", "other/src/lib.rs": "pub fn f() -> &'static str { \"LIB\" }\n", ...files }, "src/main.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe(wrong);
+  });
+
+  it.each([
+    ["a moved inline module inside a plain one", "mod outer { #[path=\"../bin\"] pub mod moved { pub mod tool; } }\n"],
+    ["two moved inline modules", "#[path=\"custom\"] mod outer { #[path=\"../bin\"] pub mod moved { pub mod tool; } }\n"],
+    ["a path-attribute child of a moved inline module", "#[path=\"custom/deep\"] mod outer { #[path=\"../../bin/tool.rs\"] pub mod tool; }\n"],
+  ])("never takes the child of %s for a crate root", async (_label, prefix) => {
+    const edge = await target({
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n",
+      "src/main.rs": prefix + "pub fn f() -> &'static str { \"ROOT\" }\nfn main() {}\n",
+      "src/outer/placeholder.rs": "",
+      "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",
