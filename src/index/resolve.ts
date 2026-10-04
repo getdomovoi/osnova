@@ -213,9 +213,10 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       const packageSection = /^\s*\[package\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
       const name = packageSection === undefined ? undefined : /^\s*name\s*=\s*"([^"]+)"/m.exec(packageSection)?.[1];
       if (name !== undefined) cargoPackages.set(name.replace(/-/g, "_"), dir);
-      const target = /^\s*\[(?:lib|\[bin\])\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
-      const rootPath = target === undefined ? undefined : /^\s*path\s*=\s*"([^"]+)"/m.exec(target)?.[1];
-      if (rootPath !== undefined) { const srcDir = path.posix.dirname(path.posix.join(dir, rootPath)); cargoSrc.set(dir, srcDir === "." ? "" : srcDir); }
+      // The library target a package path names: `[lib] path` when set, else src/lib.rs. A binary is never imported.
+      const library = /^\s*\[lib\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
+      const libraryPath = library === undefined ? undefined : /^\s*path\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(library);
+      cargoSrc.set(dir, path.posix.normalize(path.posix.join(dir, libraryPath === undefined || libraryPath === null ? "src/lib.rs" : (libraryPath[1] ?? libraryPath[2])!)));
       const dependencies = new Set<string>();
       for (const table of card.text.matchAll(/^\s*\[(?:workspace\.|target\.[^\]]+\.)?(?:dependencies|dev-dependencies|build-dependencies)\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)) {
         for (const entry of (table[1] ?? "").matchAll(/^\s*([A-Za-z0-9_-]+)\s*=/gm)) if (entry[1] !== undefined) dependencies.add(entry[1].replace(/-/g, "_"));
@@ -263,6 +264,16 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
         // directory (from the module directory of the file) inside one.
         const pathTarget = declaration.pathValue === undefined ? undefined : path.posix.normalize(path.posix.join(declaration.inline.length === 0 ? dir : nestedDir, declaration.pathValue));
         if (declaration.other) {
+          // An enclosing inline module's `#[path]` moves its children: they may sit under that path, from the file's
+          // directory or its module directory, followed by the inline modules inside it.
+          for (const frame of declaration.framePaths) {
+            if (frame.value === null) { unreadable = true; continue; }
+            for (const base of [dir, childDir]) {
+              const moved = path.posix.join(base, frame.value, ...declaration.inline.slice(frame.at + 1));
+              add(path.posix.normalize(path.posix.join(moved, `${declaration.name}.rs`)), { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, false);
+              add(path.posix.normalize(path.posix.join(moved, declaration.name, "mod.rs")), { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, false);
+            }
+          }
           for (const candidate of [...conventional, ...(pathTarget === undefined ? [] : [pathTarget, path.posix.normalize(path.posix.join(dir, declaration.pathValue!))])]) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, false);
         } else if (pathTarget !== undefined) add(pathTarget, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, !declaration.cfgPath);
         else for (const candidate of conventional) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, true);
@@ -325,6 +336,8 @@ interface RustModuleDeclaration {
   readonly hasPath: boolean;
   readonly cfgPath: boolean;
   readonly pathValue: string | undefined;
+  /** The `#[path]` values of enclosing inline modules, by frame; null when one cannot be read. */
+  readonly framePaths: readonly { readonly at: number; readonly value: string | null }[];
 }
 
 // The `mod name;` declarations of Rust source. Comments (block comments nest), strings, raw strings and char
@@ -349,7 +362,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       continue;
     }
     const raw = /^(?:b|c)?r(#*)"/.exec(text.slice(index, index + 260));
-    if (raw !== null && (index === 0 || !/[\p{L}\p{N}_]/u.test(text[index - 1]!))) {
+    if (raw !== null && (index === 0 || !/[\p{L}\p{N}\p{M}_]/u.test(text[index - 1]!))) {
       const close = `"${raw[1]}`;
       const end = text.indexOf(close, index + raw[0].length);
       const stop = end < 0 ? text.length : end + close.length;
@@ -358,7 +371,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       index = stop;
       continue;
     }
-    if (char === '"' || ((char === "b" || char === "c") && next === '"' && (index === 0 || !/[\p{L}\p{N}_]/u.test(text[index - 1]!)))) {
+    if (char === '"' || ((char === "b" || char === "c") && next === '"' && (index === 0 || !/[\p{L}\p{N}\p{M}_]/u.test(text[index - 1]!)))) {
       let at = char === '"' ? index + 1 : index + 2;
       let value = "";
       let escaped = false;
@@ -376,9 +389,10 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
     index += 1;
   }
   const declarations: RustModuleDeclaration[] = [];
-  const stack: (string | null)[] = [];
+  // An inline module's frame keeps its name, and whether a `#[path]` or `#[cfg]` makes its children's place unknown.
+  const stack: ({ name: string; opaque: boolean; path: string | null | undefined } | null)[] = [];
   let unbalanced = false;
-  const pattern = /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}_#])mod\s+(?:r#)?([\p{L}\p{N}_]+)\s*([;{])|([{}()[\]])/gu;
+  const pattern = /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}\p{M}_#])mod\s+(?:r#)?([\p{L}\p{N}\p{M}_]+)\s*([;{])|([{}()[\]])/gu;
   for (const match of code.matchAll(pattern)) {
     const delimiter = match[4];
     if (delimiter !== undefined) {
@@ -387,17 +401,24 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       continue;
     }
     const name = match[2]!;
-    if (match[3] === "{") { stack.push(name); continue; }
+    if (match[3] === "{") {
+      const frameValue = /(?:^|[\s(,[])path\s*=\s*"S(\d+)"/.exec(match[1] ?? "")?.[1];
+      const frameText = frameValue === undefined ? undefined : strings[Number(frameValue)];
+      const framePath = /(?:^|[\s(,[])path\s*=/.test(match[1] ?? "") ? (frameText === undefined || frameText.includes("\u0000") ? null : frameText) : undefined;
+      stack.push({ name, path: framePath, opaque: /(?:^|[\s(,[])path\s*=|(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(match[1] ?? "") });
+      continue;
+    }
     const attributes = match[1] ?? "";
     const value = /(?:^|[\s(,[])path\s*=\s*"S(\d+)"/.exec(attributes)?.[1];
     const pathValue = value === undefined ? undefined : strings[Number(value)];
     declarations.push({
       name,
-      inline: stack.every((entry) => entry !== null) ? [...stack] as string[] : [],
-      other: stack.some((entry) => entry === null),
-      cfg: /(?:^|[^\p{L}\p{N}_])cfg(?:_attr)?\s*\(/u.test(attributes),
+      inline: stack.every((entry) => entry !== null) ? stack.map((entry) => entry!.name) : [],
+      other: stack.some((entry) => entry === null || entry.opaque),
+      framePaths: stack.flatMap((entry, at) => entry !== null && entry.path !== undefined ? [{ at, value: entry.path }] : []),
+      cfg: /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(attributes),
       hasPath: /(?:^|[\s(,[])path\s*=/.test(attributes),
-      cfgPath: /(?:^|[^\p{L}\p{N}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])path\s*=/.test(attributes),
+      cfgPath: /(?:^|[^\p{L}\p{N}\p{M}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])path\s*=/.test(attributes),
       pathValue: pathValue === undefined || pathValue.includes("\u0000") ? undefined : pathValue,
     });
   }
@@ -407,10 +428,10 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
 // Whether blanked Rust code may bind a name other than by `mod name;`: any glob `use` or macro call may bring it in, and any
 // mention of it that is not a path head (`name::`) or a `mod name` declaration may be an item, a `use` or an alias.
 function rustNameBoundOtherwise(code: string, name: string): boolean {
-  for (const statement of code.matchAll(/(?<![\p{L}\p{N}_])use\s[^;]*;/gu)) if (statement[0].includes("*")) return true;
+  for (const statement of code.matchAll(/(?<![\p{L}\p{N}\p{M}_])use\s[^;]*;/gu)) if (statement[0].includes("*")) return true;
   // A macro call may expand to an item of the name, which no text mention shows.
-  if (/[\p{L}\p{N}_]\s*!\s*[({[]/u.test(code)) return true;
-  return new RegExp(`(?<![\\p{L}\\p{N}_])(?<!(?<![\\p{L}\\p{N}_])mod\\s+(?:r#)?)(?:r#)?${name}(?![\\p{L}\\p{N}_])(?!\\s*::)`, "u").test(code);
+  if (/[\p{L}\p{N}\p{M}_]\s*!\s*[({[]/u.test(code)) return true;
+  return new RegExp(`(?<![\\p{L}\\p{N}\\p{M}_])(?<!(?<![\\p{L}\\p{N}\\p{M}_])mod\\s+(?:r#)?)(?:r#)?${name}(?![\\p{L}\\p{N}\\p{M}_])(?!\\s*::)`, "u").test(code);
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -531,7 +552,7 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   const head = segments[0];
   if (head === undefined) return undefined;
   const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
-  const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
+  const libraryOf = (crate: string): string => context.cargoSrc.get(crate) ?? path.posix.join(crate, "src/lib.rs");
   // A crate root sits where Cargo looks for one (rustRootPlace) and nothing declares it as a module. A file a
   // declaration the scan could not follow may name has no known owner, and its paths name nothing.
   if (context.rustUncertainOwner.has(fromFile)) return undefined;
@@ -612,7 +633,7 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     return walk(holder.file, inline.length === 0 ? holder.dir : undefined, segments.slice(index), inline);
   }
   const headDeclaration = context.rustModuleFiles.get(fromFile)?.get(head);
-  if (context.cargoPackages.get(head) === undefined && (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path")) {
+  if (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path" || headDeclaration === "nested") {
     // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
     const places = identityOf(fromFile);
     return places === undefined ? undefined : walk(fromFile, places[places.length - 1]!.dir, segments);
@@ -620,19 +641,18 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
   const crate = context.cargoPackages.get(head);
   if (crate === undefined) return undefined;
-  let start = srcOf(crate);
+  let start = libraryOf(crate);
   let rest = segments.slice(1);
   // A facade crate names another crate under an alias (`pub extern crate grep_printer as printer;`), so
   // `grep::printer::X` continues from the aliased crate's root. Each hop consumes a segment, so it ends.
   for (let hop = 0; hop < segments.length; hop += 1) {
-    const next = rest[0] === undefined ? undefined : context.crateAliases.get(`${start}/lib.rs`)?.get(rest[0]);
+    const next = rest[0] === undefined ? undefined : context.crateAliases.get(start)?.get(rest[0]);
     const aliased = next === undefined ? undefined : context.cargoPackages.get(next);
     if (aliased === undefined) break;
-    start = srcOf(aliased);
+    start = libraryOf(aliased);
     rest = rest.slice(1);
   }
-  const root = firstKnown(["lib.rs", "main.rs", "mod.rs"].map((name) => path.posix.join(start, name)));
-  return root === undefined ? undefined : walk(root, start, rest);
+  return knownFiles.has(start) && !context.rustDeclaredBy.has(start) && !context.rustUncertainOwner.has(start) ? walk(start, parentOf(start), rest) : undefined;
 }
 
 export interface ResolutionInput {

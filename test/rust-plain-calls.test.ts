@@ -737,6 +737,38 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     if (edge?.toSymbol !== undefined) expect(edge.toSymbol).toBe(right);
   });
 
+  // Round 8.
+  const otherPackage = "[package]\nname=\"other\"\nversion=\"0.1.0\"\nedition=\"2024\"\n";
+  it.each([
+    ["a renamed library target", { "other/Cargo.toml": otherPackage + "[lib]\npath=\"src/actual.rs\"\n", "other/src/actual.rs": "pub fn f() -> &'static str { \"LIB\" }\n", "other/src/lib.rs": "pub fn f() -> &'static str { \"STRAY\" }\n" }, "other/src/actual.rs#f", "other/src/lib.rs#f"],
+    ["a single-quoted library target", { "other/Cargo.toml": otherPackage + "[lib]\npath='custom.rs'\n", "other/custom.rs": "pub fn f() -> &'static str { \"LIB\" }\n", "other/src/lib.rs": "pub fn f() -> &'static str { \"STRAY\" }\n" }, "other/custom.rs#f", "other/src/lib.rs#f"],
+    ["a library beside a custom binary target", { "other/Cargo.toml": otherPackage + "[[bin]]\nname=\"tool\"\npath=\"tools/main.rs\"\n", "other/src/lib.rs": "pub fn f() -> &'static str { \"LIB\" }\n", "other/tools/main.rs": "pub fn f() -> &'static str { \"STRAY\" }\nfn main() {}\n" }, "other/src/lib.rs#f", "other/tools/main.rs#f"],
+  ] as const)("names a workspace package's function in %s", async (_label, extra, right, wrong) => {
+    const edge = await target({ "Cargo.toml": "[workspace]\nmembers=[\"other\", \"app\"]\n", "app/Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\n", "app/src/main.rs": "fn run() -> &'static str {\n    other::f()\n}\nfn main() { let _ = run(); }\n", ...extra }, "app/src/main.rs", 2, "f");
+    expect(edge?.toSymbol).not.toBe(wrong);
+    expect(edge?.toSymbol).toBe(right);
+  });
+
+  it("names a local module over a workspace package of the same name", async () => {
+    const edge = await target({
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\n",
+      "src/main.rs": "mod app;\nfn run() -> &'static str {\n    app::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/app.rs": "pub fn f() -> &'static str { \"MODULE\" }\n",
+      "src/lib.rs": "pub fn f() -> &'static str { \"LIB\" }\n",
+    }, "src/main.rs", 3, "f");
+    expect(edge?.toSymbol).toBe("src/app.rs#f");
+  });
+
+  it.each([
+    ["a macro whose name ends in a combining mark", { "src/main.rs": "#[cfg(any())] mod alias;\nmacro_rules! define\u0301 { () => { pub mod alias { pub fn f() -> &'static str { \"MACRO\" } } } }\ndefine\u0301!();\nfn run() -> &'static str {\n    crate::alias::f()\n}\nfn main() {}\n", "src/alias.rs": "pub fn f() -> &'static str { \"STRAY\" }\n" }, "src/main.rs", 5, "src/alias.rs#f"],
+    ["a child of an inline module a path attribute moves", { "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n", "src/main.rs": "#[path=\"bin\"] mod outer { pub mod tool; }\npub fn f() -> &'static str { \"MAIN\" }\nfn main() {}\n", "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n" }, "src/bin/tool.rs", 3, "src/bin/tool.rs#f"],
+    ["a child of a cfg-disabled inline parent", { "src/main.rs": "#[cfg(any())] mod outer { pub fn f() -> &'static str { \"DISABLED\" }\npub mod child; }\nfn main() {}\n", "src/outer/child.rs": "pub fn run() -> &'static str {\n    super::f()\n}\n" }, "src/outer/child.rs", 2, "src/main.rs#outer.f"],
+  ] as const)("never resolves through %s", async (_label, files, file, line, wrong) => {
+    const edge = await target({ ...files }, file, line, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe(wrong);
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",
