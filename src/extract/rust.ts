@@ -195,9 +195,6 @@ export const rustAdapter: LanguageAdapter = {
           // records, and a plain name inside the module names the module's one first. `mod util;` declares a
           // module file, which is no record here.
           const nameNode = node.childForFieldName("name");
-          // `#[path = ".."] mod m;` (or under `cfg_attr`) names a file the index does not map. It is recorded as an
-          // empty module, so a path through it lands there and names nothing instead of a conventional `m.rs`.
-          if (nameNode !== null && node.childForFieldName("body") === null && pathAttribute(node)) out.addDef(nameNode.text, "module", node);
           if (nameNode !== null && node.childForFieldName("body") !== null) {
             out.addDef(nameNode.text, "module", node);
             out.push(nameNode.text);
@@ -266,16 +263,6 @@ export const rustAdapter: LanguageAdapter = {
     return { definitions: out.definitions, edges: out.edges, reExports };
   },
 };
-
-// Whether the attributes written before an item (`#[path = ".."]`, `#[cfg_attr(.., path = "..")]`) set a path.
-function pathAttribute(node: Node): boolean {
-  for (let sibling = node.previousNamedSibling; sibling !== null; sibling = sibling.previousNamedSibling) {
-    if (sibling.type === "line_comment" || sibling.type === "block_comment") continue;
-    if (sibling.type !== "attribute_item") return false;
-    if (/(^|[\s(,[])path\s*=/.test(sibling.text)) return true;
-  }
-  return false;
-}
 
 // Item declarations a plain name can name in a block or module body.
 const ITEM_KINDS = new Set(["function_item", "struct_item", "enum_item", "union_item", "const_item", "static_item", "type_item", "trait_item", "mod_item"]);

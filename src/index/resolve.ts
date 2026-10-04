@@ -167,6 +167,13 @@ export interface WorkspaceContext {
   readonly tsConfigs: TsConfigs;
   /** Qualified names of Rust inline modules (`src/main.rs#m.inner`), which a path walks before any module file. */
   readonly rustInlineModules: ReadonlySet<string>;
+  /** Per Rust file, the `mod name;` declarations it writes at its top level: `file`, or `path` when an attribute
+   * sets its path; `nested` for one written only inside an inline module. */
+  readonly rustModuleFiles: ReadonlyMap<string, ReadonlyMap<string, "file" | "path" | "nested">>;
+  /** Rust crate roots a Cargo.toml target section names with `path = ".."`. */
+  readonly rustTargetRoots: ReadonlySet<string>;
+  /** Rust module file to the files whose top-level `mod name;` declares it. */
+  readonly rustDeclaredBy: ReadonlyMap<string, readonly string[]>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -217,8 +224,53 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
+  // Which file declares each Rust module file: `mod name;` at a file's top level names `name.rs` or `name/mod.rs`
+  // beside its children (beside the file for a crate root or mod.rs, else in the directory named after it).
+  const rustModuleFiles = new Map([...files.values()].filter((card) => card.language === "rust").map((card) => [card.path, rustModuleDeclarations(card.text)]));
+  const rustDeclaredBy = new Map<string, string[]>();
+  for (const [file, declarations] of rustModuleFiles) {
+    const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
+    const name = path.posix.basename(file);
+    const parentName = path.posix.basename(dir);
+    const besideFile = name === "mod.rs" || name === "lib.rs" || name === "main.rs" || name === "build.rs" || ["tests", "examples", "benches"].includes(parentName) || (parentName === "bin" && path.posix.basename(path.posix.dirname(dir)) === "src");
+    const childDir = besideFile ? dir : path.posix.join(dir, name.replace(/\.rs$/, ""));
+    for (const [module, kind] of declarations) {
+      if (kind !== "file") continue;
+      for (const child of [path.posix.join(childDir, `${module}.rs`), path.posix.join(childDir, module, "mod.rs")]) {
+        if (!files.has(child)) continue;
+        const list = rustDeclaredBy.get(child);
+        if (list === undefined) rustDeclaredBy.set(child, [file]); else list.push(file);
+      }
+    }
+  }
   return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
-    rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])) };
+    rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])),
+    rustModuleFiles,
+    rustDeclaredBy,
+    rustTargetRoots: new Set([...files.values()].flatMap((card) => {
+      if (path.posix.basename(card.path) !== "Cargo.toml") return [];
+      const dir = path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path);
+      return [...card.text.matchAll(/^\s*\[\[?(?:lib|bin|test|example|bench)\]\]?\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)]
+        .flatMap((section) => [...(section[1] ?? "").matchAll(/^\s*path\s*=\s*"([^"]+)"/gm)].map((entry) => path.posix.normalize(path.posix.join(dir, entry[1]!))));
+    })) };
+}
+
+// The `mod name;` declarations of Rust source, read past comments and string literals: `path` when an attribute
+// before it (`#[path = ".."]`, `#[cfg_attr(.., path = "..")]`) sets the module's file, else `file`; `nested` when
+// every declaration of the name sits inside braces (an inline module's body).
+function rustModuleDeclarations(text: string): Map<string, "file" | "path" | "nested"> {
+  const code = text.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|r(#*)"[\s\S]*?"\1|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\.|[^\\'\n])'/g, (match) => match.startsWith("/") ? " ".repeat(match.length) : match[0] === "'" || match.startsWith("b'") ? "' '" : '""');
+  const out = new Map<string, "file" | "path" | "nested">();
+  let depth = 0;
+  let scanned = 0;
+  for (const match of code.matchAll(/((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/g)) {
+    for (; scanned < match.index; scanned += 1) depth += code[scanned] === "{" ? 1 : code[scanned] === "}" ? -1 : 0;
+    const name = match[2]!;
+    const kind = depth > 0 ? "nested" : /(^|[\s(,[])path\s*=/.test(match[1] ?? "") ? "path" : "file";
+    const previous = out.get(name);
+    out.set(name, previous === "path" || kind === "path" ? "path" : previous === "file" || kind === "file" ? "file" : "nested");
+  }
+  return out;
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -342,21 +394,34 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   const fromDir = parentOf(fromFile);
   const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
   const base = path.posix.basename(fromFile);
-  const ownDir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
+  // A crate root: lib.rs, main.rs, build.rs at a Cargo root, a file directly under tests/, examples/, benches/ or
+  // src/bin/, or a target path a Cargo.toml names. Its child modules live beside it, as a mod.rs file's do.
+  const targetDir = (dir: string): boolean => ["tests", "examples", "benches"].includes(path.posix.basename(dir)) || (path.posix.basename(dir) === "bin" && path.posix.basename(parentOf(dir)) === "src");
+  // A file another file declares with `mod name;` is that module, never a root, whatever its name or place.
+  const isRoot = (file: string): boolean => {
+    if (context.rustDeclaredBy.has(file)) return false;
+    const name = path.posix.basename(file);
+    return name === "lib.rs" || name === "main.rs" || targetDir(parentOf(file)) || (name === "build.rs" && context.cargoRoots.includes(parentOf(file))) || context.rustTargetRoots.has(file);
+  };
+  const ownDir = base === "mod.rs" || isRoot(fromFile) ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
   const inlineModule = (file: string, names: readonly string[]): boolean => context.rustInlineModules.has(`${file}#${names.join(".")}`);
   const firstKnown = (files: readonly string[]): string | undefined => files.find((file) => knownFiles.has(file));
-  // From a module file, each segment is an inline module the file declares (a module declared with
-  // `#[path = ".."]` is recorded as one too, so a path through it finds nothing), or a module file in the
-  // directory its children live in. The rest names items inside the last module.
-  const walk = (file: string, dir: string, rest: readonly string[]): { file: string; inline: string[] } => {
+  // From a module file, each segment is an inline module the file declares, or a module file the file declares
+  // with `mod name;` and the index holds beside its children. A module whose path an attribute sets, and a file
+  // child of an inline module, live where the index cannot follow: the path names nothing. A segment that is
+  // neither (an alias, an item) is left for the item lookup in the current module, which finds it or nothing.
+  const walk = (file: string, dir: string, rest: readonly string[]): { file: string; inline: string[] } | undefined => {
     let current = file;
     let currentDir = dir;
     let inline: string[] = [];
     for (let index = 0; index < rest.length; index += 1) {
       const segment = rest[index]!;
       if (inlineModule(current, [...inline, segment])) { inline.push(segment); continue; }
-      const modulePath = path.posix.join(currentDir, ...inline, segment);
-      const next = firstKnown([`${modulePath}.rs`, `${modulePath}/mod.rs`]);
+      const declaration = context.rustModuleFiles.get(current)?.get(segment);
+      const declared = inline.length === 0 ? declaration : undefined;
+      if (declared === "path" || (inline.length > 0 && declaration !== undefined)) return undefined;
+      const modulePath = path.posix.join(currentDir, segment);
+      const next = declared === "file" ? firstKnown([`${modulePath}.rs`, `${modulePath}/mod.rs`]) : undefined;
       if (next === undefined) return { file: current, inline: [...inline, ...rest.slice(index)] };
       current = next;
       currentDir = modulePath;
@@ -365,22 +430,16 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     return { file: current, inline };
   };
   if (head === "crate") {
-    // The crate root this file belongs to: the file itself when it is one (lib.rs, main.rs, build.rs, or a file
-    // directly under tests/, examples/, benches/ or src/bin/), else the nearest directory above it holding exactly
-    // one of lib.rs and main.rs, without crossing into a tests/, examples/, benches/ or src/bin/ target. A root's
-    // child modules live beside it. When no root is certain, the path names nothing.
-    const targetDir = (dir: string): boolean => ["tests", "examples", "benches"].includes(path.posix.basename(dir)) || (path.posix.basename(dir) === "bin" && path.posix.basename(parentOf(dir)) === "src");
-    let root: string | undefined;
-    if (base === "lib.rs" || base === "main.rs" || targetDir(fromDir) || (base === "build.rs" && context.cargoRoots.includes(fromDir))) root = fromFile;
-    else {
-      for (let dir = fromDir; root === undefined; dir = parentOf(dir)) {
-        if (targetDir(dir)) return undefined;
-        const roots = ["lib.rs", "main.rs"].map((name) => path.posix.join(dir, name)).filter((file) => knownFiles.has(file));
-        if (roots.length > 1) return undefined;
-        root = roots[0];
-        if (root === undefined && dir === "") return undefined;
-      }
+    // The crate root this file belongs to: follow the files that declare it with `mod name;` up to one nothing
+    // declares, which must be a root (lib.rs, main.rs, build.rs, a file directly under tests/, examples/, benches/
+    // or src/bin/, or a Cargo target path). Two declaring files, a chain that loops, or an undeclared file that is
+    // no root leave the crate unknown, and the path names nothing.
+    let root: string | undefined = fromFile;
+    for (let hops = 0; root !== undefined && context.rustDeclaredBy.has(root); hops += 1) {
+      const declarers: readonly string[] = context.rustDeclaredBy.get(root)!;
+      root = declarers.length === 1 && hops < 32 ? declarers[0] : undefined;
     }
+    if (root === undefined || !isRoot(root)) return undefined;
     return walk(root, parentOf(root), segments.slice(1));
   }
   if (head === "self" || head === "super") {
@@ -390,7 +449,8 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     const file = dir === ownDir ? fromFile : firstKnown([path.posix.join(dir, "mod.rs"), ...(dir === "" ? [] : [`${dir}.rs`]), path.posix.join(dir, "lib.rs"), path.posix.join(dir, "main.rs")]);
     return file === undefined ? undefined : walk(file, dir, segments.slice(index));
   }
-  if (context.cargoPackages.get(head) === undefined && (inlineModule(fromFile, [head]) || knownFiles.has(path.posix.join(ownDir, `${head}.rs`)) || knownFiles.has(path.posix.join(ownDir, head, "mod.rs")))) {
+  const headDeclaration = context.rustModuleFiles.get(fromFile)?.get(head);
+  if (context.cargoPackages.get(head) === undefined && (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path")) {
     // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
     return walk(fromFile, ownDir, segments);
   }

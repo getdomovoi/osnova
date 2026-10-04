@@ -45,7 +45,7 @@ describe("Rust receivers", () => {
     const index = await build({
       "Cargo.toml": "[package]\nname = 'x'\n",
       "src/server.rs": "pub struct Server { port: u16 }\n\nimpl Server {\n    pub fn new() -> Server { Server { port: 1 } }\n    pub fn build() -> Self { Server { port: 2 } }\n    pub fn start(&self) { self.stop(); }\n    pub fn stop(&mut self) {}\n}\n",
-      "src/main.rs": "use crate::server::Server;\n\nfn run(s: &Server, t: Server, u: &mut Server) {\n    s.start();\n    t.start();\n    u.start();\n    let n = Server::new();\n    n.start();\n    let m: Server = t;\n    m.start();\n    let w = Server { port: 3 };\n    w.start();\n    Server::new().start();\n    Server::build().start();\n    Server::stop();\n    let z = other();\n    z.start();\n    let mut q = Server::new();\n    q = other();\n    q.start();\n}\n",
+      "src/main.rs": "mod server;\nuse crate::server::Server;\n\nfn run(s: &Server, t: Server, u: &mut Server) {\n    s.start();\n    t.start();\n    u.start();\n    let n = Server::new();\n    n.start();\n    let m: Server = t;\n    m.start();\n    let w = Server { port: 3 };\n    w.start();\n    Server::new().start();\n    Server::build().start();\n    Server::stop();\n    let z = other();\n    z.start();\n    let mut q = Server::new();\n    q = other();\n    q.start();\n}\n",
     });
     expect(index.symbols.get("src/server.rs#Server.new")?.memberKind).toBe("static");
     expect(index.symbols.get("src/server.rs#Server.start")?.memberKind).toBe("instance");

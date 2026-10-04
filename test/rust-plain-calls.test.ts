@@ -588,3 +588,66 @@ describe("Rust scope, round-3 rustc reproductions", () => {
     expect(inside?.toSymbol).toBe("src/main.rs#run.f");
   });
 });
+
+describe("Rust module files, round-4 rustc reproductions", () => {
+  const target = async (files: Record<string, string>, file: string, line: number, name: string) => callAt(await build(files), file, line, name);
+
+  it("never walks past a module whose path an attribute sets, or into a file child of an inline module", async () => {
+    const opaque = await target({
+      "src/main.rs": "#[path = \"chosen.rs\"] mod m;\nfn run() -> &'static str {\n    crate::m::child::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/chosen.rs": "pub mod child;\n",
+      "src/m/child.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+      "src/child.rs": "pub fn f() -> &'static str { \"CHOSEN\" }\n",
+    }, "src/main.rs", 3, "f");
+    expect(opaque?.toSymbol).not.toBe("src/m/child.rs#f");
+    const inline = await target({
+      "src/main.rs": "#[path = \"custom\"] mod m { pub mod child; }\nfn run() -> &'static str {\n    crate::m::child::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/custom/child.rs": "pub fn f() -> &'static str { \"CHOSEN\" }\n",
+      "src/m/child.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/main.rs", 3, "f");
+    expect(inline?.toSymbol).not.toBe("src/m/child.rs#f");
+  });
+
+  it("takes a Cargo target path as the crate root over a stray conventional root", async () => {
+    for (const section of ["[lib]", "[[bin]]\nname = \"chosen\""]) {
+      const edge = await target({
+        "Cargo.toml": `[package]\nname = "app"\nversion = "0.1.0"\n${section}\npath = "src/chosen.rs"\n`,
+        "src/chosen.rs": "fn f() -> &'static str { \"CUSTOM\" }\nfn run() -> &'static str {\n    crate::f()\n}\n",
+        "src/lib.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+      }, "src/chosen.rs", 3, "f");
+      expect(edge?.toSymbol).not.toBe("src/lib.rs#f");
+    }
+  });
+
+  it("reads self:: from a test or single-file binary root beside the file", async () => {
+    for (const root of ["tests/basic.rs", "src/bin/tool.rs"]) {
+      const dir = root.slice(0, root.lastIndexOf("/"));
+      const stem = root.slice(root.lastIndexOf("/") + 1, -3);
+      const edge = await target({
+        "src/lib.rs": "pub fn lib() {}\n",
+        [root]: "mod child;\nfn run() -> &'static str {\n    self::child::f()\n}\n",
+        [`${dir}/child.rs`]: "pub fn f() -> &'static str { \"CHILD\" }\n",
+        [`${dir}/${stem}/child.rs`]: "pub fn f() -> &'static str { \"STRAY\" }\n",
+      }, root, 3, "f");
+      expect(edge?.toSymbol).toBe(`${dir}/child.rs#f`);
+    }
+  });
+
+  it("reads crate:: from a test module declared by the test crate's root as that root", async () => {
+    const edge = await target({
+      "src/lib.rs": "pub fn f() {}\n",
+      "tests/tests.rs": "mod test_matcher;\nmod util;\n",
+      "tests/util.rs": "pub fn helper() -> u32 { 1 }\n",
+      "tests/test_matcher.rs": "use crate::util::helper;\nfn t() {\n    let _ = helper();\n}\n",
+    }, "tests/test_matcher.rs", 3, "helper");
+    expect(edge?.toSymbol).toBe("tests/util.rs#helper");
+  });
+
+  it("never follows a module alias to a stray file of the alias's name", async () => {
+    const edge = await target({
+      "src/main.rs": "pub mod actual { pub fn f() -> &'static str { \"ACTUAL\" } }\npub use actual as alias;\nfn run() -> &'static str {\n    crate::alias::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/alias.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/main.rs", 4, "f");
+    expect(edge?.toSymbol).not.toBe("src/alias.rs#f");
+  });
+});
