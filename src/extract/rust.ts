@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { Extractor, childrenOf } from "./util.js";
 import type { AdapterOutput, LanguageAdapter } from "./adapter.js";
-import type { ReExport } from "../types.js";
+import type { EdgeBinding, ReExport } from "../types.js";
 import { collectTypedBindings, rustSpec } from "./typed-bindings.js";
 
 function lastSegment(text: string): string {
@@ -26,6 +26,42 @@ export const rustAdapter: LanguageAdapter = {
     const out = new Extractor();
     const bindings = collectTypedBindings(tree.rootNode, rustSpec);
     const reExports: ReExport[] = [];
+
+    // What a plain name at `site` names in Rust's item scope. An item declared in an enclosing block or in the
+    // innermost inline module comes first (no binding: the resolver finds it in the caller's module), then a
+    // `use` of that name there, then the one glob `use` there. An inline module does not see its parent's
+    // items or imports: with none of those, the name is a prelude, std or macro name the index cannot place.
+    // At the file root, the plain-name lookup applies as before, with a `use` of the name followed first.
+    const plainScope = (site: Node, name: string): EdgeBinding | undefined => {
+      const globs: string[] = [];
+      const levels: Node[] = [];
+      let module: Node | null = null;
+      for (let current: Node | null = site.parent; current !== null; current = current.parent) {
+        if (current.type === "block") levels.push(current);
+        if (current.type === "mod_item" && current.childForFieldName("body") !== null) { module = current; levels.push(current.childForFieldName("body")!); break; }
+        if (current.type === "source_file") { levels.push(current); break; }
+      }
+      for (const level of levels) {
+        const children = childrenOf(level);
+        if (children.some((child) => ITEM_KINDS.has(child.type) && child.childForFieldName("name")?.text === name)) return undefined;
+        for (const use of children) {
+          if (use.type !== "use_declaration") continue;
+          const named = rustSpec.imports(use, "use_declaration").find((item) => item.local === name);
+          if (named !== undefined) {
+            const source = bindings.modulePath(named.source, use);
+            return source === null ? undefined : { kind: "import", source, importedName: named.name, plain: true };
+          }
+          const argument = use.childForFieldName("argument") ?? childrenOf(use).find((child) => child.type !== "visibility_modifier");
+          if (argument?.type === "use_wildcard") globs.push(argument.text.replace(/::\*$/, ""));
+        }
+      }
+      if (module === null) return undefined;
+      if (globs.length > 1) return { kind: "blocked", reason: "ambiguous" };
+      const glob = globs[0];
+      if (glob === undefined) return { kind: "blocked", reason: "unbound" };
+      const source = bindings.modulePath(glob, site);
+      return source === null ? { kind: "blocked", reason: "unbound" } : { kind: "import", source, importedName: name, plain: true };
+    };
 
     const visit = (node: Node): void => {
       switch (node.type) {
@@ -121,9 +157,7 @@ export const rustAdapter: LanguageAdapter = {
               // A closure, parameter or pattern binding called by name shadows every item of the name. A name a `use`
               // brings in from another crate or std is that import's, external when the crate is not in the workspace;
               // a `crate::`, `self::` or `super::` use keeps the plain-name lookup, which already prefers imported files.
-              const imported = bindings.imported(fn.text, node);
-              const external = imported?.kind === "import" && !/^(crate|self|super)(::|$)/.test(imported.source) ? imported : undefined;
-              out.addEdge("calls", fn.text, fn, patternBound(node, fn.text) ? { kind: "blocked", reason: "local-value" } : external);
+              out.addEdge("calls", fn.text, fn, patternBound(node, fn.text) ? { kind: "blocked", reason: "local-value" } : plainScope(node, fn.text));
             } else if (fn.type === "scoped_identifier" || fn.type === "scoped_type_identifier") {
               const nameNode = fn.childForFieldName("name");
               const name = nameNode?.text ?? lastSegment(fn.text);
@@ -177,9 +211,14 @@ export const rustAdapter: LanguageAdapter = {
   },
 };
 
+// Item declarations a plain name can name in a block or module body.
+const ITEM_KINDS = new Set(["function_item", "struct_item", "enum_item", "union_item", "const_item", "static_item", "type_item", "trait_item", "mod_item"]);
+
+// The names a pattern binds: identifiers, and struct-pattern shorthand (`Holder { f }` binds `f`); a field
+// name before a colon (`Holder { f: g }`) binds nothing.
 function patternNames(pattern: Node | null, into: Set<string>): void {
   if (pattern === null) return;
-  if (pattern.type === "identifier") { into.add(pattern.text); return; }
+  if (pattern.type === "identifier" || pattern.type === "shorthand_field_identifier") { into.add(pattern.text); return; }
   for (const child of childrenOf(pattern)) patternNames(child, into);
 }
 
@@ -200,8 +239,10 @@ function patternBound(site: Node, name: string): boolean {
       const parameters = current.childForFieldName("parameters");
       if (parameters !== null) for (const parameter of childrenOf(parameters)) after(parameter.type === "parameter" ? parameter.childForFieldName("pattern") : parameter, parameters.endIndex);
     } else if (current.type === "match_arm") {
+      // The grammar's arm pattern holds its guard (`Some(f) if f()`), and the binding is live inside the guard.
       const pattern = current.childForFieldName("pattern");
-      after(pattern, pattern?.endIndex ?? Infinity);
+      const guard = pattern?.childForFieldName("condition") ?? null;
+      for (const part of pattern === null ? [] : childrenOf(pattern)) if (part.id !== guard?.id) after(part, guard?.startIndex ?? pattern!.endIndex);
     } else if (current.type === "for_expression") {
       after(current.childForFieldName("pattern"), current.childForFieldName("value")?.endIndex ?? Infinity);
     } else if (current.type === "if_expression" || current.type === "while_expression") {

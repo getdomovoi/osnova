@@ -204,7 +204,9 @@ export interface ExportHop {
 }
 
 export type SymbolBinding =
-  | { readonly kind: "import"; readonly source: string; readonly importedName: string }
+  // `plain`: a Rust plain call whose name a `use` brings in; when the import cannot be followed to a declaration,
+  // the call falls back to the plain-name lookup instead of staying unresolved.
+  | { readonly kind: "import"; readonly source: string; readonly importedName: string; readonly plain?: true | undefined }
   | { readonly kind: "local"; readonly name: string };
 
 export type Callee = SymbolBinding | { readonly kind: "method"; readonly owner: ReceiverOwner; readonly member: string; readonly mode?: ReceiverMode | undefined };

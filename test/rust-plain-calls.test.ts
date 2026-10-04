@@ -294,3 +294,121 @@ describe("a plain Rust call and a method of an impl for a foreign type", () => {
     expect(callAt(index, "src/sink.rs", 2, "from")?.toSymbol).toBeUndefined();
   });
 });
+
+describe("Rust module scope, from rustc reproductions", () => {
+  const target = async (files: Record<string, string>, file: string, line: number, name: string) => {
+    const index = await build(files);
+    return callAt(index, file, line, name);
+  };
+
+  it("names the function a child module imports by crate path, not the file root's", async () => {
+    const edge = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "mod inner { pub fn f() -> &'static str { \"INNER\" } }",
+      "mod m {",
+      "    use crate::inner::f;",
+      "    pub fn run() -> &'static str { f() }",
+      "}",
+      "fn main() { println!(\"{}\", m::run()); }",
+      "",
+    ].join("\n") }, "src/main.rs", 5, "f");
+    expect(edge).toMatchObject({ toSymbol: "src/main.rs#inner.f" });
+  });
+
+  it("names the function a child module imports by self path or glob", async () => {
+    for (const use of ["use super::inner::f;", "use super::inner::*;"]) {
+      const edge = await target({ "src/main.rs": [
+        "fn f() -> &'static str { \"ROOT\" }",
+        "mod inner { pub fn f() -> &'static str { \"INNER\" } }",
+        "mod m {",
+        `    ${use}`,
+        "    pub fn run() -> &'static str { f() }",
+        "}",
+        "fn main() { println!(\"{}\", m::run()); }",
+        "",
+      ].join("\n") }, "src/main.rs", 5, "f");
+      expect(edge?.toSymbol).toBe("src/main.rs#inner.f");
+    }
+  });
+
+  it("never names a file-root function from a child module that does not import it", async () => {
+    const edge = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "macro_rules! make { () => { pub fn f() -> &'static str { \"MACRO\" } } }",
+      "mod m {",
+      "    make!();",
+      "    pub fn run() -> &'static str { f() }",
+      "}",
+      "fn main() { println!(\"{}\", m::run()); }",
+      "",
+    ].join("\n") }, "src/main.rs", 5, "f");
+    expect(edge?.toSymbol).toBeUndefined();
+  });
+
+  it("still names the parent's function through use super::*", async () => {
+    const edge = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "#[cfg(test)]",
+      "mod tests {",
+      "    use super::*;",
+      "    fn run() -> &'static str { f() }",
+      "}",
+      "fn main() {}",
+      "",
+    ].join("\n") }, "src/main.rs", 5, "f");
+    expect(edge?.toSymbol).toBe("src/main.rs#f");
+  });
+
+  it("follows a re-export through an inline module", async () => {
+    const edge = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "mod inner { pub fn f() -> &'static str { \"INNER\" } }",
+      "pub(crate) use crate::inner::f as g;",
+      "fn main() { let _value = crate::g(); }",
+      "",
+    ].join("\n") }, "src/main.rs", 4, "g");
+    expect(edge?.toSymbol).toBe("src/main.rs#inner.f");
+  });
+
+  it("blocks a call to a match binding inside its guard", async () => {
+    const edge = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "fn main() {",
+      "    match Some(|| \"LOCAL\") {",
+      "        Some(f) if f() == \"LOCAL\" => println!(\"LOCAL\"),",
+      "        _ => println!(\"ROOT\"),",
+      "    }",
+      "}",
+      "",
+    ].join("\n") }, "src/main.rs", 4, "f");
+    expect(edge?.toSymbol).toBeUndefined();
+  });
+
+  it("blocks a call to a struct-pattern shorthand binding", async () => {
+    const edge = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "struct Holder { f: fn() -> &'static str }",
+      "fn main() {",
+      "    let Holder { f } = Holder { f: || \"LOCAL\" };",
+      "    let _value = f();",
+      "}",
+      "",
+    ].join("\n") }, "src/main.rs", 5, "f");
+    expect(edge?.toSymbol).toBeUndefined();
+  });
+
+  it("names the inline module's function over a stray file of the module's name", async () => {
+    const edge = await target({
+      "src/main.rs": [
+        "mod m {",
+        "    mod inner { pub fn f() -> &'static str { \"INLINE\" } }",
+        "    pub fn run() -> &'static str { self::inner::f() }",
+        "}",
+        "fn main() { println!(\"{}\", m::run()); }",
+        "",
+      ].join("\n"),
+      "src/m.rs": "pub mod inner { pub fn f() -> &'static str { \"FILE\" } }\n",
+    }, "src/main.rs", 3, "f");
+    expect(edge?.toSymbol).toBe("src/main.rs#m.inner.f");
+  });
+});

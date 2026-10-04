@@ -61,6 +61,9 @@ export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
   // The import binding of a plain name at a site, from the innermost scope outward: a block-level `use` counts.
   imported: (name: string, site: Node) => EdgeBinding | undefined;
+  // A Rust module path written at a site, spelled as the resolver reads it: `super`/`self` paths inside an
+  // inline module from the file root (`self::m::inner`), others as written. Null when it climbs above the file.
+  modulePath: (path: string, site: Node) => string | null;
   heritage: (classNode: Node) => SymbolBinding[];
   interfaces: (classNode: Node) => SymbolBinding[];
   returns: (fn: Node) => ReturnBinding | undefined;
@@ -469,6 +472,12 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   };
 
   return {
+    modulePath(path, site) {
+      const source = relativeSource(path, site);
+      if (source !== null) return source;
+      const target = inlineTarget(path, site);
+      return target === null ? null : ["self", ...target].join("::");
+    },
     imported(name, site) {
       const found = importOf(name, site);
       return found === undefined ? undefined : { kind: "import", source: found.source, importedName: found.name };

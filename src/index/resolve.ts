@@ -165,6 +165,8 @@ export interface WorkspaceContext {
   readonly cargoDependencies: ReadonlyMap<string, ReadonlySet<string>>;
   /** tsconfig.json and jsconfig.json `paths` and `baseUrl`, read from the nearest config above the importing file. */
   readonly tsConfigs: TsConfigs;
+  /** Qualified names of Rust inline modules (`src/main.rs#m.inner`), which a path walks before any module file. */
+  readonly rustInlineModules: ReadonlySet<string>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -215,7 +217,8 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files) };
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
+    rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])) };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -340,6 +343,8 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   const ownCrate = (): string | undefined => context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
   const base = path.posix.basename(fromFile);
   const ownDir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
+  // An inline module of `file` named by the path's first segments owns them, whatever module files exist on disk.
+  const inlineIn = (file: string, names: readonly string[]): boolean => names.length > 0 && context.rustInlineModules.has(`${file}#${names[0]}`);
   let start: string;
   let rest: string[];
   if (head === "crate") {
@@ -357,8 +362,9 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
     start = dir;
     rest = segments.slice(index);
-    // `self` alone is this file; `self::inner::X` with no file for `inner` names an inline module of this file.
-    if (dir === ownDir && (rest.length === 0 || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return { file: fromFile, inline: rest };
+    // `self` alone is this file; `self::inner::X` names an inline module of this file when the file declares one,
+    // or when no module file of that name exists.
+    if (dir === ownDir && (rest.length === 0 || inlineIn(fromFile, rest) || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return { file: fromFile, inline: rest };
   } else {
     // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
     const crate = context.cargoPackages.get(head);
@@ -375,6 +381,8 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
       rest = rest.slice(1);
     }
   }
+  const root = ["lib.rs", "main.rs", "mod.rs"].map((name) => path.posix.join(start, name)).find((file) => knownFiles.has(file));
+  if (root !== undefined && inlineIn(root, rest)) return { file: root, inline: rest };
   for (let take = rest.length; take >= 0; take -= 1) {
     const modulePath = path.posix.join(start, ...rest.slice(0, take));
     const candidates = take === 0 ? [`${modulePath}/lib.rs`, `${modulePath}/main.rs`, `${modulePath}/mod.rs`] : [`${modulePath}.rs`, `${modulePath}/mod.rs`];
@@ -435,7 +443,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (qualifiedName === undefined) return "";
     const parts = qualifiedName.slice(qualifiedName.indexOf("#") + 1).split(".");
     const modules: string[] = [];
-    for (let take = 1; take < parts.length; take += 1) {
+    for (let take = 1; take <= parts.length; take += 1) {
       const parent = declaredAs(file, `${file}#${parts.slice(0, take).join(".")}`)[0];
       if (parent?.kind !== "module") break;
       modules.push(parts[take - 1]!);
@@ -487,8 +495,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const visited = new Set<string>();
     const active = new Set<string>();
     const family = languageFamily(files.get(file)?.language);
-    const walk = (currentFile: string, currentName: string, via: readonly ExportHop[]): void => {
-      const state = JSON.stringify([currentFile, currentName]);
+    const walk = (currentFile: string, currentName: string, via: readonly ExportHop[], currentInline: readonly string[]): void => {
+      const state = JSON.stringify([currentFile, currentName, currentInline]);
       if (active.has(state)) { result.cycle = true; return; }
       if (visited.has(state)) return;
       if (visited.size >= 4096 || via.length > 128) { result.incomplete = true; return; }
@@ -509,7 +517,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         return;
       }
       // A Rust item inside an inline module is reached only by a path through that module.
-      const localName = [...(via.length === 0 ? inline : []), currentName].join(".");
+      const localName = [...currentInline, currentName].join(".");
       const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName) ||
         (TYPED_FAMILY.has(card.language) && symbol.name === currentName && symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === localName));
       const spaces = links.filter((link) => link.kind === "namespace" && link.exportedName === currentName);
@@ -537,11 +545,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         walk(target, importedName, [...via, {
           file: currentFile, line: link.line, kind: link.kind, exportedName: currentName,
           importedName, source: link.source, targetFile: target,
-        }]);
+        }], inlinePath(card.language, currentFile, link.source));
       }
       active.delete(state);
     };
-    walk(file, name, []);
+    walk(file, name, [], inline);
     exportCache.set(key, result);
     return result;
   };
@@ -2043,7 +2051,18 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         );
         continue;
       }
-      if (raw.binding !== undefined) {
+      // A Rust plain call's `use` binding that leads to no declaration (a `crate::` path the index cannot place,
+      // an integration test's own crate root, a module re-exported by a glob) falls back to the plain-name lookup
+      // below; one into std or a crate outside the workspace stays external.
+      const plainFallback = (): boolean => {
+        const binding = raw.binding;
+        if (binding?.kind !== "import" || binding.plain !== true) return false;
+        const target = resolveImportTarget(card.language, fromFile, binding.source, knownFiles, context);
+        if (target === undefined) return unresolvedImport(card.language, fromFile, binding.source).external === undefined;
+        const found = exported(target, binding.importedName, inlinePath(card.language, fromFile, binding.source));
+        return found.incomplete || ![...found.symbols.values()].some((symbol) => languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) && symbol.kind !== "module");
+      };
+      if (raw.binding !== undefined && !plainFallback()) {
         const binding = raw.binding;
         const reference = binding.kind === "member" ? binding.owner : binding;
         let candidates: readonly OsnovaSymbol[] = [];
@@ -2446,7 +2465,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
         languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
         (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)) &&
-        (!plainRust || moduleOf(symbol.file, symbol.qualifiedName) === "" || (symbol.file === fromFile && moduleOf(symbol.file, symbol.qualifiedName) === callerModule)) &&
+        (!plainRust || (symbol.kind !== "module" && (callerModule === ""
+          ? moduleOf(symbol.file, symbol.qualifiedName) === ""
+          : symbol.file === fromFile && moduleOf(symbol.file, symbol.qualifiedName) === callerModule))) &&
         (!plainGo || symbol.kind !== "method"));
       const sameModule = plainRust && callerModule !== "" ? candidates.filter((symbol) => symbol.file === fromFile && moduleOf(symbol.file, symbol.qualifiedName) === callerModule) : [];
       const sameFile = sameModule.length > 0 ? sameModule : candidates.filter((symbol) => symbol.file === fromFile);
@@ -2472,7 +2493,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         // the family defines is a builtin or a standard-library name: external, like an unbound global.
         : resolved === undefined ? { status: "unresolved", reason: TYPED_FAMILY.has(card.language) && candidates.length === 0 ? "unbound-global" : "no-matching-symbol" }
           : { status: "resolved", method: sameFile.length > 0 ? "same-file-name" : samePackage.length > 0 ? "lexical-definition" : imported.length > 0 ? "imported-file-name" : "unique-name" };
-      const args = { ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.argumentTypes === undefined ? {} : { argumentTypes: raw.argumentTypes }), ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }) };
+      // A `plain` binding that fell back here stays on the edge: an incremental update rebuilds raw edges from it.
+      const args = { ...(raw.binding === undefined ? {} : { binding: raw.binding }), ...(raw.arguments === undefined ? {} : { arguments: raw.arguments }), ...(raw.argumentTypes === undefined ? {} : { argumentTypes: raw.argumentTypes }), ...(raw.constructs === undefined ? {} : { constructs: raw.constructs }) };
       edges.push(
         resolved === undefined
           ? { kind: raw.kind, fromFile, fromSymbol, toName: raw.toName, line: raw.line, evidence: { source: "syntax", resolution }, ...args }
