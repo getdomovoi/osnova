@@ -131,11 +131,11 @@ function commandArgs<T extends ParseArgsConfig>(command: string, config: T): Ret
   }
 }
 
-function numericOption(value: string | undefined, name: string, minimum = 0): number | undefined {
+function numericOption(command: string, value: string | undefined, name: string, minimum = 0): number | undefined {
   if (value === undefined) return undefined;
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < minimum) {
-    throw new RangeError(`osnova: --${name} must be a safe integer >= ${minimum}`);
+    throw new RangeError(`osnova ${command}: --${name} must be a safe integer >= ${minimum}`);
   }
   return number;
 }
@@ -300,7 +300,7 @@ export async function runCli(
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = numericOption(parsed.values.limit, "limit", 1);
+      const limitValue = numericOption(command, parsed.values.limit, "limit", 1);
       const lean = parsed.values.lean === true;
       if (parsed.values.scoped === true) {
         const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: lean ? false : parsed.values.full });
@@ -335,7 +335,7 @@ export async function runCli(
       });
       const pattern = requirePositional(parsed.positionals, "pattern", "thread");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = numericOption(parsed.values.limit, "limit"); // 0 is a documented count-only mode: totals without matches
+      const limitValue = numericOption(command, parsed.values.limit, "limit"); // 0 is a documented count-only mode: totals without matches
       const result = findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
@@ -372,7 +372,7 @@ export async function runCli(
       const symbol = requirePositional(parsed.positionals, "symbol", "warp");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "warp", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const depthValue = numericOption(parsed.values.depth, "depth", 1);
+      const depthValue = numericOption(command, parsed.values.depth, "depth", 1);
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") {
         throw new Error(`osnova warp: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
@@ -395,7 +395,7 @@ export async function runCli(
         },
       });
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", 1);
+      const maxDirsValue = numericOption(command, parsed.values["max-dirs"], "max-dirs", 1);
       io.stdout(
         formatMap(
           map(index, {
@@ -417,12 +417,12 @@ export async function runCli(
       // Symbols seed the context on their own; without them a blank question selects nothing.
       const question = parsed.positionals.join(" ");
       if (question.trim().length === 0 && (parsed.values.symbol ?? []).length === 0) throw new Error("osnova footing: missing <question> argument");
-      const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
+      const budget = numericOption(command, parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = taskContext(index, { task, question, symbols: parsed.values.symbol,
-        in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit", 1),
-        maxDepth: numericOption(parsed.values.depth, "depth", 1), maxCodeUnits: budget });
+        in: parsed.values.in, limit: numericOption(command, parsed.values.limit, "limit", 1),
+        maxDepth: numericOption(command, parsed.values.depth, "depth", 1), maxCodeUnits: budget });
       io.stdout(jsonOutput(result, "footing"));
       return EXIT_OK;
     }
@@ -434,7 +434,7 @@ export async function runCli(
       if (baseCache === undefined && baseRef === undefined) throw new Error("osnova settle: --base-ref or --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const maxDepth = numericOption(parsed.values.depth, "depth", 1) ?? 1;
+      const maxDepth = numericOption(command, parsed.values.depth, "depth", 1) ?? 1;
       let result;
       if (baseRef !== undefined) {
         const base = await materializeBaseRef(root, baseRef, { cacheDir });
@@ -481,7 +481,7 @@ export async function runCli(
       const claims = parseClaims([...(parsed.values.site ?? []), ...fromFile]);
       if (claims.length === 0) throw new Error("osnova plumb: give at least one --site path:line or a --sites-file");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", 1) });
+      const result = plumb(index, symbol, claims, { direction, depth: numericOption(command, parsed.values.depth, "depth", 1) });
       io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
       return EXIT_OK;
     }
@@ -494,7 +494,7 @@ export async function runCli(
       const file = parsed.values.file;
       if (symbols.length === 0 && file === undefined) throw new Error("osnova tests: give <symbol...> or --file <path>");
       if (symbols.length > 0 && file !== undefined) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
-      const limit = numericOption(parsed.values.limit, "limit", 1);
+      const limit = numericOption(command, parsed.values.limit, "limit", 1);
       const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
@@ -511,7 +511,7 @@ export async function runCli(
       }
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = unreferenced(index, {
-        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", 1), includeExported: parsed.values.exported,
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(command, parsed.values.limit, "limit", 1), includeExported: parsed.values.exported,
       });
       io.stdout(formatUnreferenced(result));
       return EXIT_OK;

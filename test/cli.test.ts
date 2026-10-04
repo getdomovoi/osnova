@@ -320,7 +320,9 @@ describe("cli", () => {
       [["thread", ""], "osnova: osnova thread: missing <pattern> argument"],
       [["tests"], "osnova: osnova tests: give <symbol...> or --file <path>"],
       [["footing", "   "], "osnova: osnova footing: missing <question> argument"],
-      [["ground", "two", "-n", "0"], "osnova: --limit must be a safe integer >= 1"],
+      [["ground", "two", "-n", "0"], "osnova: osnova ground: --limit must be a safe integer >= 1"],
+      [["warp", "two", "--depth", "0"], "osnova: osnova warp: --depth must be a safe integer >= 1"],
+      [["groundwork", "--max-dirs", "0"], "osnova: osnova groundwork: --max-dirs must be a safe integer >= 1"],
     ] as const) {
       const result = bin([...args]);
       expect(result.status).toBe(2);
@@ -344,11 +346,26 @@ describe("cli", () => {
     const counts = capture();
     expect(await run(["thread", "two", "-n", "0"], counts.io)).toBe(0);
     expect(counts.lines.join("\n")).not.toContain("no matches");
-    await expect(run(["thread", "two", "-n", "abc"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 0$/);
+    await expect(run(["thread", "two", "-n", "abc"])).rejects.toThrow(/^osnova thread: --limit must be a safe integer >= 0$/);
     for (const command of [["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
-      await expect(run([...command, "-n", "0"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 1$/);
-      await expect(run([...command, "-n", "abc"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 1$/);
-      await expect(run([...command, "--limit=0"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 1$/);
+      await expect(run([...command, "-n", "0"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
+      await expect(run([...command, "-n", "abc"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
+      await expect(run([...command, "--limit=0"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
+    }
+  }, 60_000);
+
+  it("names the command in every numeric option error", async () => {
+    const run = (args: string[]) => runCli([...args, "--workspace", workspace, ...cacheArgs], capture().io);
+    for (const [args, message] of [
+      [["warp", "two", "--depth", "0"], "osnova warp: --depth must be a safe integer >= 1"],
+      [["footing", "two", "--depth", "abc"], "osnova footing: --depth must be a safe integer >= 1"],
+      [["footing", "two", "--max-code-units", "0"], "osnova footing: --max-code-units must be a safe integer >= 1"],
+      [["groundwork", "--max-dirs", "0"], "osnova groundwork: --max-dirs must be a safe integer >= 1"],
+      [["plumb", "two", "--site", "src/two.ts:1", "--depth", "0"], "osnova plumb: --depth must be a safe integer >= 1"],
+      [["settle", "--base-cache", path.join(workspace, "no-such-cache"), "--depth", "0"], "osnova settle: --depth must be a safe integer >= 1"],
+    ] as const) {
+      const error = await run([...args]).then(() => undefined, (caught: unknown) => caught);
+      expect(error instanceof Error ? error.message : error, args.join(" ")).toBe(message);
     }
   }, 60_000);
 
