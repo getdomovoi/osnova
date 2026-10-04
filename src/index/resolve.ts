@@ -290,6 +290,9 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
   // again from the roots that first pass proves.
   const firstPass = linkRust((file) => path.posix.basename(file) === "mod.rs" || rustRootPlace(file, rustTargetRoots, cargoRoots));
   const ownership = linkRust((file) => path.posix.basename(file) === "mod.rs" || (rustRootPlace(file, rustTargetRoots, cargoRoots) && !firstPass.declaredBy.has(file) && !firstPass.uncertain.has(file)));
+  // A file a manifest lists as a target is compiled as its own crate root even when another file declares it as a
+  // module (whether or not that declaration's cfg is on): it has two crate contexts, and its paths name neither.
+  for (const file of rustTargetRoots) if (ownership.declaredBy.delete(file)) ownership.uncertain.add(file);
   const rustDeclaredBy = ownership.declaredBy;
   return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
     rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])),

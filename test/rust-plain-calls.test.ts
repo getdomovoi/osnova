@@ -868,6 +868,24 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
   });
 
+  // Round 14: an explicit Cargo target that another file also declares as a module.
+  const bins = "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n[[bin]]\nname=\"tool\"\npath=\"src/bin/tool.rs\"\n[[bin]]\nname=\"owner\"\npath=";
+  it.each([
+    ["a disabled path declaration", "custom/owner.rs", "#[cfg(any())]\n#[path=\"../src/bin/tool.rs\"]mod child;\n"],
+    ["an active path declaration", "custom/owner.rs", "#[cfg(all())]\n#[path=\"../src/bin/tool.rs\"]mod child;\n"],
+    ["a plain path declaration", "custom/owner.rs", "#[path=\"../src/bin/tool.rs\"]mod child;\n"],
+    ["a disabled conventional declaration", "src/bin/owner.rs", "#[cfg(any())]\nmod tool;\n"],
+    ["an active conventional declaration", "src/bin/owner.rs", "#[cfg(all())]\nmod tool;\n"],
+  ])("never reads crate:: in an explicit Cargo target that %s also names as another target's", async (_label, owner, declaration) => {
+    const edge = await target({
+      "Cargo.toml": `${bins}"${owner}"\n`,
+      [owner]: declaration + "pub fn f() -> &'static str { \"OWNER\" }\nfn main() {}\n",
+      "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\nfn run() -> &'static str {\n    crate::f()\n}\nfn main() { let _ = run(); }\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe(`${owner}#f`);
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",
