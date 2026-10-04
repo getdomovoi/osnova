@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { runCli } from "../src/cli/cli.js";
 
 function capture(): { lines: string[]; io: { stdout: (t: string) => void; stderr: (t: string) => void } } {
@@ -300,6 +301,32 @@ describe("cli", () => {
     await expect(run(["tests"])).rejects.toThrow(/^osnova tests: give <symbol\.\.\.> or --file <path>$/);
     await expect(run(["tests", "two", "--file", "test/two.test.ts"])).rejects.toThrow(/^osnova tests: give either <symbol\.\.\.> or --file <path>, not both$/);
   }, 60_000);
+
+  it("names the command as typed when an option is unknown or lacks its value", async () => {
+    const commands = ["build", "check", "ground", "thread", "outline", "warp", "groundwork", "footing", "settle", "plumb", "tests", "unreferenced", "coverage", "update-check", "doctor", "setup", "hook", "mcp"];
+    for (const command of commands) {
+      await expect(runCli([command, "--no-such-option"], capture().io)).rejects.toThrow(new RegExp(`^osnova ${command}: Unknown option '--no-such-option'`));
+    }
+    await expect(runCli(["ground", "--workspace"], capture().io)).rejects.toThrow(/^osnova ground: Option '--workspace <value>' argument missing$/);
+    await expect(runCli(["footing", "--symbol"], capture().io)).rejects.toThrow(/^osnova footing: Option '--symbol <value>' argument missing$/);
+    await expect(runCli(["footing", "two", "--task", "oops", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow(/^osnova footing: invalid --task "oops"; use understand, change or review$/);
+  }, 60_000);
+
+  it("prints usage errors with the typed command on stderr and exits 2", () => {
+    const bin = (args: string[]) => spawnSync(process.execPath, ["--import", "tsx", path.resolve("src/cli/bin.ts"), ...args, "--workspace", workspace, ...cacheArgs], { encoding: "utf8", timeout: 60_000 });
+    for (const [args, message] of [
+      [["warp"], "osnova: osnova warp: missing <symbol> argument"],
+      [["outline"], "osnova: osnova outline: missing <file> argument"],
+      [["thread", ""], "osnova: osnova thread: missing <pattern> argument"],
+      [["tests"], "osnova: osnova tests: give <symbol...> or --file <path>"],
+      [["footing", "   "], "osnova: osnova footing: missing <question> argument"],
+      [["ground", "two", "-n", "0"], "osnova: --limit must be a safe integer >= 1"],
+    ] as const) {
+      const result = bin([...args]);
+      expect(result.status).toBe(2);
+      expect(result.stderr.trim()).toBe(message);
+    }
+  }, 120_000);
 
   it("footing rejects a blank question unless symbols seed it", async () => {
     const run = (args: string[], io = capture().io) => runCli(["footing", ...args, "--workspace", workspace, ...cacheArgs], io);
