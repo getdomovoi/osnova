@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "3b89f59100a227307a469f6b0367075999b67c6a",
+    "commit": "1f5e0bef0a2188f868825faae4b5d101d2d36428",
     "version": "0.12.0",
     "unreleased": "C# object creation names the constructor it runs"
   },
@@ -220,7 +220,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (2045 to 2070)",
         "determinism": "three runs byte-identical"
       },
-      "overloadUndetermined": 968,
+      "overloadUndetermined": 955,
       "previous": {
         "osnova": {
           "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
@@ -278,54 +278,19 @@
         "external": 6320,
         "noVerdict": 162
       },
-      "claimedEdges": 6121,
-      "decided": 6066,
-      "undecided": 55,
-      "truePositive": 6039,
-      "falsePositive": 27,
-      "precision": 0.9955,
-      "falseEdgeRate": 0.00445,
+      "claimedEdges": 6134,
+      "decided": 6081,
+      "undecided": 53,
+      "truePositive": 6081,
+      "falsePositive": 0,
+      "precision": 1,
+      "falseEdgeRate": 0,
       "oracleInRepoSites": 7028,
-      "coveredInRepoSites": 6034,
-      "recall": 0.8586,
+      "coveredInRepoSites": 6076,
+      "recall": 0.8645,
       "falseEdgesWithCorrectTarget": 0,
-      "falseByCause": [
-        {
-          "cause": "cfg variants collapse",
-          "count": 11,
-          "wrong": "osnova",
-          "detail": "a function declared once per #[cfg] branch (unix, windows, other) is one record; osnova names a variant that is not active on the host build",
-          "example": "crates/ignore/src/walk.rs:1469 device_num"
-        },
-        {
-          "cause": "inline test module function collapses with its parent",
-          "count": 6,
-          "wrong": "osnova",
-          "detail": "fn check in ban.rs and fn check in its mod tests share one record, so calls to the parent function (and super::check) name the test helper",
-          "example": "crates/regex/src/ban.rs:39 check"
-        },
-        {
-          "cause": "local binding called",
-          "count": 5,
-          "wrong": "osnova",
-          "detail": "a closure, parameter or pattern binding is called and resolved by unique or same-file name to an unrelated function",
-          "example": "crates/core/flags/hiargs.rs:1063 add"
-        },
-        {
-          "cause": "function-local use of an external function",
-          "count": 4,
-          "wrong": "osnova",
-          "detail": "use std::os::unix::fs::symlink inside a function body is not read, so symlink(...) names an in-repo function of that name",
-          "example": "crates/ignore/src/walk.rs:2217 symlink"
-        },
-        {
-          "cause": "external trait implementation",
-          "count": 1,
-          "wrong": "osnova",
-          "detail": "Box::<dyn Error>::from(...) names the in-repo impl From<NoError> for io::Error through an imported file",
-          "example": "crates/searcher/src/sink.rs:58 from"
-        }
-      ],
+      "falseByCause": [],
+
       "runSeconds": {
         "oracle": 9.7,
         "osnovaSites": 1.43

@@ -151,7 +151,7 @@ describe("cli", () => {
       java: { "imported-file-name": 1, "receiver-hint": 1, "same-file-name": 1 },
       python: { "import-binding": 2, "lexical-definition": 1, "receiver-hint": 1 },
       ruby: { "same-file-name": 1, "unique-name": 1 },
-      rust: { "imported-file-name": 2, "same-file-name": 1 },
+      rust: { "import-binding": 1, "imported-file-name": 1, "same-file-name": 1 },
       typescript: { "import-binding": 1, "lexical-definition": 2, "receiver-hint": 2 },
     });
   }, 60_000);

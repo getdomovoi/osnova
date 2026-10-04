@@ -165,6 +165,23 @@ export interface WorkspaceContext {
   readonly cargoDependencies: ReadonlyMap<string, ReadonlySet<string>>;
   /** tsconfig.json and jsconfig.json `paths` and `baseUrl`, read from the nearest config above the importing file. */
   readonly tsConfigs: TsConfigs;
+  /** Qualified names of Rust inline modules (`src/main.rs#m.inner`), which a path walks before any module file. */
+  readonly rustInlineModules: ReadonlySet<string>;
+  /** Per Rust file, the `mod name;` declarations it writes at its top level: `file`, or `path` when an attribute
+   * sets its path; `nested` for one written only inside an inline module. */
+  readonly rustModuleFiles: ReadonlyMap<string, ReadonlyMap<string, "file" | "path" | "nested">>;
+  /** Rust crate roots a Cargo.toml names: target `path` values and a `build` script. */
+  readonly rustTargetRoots: ReadonlySet<string>;
+  /** Rust module file to the files whose top-level `mod name;` declares it. */
+  readonly rustDeclaredBy: ReadonlyMap<string, readonly RustModuleLink[]>;
+  /** Rust files a declaration may name that the scan could not follow: no root, and no module the walk enters. */
+  readonly rustUncertainOwner: ReadonlySet<string>;
+  /** Cargo targets another file also declares as a module: compiled in two crates, so their module identity is unproven. */
+  readonly rustTwoCrates: ReadonlySet<string>;
+  /** Rust files Cargo may build as a target's crate root; an undeclared file outside it is a module out of sight or no code. */
+  readonly rustMayBeTargets: ReadonlySet<string>;
+  /** Some `#[path]` value or delimiter could not be read, so any file may be a module: no crate root is proven. */
+  readonly rustOwnershipUnreadable: boolean;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -200,9 +217,10 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       const packageSection = /^\s*\[package\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
       const name = packageSection === undefined ? undefined : /^\s*name\s*=\s*"([^"]+)"/m.exec(packageSection)?.[1];
       if (name !== undefined) cargoPackages.set(name.replace(/-/g, "_"), dir);
-      const target = /^\s*\[(?:lib|\[bin\])\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
-      const rootPath = target === undefined ? undefined : /^\s*path\s*=\s*"([^"]+)"/m.exec(target)?.[1];
-      if (rootPath !== undefined) { const srcDir = path.posix.dirname(path.posix.join(dir, rootPath)); cargoSrc.set(dir, srcDir === "." ? "" : srcDir); }
+      // The library target a package path names: `[lib] path` when set, else src/lib.rs. A binary is never imported.
+      const library = /^\s*\[lib\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(card.text)?.[1];
+      const libraryPath = library === undefined ? undefined : /^\s*path\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(library);
+      cargoSrc.set(dir, path.posix.normalize(path.posix.join(dir, libraryPath === undefined || libraryPath === null ? "src/lib.rs" : (libraryPath[1] ?? libraryPath[2])!)));
       const dependencies = new Set<string>();
       for (const table of card.text.matchAll(/^\s*\[(?:workspace\.|target\.[^\]]+\.)?(?:dependencies|dev-dependencies|build-dependencies)\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)) {
         for (const entry of (table[1] ?? "").matchAll(/^\s*([A-Za-z0-9_-]+)\s*=/gm)) if (entry[1] !== undefined) dependencies.add(entry[1].replace(/-/g, "_"));
@@ -215,7 +233,484 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files) };
+  // Which file owns each Rust module file. A declaration the scan can follow (`mod name;` at the top level, in a
+  // named inline module, or with a literal `#[path]`) links its file to the declaring file. One it can see but not
+  // follow (inside a macro or function body, or a `cfg_attr` path) marks its candidate files as owned by an
+  // unknown declarer, so they are neither a root nor a module the walk may enter. A `path` value that cannot be
+  // read could name any file, and leaves every crate root unproven.
+  const rustScans = new Map([...files.values()].filter((card) => card.language === "rust").map((card) => [card.path, scanRustModules(card.text)]));
+  const cargoTargets = new Map([...files.values()].filter((card) => path.posix.basename(card.path) === "Cargo.toml")
+    .map((card) => [path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path), readCargoTargets(card.text)]));
+  const rustTargetRoots = new Set([...cargoTargets].flatMap(([dir, targets]) => [...targets.paths, ...(typeof targets.build === "string" ? [targets.build] : [])]
+    .map((target) => path.posix.normalize(path.posix.join(dir, target)))));
+  const rustModuleFiles = new Map<string, Map<string, "file" | "path" | "nested">>();
+  const linkRust = (placements: (file: string) => readonly ("beside" | "named")[]) => {
+    const declaredBy = new Map<string, RustModuleLink[]>();
+    const uncertain = new Set<string>();
+    const seen = new Set<string>();
+    let unreadable = false;
+    const add = (child: string, link: RustModuleLink, certain: boolean) => {
+      if (!files.has(child)) return;
+      if (!certain) { uncertain.add(child); return; }
+      const key = [child, link.declarer, link.name, link.viaPath, ...link.inline].join("\0");
+      if (seen.has(key)) return;
+      seen.add(key);
+      const list = declaredBy.get(child);
+      if (list === undefined) declaredBy.set(child, [link]); else list.push(link);
+    };
+    for (const [file, scan] of rustScans) {
+      const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
+      if (scan.unbalanced) unreadable = true;
+      for (const placement of placements(file)) for (const declaration of scan.declarations) {
+        const childDir = placement === "beside" ? dir : path.posix.join(dir, path.posix.basename(file).replace(/\.rs$/, ""));
+        const nestedDir = path.posix.join(childDir, ...declaration.inline);
+        const conventional = [path.posix.join(nestedDir, `${declaration.name}.rs`), path.posix.join(nestedDir, declaration.name, "mod.rs")];
+        // An absolute path names a file by a root the index does not compare against its relative paths.
+        if (declaration.hasPath && (declaration.pathValue === undefined || rustAbsolutePath(declaration.pathValue))) { unreadable = true; continue; }
+        // A literal path is relative to the file's directory at the top level, and to the inline modules'
+        // directory (from the module directory of the file) inside one.
+        const pathTarget = declaration.pathValue === undefined ? undefined : path.posix.normalize(path.posix.join(declaration.inline.length === 0 ? dir : nestedDir, declaration.pathValue));
+        if (declaration.other) {
+          // An enclosing inline module's `#[path]` moves its children to a place the index does not compute (paths
+          // compose through every enclosing module): any file may be that child, so no crate root is proven.
+          if (declaration.framePaths.length > 0) { unreadable = true; continue; }
+          for (const candidate of [...conventional, ...(pathTarget === undefined ? [] : [pathTarget, path.posix.normalize(path.posix.join(dir, declaration.pathValue!))])]) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, false);
+        } else if (pathTarget !== undefined) add(pathTarget, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: true }, !declaration.cfgPath);
+        else for (const candidate of conventional) add(candidate, { declarer: file, inline: declaration.inline, name: declaration.name, viaPath: false }, true);
+      }
+    }
+    return { declaredBy, uncertain, unreadable };
+  };
+  for (const [file, scan] of rustScans) {
+    const kinds = new Map<string, "file" | "path" | "nested">();
+    for (const declaration of scan.declarations) {
+      // A cfg-gated module is followed only while nothing else in the file binds its name: the gate may be off,
+      // and a `use .. as name` or a type of that name would then be what the path names.
+      const kind = declaration.other || declaration.inline.length > 0 ? "nested" : declaration.hasPath || (declaration.cfg && rustNameBoundOtherwise(scan.code, declaration.name)) ? "path" : "file";
+      const previous = kinds.get(declaration.name);
+      kinds.set(declaration.name, previous === "path" || kind === "path" ? "path" : previous === "file" || kind === "file" ? "file" : "nested");
+    }
+    rustModuleFiles.set(file, kinds);
+  }
+  // A file's child modules sit beside it when it is mod.rs, a crate root, or loaded by a `#[path]`, and in the
+  // directory named after it when a plain `mod name;` loads it; a file reached more than one way has its children in
+  // every such place, each linked to it. How a file is reached depends on the links, so they are rebuilt until they
+  // stop changing. Links that never settle prove nothing, and leave every crate root unproven.
+  const placements = (links: ReturnType<typeof linkRust> | undefined) => (file: string): ("beside" | "named")[] => {
+    if (path.posix.basename(file) === "mod.rs") return ["beside"];
+    const declarers = links?.declaredBy.get(file) ?? [];
+    const uncertain = links?.uncertain.has(file) ?? false;
+    const found = new Set<"beside" | "named">();
+    if (rustRootPlace(file, rustTargetRoots, cargoRoots) && ((declarers.length === 0 && !uncertain) || rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets))) found.add("beside");
+    if (declarers.some((link) => link.viaPath)) found.add("beside");
+    if (declarers.some((link) => !link.viaPath) || found.size === 0) found.add("named");
+    return [...found];
+  };
+  const linksKey = (links: ReturnType<typeof linkRust>): string => JSON.stringify([[...links.declaredBy].map(([child, list]) => [child, list.map((link) => [link.declarer, link.name, link.viaPath, ...link.inline].join("\0")).sort()]).sort(), [...links.uncertain].sort()]);
+  let ownership = linkRust(placements(undefined));
+  let settled = false;
+  for (let round = 0; round < 16 && !settled; round += 1) {
+    const next = linkRust(placements(ownership));
+    settled = linksKey(next) === linksKey(ownership);
+    ownership = next;
+  }
+  // A Cargo target is compiled as its own crate root even when another file declares it as a module (whether or not
+  // that declaration's cfg is on): it has two crate contexts, so no path from it (or a module below it) is proven.
+  // The declaring file may still walk into it as its module.
+  const rustMayBeTargets = new Set([...rustScans.keys()].filter((file) => rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets)));
+  const rustTwoCrates = new Set([...ownership.declaredBy.keys()].filter((file) => rustMayBeTargets.has(file)));
+  const cargoUnread = [...cargoTargets.values()].some((targets) => targets.unread);
+  const rustDeclaredBy = ownership.declaredBy;
+  return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
+    rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])),
+    rustModuleFiles,
+    rustDeclaredBy,
+    rustUncertainOwner: ownership.uncertain,
+    rustTwoCrates,
+    rustMayBeTargets,
+    rustOwnershipUnreadable: ownership.unreadable || cargoUnread || !settled,
+    rustTargetRoots };
+}
+
+type CargoTargetKind = "lib" | "bin" | "test" | "example" | "bench";
+
+/** What a Cargo manifest says about its targets, as far as the index reads TOML. */
+interface CargoTargets {
+  /** The files target tables name, relative to the manifest's directory: a `path`, or for a table without one the files
+   * Cargo infers from the target's name. */
+  readonly paths: readonly string[];
+  /** Kinds whose automatic discovery `autobins = false` (and its siblings) turns off. */
+  readonly autoOff: ReadonlySet<CargoTargetKind>;
+  /** `build = false`, or the script `build = ".."` names; undefined leaves build.rs as the script. */
+  readonly build: false | string | undefined;
+  /** Target syntax the reader does not interpret: an inline target table, a multi-line or undecodable path. */
+  readonly unread: boolean;
+}
+
+// A small TOML reader for the target keys of a Cargo manifest: table headers (bare, quoted, spaced, with a trailing
+// comment), dotted and quoted keys, and string values with their escapes. Multi-line strings and arrays are skipped
+// whole, so their text is never read as a header. A line it cannot parse, or target syntax it does not read, sets
+// `unread`: what it skipped could name a target.
+function readCargoTargets(text: string): CargoTargets {
+  const kinds = new Set<string>(["lib", "bin", "test", "example", "bench"]);
+  const autoKeys = new Map<string, CargoTargetKind>([["autolib", "lib"], ["autobins", "bin"], ["autotests", "test"], ["autoexamples", "example"], ["autobenches", "bench"]]);
+  const paths: string[] = [];
+  const pathless: { kind: CargoTargetKind; name: string | undefined }[] = [];
+  let packageName: string | undefined;
+  const autoOff = new Set<CargoTargetKind>();
+  let build: false | string | undefined;
+  let unread = false;
+  const lineEnd = (at: number): number => { const end = text.indexOf("\n", at); return end < 0 ? text.length : end; };
+  const blank = (from: number, to: number): boolean => /^[ \t\r]*(?:#.*)?$/.test(text.slice(from, to));
+  // One basic ("..") or literal ('..') single-line string starting at `at`: its decoded value and the index after it.
+  const stringAt = (at: number): { value: string; end: number } | undefined => {
+    if (text[at] === "'") { const end = text.indexOf("'", at + 1); return end < 0 || text.slice(at + 1, end).includes("\n") ? undefined : { value: text.slice(at + 1, end), end: end + 1 }; }
+    if (text[at] !== '"') return undefined;
+    let value = "";
+    for (let index = at + 1; index < text.length; index += 1) {
+      const char = text[index]!;
+      if (char === '"') return { value, end: index + 1 };
+      if (char === "\n") return undefined;
+      if (char !== "\\") { value += char; continue; }
+      const escape = text[index + 1];
+      const simple: Record<string, string> = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\", e: "\u001b" };
+      if (escape !== undefined && simple[escape] !== undefined) { value += simple[escape]; index += 1; continue; }
+      const digits = escape === "u" ? 4 : escape === "U" ? 8 : escape === "x" ? 2 : 0;
+      const hex = text.slice(index + 2, index + 2 + digits);
+      if (digits === 0 || !/^[0-9A-Fa-f]+$/.test(hex) || hex.length !== digits || Number.parseInt(hex, 16) > 0x10ffff) return undefined;
+      value += String.fromCodePoint(Number.parseInt(hex, 16));
+      index += 1 + digits;
+    }
+    return undefined;
+  };
+  // A dotted key (`a."b".'c'`) starting at `at`, with the index after it.
+  const keyAt = (at: number): { segments: string[]; end: number } | undefined => {
+    const segments: string[] = [];
+    let index = at;
+    for (;;) {
+      while (text[index] === " " || text[index] === "\t") index += 1;
+      const quoted = stringAt(index);
+      const bare = quoted === undefined ? /^[A-Za-z0-9_-]+/.exec(text.slice(index, lineEnd(index)))?.[0] : undefined;
+      if (quoted === undefined && bare === undefined) return undefined;
+      segments.push(quoted?.value ?? bare!);
+      index = quoted?.end ?? index + bare!.length;
+      while (text[index] === " " || text[index] === "\t") index += 1;
+      if (text[index] !== ".") return { segments, end: index };
+      index += 1;
+    }
+  };
+  // The end of the value starting at `at`: past nested arrays and inline tables and every kind of string, up to a
+  // comment or the end of its line.
+  const valueEnd = (at: number): number => {
+    let depth = 0;
+    let index = at;
+    while (index < text.length) {
+      const char = text[index]!;
+      const triple = text.startsWith('"""', index) ? '"""' : text.startsWith("'''", index) ? "'''" : undefined;
+      if (triple !== undefined) {
+        let close = index + 3;
+        while (close < text.length && !text.startsWith(triple, close)) close += triple === '"""' && text[close] === "\\" ? 2 : 1;
+        index = Math.min(text.length, close + 3);
+        while (text[index] === triple[0]) index += 1;
+        continue;
+      }
+      if (char === '"' || char === "'") { const string = stringAt(index); index = string?.end ?? lineEnd(index); continue; }
+      if (char === "#") { if (depth === 0) return index; index = lineEnd(index); continue; }
+      if (char === "\n" && depth === 0) return index;
+      if (char === "[" || char === "{") depth += 1;
+      if (char === "]" || char === "}") depth -= 1;
+      index += 1;
+    }
+    return index;
+  };
+  let table: string[] = [];
+  let targetKind: CargoTargetKind | undefined;
+  let targetHasPath = false;
+  let targetName: string | undefined;
+  const closeTable = (): void => {
+    if (targetKind !== undefined && !targetHasPath) pathless.push({ kind: targetKind, name: targetName });
+    targetKind = undefined;
+    targetHasPath = false;
+    targetName = undefined;
+  };
+  let index = text.startsWith("\ufeff") ? 1 : 0;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === " " || char === "\t" || char === "\r" || char === "\n") { index += 1; continue; }
+    if (char === "#") { index = lineEnd(index); continue; }
+    if (char === "[") {
+      const array = text[index + 1] === "[";
+      const end = lineEnd(index);
+      const key = keyAt(index + (array ? 2 : 1));
+      const close = array ? "]]" : "]";
+      closeTable();
+      if (key === undefined || !text.startsWith(close, key.end) || !blank(key.end + close.length, end)) {
+        unread = true;
+        table = ["\0"];
+      } else {
+        table = key.segments;
+        const head = table[0]!;
+        if (table.length === 1 && kinds.has(head)) {
+          if ((head === "lib") === array) unread = true;
+          else targetKind = head as CargoTargetKind;
+        }
+      }
+      index = end;
+      continue;
+    }
+    const key = keyAt(index);
+    let at = key?.end ?? index;
+    if (key === undefined || text[at] !== "=") { unread = true; index = lineEnd(index); continue; }
+    at += 1;
+    while (text[at] === " " || text[at] === "\t") at += 1;
+    const end = valueEnd(at);
+    const raw = text.slice(at, end).trim();
+    const full = [...table, ...key.segments];
+    const string = stringAt(at);
+    const whole = string !== undefined && blank(string.end, end);
+    if (targetKind !== undefined && key.segments.length === 1 && key.segments[0] === "path") {
+      targetHasPath = true;
+      // An absolute path names a file by a root the index does not compare against its relative paths.
+      if (whole && !rustAbsolutePath(string.value)) paths.push(string.value); else unread = true;
+    } else if (targetKind !== undefined && key.segments.length === 1 && key.segments[0] === "name") {
+      if (whole) targetName = string.value; else unread = true;
+    } else if (kinds.has(full[0]!) && (full.length === 1 || full[full.length - 1] === "path")) unread = true;
+    else if (full.length === 2 && full[0] === "package" && full[1] === "name") { if (whole) packageName = string.value; }
+    else if (full.length === 2 && full[0] === "package" && autoKeys.has(full[1]!)) { if (raw === "false") autoOff.add(autoKeys.get(full[1]!)!); }
+    else if (full.length === 2 && full[0] === "package" && full[1] === "build") {
+      if (raw === "false") build = false;
+      else if (whole && !rustAbsolutePath(string.value)) build = string.value;
+      else if (raw !== "true") unread = true;
+    }
+    index = lineEnd(end);
+  }
+  closeTable();
+  // A table without a path names the file Cargo infers from the target's name; a binary named after the package may
+  // also be src/main.rs. A target other than the library must have a name.
+  const directories: Record<CargoTargetKind, string> = { lib: "src", bin: "src/bin", test: "tests", example: "examples", bench: "benches" };
+  for (const { kind, name } of pathless) {
+    if (kind === "lib") { paths.push("src/lib.rs"); continue; }
+    if (name === undefined || name.includes("/") || name.includes("\\")) { unread = true; continue; }
+    paths.push(`${directories[kind]}/${name}.rs`, `${directories[kind]}/${name}/main.rs`);
+    if (kind === "bin" && (packageName === undefined || name === packageName)) paths.push("src/main.rs");
+  }
+  return { paths, autoOff, build, unread };
+}
+
+function rustAbsolutePath(value: string): boolean {
+  return value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/.test(value);
+}
+
+// Whether Cargo may compile a file as a target's crate root. Inside a package, only a file a target table names (by
+// its path, or by its name when it has none), the build script, and the files of each kind's default layout whose
+// discovery is on are targets; a file outside every manifest keeps whatever rustRootPlace allows.
+function rustMayBeTarget(file: string, targetRoots: ReadonlySet<string>, cargoRoots: readonly string[], manifests: ReadonlyMap<string, CargoTargets>): boolean {
+  if (targetRoots.has(file)) return true;
+  if (!rustRootPlace(file, targetRoots, cargoRoots)) return false;
+  // A nested package's manifest does not stop the packages above it from discovering their own layout.
+  const owners = [...manifests.keys()].filter((dir) => dir === "" || file.startsWith(`${dir}/`));
+  if (owners.length === 0) return true;
+  return owners.some((owner) => {
+    const targets = manifests.get(owner)!;
+    const relative = owner === "" ? file : file.slice(owner.length + 1);
+    if (relative === "build.rs") return targets.build === undefined;
+    const kind: CargoTargetKind | undefined = relative === "src/lib.rs" ? "lib"
+      : relative === "src/main.rs" || /^src\/bin\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bin"
+      : /^tests\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "test"
+      : /^examples\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "example"
+      : /^benches\/[^/]+(?:\.rs|\/main\.rs)$/.test(relative) ? "bench" : undefined;
+    return kind !== undefined && !targets.autoOff.has(kind);
+  });
+}
+
+// Where a Rust crate root may sit: a Cargo target path, lib.rs or main.rs in a src directory, build.rs beside a
+// Cargo.toml, a file directly under tests/, examples/, benches/ or src/bin/, or main.rs one directory below one.
+function rustRootPlace(file: string, targetRoots: ReadonlySet<string>, cargoRoots: readonly string[]): boolean {
+  const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
+  const dir = parentOf(file);
+  const name = path.posix.basename(file);
+  const targetDir = (candidate: string): boolean => ["tests", "examples", "benches"].includes(path.posix.basename(candidate)) || (path.posix.basename(candidate) === "bin" && path.posix.basename(parentOf(candidate)) === "src");
+  return targetRoots.has(file) || ((name === "lib.rs" || name === "main.rs") && path.posix.basename(dir) === "src") || (name === "build.rs" && cargoRoots.includes(dir))
+    || targetDir(dir) || (name === "main.rs" && dir !== "" && targetDir(parentOf(dir)));
+}
+
+/** One `mod name;` that names a file: the declaring file, the inline modules around it, and whether a `#[path]` set it. */
+interface RustModuleLink {
+  readonly declarer: string;
+  readonly inline: readonly string[];
+  readonly name: string;
+  readonly viaPath: boolean;
+}
+
+interface RustModuleDeclaration {
+  readonly name: string;
+  /** The named inline modules around it, outermost first. */
+  readonly inline: readonly string[];
+  /** Inside some other body (a macro, a function, an impl): the scan cannot tell where it belongs. */
+  readonly other: boolean;
+  readonly cfg: boolean;
+  readonly hasPath: boolean;
+  readonly cfgPath: boolean;
+  readonly pathValue: string | undefined;
+  /** The `path` identifiers in this declaration's attributes. */
+  readonly pathCount: number;
+  /** The `#[path]` values of enclosing inline modules, by frame; null when one cannot be read. */
+  readonly framePaths: readonly { readonly at: number; readonly value: string | null }[];
+}
+
+// The `mod name;` declarations of Rust source. Comments (block comments nest), strings, raw strings and char
+// literals are blanked first; delimiter depth covers braces, parentheses and brackets, so a macro body of any
+// delimiter is never the top level. `unbalanced` when the delimiters do not pair up, and nothing read is trusted.
+function scanRustModules(text: string): { declarations: RustModuleDeclaration[]; unbalanced: boolean; code: string } {
+  const strings: string[] = [];
+  let code = "";
+  for (let index = 0; index < text.length;) {
+    const char = text[index]!;
+    const next = text[index + 1];
+    if (char === "/" && next === "/") { const end = text.indexOf("\n", index); index = end < 0 ? text.length : end; code += " "; continue; }
+    if (char === "/" && next === "*") {
+      let depth = 1;
+      index += 2;
+      while (index < text.length && depth > 0) {
+        if (text[index] === "/" && text[index + 1] === "*") { depth += 1; index += 2; }
+        else if (text[index] === "*" && text[index + 1] === "/") { depth -= 1; index += 2; }
+        else index += 1;
+      }
+      code += " ";
+      continue;
+    }
+    const raw = /^(?:b|c)?r(#*)"/.exec(text.slice(index, index + 260));
+    if (raw !== null && (index === 0 || !/[\p{L}\p{N}\p{M}_]/u.test(text[index - 1]!))) {
+      const close = `"${raw[1]}`;
+      const end = text.indexOf(close, index + raw[0].length);
+      const stop = end < 0 ? text.length : end + close.length;
+      strings.push(text.slice(index + raw[0].length, end < 0 ? text.length : end));
+      code += ` "S${strings.length - 1}" `;
+      index = stop;
+      continue;
+    }
+    if (char === '"' || ((char === "b" || char === "c") && next === '"' && (index === 0 || !/[\p{L}\p{N}\p{M}_]/u.test(text[index - 1]!)))) {
+      let at = char === '"' ? index + 1 : index + 2;
+      let value = "";
+      let escaped = false;
+      while (at < text.length && text[at] !== '"') { if (text[at] === "\\") { escaped = true; value += text.slice(at, at + 2); at += 2; } else { value += text[at]; at += 1; } }
+      strings.push(escaped ? "\u0000" : value);
+      code += ` "S${strings.length - 1}" `;
+      index = at + 1;
+      continue;
+    }
+    if (char === "'") {
+      const literal = /^'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^\\'\n])'/u.exec(text.slice(index, index + 16));
+      if (literal !== null) { code += " "; index += literal[0].length; continue; }
+    }
+    // Rust also treats NEXT LINE, the two direction marks and the line and paragraph separators as whitespace.
+    code += "\u0085\u200e\u200f\u2028\u2029\ufeff".includes(char) ? " " : char;
+    index += 1;
+  }
+  const declarations: RustModuleDeclaration[] = [];
+  let unbalanced = false;
+  let declaredMods = 0;
+  // An inline module's frame keeps its name, and whether a `#[path]` or `#[cfg]` makes its children's place unknown.
+  const stack: ({ name: string; opaque: boolean; path: string | null | undefined } | null)[] = [];
+  // Every attribute, read whole: `#`, optional `!`, any spacing, then a bracketed token tree of any depth. The
+  // declaration pattern below reads three levels of nesting; a deeper attribute may hide a gate, so then every
+  // declaration of the file counts as cfg-gated. Each `path` identifier inside an attribute is counted: one the
+  // resolver does not handle (anywhere but a plain `#[path = ".."]` on a top-level `mod name;`) may move a module's
+  // children where the index does not compute, so it leaves every crate root unproven.
+  const pathIdentifier = /(?<![\p{L}\p{N}\p{M}_])(?:r#)?path(?![\p{L}\p{N}\p{M}_])/gu;
+  let deepest = 0;
+  let pathsInAttributes = 0;
+  for (let at = code.indexOf("#"); at >= 0; at = code.indexOf("#", at + 1)) {
+    let open = at + 1;
+    while (/\s/.test(code[open] ?? "")) open += 1;
+    if (code[open] === "!") { open += 1; while (/\s/.test(code[open] ?? "")) open += 1; }
+    if (code[open] !== "[") continue;
+    let depth = 0;
+    let close = open;
+    for (; close < code.length; close += 1) {
+      if (code[close] === "[") deepest = Math.max(deepest, depth += 1);
+      else if (code[close] === "]" && (depth -= 1) === 0) break;
+    }
+    pathsInAttributes += code.slice(open, close + 1).match(pathIdentifier)?.length ?? 0;
+  }
+  const deepAttributes = deepest > 3;
+  const innerAttributes = /^\s*((?:#\s*!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)/;
+  const pattern = /((?:#\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}\p{M}_#])mod\s+(?:r#)?([\p{L}\p{N}\p{M}_]+)\s*([;{])|([{}()[\]])/gu;
+  for (const match of code.matchAll(pattern)) {
+    const delimiter = match[4];
+    if (delimiter !== undefined) {
+      if (delimiter === "{" || delimiter === "(" || delimiter === "[") stack.push(null);
+      else if (stack.pop() === undefined) unbalanced = true;
+      continue;
+    }
+    const name = match[2]!;
+    declaredMods += 1;
+    if (match[3] === "{") {
+      const frameValue = /(?:^|[\s(,[])(?:r#)?path\s*=\s*"S(\d+)"/.exec(match[1] ?? "")?.[1];
+      const frameText = frameValue === undefined ? undefined : strings[Number(frameValue)];
+      const framePath = /(?:^|[\s(,[])(?:r#)?path\s*=/.test(match[1] ?? "") ? (frameText === undefined || frameText.includes("\u0000") ? null : frameText) : undefined;
+      // Inner attributes at the start of the body apply to the module too.
+      const inner = innerAttributes.exec(code.slice((match.index ?? 0) + match[0].length))?.[1] ?? "";
+      stack.push({ name, path: framePath, opaque: deepAttributes || /(?:^|[\s(,[])(?:r#)?path\s*=|(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(`${match[1] ?? ""} ${inner}`) });
+      continue;
+    }
+    const attributes = match[1] ?? "";
+    // The resolver follows only a plain `#[path = "literal"]`, and only when it is the declaration's one path: a path
+    // inside `cfg_attr`, a doc token, or a second path may be the one a build uses.
+    const pathCount = attributes.match(pathIdentifier)?.length ?? 0;
+    const plainPaths = [...attributes.matchAll(/#\s*\[((?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*)\]/g)]
+      .flatMap((attribute) => { const plain = /^\s*(?:r#)?path\s*=\s*"S(\d+)"\s*$/.exec(attribute[1] ?? ""); return plain === null ? [] : [plain[1]!]; });
+    const pathValue = pathCount === 1 && plainPaths.length === 1 ? strings[Number(plainPaths[0])] : undefined;
+    declarations.push({
+      name,
+      inline: stack.every((entry) => entry !== null) ? stack.map((entry) => entry!.name) : [],
+      other: stack.some((entry) => entry === null || entry.opaque),
+      framePaths: stack.flatMap((entry, at) => entry !== null && entry.path !== undefined ? [{ at, value: entry.path }] : []),
+      cfg: deepAttributes || /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(attributes),
+      hasPath: pathCount > 0,
+      pathCount,
+      cfgPath: /(?:^|[^\p{L}\p{N}\p{M}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])(?:r#)?path\s*=/.test(attributes),
+      pathValue: pathValue === undefined || pathValue.includes("\u0000") ? undefined : pathValue,
+    });
+  }
+  const handledPaths = declarations.filter((declaration) => !declaration.other && declaration.inline.length === 0 && declaration.pathValue !== undefined)
+    .reduce((count, declaration) => count + declaration.pathCount, 0);
+  if (pathsInAttributes > handledPaths) unbalanced = true;
+  // `mod` is a keyword, so one outside a `mod name;` or `mod name {` is a declaration a macro assembles (`mod $name;`,
+  // `$keyword $name;` called with `mod`): it may name any file, and nothing read is trusted.
+  if ((code.match(/(?<![\p{L}\p{N}\p{M}_#])mod(?![\p{L}\p{N}\p{M}_])/gu)?.length ?? 0) > declaredMods) unbalanced = true;
+  // `include!` pastes in a file the scan does not read, and its declarations may name any file. It can be reached under
+  // another name (`use std::include as paste;`) or handed to a macro (`paste!(include)`), so any `include` counts unless
+  // it is a method or function name (`.include(`, `fn include`, `include(`) outside every macro's tokens: inside them,
+  // a macro may forward it as `include!`.
+  const macroTokens: [number, number][] = [];
+  // A macro's tokens are the group after `!` (`name!(..)`) or after `macro_rules! name`, whatever characters the name
+  // uses; a `!` that is no macro (`!(a)`, `!= (b)`) only widens what counts.
+  if (code.includes("include")) for (const invocation of code.matchAll(/!\s*(?:[^\s()[\]{};,!]+\s*)?[({[]/gu)) {
+    const open = (invocation.index ?? 0) + invocation[0].length - 1;
+    let depth = 0;
+    let close = code.length;
+    for (let at = open; at < code.length; at += 1) {
+      if ("([{".includes(code[at]!)) depth += 1;
+      else if (")]}".includes(code[at]!) && --depth === 0) { close = at; break; }
+    }
+    macroTokens.push([open, close]);
+  }
+  for (const token of code.matchAll(/(?<![\p{L}\p{N}\p{M}_])(?:r#)?include(?![\p{L}\p{N}\p{M}_])/gu)) {
+    const at = token.index ?? 0;
+    const named = /(?:\.|(?<![\p{L}\p{N}\p{M}_])fn)\s*$/u.test(code.slice(Math.max(0, at - 64), at)) || /^\s*\(/.test(code.slice(at + token[0].length, at + token[0].length + 64));
+    if (!named || macroTokens.some(([open, close]) => at > open && at < close)) { unbalanced = true; break; }
+  }
+  return { declarations, unbalanced: unbalanced || stack.length > 0, code };
+}
+
+// Whether blanked Rust code may bind a name other than by `mod name;`: any glob `use` or macro call may bring it in, and any
+// mention of it that is not a path head (`name::`) or a `mod name` declaration may be an item, a `use` or an alias.
+function rustNameBoundOtherwise(code: string, name: string): boolean {
+  for (const statement of code.matchAll(/(?<![\p{L}\p{N}\p{M}_])use\s[^;]*;/gu)) if (statement[0].includes("*")) return true;
+  // A macro call may expand to an item of the name, which no text mention shows.
+  if (/[\p{L}\p{N}\p{M}_]\s*!\s*[({[]/u.test(code)) return true;
+  return new RegExp(`(?<![\\p{L}\\p{N}\\p{M}_])(?<!(?<![\\p{L}\\p{N}\\p{M}_])mod\\s+(?:r#)?)(?:r#)?${name}(?![\\p{L}\\p{N}\\p{M}_])(?!\\s*::)`, "u").test(code);
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -326,55 +821,121 @@ function resolveGoPackage(spec: string, knownFiles: ReadonlySet<string>, context
 // other head against the workspace crate of that package name. The
 // longest file prefix wins, so an inline module inside a file still lands on that file.
 function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): string | undefined {
-  const segments = spec.split("::").filter((part) => part.length > 0);
+  return resolveRustPath(fromFile, spec, knownFiles, context)?.file;
+}
+
+// The file a Rust path lands on, and the segments left after it: the inline modules of that file the path
+// continues through (`use super::inner::Deep` with `mod inner { .. }` in the file gives inline ["inner"]).
+function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): { file: string; inline: string[] } | undefined {
+  const segments = spec.split("::").filter((part) => part.length > 0).map((part) => part.replace(/^r#/, ""));
   const head = segments[0];
   if (head === undefined) return undefined;
-  const fromDir = path.posix.dirname(fromFile) === "." ? "" : path.posix.dirname(fromFile);
-  const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
-  const ownCrate = (): string | undefined => context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
-  const base = path.posix.basename(fromFile);
-  const ownDir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
-  let start: string;
-  let rest: string[];
-  if (head === "crate") {
-    const crate = ownCrate();
-    if (crate === undefined) return undefined;
-    start = srcOf(crate);
-    rest = segments.slice(1);
-  } else if (context.cargoPackages.get(head) === undefined && head !== "self" && head !== "super" && (knownFiles.has(path.posix.join(ownDir, `${head}.rs`)) || knownFiles.has(path.posix.join(ownDir, head, "mod.rs")))) {
-    // `flags::parse::lookup()` with `mod flags;` in this file: a sibling module named without `self::`.
-    start = ownDir;
-    rest = segments;
-  } else if (head === "self" || head === "super") {
-    let dir = ownDir;
-    let index = 0;
-    while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
-    start = dir;
-    rest = segments.slice(index);
-    // `self` alone is this file; `self::inner::X` with no file for `inner` names an inline module of this file.
-    if (dir === ownDir && (rest.length === 0 || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return fromFile;
-  } else {
-    // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
-    const crate = context.cargoPackages.get(head);
-    if (crate === undefined) return undefined;
-    start = srcOf(crate);
-    rest = segments.slice(1);
-    // A facade crate names another crate under an alias (`pub extern crate grep_printer as printer;`), so
-    // `grep::printer::X` continues from the aliased crate's root. Each hop consumes a segment, so it ends.
-    for (let hop = 0; hop < segments.length; hop += 1) {
-      const next = rest[0] === undefined ? undefined : context.crateAliases.get(`${start}/lib.rs`)?.get(rest[0]);
-      const aliased = next === undefined ? undefined : context.cargoPackages.get(next);
-      if (aliased === undefined) break;
-      start = srcOf(aliased);
-      rest = rest.slice(1);
+  const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
+  const libraryOf = (crate: string): string => context.cargoSrc.get(crate) ?? path.posix.join(crate, "src/lib.rs");
+  // A crate root is a file Cargo may build as a target (rustMayBeTarget) that nothing declares as a module. A file a
+  // declaration the scan could not follow may name has no known owner, and its paths name nothing.
+  if (context.rustUncertainOwner.has(fromFile)) return undefined;
+  const isRoot = (file: string): boolean => !context.rustDeclaredBy.has(file) && !context.rustUncertainOwner.has(file) && !context.rustOwnershipUnreadable
+    && context.rustMayBeTargets.has(file);
+  // A file's module identity, root first: each file of the chain, its module path from the crate root, and the
+  // directory of its child modules. Only a chain of single `mod name;` declarations up to a root proves it, and a
+  // file a `#[path]` loads keeps its place in the tree but has children the index cannot place (dir undefined).
+  // Folder layout alone proves nothing: `super::` and `self::` walk this tree, never directories.
+  type Place = { file: string; modules: string[]; dir: string | undefined };
+  const identityOf = (file: string): Place[] | undefined => {
+    const links: RustModuleLink[] = [];
+    let current = file;
+    for (let hops = 0; ; hops += 1) {
+      if (hops > 32 || context.rustUncertainOwner.has(current) || context.rustTwoCrates.has(current)) return undefined;
+      if (isRoot(current)) break;
+      const declarers = context.rustDeclaredBy.get(current);
+      if (declarers === undefined || declarers.length !== 1) return undefined;
+      links.push(declarers[0]!);
+      current = declarers[0]!.declarer;
     }
+    const places: Place[] = [{ file: current, modules: [], dir: parentOf(current) }];
+    for (let index = links.length - 1; index >= 0; index -= 1) {
+      const link = links[index]!;
+      const parent = places[places.length - 1]!;
+      const child = index === 0 ? file : links[index - 1]!.declarer;
+      const dir = link.viaPath || parent.dir === undefined ? undefined : path.posix.join(parent.dir, ...link.inline, link.name);
+      if (dir !== undefined && child !== `${dir}.rs` && child !== `${dir}/mod.rs`) return undefined;
+      places.push({ file: child, modules: [...parent.modules, ...link.inline, link.name], dir });
+    }
+    return places;
+  };
+  const inlineModule = (file: string, names: readonly string[]): boolean => context.rustInlineModules.has(`${file}#${names.join(".")}`);
+  const firstKnown = (files: readonly string[]): string | undefined => files.find((file) => knownFiles.has(file));
+  // From a module file, each segment is an inline module the file declares, or a module file the file declares
+  // with `mod name;` and the index holds beside its children. A module whose path an attribute sets, and a file
+  // child of an inline module, live where the index cannot follow: the path names nothing. A segment that is
+  // neither (an alias, an item) is left for the item lookup in the current module, which finds it or nothing.
+  const walk = (file: string, dir: string | undefined, rest: readonly string[], start: readonly string[] = []): { file: string; inline: string[] } | undefined => {
+    let current = file;
+    let currentDir = dir;
+    let inline: string[] = [...start];
+    for (let index = 0; index < rest.length; index += 1) {
+      const segment = rest[index]!;
+      if (inlineModule(current, [...inline, segment])) { inline.push(segment); continue; }
+      const declaration = context.rustModuleFiles.get(current)?.get(segment);
+      const declared = inline.length === 0 ? declaration : undefined;
+      if (declared === "path" || (inline.length > 0 && declaration !== undefined)) return undefined;
+      if (declared === "file" && currentDir === undefined) return undefined;
+      const modulePath = path.posix.join(currentDir ?? "", segment);
+      const next = declared === "file" ? firstKnown([`${modulePath}.rs`, `${modulePath}/mod.rs`]) : undefined;
+      if (next !== undefined && context.rustUncertainOwner.has(next)) return undefined;
+      if (next === undefined) return { file: current, inline: [...inline, ...rest.slice(index)] };
+      current = next;
+      currentDir = modulePath;
+      inline = [];
+    }
+    return { file: current, inline };
+  };
+  if (head === "crate") {
+    const places = identityOf(fromFile);
+    return places === undefined ? undefined : walk(places[0]!.file, places[0]!.dir, segments.slice(1));
   }
-  for (let take = rest.length; take >= 0; take -= 1) {
-    const modulePath = path.posix.join(start, ...rest.slice(0, take));
-    const candidates = take === 0 ? [`${modulePath}/lib.rs`, `${modulePath}/main.rs`, `${modulePath}/mod.rs`] : [`${modulePath}.rs`, `${modulePath}/mod.rs`];
-    for (const candidate of candidates) if (knownFiles.has(candidate)) return candidate;
+  if (head === "self" || head === "super") {
+    // The module `super::` names is the file's module path less one name per `super`; it lives in the deepest file
+    // of the chain whose path starts it, inside that file's inline modules for the rest.
+    const places = identityOf(fromFile);
+    if (places === undefined) return undefined;
+    let index = 0;
+    let up = 0;
+    while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") up += 1; index += 1; }
+    const own = places[places.length - 1]!.modules;
+    if (up > own.length) return undefined;
+    const target = own.slice(0, own.length - up);
+    const holder = [...places].reverse().find((place) => place.modules.length <= target.length && place.modules.every((name, at) => name === target[at]));
+    if (holder === undefined) return undefined;
+    const inline = target.slice(holder.modules.length);
+    return walk(holder.file, inline.length === 0 ? holder.dir : undefined, segments.slice(index), inline);
   }
-  return undefined;
+  const headDeclaration = context.rustModuleFiles.get(fromFile)?.get(head);
+  // A local module of a workspace package's name: Rust picks the module while it is present, but a cfg gate (outer,
+  // inner, or inside an attribute the index cannot read) may remove it and leave the package to bind the name.
+  // Neither is proven, so the path names nothing.
+  if (context.cargoPackages.has(head) && (inlineModule(fromFile, [head]) || headDeclaration !== undefined)) return undefined;
+  if (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path" || headDeclaration === "nested") {
+    // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
+    const places = identityOf(fromFile);
+    return places === undefined ? undefined : walk(fromFile, places[places.length - 1]!.dir, segments);
+  }
+  // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
+  const crate = context.cargoPackages.get(head);
+  if (crate === undefined) return undefined;
+  let start = libraryOf(crate);
+  let rest = segments.slice(1);
+  // A facade crate names another crate under an alias (`pub extern crate grep_printer as printer;`), so
+  // `grep::printer::X` continues from the aliased crate's root. Each hop consumes a segment, so it ends.
+  for (let hop = 0; hop < segments.length; hop += 1) {
+    const next = rest[0] === undefined ? undefined : context.crateAliases.get(start)?.get(rest[0]);
+    const aliased = next === undefined ? undefined : context.cargoPackages.get(next);
+    if (aliased === undefined) break;
+    start = libraryOf(aliased);
+    rest = rest.slice(1);
+  }
+  return knownFiles.has(start) && !context.rustDeclaredBy.has(start) && !context.rustUncertainOwner.has(start) ? walk(start, parentOf(start), rest) : undefined;
 }
 
 export interface ResolutionInput {
@@ -424,6 +985,31 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     symbolsByQualifiedName.set(file, byName);
   }
   const declaredAs = (file: string, qualifiedName: string): readonly OsnovaSymbol[] => symbolsByQualifiedName.get(file)?.get(qualifiedName) ?? [];
+  // The inline-module path of a Rust symbol: the leading qualified-name parts that are declared modules.
+  const moduleOf = (file: string, qualifiedName: string | undefined): string => {
+    if (qualifiedName === undefined) return "";
+    const parts = qualifiedName.slice(qualifiedName.indexOf("#") + 1).split(".");
+    const modules: string[] = [];
+    for (let take = 1; take <= parts.length; take += 1) {
+      const parent = declaredAs(file, `${file}#${parts.slice(0, take).join(".")}`)[0];
+      if (parent?.kind !== "module") break;
+      modules.push(parts[take - 1]!);
+    }
+    return modules.join(".");
+  };
+  // A local reference names an item of the file. In Rust the referencing site's inline module comes first, then
+  // the file's root, then, with no module known, a module item that is the file's only declaration of the name.
+  const declaredLocal = (file: string, name: string, module = ""): readonly OsnovaSymbol[] => {
+    const root = declaredAs(file, qualifiedNameOf(file, name));
+    if (files.get(file)?.language !== "rust" || name.includes(".")) return root;
+    if (module !== "") {
+      const inner = declaredAs(file, qualifiedNameOf(file, `${module}.${name}`));
+      if (inner.length > 0) return inner;
+    }
+    if (root.length > 0 || module !== "") return root;
+    const nested = (symbolsByName.get(name) ?? []).filter((symbol) => symbol.file === file && symbol.qualifiedName === qualifiedNameOf(file, `${moduleOf(file, symbol.qualifiedName)}.${name}`) && moduleOf(file, symbol.qualifiedName) !== "");
+    return new Set(nested.map((symbol) => symbol.qualifiedName)).size === 1 ? nested : [];
+  };
 
   const knownFiles = new Set(files.keys());
   const context = workspaceContext(files);
@@ -445,16 +1031,19 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // hide the other, and a call to the value would find only the type.
   const exportKey = (symbol: OsnovaSymbol): string => `${symbol.qualifiedName}\u0000${symbol.kind}`;
   const exportCache = new Map<string, ExportResult>();
-  const exported = (file: string, name: string): ExportResult => {
-    const key = JSON.stringify([file, name]);
+  // The inline-module segments a Rust import continues through inside the target file (see resolveRustPath).
+  const inlinePath = (language: CardLanguage, fromFile: string, spec: string): readonly string[] =>
+    language === "rust" ? resolveRustPath(fromFile, spec, knownFiles, context)?.inline ?? [] : [];
+  const exported = (file: string, name: string, inline: readonly string[] = []): ExportResult => {
+    const key = JSON.stringify([file, name, inline]);
     const cached = exportCache.get(key);
     if (cached !== undefined) return cached;
     const result: ExportResult = { symbols: new Map(), routes: new Map(), namespaces: [], incomplete: false, cycle: false };
     const visited = new Set<string>();
     const active = new Set<string>();
     const family = languageFamily(files.get(file)?.language);
-    const walk = (currentFile: string, currentName: string, via: readonly ExportHop[]): void => {
-      const state = JSON.stringify([currentFile, currentName]);
+    const walk = (currentFile: string, currentName: string, via: readonly ExportHop[], currentInline: readonly string[]): void => {
+      const state = JSON.stringify([currentFile, currentName, currentInline]);
       if (active.has(state)) { result.cycle = true; return; }
       if (visited.has(state)) return;
       if (visited.size >= 4096 || via.length > 128) { result.incomplete = true; return; }
@@ -474,8 +1063,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         result.incomplete = true;
         return;
       }
+      // A Rust item inside an inline module is reached only by a path through that module.
+      const localName = [...currentInline, currentName].join(".");
       const direct = card.symbols.filter((symbol) => symbol.exportedNames?.includes(currentName) ||
-        (TYPED_FAMILY.has(card.language) && symbol.name === currentName && !symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).includes(".")));
+        (TYPED_FAMILY.has(card.language) && symbol.name === currentName && symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1) === localName));
       const spaces = links.filter((link) => link.kind === "namespace" && link.exportedName === currentName);
       for (const link of spaces) {
         if (link.kind !== "namespace") continue;
@@ -501,11 +1092,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         walk(target, importedName, [...via, {
           file: currentFile, line: link.line, kind: link.kind, exportedName: currentName,
           importedName, source: link.source, targetFile: target,
-        }]);
+        }], inlinePath(card.language, currentFile, link.source));
       }
       active.delete(state);
     };
-    walk(file, name, []);
+    walk(file, name, [], inline);
     exportCache.set(key, result);
     return result;
   };
@@ -556,11 +1147,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const holderCard = files.get(holder.file);
     if (holderCard === undefined) return null;
     let bases: readonly OsnovaSymbol[] = [];
-    if (base.kind === "local") bases = declaredAs(holder.file, qualifiedNameOf(holder.file, base.name));
+    if (base.kind === "local") bases = declaredLocal(holder.file, base.name, moduleOf(holder.file, holder.qualifiedName));
     else {
       const target = resolveImportTarget(holderCard.language, holder.file, base.source, knownFiles, context);
       if (target === undefined) return null;
-      const found = exported(target, base.importedName);
+      const found = exported(target, base.importedName, inlinePath(holderCard.language, holder.file, base.source));
       if (found.incomplete) return null;
       bases = [...found.symbols.values()];
     }
@@ -571,14 +1162,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const holderCard = files.get(file);
     if (holderCard === undefined) return null;
     if (ref.kind === "local") {
-      const local = [...declaredAs(file, qualifiedNameOf(file, ref.name))];
+      const local = [...declaredLocal(file, ref.name)];
       if (local.length > 0 || !TYPED_FAMILY.has(holderCard.language)) return local;
       const family = languageFamily(holderCard.language);
       return (symbolsByName.get(ref.name) ?? []).filter((symbol) => (isHolder(symbol) || symbol.kind === "function") && languageFamily(files.get(symbol.file)?.language) === family);
     }
     const target = resolveImportTarget(holderCard.language, file, ref.source, knownFiles, context);
     if (target === undefined) return null;
-    const found = exported(target, ref.importedName);
+    const found = exported(target, ref.importedName, inlinePath(holderCard.language, file, ref.source));
     return found.incomplete ? null : [...found.symbols.values()];
   };
   const unique = (symbols: OsnovaSymbol[] | null): OsnovaSymbol | undefined =>
@@ -2019,7 +2610,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
           const target = resolveImportTarget(card.language, fromFile, reference.source, knownFiles, context);
           if (target === undefined) resolution = unresolvedImport(card.language, fromFile, reference.source);
           else {
-            exportResult = exported(target, reference.importedName);
+            exportResult = exported(target, reference.importedName, inlinePath(card.language, fromFile, reference.source));
             if (exportResult.incomplete) resolution = { status: "unresolved", reason: "re-export-incomplete" };
             else {
               candidates = [...exportResult.symbols.values()].filter((symbol) =>
@@ -2031,7 +2622,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             }
           }
         } else if (reference.kind === "local") {
-          candidates = [...declaredAs(fromFile, qualifiedNameOf(fromFile, reference.name))];
+          candidates = [...declaredLocal(fromFile, reference.name, card.language === "rust" ? moduleOf(fromFile, fromSymbol) : "")];
           // A same-file function named like a builtin (`export function string()`) is not the type a receiver carries.
           if (binding.kind === "member" && BUILTIN_TYPES.has(reference.name) && !candidates.some(isHolder)) candidates = [];
           // The file declares this name in more than one scope, and the index keeps one record per
@@ -2176,7 +2767,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
             const target = resolveImportTarget(card.language, fromFile, ref.source, knownFiles, context);
             if (target === undefined) return [];
             if (ref.importedName === "*") return [target];
-            const found = exported(target, ref.importedName);
+            const found = exported(target, ref.importedName, inlinePath(card.language, fromFile, ref.source));
             return found.incomplete ? [] : [...new Set(found.namespaces.map((space) => space.file))];
           };
           const selectOf = (ref: { index?: number | undefined; unwrapped?: true | undefined }, elements = false): number | "returns" | "unwrapped" | "elements" | "values" =>
@@ -2346,8 +2937,11 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         if (raw.kind === "extends" || raw.kind === "implements") candidates = candidates.filter((symbol) => HERITAGE_KINDS.has(symbol.kind));
         if (raw.kind === "routes") candidates = candidates.filter((symbol) => ROUTE_TARGET_KINDS.has(symbol.kind));
         const names = [...new Set(candidates.map((symbol) => symbol.qualifiedName))].sort();
-        const resolved = names.length === 1 ? candidates[0] : undefined;
+        const resolved = names.length === 1 && candidates[0]!.shadowed !== true ? candidates[0] : undefined;
         if (names.length > 1) resolution = { status: "ambiguous", candidates: names };
+        // The member reached is one of several declarations of its name in one scope (cfg-gated Rust twins in an
+        // impl): the index keeps one record, so no edge can name the one a build compiles.
+        else if (names.length === 1 && candidates[0]!.shadowed === true) resolution = { status: "unresolved", reason: "shadowed-declaration" };
         else if (resolved === undefined && resolution.status === "resolved") resolution = { status: "unresolved", reason: "bound-symbol-missing" };
         // A value reference is recorded only when it names an indexed callable or class; a bound name that
         // reaches a constant, a type or an import the index cannot follow leaves no edge.
@@ -2385,22 +2979,44 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         : raw.toName;
       // A plain Rust name never names an impl method or a variant: `Ok(x)` is the prelude's, not `ParseResult::Ok`,
       // however unique that is. A function nested in a function or method (`fn imp` inside `fn is_readable_stdin`) still counts.
+      // A method of an impl for a type outside the index (`impl From<X> for std::io::Error`) has no declared parent
+      // at all; it is a member of that foreign type, never a plain name. An inline module is a namespace, not a
+      // holder: its items are plain names inside it, which `moduleOf` sorts out below.
+      // Only the immediate parent decides: a trait impl's methods sit under the undeclared `Type.Trait`, and an
+      // outer declaration of the same name (an associated `type Error` leaked to the file root) says nothing.
       const memberOfHolder = (symbol: OsnovaSymbol): boolean => {
         const parts = symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1).split(".");
-        for (let take = parts.length - 1; take > 0; take -= 1) {
-          const parent = declaredAs(symbol.file, `${symbol.file}#${parts.slice(0, take).join(".")}`)[0];
-          if (parent !== undefined) return isHolder(parent);
-        }
-        return false;
+        if (parts.length < 2) return false;
+        const parent = declaredAs(symbol.file, `${symbol.file}#${parts.slice(0, -1).join(".")}`)[0];
+        if (parent === undefined) return true;
+        return parent.kind === "module" ? false : isHolder(parent);
       };
       // A plain Go name never names a method either, and it is declared by the caller's own package (the files of its
       // directory with its package clause) before any other file.
       const plainGo = card.language === "go" && !raw.toName.includes(".");
+      const plainRust = card.language === "rust" && !raw.toName.includes(".");
+      // An item declared inside a function's body is in scope only in its block.
+      const nestedVisible = (symbol: OsnovaSymbol): boolean => {
+        const local = symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1);
+        const parentLocal = local.includes(".") ? local.slice(0, local.lastIndexOf(".")) : "";
+        if (parentLocal === "") return true;
+        const parent = declaredAs(symbol.file, `${symbol.file}#${parentLocal}`)[0];
+        // The adapter binds a call to an item of an enclosing block exactly; by name, such an item is never in scope.
+        return parent === undefined || (parent.kind !== "function" && parent.kind !== "method");
+      };
+      // An item of an inline module is in scope only inside that module; from anywhere else it needs a path. A
+      // caller inside the module sees the module's item before the file's.
+      const callerModule = plainRust ? moduleOf(fromFile, fromSymbol) : "";
       const candidates = (symbolsByName.get(lookupName) ?? []).filter((symbol) =>
         languageFamily(files.get(symbol.file)?.language) === languageFamily(card.language) &&
         (card.language !== "rust" || raw.toName.includes(".") || !memberOfHolder(symbol)) &&
+        (!plainRust || nestedVisible(symbol)) &&
+        (!plainRust || (symbol.kind !== "module" && (callerModule === ""
+          ? moduleOf(symbol.file, symbol.qualifiedName) === ""
+          : symbol.file === fromFile && moduleOf(symbol.file, symbol.qualifiedName) === callerModule))) &&
         (!plainGo || symbol.kind !== "method"));
-      const sameFile = candidates.filter((symbol) => symbol.file === fromFile);
+      const sameModule = plainRust && callerModule !== "" ? candidates.filter((symbol) => symbol.file === fromFile && moduleOf(symbol.file, symbol.qualifiedName) === callerModule) : [];
+      const sameFile = sameModule.length > 0 ? sameModule : candidates.filter((symbol) => symbol.file === fromFile);
       const samePackage = plainGo ? candidates.filter((symbol) => {
         const other = files.get(symbol.file);
         return other !== undefined && path.posix.dirname(symbol.file) === path.posix.dirname(fromFile) && sameGoPackage(other, card);
@@ -2411,8 +3027,12 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const imported = candidates.filter((symbol) => importTargets.includes(symbol.file));
       const preferred = sameFile.length > 0 ? sameFile : samePackage.length > 0 ? samePackage : imported.length > 0 ? imported : candidates;
       const names = [...new Set(preferred.map((symbol) => symbol.qualifiedName))].sort();
-      const resolved = names.length === 1 && !conditionalPackage ? preferred[0] : undefined;
+      // The chosen declaration is one of several the file declares for the name (cfg-gated Rust twins): the index
+      // keeps one record per qualified name, so no edge can name the one a build compiles.
+      const shadowedTarget = names.length === 1 && preferred[0]!.shadowed === true;
+      const resolved = names.length === 1 && !conditionalPackage && !shadowedTarget ? preferred[0] : undefined;
       const resolution: EdgeResolution = conditionalPackage ? { status: "unresolved", reason: "binding-blocked" }
+        : shadowedTarget ? { status: "unresolved", reason: "shadowed-declaration" }
         : names.length > 1
         ? { status: "ambiguous", candidates: names }
         // Go, Rust, Java and C# bind plain names without an import statement, so a name no indexed file of
