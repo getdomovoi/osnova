@@ -403,10 +403,13 @@ export async function runCli(
       const task = parsed.values.task;
       if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
+      // Symbols seed the context on their own; without them a blank question selects nothing.
+      const question = parsed.positionals.join(" ");
+      if (question.trim().length === 0 && (parsed.values.symbol ?? []).length === 0) throw new Error("osnova footing: missing <question> argument");
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
+      const result = taskContext(index, { task, question, symbols: parsed.values.symbol,
         in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit"),
         maxDepth: numericOption(parsed.values.depth, "depth", 1), maxCodeUnits: budget });
       io.stdout(jsonOutput(result, "footing"));

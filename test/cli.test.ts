@@ -301,6 +301,16 @@ describe("cli", () => {
     await expect(run(["tests", "two", "--file", "test/two.test.ts"])).rejects.toThrow(/^osnova tests: give either <symbol\.\.\.> or --file <path>, not both$/);
   }, 60_000);
 
+  it("footing rejects a blank question unless symbols seed it", async () => {
+    const run = (args: string[], io = capture().io) => runCli(["footing", ...args, "--workspace", workspace, ...cacheArgs], io);
+    await expect(run([""])).rejects.toThrow(/^osnova footing: missing <question> argument$/);
+    await expect(run(["   "])).rejects.toThrow(/^osnova footing: missing <question> argument$/);
+    await expect(run([])).rejects.toThrow(/^osnova footing: missing <question> argument$/);
+    const seeded = capture();
+    expect(await run(["", "--symbol", "two"], seeded.io)).toBe(0);
+    expect(seeded.lines.join("\n")).toContain("two");
+  }, 60_000);
+
   it("rejects unknown commands with exit 2", async () => {
     const { lines, io } = capture();
     const code = await runCli(["frobnicate"], io);
