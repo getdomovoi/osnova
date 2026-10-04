@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Fixed
+
+- CLI usage errors name the command as typed. `osnova warp`, `osnova outline` and `osnova thread` without their argument named internal functions (`callers`, `skeleton`, `grep`); they now print `osnova: osnova warp: missing <symbol> argument`, `osnova: osnova outline: missing <file> argument` and `osnova: osnova thread: missing <pattern> argument`, still with exit code 2. `osnova tests` with neither `<symbol...>` nor `--file <path>` says `give <symbol...> or --file <path>`; it said "not both", which it still says when both are given.
+
 ## 0.12.0 (2026-10-01)
 
 The extraction version moves to `structural-9.40` and the edge section format to 13, so the first run after upgrading rebuilds the cache once.

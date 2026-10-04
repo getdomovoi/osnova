@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -210,8 +211,22 @@ describe("cli", () => {
     const twice = capture();
     expect(await runCli(["tests", "two", "--workspace", workspace, ...cacheArgs], twice.io)).toBe(0);
     expect(twice.lines).toEqual(bySymbol.lines);
-    await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("either <symbol...> or --file");
+    await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("give <symbol...> or --file <path>");
     await expect(runCli(["tests", "two", "--file", "test/two.test.ts", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("not both");
+  }, 60_000);
+
+  it("names the command as typed in usage errors", () => {
+    const bin = path.join(import.meta.dirname, "..", "dist", "bin.js");
+    const run = (...args: string[]): { status: number | null; stderr: string } => {
+      const result = spawnSync(process.execPath, [bin, ...args, "--workspace", workspace, ...cacheArgs], { encoding: "utf8" });
+      return { status: result.status, stderr: result.stderr };
+    };
+    expect(run("warp")).toEqual({ status: 2, stderr: "osnova: osnova warp: missing <symbol> argument\n" });
+    expect(run("outline")).toEqual({ status: 2, stderr: "osnova: osnova outline: missing <file> argument\n" });
+    expect(run("thread", "")).toEqual({ status: 2, stderr: "osnova: osnova thread: missing <pattern> argument\n" });
+    expect(run("ground")).toEqual({ status: 2, stderr: "osnova: osnova ground: missing <question> argument\n" });
+    expect(run("tests")).toEqual({ status: 2, stderr: "osnova: osnova tests: give <symbol...> or --file <path>\n" });
+    expect(run("tests", "two", "--file", "test/two.test.ts")).toEqual({ status: 2, stderr: "osnova: osnova tests: give either <symbol...> or --file <path>, not both\n" });
   }, 60_000);
 
   it("rejects a stray directory positional and points at --workspace", async () => {
