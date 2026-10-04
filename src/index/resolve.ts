@@ -178,8 +178,6 @@ export interface WorkspaceContext {
   readonly rustUncertainOwner: ReadonlySet<string>;
   /** Some `#[path]` value or delimiter could not be read, so any file may be a module: no crate root is proven. */
   readonly rustOwnershipUnreadable: boolean;
-  /** Per Rust file, its top-level modules behind a `#[cfg]`: one may be absent, leaving a package of the name to bind. */
-  readonly rustCfgModules: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -299,7 +297,6 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
     rustDeclaredBy,
     rustUncertainOwner: ownership.uncertain,
     rustOwnershipUnreadable: ownership.unreadable,
-    rustCfgModules: new Map([...rustScans].map(([file, scan]) => [file, scan.cfgModules])),
     rustTargetRoots };
 }
 
@@ -339,7 +336,7 @@ interface RustModuleDeclaration {
 // The `mod name;` declarations of Rust source. Comments (block comments nest), strings, raw strings and char
 // literals are blanked first; delimiter depth covers braces, parentheses and brackets, so a macro body of any
 // delimiter is never the top level. `unbalanced` when the delimiters do not pair up, and nothing read is trusted.
-function scanRustModules(text: string): { declarations: RustModuleDeclaration[]; unbalanced: boolean; code: string; cfgModules: Set<string> } {
+function scanRustModules(text: string): { declarations: RustModuleDeclaration[]; unbalanced: boolean; code: string } {
   const strings: string[] = [];
   let code = "";
   for (let index = 0; index < text.length;) {
@@ -385,12 +382,26 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
     index += 1;
   }
   const declarations: RustModuleDeclaration[] = [];
-  /** Top-level modules (inline or file) behind a `#[cfg]` or `#[cfg_attr]`: they may be absent from a build. */
-  const cfgModules = new Set<string>();
+  let unbalanced = false;
   // An inline module's frame keeps its name, and whether a `#[path]` or `#[cfg]` makes its children's place unknown.
   const stack: ({ name: string; opaque: boolean; path: string | null | undefined } | null)[] = [];
-  let unbalanced = false;
-  const pattern = /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}\p{M}_#])mod\s+(?:r#)?([\p{L}\p{N}\p{M}_]+)\s*([;{])|([{}()[\]])/gu;
+  // An attribute's token tree may nest brackets; three levels are read. A deeper one may hide a gate, so then every
+  // declaration of the file counts as cfg-gated. An inner `#![path = ..]` moves an inline module's children where the
+  // index does not compute, so it leaves every crate root unproven, as an unbalanced file does.
+  let deepest = 0;
+  for (let at = code.indexOf("#"); at >= 0; at = code.indexOf("#", at + 1)) {
+    const open = /^#!?\s*\[/.exec(code.slice(at, at + 8));
+    if (open === null) continue;
+    let depth = 0;
+    for (let index = at + open[0].length - 1; index < code.length; index += 1) {
+      if (code[index] === "[") deepest = Math.max(deepest, depth += 1);
+      else if (code[index] === "]" && (depth -= 1) === 0) break;
+    }
+  }
+  const deepAttributes = deepest > 3;
+  if (/#!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*?(?<![\p{L}\p{N}\p{M}_])path\s*=/u.test(code)) unbalanced = true;
+  const innerAttributes = /^\s*((?:#!\s*\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)/;
+  const pattern = /((?:#\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}\p{M}_#])mod\s+(?:r#)?([\p{L}\p{N}\p{M}_]+)\s*([;{])|([{}()[\]])/gu;
   for (const match of code.matchAll(pattern)) {
     const delimiter = match[4];
     if (delimiter !== undefined) {
@@ -399,12 +410,13 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       continue;
     }
     const name = match[2]!;
-    if (stack.length === 0 && /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(match[1] ?? "")) cfgModules.add(name);
     if (match[3] === "{") {
       const frameValue = /(?:^|[\s(,[])path\s*=\s*"S(\d+)"/.exec(match[1] ?? "")?.[1];
       const frameText = frameValue === undefined ? undefined : strings[Number(frameValue)];
       const framePath = /(?:^|[\s(,[])path\s*=/.test(match[1] ?? "") ? (frameText === undefined || frameText.includes("\u0000") ? null : frameText) : undefined;
-      stack.push({ name, path: framePath, opaque: /(?:^|[\s(,[])path\s*=|(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(match[1] ?? "") });
+      // Inner attributes at the start of the body apply to the module too.
+      const inner = innerAttributes.exec(code.slice((match.index ?? 0) + match[0].length))?.[1] ?? "";
+      stack.push({ name, path: framePath, opaque: deepAttributes || /(?:^|[\s(,[])path\s*=|(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(`${match[1] ?? ""} ${inner}`) });
       continue;
     }
     const attributes = match[1] ?? "";
@@ -415,13 +427,13 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       inline: stack.every((entry) => entry !== null) ? stack.map((entry) => entry!.name) : [],
       other: stack.some((entry) => entry === null || entry.opaque),
       framePaths: stack.flatMap((entry, at) => entry !== null && entry.path !== undefined ? [{ at, value: entry.path }] : []),
-      cfg: /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(attributes),
+      cfg: deepAttributes || /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(attributes),
       hasPath: /(?:^|[\s(,[])path\s*=/.test(attributes),
       cfgPath: /(?:^|[^\p{L}\p{N}\p{M}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])path\s*=/.test(attributes),
       pathValue: pathValue === undefined || pathValue.includes("\u0000") ? undefined : pathValue,
     });
   }
-  return { declarations, unbalanced: unbalanced || stack.length > 0, code, cfgModules };
+  return { declarations, unbalanced: unbalanced || stack.length > 0, code };
 }
 
 // Whether blanked Rust code may bind a name other than by `mod name;`: any glob `use` or macro call may bring it in, and any
@@ -632,9 +644,10 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
     return walk(holder.file, inline.length === 0 ? holder.dir : undefined, segments.slice(index), inline);
   }
   const headDeclaration = context.rustModuleFiles.get(fromFile)?.get(head);
-  // A cfg-gated module of a workspace package's name may be absent, and the package then binds the name: neither is
-  // proven, so the path names nothing.
-  if (context.cargoPackages.has(head) && context.rustCfgModules.get(fromFile)?.has(head) === true) return undefined;
+  // A local module of a workspace package's name: Rust picks the module while it is present, but a cfg gate (outer,
+  // inner, or inside an attribute the index cannot read) may remove it and leave the package to bind the name.
+  // Neither is proven, so the path names nothing.
+  if (context.cargoPackages.has(head) && (inlineModule(fromFile, [head]) || headDeclaration !== undefined)) return undefined;
   if (inlineModule(fromFile, [head]) || headDeclaration === "file" || headDeclaration === "path" || headDeclaration === "nested") {
     // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
     const places = identityOf(fromFile);

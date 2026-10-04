@@ -749,14 +749,17 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).toBe(right);
   });
 
-  it("names a local module over a workspace package of the same name", async () => {
+  // Rust picks the module while it is present, but a cfg gate the index cannot see may remove it, so a collision
+  // refuses (round 10).
+  it("never names the workspace package for a local module of the same name", async () => {
     const edge = await target({
       "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\n",
       "src/main.rs": "mod app;\nfn run() -> &'static str {\n    app::f()\n}\nfn main() { let _ = run(); }\n",
       "src/app.rs": "pub fn f() -> &'static str { \"MODULE\" }\n",
       "src/lib.rs": "pub fn f() -> &'static str { \"LIB\" }\n",
     }, "src/main.rs", 3, "f");
-    expect(edge?.toSymbol).toBe("src/app.rs#f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/lib.rs#f");
   });
 
   it.each([
@@ -788,6 +791,27 @@ describe("Rust module files, round-4 rustc reproductions", () => {
       "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n",
       "src/main.rs": prefix + "pub fn f() -> &'static str { \"ROOT\" }\nfn main() {}\n",
       "src/outer/placeholder.rs": "",
+      "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
+  });
+
+  // Round 10: regressions against the base branch.
+  it.each([
+    ["a cfg gate before an attribute with nested brackets", { "src/main.rs": "#[cfg(any())]\n#[doc = stringify!([x])]\nmod other { pub fn f() -> &'static str { \"DISABLED\" } }\nfn run() -> &'static str {\n    other::f()\n}\nfn main() {}\n" }, 5, "src/main.rs#other.f"],
+    ["an inner cfg gate", { "src/main.rs": "mod other { #![cfg(any())]\npub fn f() -> &'static str { \"DISABLED\" } }\nfn run() -> &'static str {\n    other::f()\n}\nfn main() {}\n" }, 4, "src/main.rs#other.f"],
+    ["an inner cfg gate in a module file", { "src/main.rs": "mod other;\nfn run() -> &'static str {\n    other::f()\n}\nfn main() {}\n", "src/other.rs": "#![cfg(any())]\npub fn f() -> &'static str { \"DISABLED\" }\n" }, 3, "src/other.rs#f"],
+  ] as const)("never names a local module behind %s over the workspace package of its name", async (_label, files, line, wrong) => {
+    const edge = await target({ "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\n", "other/Cargo.toml": "[package]\nname=\"other\"\nversion=\"0.1.0\"\nedition=\"2024\"\n", "other/src/lib.rs": "pub fn f() -> &'static str { \"LIB\" }\n", ...files }, "src/main.rs", line, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe(wrong);
+  });
+
+  it("never takes the child of an inline module with an inner path attribute for a crate root", async () => {
+    const edge = await target({
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n",
+      "src/main.rs": "mod outer { #![path = \"bin\"]\npub mod tool; }\npub fn f() -> &'static str { \"ROOT\" }\nfn main() {}\n",
       "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
     }, "src/bin/tool.rs", 3, "f");
     expect(edge).toBeDefined();
