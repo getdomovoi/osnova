@@ -680,10 +680,25 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
   // `$keyword $name;` called with `mod`): it may name any file, and nothing read is trusted.
   if ((code.match(/(?<![\p{L}\p{N}\p{M}_#])mod(?![\p{L}\p{N}\p{M}_])/gu)?.length ?? 0) > declaredMods) unbalanced = true;
   // `include!` pastes in a file the scan does not read, and its declarations may name any file. It can be reached under
-  // another name (`use std::include as paste;`) or handed to a macro (`paste!(include)`), so any `include` that is not
-  // a method or function name (`.include(`, `fn include`, `include(`) counts.
-  if (/(?<![\p{L}\p{N}\p{M}_])(?:r#)?include\s*!/u.test(code)
-    || /(?<![\p{L}\p{N}\p{M}_.]|fn\s+|\.\s*)(?:r#)?include(?![\p{L}\p{N}\p{M}_]|\s*\()/u.test(code)) unbalanced = true;
+  // another name (`use std::include as paste;`) or handed to a macro (`paste!(include)`), so any `include` counts unless
+  // it is a method or function name (`.include(`, `fn include`, `include(`) outside every macro's tokens: inside them,
+  // a macro may forward it as `include!`.
+  const macroTokens: [number, number][] = [];
+  if (code.includes("include")) for (const invocation of code.matchAll(/(?<![\p{L}\p{N}\p{M}_])(?:r#)?[\p{L}_][\p{L}\p{N}\p{M}_]*\s*!\s*(?:(?:r#)?[\p{L}_][\p{L}\p{N}\p{M}_]*\s*)?[({[]/gu)) {
+    const open = (invocation.index ?? 0) + invocation[0].length - 1;
+    let depth = 0;
+    let close = code.length;
+    for (let at = open; at < code.length; at += 1) {
+      if ("([{".includes(code[at]!)) depth += 1;
+      else if (")]}".includes(code[at]!) && --depth === 0) { close = at; break; }
+    }
+    macroTokens.push([open, close]);
+  }
+  for (const token of code.matchAll(/(?<![\p{L}\p{N}\p{M}_])(?:r#)?include(?![\p{L}\p{N}\p{M}_])/gu)) {
+    const at = token.index ?? 0;
+    const named = /(?:\.|(?<![\p{L}\p{N}\p{M}_])fn)\s*$/u.test(code.slice(Math.max(0, at - 64), at)) || /^\s*\(/.test(code.slice(at + token[0].length, at + token[0].length + 64));
+    if (!named || macroTokens.some(([open, close]) => at > open && at < close)) { unbalanced = true; break; }
+  }
   return { declarations, unbalanced: unbalanced || stack.length > 0, code };
 }
 

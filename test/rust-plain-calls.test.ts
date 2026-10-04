@@ -1052,6 +1052,10 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     ["a std alias", "use std::include as paste;\npaste!(\"decl.inc\");\n"],
     ["a core alias", "use core::include as paste;\npaste!(\"decl.inc\");\n"],
     ["a forwarding macro", "macro_rules! paste { ($m:ident) => { $m!(\"decl.inc\"); } }\npaste!(include);\n"],
+    ["a call-shaped forward", "macro_rules! paste { ($m:ident ($p:literal)) => { $m!($p); } }\npaste!(include(\"decl.inc\"));\n"],
+    ["a raw call-shaped forward", "macro_rules! paste { ($m:ident ($p:literal)) => { $m!($p); } }\npaste!(r#include(\"decl.inc\"));\n"],
+    ["a function-shaped forward", "macro_rules! paste { (fn $m:ident) => { $m!(\"decl.inc\"); } }\npaste!(fn include);\n"],
+    ["a method-shaped forward", "macro_rules! paste { (. $m:ident) => { $m!(\"decl.inc\"); } }\npaste!(. include);\n"],
   ])("never takes a file an included declaration may name for a crate root, through %s", async (_label, declare) => {
     const edge = await target({
       "Cargo.toml": app + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n[[test]]\nname=\"tool\"\npath=\"tests/separate.rs\"\n",
