@@ -10,7 +10,7 @@ import { indexHealth } from "../index/health.js";
 import { loadArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
-import { findTextDetailed } from "../query/findText.js";
+import { findTextDetailed, InvalidPatternError } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
@@ -25,7 +25,7 @@ import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
-import { taskContext } from "../query/task-context.js";
+import { taskContext, TaskContextBudgetError } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
 import { doctor, setupClients } from "../diagnostics/index.js";
 import type { SetupClientId } from "../diagnostics/index.js";
@@ -175,6 +175,17 @@ function jsonOutput(value: unknown, label: string): string {
     throw new RangeError(`osnova: ${label} JSON exceeds ${maximumTextResponseCodeUnits} code units; use the API for complete structured output`);
   }
   return text;
+}
+
+// Shared query errors keep the wording the API and MCP tools report; the CLI names the command that was typed instead.
+function withCommandError<T>(command: string, run: () => T, describe: (error: unknown) => string | undefined): T {
+  try {
+    return run();
+  } catch (error) {
+    const message = describe(error);
+    if (message === undefined) throw error;
+    throw new Error(`osnova ${command}: ${message}`, { cause: error });
+  }
 }
 
 const lspLanguageNames: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
@@ -336,13 +347,13 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const pattern = requirePositional(parsed.positionals, "pattern", "thread");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit", "thread");
-      const result = findTextDetailed(index, pattern, {
+      const result = withCommandError("thread", () => findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
         in: parsed.values.in,
         limit: limitValue ?? 50,
         matchesPerGroup: threadMatchesPerGroup,
-      });
+      }), (error) => error instanceof InvalidPatternError ? error.message.replace(/^osnova: /, "") : undefined);
       io.stdout(formatFindTextResult(result, threadMatchesPerGroup));
       return EXIT_OK;
     }
@@ -417,9 +428,11 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", "footing", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
-        in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit", "footing"),
-        maxDepth: numericOption(parsed.values.depth, "depth", "footing", 1), maxCodeUnits: budget });
+      const limit = numericOption(parsed.values.limit, "limit", "footing");
+      const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
+      const result = withCommandError("footing", () => taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
+        in: parsed.values.in, limit, maxDepth, maxCodeUnits: budget }),
+        (error) => error instanceof TaskContextBudgetError ? `--max-code-units ${budget} cannot retain receipts and omissions; give at least ${error.minimum}` : undefined);
       io.stdout(jsonOutput(result, "footing"));
       return EXIT_OK;
     }
