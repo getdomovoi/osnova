@@ -1056,6 +1056,9 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     ["a raw call-shaped forward", "macro_rules! paste { ($m:ident ($p:literal)) => { $m!($p); } }\npaste!(r#include(\"decl.inc\"));\n"],
     ["a function-shaped forward", "macro_rules! paste { (fn $m:ident) => { $m!(\"decl.inc\"); } }\npaste!(fn include);\n"],
     ["a method-shaped forward", "macro_rules! paste { (. $m:ident) => { $m!(\"decl.inc\"); } }\npaste!(. include);\n"],
+    ["a macro named with a connector", "macro_rules! paste\u203f { ($m:ident ($p:literal)) => { $m!($p); } }\npaste\u203f!(include(\"decl.inc\"));\n"],
+    ["a macro named with a letterlike symbol", "macro_rules! \u2118 { (fn $m:ident) => { $m!(\"decl.inc\"); } }\n\u2118![fn include];\n"],
+    ["a raw macro name in braces", "macro_rules! paste\u203f { (. $m:ident) => { $m!(\"decl.inc\"); } }\nr#paste\u203f!{. include}\n"],
   ])("never takes a file an included declaration may name for a crate root, through %s", async (_label, declare) => {
     const edge = await target({
       "Cargo.toml": app + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n[[test]]\nname=\"tool\"\npath=\"tests/separate.rs\"\n",

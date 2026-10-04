@@ -684,7 +684,9 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
   // it is a method or function name (`.include(`, `fn include`, `include(`) outside every macro's tokens: inside them,
   // a macro may forward it as `include!`.
   const macroTokens: [number, number][] = [];
-  if (code.includes("include")) for (const invocation of code.matchAll(/(?<![\p{L}\p{N}\p{M}_])(?:r#)?[\p{L}_][\p{L}\p{N}\p{M}_]*\s*!\s*(?:(?:r#)?[\p{L}_][\p{L}\p{N}\p{M}_]*\s*)?[({[]/gu)) {
+  // A macro's tokens are the group after `!` (`name!(..)`) or after `macro_rules! name`, whatever characters the name
+  // uses; a `!` that is no macro (`!(a)`, `!= (b)`) only widens what counts.
+  if (code.includes("include")) for (const invocation of code.matchAll(/!\s*(?:[^\s()[\]{};,!]+\s*)?[({[]/gu)) {
     const open = (invocation.index ?? 0) + invocation[0].length - 1;
     let depth = 0;
     let close = code.length;
