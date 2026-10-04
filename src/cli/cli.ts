@@ -322,7 +322,7 @@ export async function runCli(
           "cache-dir": { type: "string" },
         },
       });
-      const pattern = requirePositional(parsed.positionals, "pattern", "grep");
+      const pattern = requirePositional(parsed.positionals, "pattern", "thread");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit");
       const result = findTextDetailed(index, pattern, {
@@ -341,7 +341,7 @@ export async function runCli(
         allowPositionals: true,
         options: { workspace: { type: "string" }, "cache-dir": { type: "string" } },
       });
-      const file = requirePositional(parsed.positionals, "file", "skeleton");
+      const file = requirePositional(parsed.positionals, "file", "outline");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(formatSkeleton(skeleton(index, file)));
       return EXIT_OK;
@@ -358,7 +358,7 @@ export async function runCli(
           "cache-dir": { type: "string" },
         },
       });
-      const symbol = requirePositional(parsed.positionals, "symbol", "callers");
+      const symbol = requirePositional(parsed.positionals, "symbol", "warp");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "warp", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const depthValue = numericOption(parsed.values.depth, "depth", 1);
@@ -478,7 +478,8 @@ export async function runCli(
       const symbols = parsed.positionals.filter((name) => name.length > 0);
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "tests", io)) return EXIT_ERROR;
       const file = parsed.values.file;
-      if ((symbols.length === 0) === (file === undefined)) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
+      if (symbols.length === 0 && file === undefined) throw new Error("osnova tests: give <symbol...> or --file <path>");
+      if (symbols.length > 0 && file !== undefined) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
       const limit = numericOption(parsed.values.limit, "limit");
       const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);

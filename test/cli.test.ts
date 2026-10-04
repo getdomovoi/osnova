@@ -210,7 +210,7 @@ describe("cli", () => {
     const twice = capture();
     expect(await runCli(["tests", "two", "--workspace", workspace, ...cacheArgs], twice.io)).toBe(0);
     expect(twice.lines).toEqual(bySymbol.lines);
-    await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("either <symbol...> or --file");
+    await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("give <symbol...> or --file <path>");
     await expect(runCli(["tests", "two", "--file", "test/two.test.ts", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("not both");
   }, 60_000);
 
@@ -289,6 +289,16 @@ describe("cli", () => {
     expect(scopedText).toContain("src/lean-target.ts:1 function src/lean-target.ts#assembleReport lines 1-5");
     expect(scopedText).toContain("function assembleReport(rows: readonly string[], title: string): string");
     expect(scopedText).not.toContain("const header =");
+  }, 60_000);
+
+  it("names the command as typed in every usage error", async () => {
+    const run = (args: string[]) => runCli([...args, "--workspace", workspace, ...cacheArgs], capture().io);
+    await expect(run(["warp"])).rejects.toThrow(/^osnova warp: missing <symbol> argument$/);
+    await expect(run(["outline"])).rejects.toThrow(/^osnova outline: missing <file> argument$/);
+    await expect(run(["thread", ""])).rejects.toThrow(/^osnova thread: missing <pattern> argument$/);
+    await expect(run(["ground"])).rejects.toThrow(/^osnova ground: missing <question> argument$/);
+    await expect(run(["tests"])).rejects.toThrow(/^osnova tests: give <symbol\.\.\.> or --file <path>$/);
+    await expect(run(["tests", "two", "--file", "test/two.test.ts"])).rejects.toThrow(/^osnova tests: give either <symbol\.\.\.> or --file <path>, not both$/);
   }, 60_000);
 
   it("rejects unknown commands with exit 2", async () => {
