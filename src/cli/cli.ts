@@ -401,10 +401,10 @@ export async function runCli(
         workspace: { type: "string" }, "cache-dir": { type: "string" },
       } });
       const task = parsed.values.task;
-      if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
+      if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova footing: --task must be understand, change or review");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
-      if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
+      if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
         in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit"),

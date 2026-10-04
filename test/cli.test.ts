@@ -227,6 +227,8 @@ describe("cli", () => {
     expect(run("ground")).toEqual({ status: 2, stderr: "osnova: osnova ground: missing <question> argument\n" });
     expect(run("tests")).toEqual({ status: 2, stderr: "osnova: osnova tests: give <symbol...> or --file <path>\n" });
     expect(run("tests", "two", "--file", "test/two.test.ts")).toEqual({ status: 2, stderr: "osnova: osnova tests: give either <symbol...> or --file <path>, not both\n" });
+    expect(run("footing", "two", "--task", "bogus")).toEqual({ status: 2, stderr: "osnova: osnova footing: --task must be understand, change or review\n" });
+    expect(run("footing", "two", "--max-code-units", "16385")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units cannot exceed 16384\n" });
   }, 60_000);
 
   it("rejects a stray directory positional and points at --workspace", async () => {
