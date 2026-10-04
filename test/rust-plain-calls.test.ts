@@ -958,6 +958,52 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
   });
 
+  // Round 17: children found only after more than two ownership passes, children of a path-loaded file, an absolute
+  // module path, and a manifest that starts with a byte order mark.
+  const run = "fn main() { let _ = run(); }\n";
+  it.each([["crate::f()", "src/bin/root.rs#f"], ["super::f()", "src/bin/tool/main.rs#f"]])("never reads %s in a child its real parent reaches only on a third pass", async (call, right) => {
+    const edge = await target({
+      "Cargo.toml": app + "autobins=false\n[[bin]]\nname=\"app\"\npath=\"src/bin/root.rs\"\n" + ownerBin,
+      "src/bin/root.rs": "mod tool;\npub fn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { tool::run() }\n" + run,
+      "src/bin/tool.rs": "mod main;\npub fn run() -> &'static str { main::run() }\n",
+      "src/bin/tool/main.rs": "mod child;\npub fn run() -> &'static str { child::run() }\npub fn f() -> &'static str { \"MAIN\" }\n",
+      "src/bin/tool/main/child.rs": `pub fn run() -> &'static str {\n    ${call}\n}\n`,
+      "custom/owner.rs": "#[cfg(any())]\n#[path=\"../src/bin/tool/main/child.rs\"]mod other;\npub fn f() -> &'static str { \"OWNER\" }\nfn main() {}\n",
+    }, "src/bin/tool/main/child.rs", 2, "f");
+    if (edge?.toSymbol !== undefined) expect(edge.toSymbol).toBe(right);
+  });
+
+  it("never reads crate:: in a child of a path-loaded file through another declarer of the child", async () => {
+    const edge = await target({
+      "Cargo.toml": app + "autobins=false\n[[bin]]\nname=\"app\"\npath=\"entry/root.rs\"\n[[bin]]\nname=\"owner\"\npath=\"owner/root.rs\"\n",
+      "entry/root.rs": "#[path=\"../custom/tool.rs\"]mod tool;\npub fn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { tool::run() }\n" + run,
+      "custom/tool.rs": "mod child;\npub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str { child::run() }\n",
+      "custom/child.rs": "pub fn run() -> &'static str {\n    crate::f()\n}\n",
+      "owner/root.rs": "#[cfg(any())]\n#[path=\"../custom/child.rs\"]mod other;\npub fn f() -> &'static str { \"OWNER\" }\nfn main() {}\n",
+    }, "custom/child.rs", 2, "f");
+    if (edge?.toSymbol !== undefined) expect(edge.toSymbol).toBe("entry/root.rs#f");
+  });
+
+  it("never takes a file an absolute module path loads for a crate root", async () => {
+    const edge = await target({
+      "Cargo.toml": app + "autobins=false\n[[bin]]\nname=\"app\"\npath=\"entry/root.rs\"\n",
+      "entry/root.rs": "#[path=\"/work/app/src/bin/tool.rs\"]mod tool;\npub fn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { tool::run() }\n" + run,
+      "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
+  });
+
+  it("reads the first target table of a manifest that starts with a byte order mark", async () => {
+    const edge = await target({
+      "Cargo.toml": "\uFEFF[[bin]]\nname=\"app\"\npath=\"custom/tool.rs\"\n" + app + "autobins=false\n" + ownerBin,
+      "custom/owner.rs": owned("custom/tool.rs").replace("../custom/tool.rs", "tool.rs"),
+      "custom/tool.rs": tool,
+    }, "custom/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("custom/owner.rs#f");
+  });
+
   it("still reads crate:: in a test module that autotests = false keeps out of the targets", async () => {
     const edge = await target({
       "Cargo.toml": app + "autotests = false # one integration crate\n[[test]]\nname = \"integration\"\npath = \"tests/tests.rs\"\n[package.metadata.deb]\nextended-description = \"\"\"\n[[test]]\npath = \"tests/util.rs\"\n\"\"\"\n",

@@ -263,7 +263,8 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
         const childDir = placement === "beside" ? dir : path.posix.join(dir, path.posix.basename(file).replace(/\.rs$/, ""));
         const nestedDir = path.posix.join(childDir, ...declaration.inline);
         const conventional = [path.posix.join(nestedDir, `${declaration.name}.rs`), path.posix.join(nestedDir, declaration.name, "mod.rs")];
-        if (declaration.hasPath && declaration.pathValue === undefined) { unreadable = true; continue; }
+        // An absolute path names a file by a root the index does not compare against its relative paths.
+        if (declaration.hasPath && (declaration.pathValue === undefined || rustAbsolutePath(declaration.pathValue))) { unreadable = true; continue; }
         // A literal path is relative to the file's directory at the top level, and to the inline modules'
         // directory (from the module directory of the file) inside one.
         const pathTarget = declaration.pathValue === undefined ? undefined : path.posix.normalize(path.posix.join(declaration.inline.length === 0 ? dir : nestedDir, declaration.pathValue));
@@ -289,17 +290,28 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
     }
     rustModuleFiles.set(file, kinds);
   }
-  // A file's child modules sit beside it when it is mod.rs or a crate root, else in the directory named after it.
-  // Whether it is a root depends on what declares it, so the links are built once from where roots may sit and
-  // again from the roots that first pass proves.
-  // A declared file Cargo may also compile as a target has its children in both places, and each links to it.
-  const firstPass = linkRust((file) => path.posix.basename(file) === "mod.rs" || rustRootPlace(file, rustTargetRoots, cargoRoots) ? ["beside"] : ["named"]);
-  const ownership = linkRust((file) => {
+  // A file's child modules sit beside it when it is mod.rs, a crate root, or loaded by a `#[path]`, and in the
+  // directory named after it when a plain `mod name;` loads it; a file reached more than one way has its children in
+  // every such place, each linked to it. How a file is reached depends on the links, so they are rebuilt until they
+  // stop changing. Links that never settle prove nothing, and leave every crate root unproven.
+  const placements = (links: ReturnType<typeof linkRust> | undefined) => (file: string): ("beside" | "named")[] => {
     if (path.posix.basename(file) === "mod.rs") return ["beside"];
-    if (!rustRootPlace(file, rustTargetRoots, cargoRoots)) return ["named"];
-    if (!firstPass.declaredBy.has(file) && !firstPass.uncertain.has(file)) return ["beside"];
-    return rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets) ? ["beside", "named"] : ["named"];
-  });
+    const declarers = links?.declaredBy.get(file) ?? [];
+    const uncertain = links?.uncertain.has(file) ?? false;
+    const found = new Set<"beside" | "named">();
+    if (rustRootPlace(file, rustTargetRoots, cargoRoots) && ((declarers.length === 0 && !uncertain) || rustMayBeTarget(file, rustTargetRoots, cargoRoots, cargoTargets))) found.add("beside");
+    if (declarers.some((link) => link.viaPath)) found.add("beside");
+    if (declarers.some((link) => !link.viaPath) || found.size === 0) found.add("named");
+    return [...found];
+  };
+  const linksKey = (links: ReturnType<typeof linkRust>): string => JSON.stringify([[...links.declaredBy].map(([child, list]) => [child, list.map((link) => [link.declarer, link.name, link.viaPath, ...link.inline].join("\0")).sort()]).sort(), [...links.uncertain].sort()]);
+  let ownership = linkRust(placements(undefined));
+  let settled = false;
+  for (let round = 0; round < 16 && !settled; round += 1) {
+    const next = linkRust(placements(ownership));
+    settled = linksKey(next) === linksKey(ownership);
+    ownership = next;
+  }
   // A Cargo target is compiled as its own crate root even when another file declares it as a module (whether or not
   // that declaration's cfg is on): it has two crate contexts, so no path from it (or a module below it) is proven.
   // The declaring file may still walk into it as its module.
@@ -312,7 +324,7 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
     rustDeclaredBy,
     rustUncertainOwner: ownership.uncertain,
     rustTwoCrates,
-    rustOwnershipUnreadable: ownership.unreadable || cargoUnread,
+    rustOwnershipUnreadable: ownership.unreadable || cargoUnread || !settled,
     rustTargetRoots };
 }
 
@@ -334,7 +346,8 @@ interface CargoTargets {
 
 // A small TOML reader for the target keys of a Cargo manifest: table headers (bare, quoted, spaced, with a trailing
 // comment), dotted and quoted keys, and string values with their escapes. Multi-line strings and arrays are skipped
-// whole, so their text is never read as a header. Anything about targets it cannot read sets `unread`.
+// whole, so their text is never read as a header. A line it cannot parse, or target syntax it does not read, sets
+// `unread`: what it skipped could name a target.
 function readCargoTargets(text: string): CargoTargets {
   const kinds = new Set<string>(["lib", "bin", "test", "example", "bench"]);
   const autoKeys = new Map<string, CargoTargetKind>([["autolib", "lib"], ["autobins", "bin"], ["autotests", "test"], ["autoexamples", "example"], ["autobenches", "bench"]]);
@@ -410,7 +423,7 @@ function readCargoTargets(text: string): CargoTargets {
   let targetKind: CargoTargetKind | undefined;
   let targetHasPath = false;
   const closeTable = (): void => { if (targetKind !== undefined && !targetHasPath) pathless.add(targetKind); targetKind = undefined; targetHasPath = false; };
-  let index = 0;
+  let index = text.startsWith("\ufeff") ? 1 : 0;
   while (index < text.length) {
     const char = text[index]!;
     if (char === " " || char === "\t" || char === "\r" || char === "\n") { index += 1; continue; }
@@ -422,7 +435,7 @@ function readCargoTargets(text: string): CargoTargets {
       const close = array ? "]]" : "]";
       closeTable();
       if (key === undefined || !text.startsWith(close, key.end) || !blank(key.end + close.length, end)) {
-        if (/\b(?:lib|bin|test|example|bench)\b/.test(text.slice(index, end))) unread = true;
+        unread = true;
         table = ["\0"];
       } else {
         table = key.segments;
@@ -437,7 +450,7 @@ function readCargoTargets(text: string): CargoTargets {
     }
     const key = keyAt(index);
     let at = key?.end ?? index;
-    if (key === undefined || text[at] !== "=") { index = lineEnd(index); continue; }
+    if (key === undefined || text[at] !== "=") { unread = true; index = lineEnd(index); continue; }
     at += 1;
     while (text[at] === " " || text[at] === "\t") at += 1;
     const end = valueEnd(at);
@@ -569,7 +582,7 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       if (literal !== null) { code += " "; index += literal[0].length; continue; }
     }
     // Rust also treats NEXT LINE, the two direction marks and the line and paragraph separators as whitespace.
-    code += "\u0085\u200e\u200f\u2028\u2029".includes(char) ? " " : char;
+    code += "\u0085\u200e\u200f\u2028\u2029\ufeff".includes(char) ? " " : char;
     index += 1;
   }
   const declarations: RustModuleDeclaration[] = [];
