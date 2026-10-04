@@ -174,6 +174,10 @@ export interface WorkspaceContext {
   readonly rustTargetRoots: ReadonlySet<string>;
   /** Rust module file to the files whose top-level `mod name;` declares it. */
   readonly rustDeclaredBy: ReadonlyMap<string, readonly string[]>;
+  /** Rust files a declaration may name that the scan could not follow: no root, and no module the walk enters. */
+  readonly rustUncertainOwner: ReadonlySet<string>;
+  /** Some `#[path]` value or delimiter could not be read, so any file may be a module: no crate root is proven. */
+  readonly rustOwnershipUnreadable: boolean;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -224,53 +228,182 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
       for (const known of files.keys()) if (known.startsWith(`${src}/`)) { pythonRoots.set(`${src}\0${dir}`, { dir: src, manifest: dir }); break; }
     }
   }
-  // Which file declares each Rust module file: `mod name;` at a file's top level names `name.rs` or `name/mod.rs`
-  // beside its children (beside the file for a crate root or mod.rs, else in the directory named after it).
-  const rustModuleFiles = new Map([...files.values()].filter((card) => card.language === "rust").map((card) => [card.path, rustModuleDeclarations(card.text)]));
-  const rustDeclaredBy = new Map<string, string[]>();
-  for (const [file, declarations] of rustModuleFiles) {
-    const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
-    const name = path.posix.basename(file);
-    const parentName = path.posix.basename(dir);
-    const besideFile = name === "mod.rs" || name === "lib.rs" || name === "main.rs" || name === "build.rs" || ["tests", "examples", "benches"].includes(parentName) || (parentName === "bin" && path.posix.basename(path.posix.dirname(dir)) === "src");
-    const childDir = besideFile ? dir : path.posix.join(dir, name.replace(/\.rs$/, ""));
-    for (const [module, kind] of declarations) {
-      if (kind !== "file") continue;
-      for (const child of [path.posix.join(childDir, `${module}.rs`), path.posix.join(childDir, module, "mod.rs")]) {
-        if (!files.has(child)) continue;
-        const list = rustDeclaredBy.get(child);
-        if (list === undefined) rustDeclaredBy.set(child, [file]); else list.push(file);
+  // Which file owns each Rust module file. A declaration the scan can follow (`mod name;` at the top level, in a
+  // named inline module, or with a literal `#[path]`) links its file to the declaring file. One it can see but not
+  // follow (inside a macro or function body, or a `cfg_attr` path) marks its candidate files as owned by an
+  // unknown declarer, so they are neither a root nor a module the walk may enter. A `path` value that cannot be
+  // read could name any file, and leaves every crate root unproven.
+  const rustScans = new Map([...files.values()].filter((card) => card.language === "rust").map((card) => [card.path, scanRustModules(card.text)]));
+  const rustTargetRoots = new Set([...files.values()].flatMap((card) => {
+    if (path.posix.basename(card.path) !== "Cargo.toml") return [];
+    const dir = path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path);
+    return [...card.text.matchAll(/^\s*\[\[?(?:lib|bin|test|example|bench)\]\]?\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)]
+      .flatMap((section) => [...(section[1] ?? "").matchAll(/^\s*path\s*=\s*"([^"]+)"/gm)].map((entry) => path.posix.normalize(path.posix.join(dir, entry[1]!))));
+  }));
+  const rustModuleFiles = new Map<string, Map<string, "file" | "path" | "nested">>();
+  const linkRust = (beside: (file: string) => boolean) => {
+    const declaredBy = new Map<string, string[]>();
+    const uncertain = new Set<string>();
+    let unreadable = false;
+    const add = (child: string, declarer: string, certain: boolean) => {
+      if (!files.has(child)) return;
+      if (!certain) { uncertain.add(child); return; }
+      const list = declaredBy.get(child);
+      if (list === undefined) declaredBy.set(child, [declarer]); else if (!list.includes(declarer)) list.push(declarer);
+    };
+    for (const [file, scan] of rustScans) {
+      const dir = path.posix.dirname(file) === "." ? "" : path.posix.dirname(file);
+      const childDir = beside(file) ? dir : path.posix.join(dir, path.posix.basename(file).replace(/\.rs$/, ""));
+      if (scan.unbalanced) unreadable = true;
+      for (const declaration of scan.declarations) {
+        const nestedDir = path.posix.join(childDir, ...declaration.inline);
+        const conventional = [path.posix.join(nestedDir, `${declaration.name}.rs`), path.posix.join(nestedDir, declaration.name, "mod.rs")];
+        if (declaration.hasPath && declaration.pathValue === undefined) { unreadable = true; continue; }
+        // A literal path is relative to the file's directory at the top level, and to the inline modules'
+        // directory (from the module directory of the file) inside one.
+        const pathTarget = declaration.pathValue === undefined ? undefined : path.posix.normalize(path.posix.join(declaration.inline.length === 0 ? dir : nestedDir, declaration.pathValue));
+        if (declaration.other) {
+          for (const candidate of [...conventional, ...(pathTarget === undefined ? [] : [pathTarget, path.posix.normalize(path.posix.join(dir, declaration.pathValue!))])]) add(candidate, file, false);
+        } else if (pathTarget !== undefined) add(pathTarget, file, !declaration.cfgPath);
+        else for (const candidate of conventional) add(candidate, file, true);
       }
     }
+    return { declaredBy, uncertain, unreadable };
+  };
+  for (const [file, scan] of rustScans) {
+    const kinds = new Map<string, "file" | "path" | "nested">();
+    for (const declaration of scan.declarations) {
+      // A cfg-gated module is followed only while nothing else in the file binds its name: the gate may be off,
+      // and a `use .. as name` or a type of that name would then be what the path names.
+      const kind = declaration.other || declaration.inline.length > 0 ? "nested" : declaration.hasPath || (declaration.cfg && rustNameBoundOtherwise(scan.code, declaration.name)) ? "path" : "file";
+      const previous = kinds.get(declaration.name);
+      kinds.set(declaration.name, previous === "path" || kind === "path" ? "path" : previous === "file" || kind === "file" ? "file" : "nested");
+    }
+    rustModuleFiles.set(file, kinds);
   }
+  // A file's child modules sit beside it when it is mod.rs or a crate root, else in the directory named after it.
+  // Whether it is a root depends on what declares it, so the links are built once from where roots may sit and
+  // again from the roots that first pass proves.
+  const firstPass = linkRust((file) => path.posix.basename(file) === "mod.rs" || rustRootPlace(file, rustTargetRoots, cargoRoots));
+  const ownership = linkRust((file) => path.posix.basename(file) === "mod.rs" || (rustRootPlace(file, rustTargetRoots, cargoRoots) && !firstPass.declaredBy.has(file) && !firstPass.uncertain.has(file)));
+  const rustDeclaredBy = ownership.declaredBy;
   return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
     rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])),
     rustModuleFiles,
     rustDeclaredBy,
-    rustTargetRoots: new Set([...files.values()].flatMap((card) => {
-      if (path.posix.basename(card.path) !== "Cargo.toml") return [];
-      const dir = path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path);
-      return [...card.text.matchAll(/^\s*\[\[?(?:lib|bin|test|example|bench)\]\]?\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/gm)]
-        .flatMap((section) => [...(section[1] ?? "").matchAll(/^\s*path\s*=\s*"([^"]+)"/gm)].map((entry) => path.posix.normalize(path.posix.join(dir, entry[1]!))));
-    })) };
+    rustUncertainOwner: ownership.uncertain,
+    rustOwnershipUnreadable: ownership.unreadable,
+    rustTargetRoots };
 }
 
-// The `mod name;` declarations of Rust source, read past comments and string literals: `path` when an attribute
-// before it (`#[path = ".."]`, `#[cfg_attr(.., path = "..")]`) sets the module's file, else `file`; `nested` when
-// every declaration of the name sits inside braces (an inline module's body).
-function rustModuleDeclarations(text: string): Map<string, "file" | "path" | "nested"> {
-  const code = text.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|r(#*)"[\s\S]*?"\1|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\.|[^\\'\n])'/g, (match) => match.startsWith("/") ? " ".repeat(match.length) : match[0] === "'" || match.startsWith("b'") ? "' '" : '""');
-  const out = new Map<string, "file" | "path" | "nested">();
-  let depth = 0;
-  let scanned = 0;
-  for (const match of code.matchAll(/((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/g)) {
-    for (; scanned < match.index; scanned += 1) depth += code[scanned] === "{" ? 1 : code[scanned] === "}" ? -1 : 0;
-    const name = match[2]!;
-    const kind = depth > 0 ? "nested" : /(^|[\s(,[])path\s*=/.test(match[1] ?? "") ? "path" : "file";
-    const previous = out.get(name);
-    out.set(name, previous === "path" || kind === "path" ? "path" : previous === "file" || kind === "file" ? "file" : "nested");
+// Where a Rust crate root may sit: a Cargo target path, lib.rs or main.rs in a src directory, build.rs beside a
+// Cargo.toml, a file directly under tests/, examples/, benches/ or src/bin/, or main.rs one directory below one.
+function rustRootPlace(file: string, targetRoots: ReadonlySet<string>, cargoRoots: readonly string[]): boolean {
+  const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
+  const dir = parentOf(file);
+  const name = path.posix.basename(file);
+  const targetDir = (candidate: string): boolean => ["tests", "examples", "benches"].includes(path.posix.basename(candidate)) || (path.posix.basename(candidate) === "bin" && path.posix.basename(parentOf(candidate)) === "src");
+  return targetRoots.has(file) || ((name === "lib.rs" || name === "main.rs") && path.posix.basename(dir) === "src") || (name === "build.rs" && cargoRoots.includes(dir))
+    || targetDir(dir) || (name === "main.rs" && dir !== "" && targetDir(parentOf(dir)));
+}
+
+interface RustModuleDeclaration {
+  readonly name: string;
+  /** The named inline modules around it, outermost first. */
+  readonly inline: readonly string[];
+  /** Inside some other body (a macro, a function, an impl): the scan cannot tell where it belongs. */
+  readonly other: boolean;
+  readonly cfg: boolean;
+  readonly hasPath: boolean;
+  readonly cfgPath: boolean;
+  readonly pathValue: string | undefined;
+}
+
+// The `mod name;` declarations of Rust source. Comments (block comments nest), strings, raw strings and char
+// literals are blanked first; delimiter depth covers braces, parentheses and brackets, so a macro body of any
+// delimiter is never the top level. `unbalanced` when the delimiters do not pair up, and nothing read is trusted.
+function scanRustModules(text: string): { declarations: RustModuleDeclaration[]; unbalanced: boolean; code: string } {
+  const strings: string[] = [];
+  let code = "";
+  for (let index = 0; index < text.length;) {
+    const char = text[index]!;
+    const next = text[index + 1];
+    if (char === "/" && next === "/") { const end = text.indexOf("\n", index); index = end < 0 ? text.length : end; code += " "; continue; }
+    if (char === "/" && next === "*") {
+      let depth = 1;
+      index += 2;
+      while (index < text.length && depth > 0) {
+        if (text[index] === "/" && text[index + 1] === "*") { depth += 1; index += 2; }
+        else if (text[index] === "*" && text[index + 1] === "/") { depth -= 1; index += 2; }
+        else index += 1;
+      }
+      code += " ";
+      continue;
+    }
+    const raw = /^(?:b|c)?r(#*)"/.exec(text.slice(index, index + 260));
+    if (raw !== null && (index === 0 || !/[\p{L}\p{N}_]/u.test(text[index - 1]!))) {
+      const close = `"${raw[1]}`;
+      const end = text.indexOf(close, index + raw[0].length);
+      const stop = end < 0 ? text.length : end + close.length;
+      strings.push(text.slice(index + raw[0].length, end < 0 ? text.length : end));
+      code += ` "S${strings.length - 1}" `;
+      index = stop;
+      continue;
+    }
+    if (char === '"' || ((char === "b" || char === "c") && next === '"' && (index === 0 || !/[\p{L}\p{N}_]/u.test(text[index - 1]!)))) {
+      let at = char === '"' ? index + 1 : index + 2;
+      let value = "";
+      let escaped = false;
+      while (at < text.length && text[at] !== '"') { if (text[at] === "\\") { escaped = true; value += text.slice(at, at + 2); at += 2; } else { value += text[at]; at += 1; } }
+      strings.push(escaped ? "\u0000" : value);
+      code += ` "S${strings.length - 1}" `;
+      index = at + 1;
+      continue;
+    }
+    if (char === "'") {
+      const literal = /^'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^\\'\n])'/u.exec(text.slice(index, index + 16));
+      if (literal !== null) { code += " "; index += literal[0].length; continue; }
+    }
+    code += char;
+    index += 1;
   }
-  return out;
+  const declarations: RustModuleDeclaration[] = [];
+  const stack: (string | null)[] = [];
+  let unbalanced = false;
+  const pattern = /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?<![\p{L}\p{N}_#])mod\s+(?:r#)?([\p{L}\p{N}_]+)\s*([;{])|([{}()[\]])/gu;
+  for (const match of code.matchAll(pattern)) {
+    const delimiter = match[4];
+    if (delimiter !== undefined) {
+      if (delimiter === "{" || delimiter === "(" || delimiter === "[") stack.push(null);
+      else if (stack.pop() === undefined) unbalanced = true;
+      continue;
+    }
+    const name = match[2]!;
+    if (match[3] === "{") { stack.push(name); continue; }
+    const attributes = match[1] ?? "";
+    const value = /(?:^|[\s(,[])path\s*=\s*"S(\d+)"/.exec(attributes)?.[1];
+    const pathValue = value === undefined ? undefined : strings[Number(value)];
+    declarations.push({
+      name,
+      inline: stack.every((entry) => entry !== null) ? stack as string[] : [],
+      other: stack.some((entry) => entry === null),
+      cfg: /(?:^|[^\p{L}\p{N}_])cfg(?:_attr)?\s*\(/u.test(attributes),
+      hasPath: /(?:^|[\s(,[])path\s*=/.test(attributes),
+      cfgPath: /(?:^|[^\p{L}\p{N}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])path\s*=/.test(attributes),
+      pathValue: pathValue === undefined || pathValue.includes("\u0000") ? undefined : pathValue,
+    });
+  }
+  return { declarations, unbalanced: unbalanced || stack.length > 0, code };
+}
+
+// Whether blanked Rust code binds a name other than by `mod name;`: as the last name or the alias of a `use` or
+// `extern crate`, or as a type, trait, inline module or macro-free item of the type namespace.
+function rustNameBoundOtherwise(code: string, name: string): boolean {
+  const id = `(?:r#)?${name}(?![\\p{L}\\p{N}_])`;
+  for (const statement of code.matchAll(/(?<![\p{L}\p{N}_])(?:use|extern\s+crate)\s[^;]*;/gu)) {
+    if (new RegExp(`(?:\\bas\\s+|::\\s*|[{,]\\s*|(?:use|crate)\\s+)${id}\\s*(?=[,};])`, "u").test(statement[0])) return true;
+  }
+  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:struct|enum|union|trait|type|mod)\\s+${id}\\s*[^;\\s]`, "u").test(code);
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -387,22 +520,19 @@ function resolveRustModule(fromFile: string, spec: string, knownFiles: ReadonlyS
 // The file a Rust path lands on, and the segments left after it: the inline modules of that file the path
 // continues through (`use super::inner::Deep` with `mod inner { .. }` in the file gives inline ["inner"]).
 function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet<string>, context: WorkspaceContext): { file: string; inline: string[] } | undefined {
-  const segments = spec.split("::").filter((part) => part.length > 0);
+  const segments = spec.split("::").filter((part) => part.length > 0).map((part) => part.replace(/^r#/, ""));
   const head = segments[0];
   if (head === undefined) return undefined;
   const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
   const fromDir = parentOf(fromFile);
   const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
   const base = path.posix.basename(fromFile);
-  // A crate root: lib.rs, main.rs, build.rs at a Cargo root, a file directly under tests/, examples/, benches/ or
-  // src/bin/, or a target path a Cargo.toml names. Its child modules live beside it, as a mod.rs file's do.
-  const targetDir = (dir: string): boolean => ["tests", "examples", "benches"].includes(path.posix.basename(dir)) || (path.posix.basename(dir) === "bin" && path.posix.basename(parentOf(dir)) === "src");
-  // A file another file declares with `mod name;` is that module, never a root, whatever its name or place.
-  const isRoot = (file: string): boolean => {
-    if (context.rustDeclaredBy.has(file)) return false;
-    const name = path.posix.basename(file);
-    return name === "lib.rs" || name === "main.rs" || targetDir(parentOf(file)) || (name === "build.rs" && context.cargoRoots.includes(parentOf(file))) || context.rustTargetRoots.has(file);
-  };
+  // A crate root sits where Cargo looks for one (rustRootPlace) and nothing declares it as a module. A file a
+  // declaration the scan could not follow may name has no known owner: it is neither, and its paths name nothing.
+  // Its child modules live beside it, as a mod.rs file's do.
+  if (context.rustUncertainOwner.has(fromFile)) return undefined;
+  const isRoot = (file: string): boolean => !context.rustDeclaredBy.has(file) && !context.rustUncertainOwner.has(file) && !context.rustOwnershipUnreadable
+    && rustRootPlace(file, context.rustTargetRoots, context.cargoRoots);
   const ownDir = base === "mod.rs" || isRoot(fromFile) ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
   const inlineModule = (file: string, names: readonly string[]): boolean => context.rustInlineModules.has(`${file}#${names.join(".")}`);
   const firstKnown = (files: readonly string[]): string | undefined => files.find((file) => knownFiles.has(file));
@@ -422,6 +552,7 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
       if (declared === "path" || (inline.length > 0 && declaration !== undefined)) return undefined;
       const modulePath = path.posix.join(currentDir, segment);
       const next = declared === "file" ? firstKnown([`${modulePath}.rs`, `${modulePath}/mod.rs`]) : undefined;
+      if (next !== undefined && context.rustUncertainOwner.has(next)) return undefined;
       if (next === undefined) return { file: current, inline: [...inline, ...rest.slice(index)] };
       current = next;
       currentDir = modulePath;

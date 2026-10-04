@@ -650,4 +650,38 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     }, "src/main.rs", 4, "f");
     expect(edge?.toSymbol).not.toBe("src/alias.rs#f");
   });
+  // Round 5: a declaration the text scan misread, or one it could see but not follow, never proves a module
+  // file or a crate root. Each case is a rustc-valid program from the review; the stray target is wrong.
+  const stray = "pub fn f() -> &'static str { \"STRAY\" }\n";
+  const aliasRest = "pub mod actual { pub fn f() -> &'static str { \"ACTUAL\" } }\npub use actual as alias;\nfn run() -> &'static str {\n    crate::alias::f()\n}\nfn main() { let _ = run(); }\n";
+  it.each([
+    ["a nested block comment", "/* outer /* inner */ mod alias; */\n"],
+    ["a macro body in parentheses", "macro_rules! unused ( () => ( mod alias; ); );\n"],
+    ["a macro body in brackets", "macro_rules! unused [ () => [ mod alias; ]; ];\n"],
+    ["a cfg-disabled declaration", "#[cfg(any())] mod alias;\n"],
+  ])("never follows %s to a stray file of the alias's name", async (_label, prefix) => {
+    const edge = await target({ "src/main.rs": prefix + aliasRest, "src/alias.rs": stray }, "src/main.rs", 5, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/alias.rs#f");
+  });
+
+  it("still follows a cfg-gated module whose name nothing else binds", async () => {
+    const edge = await target({
+      "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",
+      "src/json.rs": "pub struct JSONBuilder;\npub fn build() {}\n",
+    }, "src/lib.rs", 6, "build");
+    expect(edge?.toSymbol).toBe("src/json.rs#build");
+  });
+
+  const local = "fn f() -> &'static str { \"LOCAL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n";
+  it.each([
+    ["a raw-identifier declaration", { "tests/basic.rs": "mod r#common;\nfn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { common::run() }\nfn main() { let _ = run(); }\n", "tests/common.rs": local }, "tests/common.rs", "tests/basic.rs#f"],
+    ["a file child of an inline module", { "src/main.rs": "fn f() -> &'static str { \"ROOT\" }\nmod outer { pub mod main; }\nfn run() -> &'static str { outer::main::run() }\nfn main() { let _ = run(); }\n", "src/outer/main.rs": local }, "src/outer/main.rs", "src/main.rs#f"],
+    ["a path-attribute declaration", { "src/main.rs": "fn f() -> &'static str { \"ROOT\" }\n#[path=\"nested/main.rs\"] mod child;\nfn run() -> &'static str { child::run() }\nfn main() { let _ = run(); }\n", "src/nested/main.rs": local }, "src/nested/main.rs", "src/main.rs#f"],
+    ["a custom Cargo target root", { "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\n[[bin]]\nname=\"chosen\"\npath=\"src/chosen.rs\"\n", "src/chosen.rs": "mod main;\nfn f() -> &'static str { \"CUSTOM\" }\nfn run() -> &'static str { main::run() }\nfn main() { let _ = run(); }\n", "src/main.rs": local }, "src/main.rs", "src/chosen.rs#f"],
+  ] as const)("reads crate:: in a module declared by %s as its declaring crate, never as a root", async (_label, files, file, root) => {
+    const edge = await target({ ...files }, file, 3, "f");
+    expect(edge?.toSymbol).not.toBe(`${file}#f`);
+    if (edge?.toSymbol !== undefined) expect(edge.toSymbol).toBe(root);
+  });
 });
