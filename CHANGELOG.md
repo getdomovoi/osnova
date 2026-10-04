@@ -8,6 +8,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 - CLI usage errors name the command as typed: `osnova warp`, `osnova outline` and `osnova thread ""` named the internal functions `callers`, `skeleton` and `grep`. `osnova tests` with neither symbols nor `--file` now says `give <symbol...> or --file <path>`; it said "not both", which still applies when both are given.
 - `osnova footing` with a blank or whitespace-only question and no `--symbol` exits 2 with `osnova footing: missing <question> argument`, as `osnova ground` does; it printed an empty answer and exited 0. With `--symbol` the question may stay blank.
+- The CLI rejects `-n 0` / `--limit 0` on `ground`, `footing`, `tests` and `unreferenced` with exit 2 and `--limit must be a safe integer >= 1`, as `groundwork --max-dirs 0` already did. `osnova ground x -n 0` printed "no matches" for a query with matches. `thread -n 0` keeps its documented count-only output (totals, no matches), and the API and MCP `limit` keep accepting 0, reported as truncation.
 
 ## 0.12.0 (2026-10-01)
 

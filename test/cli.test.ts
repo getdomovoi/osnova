@@ -311,6 +311,20 @@ describe("cli", () => {
     expect(seeded.lines.join("\n")).toContain("two");
   }, 60_000);
 
+  it("rejects a zero or non-numeric --limit on every command whose limit caps results", async () => {
+    const run = (args: string[], io = capture().io) => runCli([...args, "--workspace", workspace, ...cacheArgs], io);
+    // thread -n 0 is a documented count-only mode (totals, no matches); see search-surfaces.test.ts.
+    const counts = capture();
+    expect(await run(["thread", "two", "-n", "0"], counts.io)).toBe(0);
+    expect(counts.lines.join("\n")).not.toContain("no matches");
+    await expect(run(["thread", "two", "-n", "abc"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 0$/);
+    for (const command of [["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
+      await expect(run([...command, "-n", "0"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 1$/);
+      await expect(run([...command, "-n", "abc"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 1$/);
+      await expect(run([...command, "--limit=0"])).rejects.toThrow(/^osnova: --limit must be a safe integer >= 1$/);
+    }
+  }, 60_000);
+
   it("rejects unknown commands with exit 2", async () => {
     const { lines, io } = capture();
     const code = await runCli(["frobnicate"], io);

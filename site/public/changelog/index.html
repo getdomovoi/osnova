@@ -62,6 +62,7 @@
 <ul>
 <li>CLI usage errors name the command as typed: <code>osnova warp</code>, <code>osnova outline</code> and <code>osnova thread &quot;&quot;</code> named the internal functions <code>callers</code>, <code>skeleton</code> and <code>grep</code>. <code>osnova tests</code> with neither symbols nor <code>--file</code> now says <code>give &lt;symbol...&gt; or --file &lt;path&gt;</code>; it said &quot;not both&quot;, which still applies when both are given.</li>
 <li><code>osnova footing</code> with a blank or whitespace-only question and no <code>--symbol</code> exits 2 with <code>osnova footing: missing &lt;question&gt; argument</code>, as <code>osnova ground</code> does; it printed an empty answer and exited 0. With <code>--symbol</code> the question may stay blank.</li>
+<li>The CLI rejects <code>-n 0</code> / <code>--limit 0</code> on <code>ground</code>, <code>footing</code>, <code>tests</code> and <code>unreferenced</code> with exit 2 and <code>--limit must be a safe integer &gt;= 1</code>, as <code>groundwork --max-dirs 0</code> already did. <code>osnova ground x -n 0</code> printed &quot;no matches&quot; for a query with matches. <code>thread -n 0</code> keeps its documented count-only output (totals, no matches), and the API and MCP <code>limit</code> keep accepting 0, reported as truncation.</li>
 </ul>
 <h2 id="v0-12-0">0.12.0 (2026-10-01)</h2>
 <p>The extraction version moves to <code>structural-9.40</code> and the edge section format to 13, so the first run after upgrading rebuilds the cache once.</p>
