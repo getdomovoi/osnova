@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -210,8 +211,30 @@ describe("cli", () => {
     const twice = capture();
     expect(await runCli(["tests", "two", "--workspace", workspace, ...cacheArgs], twice.io)).toBe(0);
     expect(twice.lines).toEqual(bySymbol.lines);
-    await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("either <symbol...> or --file");
+    await expect(runCli(["tests", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("give <symbol...> or --file <path>");
     await expect(runCli(["tests", "two", "--file", "test/two.test.ts", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow("not both");
+  }, 60_000);
+
+  it("names the command as typed in usage errors", () => {
+    const bin = path.join(import.meta.dirname, "..", "dist", "bin.js");
+    const run = (...args: string[]): { status: number | null; stderr: string } => {
+      const result = spawnSync(process.execPath, [bin, ...args, "--workspace", workspace, ...cacheArgs], { encoding: "utf8" });
+      return { status: result.status, stderr: result.stderr };
+    };
+    expect(run("warp")).toEqual({ status: 2, stderr: "osnova: osnova warp: missing <symbol> argument\n" });
+    expect(run("outline")).toEqual({ status: 2, stderr: "osnova: osnova outline: missing <file> argument\n" });
+    expect(run("thread", "")).toEqual({ status: 2, stderr: "osnova: osnova thread: missing <pattern> argument\n" });
+    expect(run("ground")).toEqual({ status: 2, stderr: "osnova: osnova ground: missing <question> argument\n" });
+    expect(run("tests")).toEqual({ status: 2, stderr: "osnova: osnova tests: give <symbol...> or --file <path>\n" });
+    expect(run("tests", "two", "--file", "test/two.test.ts")).toEqual({ status: 2, stderr: "osnova: osnova tests: give either <symbol...> or --file <path>, not both\n" });
+    expect(run("footing", "two", "--task", "bogus")).toEqual({ status: 2, stderr: "osnova: osnova footing: --task must be understand, change or review\n" });
+    expect(run("footing", "two", "--max-code-units", "16385")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units cannot exceed 16384\n" });
+    expect(run("footing", "two", "--max-code-units", "0")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units must be a safe integer >= 1\n" });
+    expect(run("groundwork", "--max-dirs", "0")).toEqual({ status: 2, stderr: "osnova: osnova groundwork: --max-dirs must be a safe integer >= 1\n" });
+    expect(run("warp", "two", "--bogus")).toEqual({ status: 2, stderr: "osnova: osnova warp: Unknown option '--bogus'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"--bogus\"\n" });
+    expect(run("settle", "extra")).toEqual({ status: 2, stderr: "osnova: osnova settle: Unexpected argument 'extra'. This command does not take positional arguments\n" });
+    expect(run("footing", "two", "--max-code-units", "1")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units 1 cannot retain receipts and omissions; give at least 738\n" });
+    expect(run("thread", "[")).toEqual({ status: 2, stderr: "osnova: osnova thread: invalid pattern \"[\": SyntaxError: Invalid regular expression: /[/g: Unterminated character class\n" });
   }, 60_000);
 
   it("rejects a stray directory positional and points at --workspace", async () => {
