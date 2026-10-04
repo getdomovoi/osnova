@@ -1047,6 +1047,32 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("tests/tool.rs#f");
   });
 
+  // Round 20: `include!` under another name, or handed to a macro that calls it.
+  it.each([
+    ["a std alias", "use std::include as paste;\npaste!(\"decl.inc\");\n"],
+    ["a core alias", "use core::include as paste;\npaste!(\"decl.inc\");\n"],
+    ["a forwarding macro", "macro_rules! paste { ($m:ident) => { $m!(\"decl.inc\"); } }\npaste!(include);\n"],
+  ])("never takes a file an included declaration may name for a crate root, through %s", async (_label, declare) => {
+    const edge = await target({
+      "Cargo.toml": app + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n[[test]]\nname=\"tool\"\npath=\"tests/separate.rs\"\n",
+      "tests/root.rs": declare + "pub fn f() -> &'static str { \"ROOT\" }\nfn run() -> &'static str { tool::run() }\n" + run,
+      "tests/decl.inc": "mod tool;\n",
+      "tests/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\nfn main() {}\n",
+      "tests/separate.rs": "fn main() {}\n",
+    }, "tests/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("tests/tool.rs#f");
+  });
+
+  it("still reads crate:: beside a method or function named include", async () => {
+    const edge = await target({
+      "Cargo.toml": app,
+      "src/lib.rs": "mod util;\npub fn f() {}\nstruct S;\nimpl S {\n    fn include(&self) -> bool { true }\n    fn run(&self) -> bool { self.include() }\n}\n",
+      "src/util.rs": "pub fn run() {\n    crate::f()\n}\n",
+    }, "src/util.rs", 2, "f");
+    expect(edge?.toSymbol).toBe("src/lib.rs#f");
+  });
+
   it("takes only the file a pathless target table names by its target name", async () => {
     const edge = await target({
       "Cargo.toml": noAuto + "[[bin]]\nname=\"app\"\npath=\"tests/root.rs\"\n[[test]]\nname=\"separate\"\n",
