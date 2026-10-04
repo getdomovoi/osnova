@@ -525,3 +525,66 @@ describe("Rust scope, round-2 rustc reproductions", () => {
     expect(edge?.toSymbol).toBe("tests/util.rs#helper");
   });
 });
+
+describe("Rust scope, round-3 rustc reproductions", () => {
+  const target = async (files: Record<string, string>, file: string, line: number, name: string) => callAt(await build(files), file, line, name);
+  const notRoot = async (files: Record<string, string>, file: string, line: number, name: string, wrong: string) => {
+    const edge = await target(files, file, line, name);
+    expect(edge?.toSymbol).not.toBe(wrong);
+    return edge;
+  };
+
+  it("never discards a glob by naming convention or another scope's enum", async () => {
+    await notRoot({
+      "src/main.rs": "mod other;\nfn f() -> &'static str { \"ROOT\" }\nfn run() -> u32 {\n    use crate::other::Kind::*;\n    let _x = f();\n    0\n}\nfn main() { let _ = run(); }\n",
+      "src/other.rs": "#[allow(non_camel_case_types)] pub enum Kind { f() }\n",
+    }, "src/main.rs", 5, "f", "src/main.rs#f");
+    await notRoot({ "src/main.rs": "#[allow(non_snake_case)] mod Upper { pub fn f() -> u32 { 1 } }\nfn f() -> u32 { 0 }\nfn run() -> u32 {\n    use crate::Upper::*;\n    f()\n}\nfn main() { let _ = run(); }\n" }, "src/main.rs", 5, "f", "src/main.rs#f");
+    await notRoot({ "src/main.rs": "mod other { #[allow(non_camel_case_types)] pub enum Kind { f() } }\nmod unused { pub enum Kind { G } }\nfn f() -> u32 { 0 }\nfn run() {\n    use crate::other::Kind::*;\n    let _x = f();\n}\nfn main() { run(); }\n" }, "src/main.rs", 6, "f", "src/main.rs#f");
+  });
+
+  it("reads a grouped glob", async () => {
+    await notRoot({ "src/main.rs": "enum Kind { F(), Root }\n#[allow(non_snake_case)] fn F() -> Kind { Kind::Root }\nfn run() {\n    use Kind::{self, *};\n    let _x = F();\n}\nfn main() { run(); }\n" }, "src/main.rs", 5, "F", "src/main.rs#F");
+  });
+
+  it("never follows a module whose path a cfg_attr or a far attribute sets", async () => {
+    await notRoot({
+      "src/main.rs": "#[cfg_attr(all(), path = \"chosen.rs\")] mod m;\nfn run() -> &'static str {\n    crate::m::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/chosen.rs": "pub fn f() -> &'static str { \"CHOSEN\" }\n",
+      "src/m.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/main.rs", 3, "f", "src/m.rs#f");
+    await notRoot({
+      "src/main.rs": `#[path = "chosen.rs"]\n#[doc = "${"x".repeat(240)}"]\npub(crate) mod m;\nfn run() -> &'static str {\n    crate::m::f()\n}\nfn main() { let _ = run(); }\n`,
+      "src/chosen.rs": "pub fn f() -> &'static str { \"CHOSEN\" }\n",
+      "src/m.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/main.rs", 5, "f", "src/m.rs#f");
+    await notRoot({
+      "src/lib.rs": "pub fn unrelated() {}\n",
+      "tests/basic.rs": "#[path = \"chosen.rs\"] mod m;\nfn run() -> &'static str {\n    crate::m::f()\n}\n",
+      "tests/chosen.rs": "pub fn f() -> &'static str { \"CHOSEN\" }\n",
+      "tests/m.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "tests/basic.rs", 3, "f", "tests/m.rs#f");
+  });
+
+  it("never reads crate:: from an integration test's child module as the package library", async () => {
+    await notRoot({
+      "src/lib.rs": "pub fn f() -> &'static str { \"LIB\" }\n",
+      "tests/basic.rs": "mod common;\nfn f() -> &'static str { \"TEST\" }\nfn run() -> &'static str { common::run() }\n",
+      "tests/common/mod.rs": "pub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "tests/common/mod.rs", 2, "f", "src/lib.rs#f");
+  });
+
+  it("reads crate:: from a nested crate root as that root", async () => {
+    const edge = await target({
+      "src/lib.rs": "pub fn f() -> &'static str { \"OUTER\" }\n",
+      "inner/src/main.rs": "fn f() -> &'static str { \"NESTED\" }\nfn run() -> &'static str {\n    crate::f()\n}\nfn main() { let _ = run(); }\n",
+    }, "inner/src/main.rs", 3, "f");
+    expect(edge?.toSymbol).not.toBe("src/lib.rs#f");
+  });
+
+  it("never names a block's function from a sibling block", async () => {
+    await notRoot({ "src/main.rs": "macro_rules! define { () => { fn f() -> &'static str { \"ROOT\" } } }\ndefine!();\nfn run() -> &'static str {\n    { fn f() -> &'static str { \"LOCAL\" } let _ = f(); }\n    f()\n}\nfn main() { let _ = run(); }\n" }, "src/main.rs", 5, "f", "src/main.rs#run.f");
+    const inside = await target({ "src/main.rs": "fn run() -> &'static str {\n    { fn f() -> &'static str { \"LOCAL\" } let _x = f(); }\n    \"\"\n}\nfn main() { let _ = run(); }\n" }, "src/main.rs", 2, "f");
+    expect(inside?.toSymbol).toBe("src/main.rs#run.f");
+  });
+});

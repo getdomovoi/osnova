@@ -167,8 +167,6 @@ export interface WorkspaceContext {
   readonly tsConfigs: TsConfigs;
   /** Qualified names of Rust inline modules (`src/main.rs#m.inner`), which a path walks before any module file. */
   readonly rustInlineModules: ReadonlySet<string>;
-  /** Module directories plus names (`src/m`) declared with a `#[path = ".."]` attribute, which no path follows. */
-  readonly rustPathModules: ReadonlySet<string>;
 }
 
 export function workspaceContext(files: ReadonlyMap<string, FileCard>): WorkspaceContext {
@@ -220,14 +218,7 @@ export function workspaceContext(files: ReadonlyMap<string, FileCard>): Workspac
     }
   }
   return { packages, pythonRoots: [...pythonRoots.values()].sort((a, b) => a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0), goModules, cargoRoots: cargoRoots.sort(), cargoPackages, crateAliases, cargoSrc, lockfiles: collectLockfiles(files), cargoDependencies, tsConfigs: new TsConfigs(files),
-    rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])),
-    rustPathModules: new Set([...files.values()].flatMap((card) => {
-      if (card.language !== "rust") return [];
-      const base = path.posix.basename(card.path);
-      const dir = path.posix.dirname(card.path) === "." ? "" : path.posix.dirname(card.path);
-      const childDir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? dir : path.posix.join(dir, base.replace(/\.rs$/, ""));
-      return [...card.text.matchAll(/#\[\s*path\s*=\s*"[^"]*"\s*\][\s\S]{0,200}?\bmod\s+(\w+)\s*;/g)].map((match) => path.posix.join(childDir, match[1]!));
-    })) };
+    rustInlineModules: new Set([...files.values()].flatMap((card) => card.language === "rust" ? card.symbols.filter((symbol) => symbol.kind === "module").map((symbol) => symbol.qualifiedName) : [])) };
 }
 
 function exportTargets(value: unknown, out: string[] = []): string[] {
@@ -347,76 +338,78 @@ function resolveRustPath(fromFile: string, spec: string, knownFiles: ReadonlySet
   const segments = spec.split("::").filter((part) => part.length > 0);
   const head = segments[0];
   if (head === undefined) return undefined;
-  const fromDir = path.posix.dirname(fromFile) === "." ? "" : path.posix.dirname(fromFile);
+  const parentOf = (dir: string): string => path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir);
+  const fromDir = parentOf(fromFile);
   const srcOf = (crate: string): string => context.cargoSrc.get(crate) ?? (crate === "" ? "src" : `${crate}/src`);
-  const ownCrate = (): string | undefined => context.cargoRoots.filter((root) => root === "" || fromFile.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0];
   const base = path.posix.basename(fromFile);
   const ownDir = base === "mod.rs" || base === "lib.rs" || base === "main.rs" ? fromDir : path.posix.join(fromDir, base.replace(/\.rs$/, ""));
-  // An inline module of `file` named by the path's first segments owns them, whatever module files exist on disk.
-  const inlineIn = (file: string, names: readonly string[]): boolean => names.length > 0 && context.rustInlineModules.has(`${file}#${names[0]}`);
-  let start: string;
-  let rest: string[];
+  const inlineModule = (file: string, names: readonly string[]): boolean => context.rustInlineModules.has(`${file}#${names.join(".")}`);
+  const firstKnown = (files: readonly string[]): string | undefined => files.find((file) => knownFiles.has(file));
+  // From a module file, each segment is an inline module the file declares (a module declared with
+  // `#[path = ".."]` is recorded as one too, so a path through it finds nothing), or a module file in the
+  // directory its children live in. The rest names items inside the last module.
+  const walk = (file: string, dir: string, rest: readonly string[]): { file: string; inline: string[] } => {
+    let current = file;
+    let currentDir = dir;
+    let inline: string[] = [];
+    for (let index = 0; index < rest.length; index += 1) {
+      const segment = rest[index]!;
+      if (inlineModule(current, [...inline, segment])) { inline.push(segment); continue; }
+      const modulePath = path.posix.join(currentDir, ...inline, segment);
+      const next = firstKnown([`${modulePath}.rs`, `${modulePath}/mod.rs`]);
+      if (next === undefined) return { file: current, inline: [...inline, ...rest.slice(index)] };
+      current = next;
+      currentDir = modulePath;
+      inline = [];
+    }
+    return { file: current, inline };
+  };
   if (head === "crate") {
-    const crate = ownCrate();
-    // A file directly under a crate's tests/, examples/ or benches/ is a crate root of its own.
-    const local = crate === undefined ? fromFile : fromFile.slice(crate === "" ? 0 : crate.length + 1);
-    if (crate !== undefined && /^(tests|examples|benches)\/[^/]+\.rs$/.test(local)) {
-      rest = segments.slice(1);
-      if (rest.length === 0 || inlineIn(fromFile, rest)) return { file: fromFile, inline: rest };
-      for (let take = rest.length; take > 0; take -= 1) {
-        const modulePath = path.posix.join(fromDir, ...rest.slice(0, take));
-        for (const candidate of [`${modulePath}.rs`, `${modulePath}/mod.rs`]) if (knownFiles.has(candidate)) return { file: candidate, inline: rest.slice(take) };
+    // The crate root this file belongs to: the file itself when it is one (lib.rs, main.rs, build.rs, or a file
+    // directly under tests/, examples/, benches/ or src/bin/), else the nearest directory above it holding exactly
+    // one of lib.rs and main.rs, without crossing into a tests/, examples/, benches/ or src/bin/ target. A root's
+    // child modules live beside it. When no root is certain, the path names nothing.
+    const targetDir = (dir: string): boolean => ["tests", "examples", "benches"].includes(path.posix.basename(dir)) || (path.posix.basename(dir) === "bin" && path.posix.basename(parentOf(dir)) === "src");
+    let root: string | undefined;
+    if (base === "lib.rs" || base === "main.rs" || targetDir(fromDir) || (base === "build.rs" && context.cargoRoots.includes(fromDir))) root = fromFile;
+    else {
+      for (let dir = fromDir; root === undefined; dir = parentOf(dir)) {
+        if (targetDir(dir)) return undefined;
+        const roots = ["lib.rs", "main.rs"].map((name) => path.posix.join(dir, name)).filter((file) => knownFiles.has(file));
+        if (roots.length > 1) return undefined;
+        root = roots[0];
+        if (root === undefined && dir === "") return undefined;
       }
-      return { file: fromFile, inline: rest };
     }
-    // With no Cargo.toml above the file, the crate is the nearest directory whose src/ holds lib.rs or main.rs.
-    let root = crate === undefined ? undefined : srcOf(crate);
-    for (let dir = fromDir; root === undefined; dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir)) {
-      if (["lib.rs", "main.rs"].some((name) => knownFiles.has(path.posix.join(dir, "src", name)))) root = path.posix.join(dir, "src");
-      if (dir === "") break;
-    }
-    if (root === undefined) return undefined;
-    start = root;
-    rest = segments.slice(1);
-  } else if (context.cargoPackages.get(head) === undefined && head !== "self" && head !== "super" && (knownFiles.has(path.posix.join(ownDir, `${head}.rs`)) || knownFiles.has(path.posix.join(ownDir, head, "mod.rs")))) {
-    // `flags::parse::lookup()` with `mod flags;` in this file: a sibling module named without `self::`.
-    start = ownDir;
-    rest = segments;
-  } else if (head === "self" || head === "super") {
+    return walk(root, parentOf(root), segments.slice(1));
+  }
+  if (head === "self" || head === "super") {
     let dir = ownDir;
     let index = 0;
-    while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = path.posix.dirname(dir) === "." ? "" : path.posix.dirname(dir); index += 1; }
-    start = dir;
-    rest = segments.slice(index);
-    // `self` alone is this file; `self::inner::X` names an inline module of this file when the file declares one,
-    // or when no module file of that name exists.
-    if (dir === ownDir && (rest.length === 0 || inlineIn(fromFile, rest) || (!knownFiles.has(path.posix.join(start, `${rest[0]}.rs`)) && !knownFiles.has(path.posix.join(start, rest[0] ?? "", "mod.rs"))))) return { file: fromFile, inline: rest };
-  } else {
-    // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
-    const crate = context.cargoPackages.get(head);
-    if (crate === undefined) return undefined;
-    start = srcOf(crate);
-    rest = segments.slice(1);
-    // A facade crate names another crate under an alias (`pub extern crate grep_printer as printer;`), so
-    // `grep::printer::X` continues from the aliased crate's root. Each hop consumes a segment, so it ends.
-    for (let hop = 0; hop < segments.length; hop += 1) {
-      const next = rest[0] === undefined ? undefined : context.crateAliases.get(`${start}/lib.rs`)?.get(rest[0]);
-      const aliased = next === undefined ? undefined : context.cargoPackages.get(next);
-      if (aliased === undefined) break;
-      start = srcOf(aliased);
-      rest = rest.slice(1);
-    }
+    while (segments[index] === "super" || segments[index] === "self") { if (segments[index] === "super") dir = parentOf(dir); index += 1; }
+    const file = dir === ownDir ? fromFile : firstKnown([path.posix.join(dir, "mod.rs"), ...(dir === "" ? [] : [`${dir}.rs`]), path.posix.join(dir, "lib.rs"), path.posix.join(dir, "main.rs")]);
+    return file === undefined ? undefined : walk(file, dir, segments.slice(index));
   }
-  const root = ["lib.rs", "main.rs", "mod.rs"].map((name) => path.posix.join(start, name)).find((file) => knownFiles.has(file));
-  if (root !== undefined && inlineIn(root, rest)) return { file: root, inline: rest };
-  // A module declared with `#[path = ".."]` lives in a file the index does not map; no path through it resolves.
-  for (let index = 0; index < rest.length; index += 1) if (context.rustPathModules.has(path.posix.join(start, ...rest.slice(0, index + 1)))) return undefined;
-  for (let take = rest.length; take >= 0; take -= 1) {
-    const modulePath = path.posix.join(start, ...rest.slice(0, take));
-    const candidates = take === 0 ? [`${modulePath}/lib.rs`, `${modulePath}/main.rs`, `${modulePath}/mod.rs`] : [`${modulePath}.rs`, `${modulePath}/mod.rs`];
-    for (const candidate of candidates) if (knownFiles.has(candidate)) return { file: candidate, inline: rest.slice(take) };
+  if (context.cargoPackages.get(head) === undefined && (inlineModule(fromFile, [head]) || knownFiles.has(path.posix.join(ownDir, `${head}.rs`)) || knownFiles.has(path.posix.join(ownDir, head, "mod.rs")))) {
+    // `flags::parse::lookup()` with `mod flags;` in this file: a child module named without `self::`.
+    return walk(fromFile, ownDir, segments);
   }
-  return undefined;
+  // `grep_matcher::LineTerminator`: another crate of this workspace, by its package name.
+  const crate = context.cargoPackages.get(head);
+  if (crate === undefined) return undefined;
+  let start = srcOf(crate);
+  let rest = segments.slice(1);
+  // A facade crate names another crate under an alias (`pub extern crate grep_printer as printer;`), so
+  // `grep::printer::X` continues from the aliased crate's root. Each hop consumes a segment, so it ends.
+  for (let hop = 0; hop < segments.length; hop += 1) {
+    const next = rest[0] === undefined ? undefined : context.crateAliases.get(`${start}/lib.rs`)?.get(rest[0]);
+    const aliased = next === undefined ? undefined : context.cargoPackages.get(next);
+    if (aliased === undefined) break;
+    start = srcOf(aliased);
+    rest = rest.slice(1);
+  }
+  const root = firstKnown(["lib.rs", "main.rs", "mod.rs"].map((name) => path.posix.join(start, name)));
+  return root === undefined ? undefined : walk(root, start, rest);
 }
 
 export interface ResolutionInput {
@@ -2476,14 +2469,14 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       // directory with its package clause) before any other file.
       const plainGo = card.language === "go" && !raw.toName.includes(".");
       const plainRust = card.language === "rust" && !raw.toName.includes(".");
-      // A function declared inside another function is in scope only inside that function.
+      // An item declared inside a function's body is in scope only in its block.
       const nestedVisible = (symbol: OsnovaSymbol): boolean => {
         const local = symbol.qualifiedName.slice(symbol.qualifiedName.indexOf("#") + 1);
         const parentLocal = local.includes(".") ? local.slice(0, local.lastIndexOf(".")) : "";
         if (parentLocal === "") return true;
         const parent = declaredAs(symbol.file, `${symbol.file}#${parentLocal}`)[0];
-        if (parent === undefined || (parent.kind !== "function" && parent.kind !== "method")) return true;
-        return symbol.file === fromFile && (fromSymbol === parent.qualifiedName || fromSymbol.startsWith(`${parent.qualifiedName}.`));
+        // The adapter binds a call to an item of an enclosing block exactly; by name, such an item is never in scope.
+        return parent === undefined || (parent.kind !== "function" && parent.kind !== "method");
       };
       // An item of an inline module is in scope only inside that module; from anywhere else it needs a path. A
       // caller inside the module sees the module's item before the file's.
