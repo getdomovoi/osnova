@@ -430,16 +430,20 @@ function scanRustModules(text: string): { declarations: RustModuleDeclaration[];
       continue;
     }
     const attributes = match[1] ?? "";
-    const value = /(?:^|[\s(,[])(?:r#)?path\s*=\s*"S(\d+)"/.exec(attributes)?.[1];
-    const pathValue = value === undefined ? undefined : strings[Number(value)];
+    // The resolver follows only a plain `#[path = "literal"]`, and only when it is the declaration's one path: a path
+    // inside `cfg_attr`, a doc token, or a second path may be the one a build uses.
+    const pathCount = attributes.match(pathIdentifier)?.length ?? 0;
+    const plainPaths = [...attributes.matchAll(/#\s*\[((?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*)\]/g)]
+      .flatMap((attribute) => { const plain = /^\s*(?:r#)?path\s*=\s*"S(\d+)"\s*$/.exec(attribute[1] ?? ""); return plain === null ? [] : [plain[1]!]; });
+    const pathValue = pathCount === 1 && plainPaths.length === 1 ? strings[Number(plainPaths[0])] : undefined;
     declarations.push({
       name,
       inline: stack.every((entry) => entry !== null) ? stack.map((entry) => entry!.name) : [],
       other: stack.some((entry) => entry === null || entry.opaque),
       framePaths: stack.flatMap((entry, at) => entry !== null && entry.path !== undefined ? [{ at, value: entry.path }] : []),
       cfg: deepAttributes || /(?:^|[^\p{L}\p{N}\p{M}_])cfg(?:_attr)?\s*\(/u.test(attributes),
-      hasPath: /(?:^|[\s(,[])(?:r#)?path\s*=/.test(attributes),
-      pathCount: attributes.match(pathIdentifier)?.length ?? 0,
+      hasPath: pathCount > 0,
+      pathCount,
       cfgPath: /(?:^|[^\p{L}\p{N}\p{M}_])cfg_attr\s*\(/u.test(attributes) && /(?:^|[\s(,[])(?:r#)?path\s*=/.test(attributes),
       pathValue: pathValue === undefined || pathValue.includes("\u0000") ? undefined : pathValue,
     });

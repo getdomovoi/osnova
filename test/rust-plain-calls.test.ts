@@ -852,6 +852,22 @@ describe("Rust module files, round-4 rustc reproductions", () => {
     expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
   });
 
+  // Round 13: only one plain path attribute on a declaration is followed.
+  it.each([
+    ["an inactive path before the active one", "#[cfg_attr(any(), path = \"bin/unused.rs\")]\n#[path = \"bin/tool.rs\"]\nmod tool;\n"],
+    ["a nested inactive path", "#[cfg_attr(all(), cfg_attr(any(), path = \"bin/unused.rs\"), path = \"bin/tool.rs\")]\nmod tool;\n"],
+    ["a path assignment inside a doc token", "#[doc = stringify!(path = \"bin/unused.rs\")]\n#[path = \"bin/tool.rs\"]\nmod tool;\n"],
+  ])("never takes a child behind %s for a crate root", async (_label, prefix) => {
+    const edge = await target({
+      "Cargo.toml": "[package]\nname=\"app\"\nversion=\"0.1.0\"\nedition=\"2024\"\nautobins=false\n",
+      "src/main.rs": prefix + "pub fn f() -> &'static str { \"ROOT\" }\nfn main() {}\n",
+      "src/bin/unused.rs": "pub fn unused() {}\n",
+      "src/bin/tool.rs": "pub fn f() -> &'static str { \"TOOL\" }\npub fn run() -> &'static str {\n    crate::f()\n}\n",
+    }, "src/bin/tool.rs", 3, "f");
+    expect(edge).toBeDefined();
+    expect(edge?.toSymbol).not.toBe("src/bin/tool.rs#f");
+  });
+
   it("still follows a cfg-gated module whose name nothing else binds", async () => {
     const edge = await target({
       "src/lib.rs": "#[cfg(feature = \"serde\")]\npub use crate::json::JSONBuilder;\n#[cfg(feature = \"serde\")]\nmod json;\nfn make() {\n    let _ = crate::json::build();\n}\n",
