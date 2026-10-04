@@ -27,13 +27,33 @@ export const rustAdapter: LanguageAdapter = {
     const bindings = collectTypedBindings(tree.rootNode, rustSpec);
     const reExports: ReExport[] = [];
 
+    // A glob of an enum (`use self::Kind::*`) brings in only that enum's variants, so it hides no other name: an
+    // enum this file declares lists them, and any other type-named glob path can only bring in type-like names.
+    const enumVariants = new Map<string, Set<string> | null>();
+    const visitEnums = (node: Node): void => {
+      if (node.type === "enum_item") {
+        const enumName = node.childForFieldName("name")?.text;
+        if (enumName !== undefined) {
+          const variants = new Set(childrenOf(node.childForFieldName("body") ?? node).filter((child) => child.type === "enum_variant").map((child) => child.childForFieldName("name")?.text ?? ""));
+          enumVariants.set(enumName, enumVariants.has(enumName) ? null : variants);
+        }
+      }
+      for (const child of childrenOf(node)) visitEnums(child);
+    };
+    visitEnums(tree.rootNode);
+    const globProvides = (globPath: string, name: string): boolean => {
+      const last = globPath.split("::").pop() ?? globPath;
+      if (!/^[A-Z]/.test(last)) return true;
+      const variants = enumVariants.get(last);
+      return variants === undefined || variants === null ? /^[A-Z]/.test(name) : variants.has(name);
+    };
+
     // What a plain name at `site` names in Rust's item scope. An item declared in an enclosing block or in the
     // innermost inline module comes first (no binding: the resolver finds it in the caller's module), then a
     // `use` of that name there, then the one glob `use` there. An inline module does not see its parent's
     // items or imports: with none of those, the name is a prelude, std or macro name the index cannot place.
     // At the file root, the plain-name lookup applies as before, with a `use` of the name followed first.
     const plainScope = (site: Node, name: string): EdgeBinding | undefined => {
-      const globs: string[] = [];
       const levels: Node[] = [];
       let module: Node | null = null;
       for (let current: Node | null = site.parent; current !== null; current = current.parent) {
@@ -41,26 +61,34 @@ export const rustAdapter: LanguageAdapter = {
         if (current.type === "mod_item" && current.childForFieldName("body") !== null) { module = current; levels.push(current.childForFieldName("body")!); break; }
         if (current.type === "source_file") { levels.push(current); break; }
       }
+      // Rust resolves level by level: at each block or module body, an item or a named `use` of the name, then that
+      // level's glob `use`s, before any outer level. A file-root glob keeps the plain-name lookup, as before.
+      const viaGlob = (glob: string, at: Node): EdgeBinding => {
+        const source = bindings.modulePath(glob, at);
+        return source === null ? { kind: "blocked", reason: "unbound" } : { kind: "import", source, importedName: name };
+      };
       for (const level of levels) {
         const children = childrenOf(level);
         if (children.some((child) => ITEM_KINDS.has(child.type) && child.childForFieldName("name")?.text === name)) return undefined;
+        const globs: Array<{ path: string; at: Node }> = [];
         for (const use of children) {
           if (use.type !== "use_declaration") continue;
           const named = rustSpec.imports(use, "use_declaration").find((item) => item.local === name);
           if (named !== undefined) {
             const source = bindings.modulePath(named.source, use);
-            return source === null ? undefined : { kind: "import", source, importedName: named.name, plain: true };
+            return source === null ? undefined : { kind: "import", source, importedName: named.name };
           }
           const argument = use.childForFieldName("argument") ?? childrenOf(use).find((child) => child.type !== "visibility_modifier");
-          if (argument?.type === "use_wildcard") globs.push(argument.text.replace(/::\*$/, ""));
+          if (argument?.type === "use_wildcard") {
+            const path = argument.text.replace(/::\*$/, "");
+            if (globProvides(path, name)) globs.push({ path, at: use });
+          }
         }
+        if (level.type === "source_file") return undefined;
+        if (globs.length > 1) return { kind: "blocked", reason: "ambiguous" };
+        if (globs.length === 1) return viaGlob(globs[0]!.path, globs[0]!.at);
       }
-      if (module === null) return undefined;
-      if (globs.length > 1) return { kind: "blocked", reason: "ambiguous" };
-      const glob = globs[0];
-      if (glob === undefined) return { kind: "blocked", reason: "unbound" };
-      const source = bindings.modulePath(glob, site);
-      return source === null ? { kind: "blocked", reason: "unbound" } : { kind: "import", source, importedName: name, plain: true };
+      return module === null ? undefined : { kind: "blocked", reason: "unbound" };
     };
 
     const visit = (node: Node): void => {

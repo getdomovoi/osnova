@@ -230,7 +230,7 @@ export function validOwner(value: unknown, depth = 0): boolean {
 export function validateBinding(value: unknown): EdgeBinding {
   if (typeof value === "object" && value !== null) {
     const binding = value as Partial<EdgeBinding>;
-    if (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string" && (binding.plain === undefined || binding.plain === true)) return value as EdgeBinding;
+    if (binding.kind === "import" && typeof binding.source === "string" && typeof binding.importedName === "string") return value as EdgeBinding;
     if (binding.kind === "local" && typeof binding.name === "string") return value as EdgeBinding;
     if (binding.kind === "blocked" && blockedReasons.has(binding.reason ?? "")) return value as EdgeBinding;
     if (binding.kind === "instance" && validOwner(binding.owner) && instanceBases.has(binding.basis ?? "")) return value as EdgeBinding;

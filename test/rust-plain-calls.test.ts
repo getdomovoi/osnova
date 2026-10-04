@@ -412,3 +412,116 @@ describe("Rust module scope, from rustc reproductions", () => {
     expect(edge?.toSymbol).toBe("src/main.rs#m.inner.f");
   });
 });
+
+describe("Rust scope, round-2 rustc reproductions", () => {
+  const target = async (files: Record<string, string>, file: string, line: number, name: string) => callAt(await build(files), file, line, name);
+
+  it("never names another item when a use names a declaration the index cannot follow", async () => {
+    const reexport = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "mod inner { pub fn f() -> &'static str { \"INNER\" } }",
+      "mod facade { pub(crate) use crate::inner::f; }",
+      "fn run() -> &'static str {",
+      "    use crate::facade::f;",
+      "    f()",
+      "}",
+      "fn main() { let _ = run(); }",
+      "",
+    ].join("\n") }, "src/main.rs", 6, "f");
+    expect(reexport?.toSymbol).not.toBe("src/main.rs#f");
+    const macro = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "mod provider {",
+      "    macro_rules! define { () => { pub fn g() -> &'static str { \"MACRO\" } } }",
+      "    define!();",
+      "}",
+      "fn run() -> &'static str {",
+      "    use crate::provider::g as f;",
+      "    f()",
+      "}",
+      "fn main() { let _ = run(); }",
+      "",
+    ].join("\n") }, "src/main.rs", 8, "f");
+    expect(macro?.toSymbol).toBeUndefined();
+  });
+
+  it("lets a nearer block's glob win over an outer item or use", async () => {
+    const item = await target({ "src/main.rs": [
+      "mod other { pub fn f() -> &'static str { \"OTHER\" } }",
+      "mod m {",
+      "    fn f() -> &'static str { \"ROOT\" }",
+      "    pub fn run() -> &'static str {",
+      "        use crate::other::*;",
+      "        f()",
+      "    }",
+      "}",
+      "fn main() { let _ = m::run(); }",
+      "",
+    ].join("\n") }, "src/main.rs", 6, "f");
+    expect(item?.toSymbol).toBe("src/main.rs#other.f");
+    const root = await target({ "src/main.rs": [
+      "fn f() -> &'static str { \"ROOT\" }",
+      "mod other { pub fn f() -> &'static str { \"OTHER\" } }",
+      "fn run() -> &'static str {",
+      "    use crate::other::*;",
+      "    f()",
+      "}",
+      "fn main() { let _ = run(); }",
+      "",
+    ].join("\n") }, "src/main.rs", 5, "f");
+    expect(root?.toSymbol).toBe("src/main.rs#other.f");
+    const variant = await target({ "src/main.rs": [
+      "fn F(x: u32) -> u32 { x }",
+      "enum Kind { F(u32) }",
+      "fn run() -> Kind {",
+      "    use Kind::*;",
+      "    F(1)",
+      "}",
+      "fn main() { let _ = run(); }",
+      "",
+    ].join("\n") }, "src/main.rs", 5, "F");
+    expect(variant?.toSymbol).not.toBe("src/main.rs#F");
+  });
+
+  it("keeps an outer function when a nearer enum glob does not provide its name", async () => {
+    const edge = await target({ "src/main.rs": [
+      "enum Mode { Fast, Slow(u32) }",
+      "fn search_path(x: u32) -> u32 { x }",
+      "fn run(m: Mode) -> u32 {",
+      "    use self::Mode::*;",
+      "    match m { Fast => search_path(1), Slow(n) => search_path(n) }",
+      "}",
+      "fn main() { let _ = run(Mode::Fast); }",
+      "",
+    ].join("\n") }, "src/main.rs", 5, "search_path");
+    expect(edge?.toSymbol).toBe("src/main.rs#search_path");
+  });
+
+  it("never follows a module declared with a path attribute to its conventional file", async () => {
+    const edge = await target({
+      "src/main.rs": "#[path = \"chosen.rs\"] mod m;\nfn run() -> &'static str {\n    crate::m::f()\n}\nfn main() { let _ = run(); }\n",
+      "src/chosen.rs": "pub fn f() -> &'static str { \"CHOSEN\" }\n",
+      "src/m.rs": "pub fn f() -> &'static str { \"STRAY\" }\n",
+    }, "src/main.rs", 3, "f");
+    expect(edge?.toSymbol).not.toBe("src/m.rs#f");
+  });
+
+  it("never names a function nested in another function from outside it", async () => {
+    const edge = await target({
+      "src/main.rs": "include!(\"included.rs\");\nfn helper() { fn f() -> &'static str { \"NESTED\" } let _ = f(); }\nfn run() -> &'static str {\n    f()\n}\nfn main() { let _ = run(); }\n",
+      "src/included.rs": "fn f() -> &'static str { \"INCLUDED\" }\n",
+    }, "src/main.rs", 4, "f");
+    expect(edge?.toSymbol).not.toBe("src/main.rs#helper.f");
+    const inside = await target({ "src/main.rs": "fn helper() { fn f() -> u32 { 1 } let _ = f(); }\nfn main() { helper(); }\n" }, "src/main.rs", 1, "f");
+    expect(inside?.toSymbol).toBe("src/main.rs#helper.f");
+  });
+
+  it("reads crate:: from an integration test file as that file's own crate", async () => {
+    const edge = await target({
+      "src/lib.rs": "pub fn lib_fn() {}\n",
+      "tests/util.rs": "pub fn helper() -> u32 { 1 }\n",
+      "tests/run.rs": "mod util;\nuse crate::util::helper;\n#[test]\nfn t() {\n    let _ = helper();\n}\n",
+    }, "tests/run.rs", 5, "helper");
+    expect(edge?.toSymbol).toBe("tests/util.rs#helper");
+  });
+});
