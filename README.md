@@ -101,7 +101,7 @@ Java and C# overloads share one symbol in the index, so a call edge names the ov
 
 ## Grep versus the graph
 
-The reason to keep a call graph instead of running a text search is not speed. It is that the first regex a person types is wrong more often than it looks, and nobody notices. Nine call-site sets in five languages were verified line by line; each cell shows sites found (precision / recall), and the [method](docs/reference.md#grep-versus-the-graph-method) lists what each side got wrong.
+The reason to keep a call graph instead of running a text search is not speed. It is that the first regex a person types is wrong more often than it looks, and nobody notices. Nine call-site sets in six languages were verified line by line; each cell shows sites found (precision / recall), and the [method](docs/reference.md#grep-versus-the-graph-method) lists what each side got wrong.
 
 | Corpus | Target | Verified sites | Text search | Resolved graph |
 |---|---|---:|---:|---:|
