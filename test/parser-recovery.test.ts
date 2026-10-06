@@ -18,6 +18,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return { ...actual, Worker: CountedWorker };
 });
 
+// Raw-string templates nested past the Kotlin scanner's state buffer make the scanner call abort mid-parse,
+// which leaves that parser resuming the abandoned parse for every later file.
+const poisonSource = "val x = " + '"""${'.repeat(1500) + "\n";
+
 let temporary: string;
 let workspace: string;
 let cacheDir: string;
@@ -39,34 +43,34 @@ afterEach(async () => {
 
 describe("parser recovery after an extraction failure", () => {
   it("indexes later files of a language after one file fails to parse", async () => {
-    await fs.writeFile(path.join(workspace, "a-breaks.sh"), 'case "$x" in\n  a) echo a ;;\nesac\n');
-    await fs.writeFile(path.join(workspace, "b-healthy.sh"), "greet() {\n  echo hi\n}\n");
+    await fs.writeFile(path.join(workspace, "a-breaks.kt"), poisonSource);
+    await fs.writeFile(path.join(workspace, "b-healthy.kt"), 'fun greet() {\n  println("hi")\n}\n');
 
     const index = await buildIndex(workspace, { cacheDir });
 
-    const healthy = index.files.get("b-healthy.sh");
+    const healthy = index.files.get("b-healthy.kt");
     expect(healthy?.diagnostics ?? []).toEqual([]);
     expect(healthy?.symbols.map((symbol) => symbol.name)).toContain("greet");
   });
 
   it("reports the failing file and only the failing file", async () => {
-    await fs.writeFile(path.join(workspace, "a-breaks.sh"), 'case "$x" in\n  a) echo a ;;\nesac\n');
-    await fs.writeFile(path.join(workspace, "b-healthy.sh"), "greet() {\n  echo hi\n}\n");
+    await fs.writeFile(path.join(workspace, "a-breaks.kt"), poisonSource);
+    await fs.writeFile(path.join(workspace, "b-healthy.kt"), 'fun greet() {\n  println("hi")\n}\n');
 
     const index = await buildIndex(workspace, { cacheDir });
 
     const failedPaths = (index.diagnostics ?? []).filter((entry) => entry.phase === "parse").map((entry) => entry.path);
-    expect(failedPaths).toEqual(["a-breaks.sh"]);
+    expect(failedPaths).toEqual(["a-breaks.kt"]);
   });
 });
 
 describe("parser recovery inside the extract worker pool", () => {
-  const poison = Array.from({ length: 10 }, (_, i) => `f${String(i * 4).padStart(2, "0")}.sh`);
-  const healthy = Array.from({ length: 40 }, (_, i) => i).filter((i) => i % 4 !== 0).map((i) => `f${String(i).padStart(2, "0")}.sh`);
+  const poison = Array.from({ length: 10 }, (_, i) => `f${String(i * 4).padStart(2, "0")}.kt`);
+  const healthy = Array.from({ length: 40 }, (_, i) => i).filter((i) => i % 4 !== 0).map((i) => `f${String(i).padStart(2, "0")}.kt`);
 
   async function writePoisonedWorkspace(): Promise<void> {
-    for (const file of poison) await fs.writeFile(path.join(workspace, file), 'case "$x" in\n  a) echo a ;;\nesac\n');
-    for (const file of healthy) await fs.writeFile(path.join(workspace, file), `fn_${file.slice(1, 3)}() {\n  echo ${file}\n}\n`);
+    for (const file of poison) await fs.writeFile(path.join(workspace, file), poisonSource);
+    for (const file of healthy) await fs.writeFile(path.join(workspace, file), `fun fn_${file.slice(1, 3)}() {\n  println("${file}")\n}\n`);
   }
 
   it("keeps every healthy file of the language when poison files are spread across workers", async () => {

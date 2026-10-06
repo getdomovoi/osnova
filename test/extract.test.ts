@@ -288,6 +288,19 @@ describe("extraction adapters", () => {
     expect(index.outgoing("src/breadth/greeter.sh#greet").map((e) => e.toName)).toContain("format");
   });
 
+  it("extracts bash files that contain case statements", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-bash-case-"));
+    try {
+      fs.writeFileSync(path.join(dir, "a.sh"), 'greet() { echo hi; }\ncase "$1" in a|b) greet ;; esac\n');
+      const built = await buildIndex(dir);
+      expect(built.diagnostics ?? []).toEqual([]);
+      expect(built.files.get("a.sh")?.symbols.map((s) => `${s.kind}:${s.qualifiedName}`)).toEqual(["function:a.sh#greet"]);
+      expect(built.edges.filter((e) => e.kind === "calls" && e.toName === "greet").map((e) => `${e.line}->${e.toSymbol}`)).toEqual(["2->a.sh#greet"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("gives unindexed files a bare fallback card", () => {
     const card = index.files.get("docs/notes.txt");
     expect(card).toBeDefined();
