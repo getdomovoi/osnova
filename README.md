@@ -10,7 +10,7 @@
 
 **A deterministic code map for AI coding agents.** Osnova indexes a repository into a symbol and call graph with tree-sitter, then serves it to any MCP client or from the command line. Same input, same output, byte for byte. No embeddings, no telemetry, and no network connection unless you type `osnova update-check`. Twenty languages, seven of them (TypeScript, JavaScript, Python, Go, Rust, Java, C#) with deep adapters.
 
-<a href="https://getosnova.dev"><img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/demo/film.gif" width="960" alt="The getosnova.dev film in eight scenes, measured on osnova 0.11.0 indexing its own source: the word osnova; 397 files read into 7,069 symbols and 31,453 edges; one function parsed into its tree-sitter tree; eleven of the calls refreshWorkspace makes, woven as threads; an agent asks who calls refreshWorkspace and osnova_warp answers with exact file and line; two fresh builds give identical hashes; the install command."></a>
+<a href="https://getosnova.dev"><img src="https://raw.githubusercontent.com/getdomovoi/osnova/main/assets/demo/film.gif" width="960" alt="The getosnova.dev film in eight scenes, measured on osnova 0.12.0 indexing its own source: the word osnova; 442 files read into 7,896 symbols and 35,343 edges; one function parsed into its tree-sitter tree; eleven of the calls refreshWorkspace makes, woven as threads; an agent asks who calls refreshWorkspace and osnova_warp answers with exact file and line; two fresh builds give identical hashes; the install command."></a>
 
 *Osnova* is the Slavic word for base or foundation. That is the job: give an agent solid ground to stand on before it edits code.
 
@@ -101,7 +101,7 @@ Java and C# overloads share one symbol in the index, so a call edge names the ov
 
 ## Grep versus the graph
 
-The reason to keep a call graph instead of running a text search is not speed. It is that the first regex a person types is wrong more often than it looks, and nobody notices. Nine call-site sets in five languages were verified line by line; each cell shows sites found (precision / recall), and the [method](docs/reference.md#grep-versus-the-graph-method) lists what each side got wrong.
+The reason to keep a call graph instead of running a text search is not speed. It is that the first regex a person types is wrong more often than it looks, and nobody notices. Nine call-site sets in six languages were verified line by line; each cell shows sites found (precision / recall), and the [method](docs/reference.md#grep-versus-the-graph-method) lists what each side got wrong.
 
 | Corpus | Target | Verified sites | Text search | Resolved graph |
 |---|---|---:|---:|---:|
