@@ -136,9 +136,17 @@ export function discardParser(language: LanguageId): void {
   const pending = parserCache.get(language);
   if (pending === undefined) return;
   parserCache.delete(language);
+  // A parser is discarded after a parse failed, often because the wasm runtime aborted mid-parse. Freeing
+  // its memory can then throw as well; a throw inside this handler would surface as an unhandled rejection
+  // and end the process. The caller already reports the failure, so leaking the broken parser is the
+  // safer outcome.
   void pending.then(
     (parser) => {
-      parser.delete();
+      try {
+        parser.delete();
+      } catch {
+        return;
+      }
     },
     () => undefined,
   );

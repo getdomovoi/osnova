@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Parser } from "web-tree-sitter";
 import { buildIndex } from "../src/index.js";
 import { serializeArtifact, serializeSections } from "../src/index/serialize.js";
 
@@ -61,6 +62,62 @@ describe("parser recovery after an extraction failure", () => {
 
     const failedPaths = (index.diagnostics ?? []).filter((entry) => entry.phase === "parse").map((entry) => entry.path);
     expect(failedPaths).toEqual(["a-breaks.kt"]);
+  });
+});
+
+describe("parser cleanup after an extraction failure", () => {
+  it("keeps the process alive and indexes later files when deleting the failed parser throws", async () => {
+    await fs.writeFile(path.join(workspace, "a-breaks.kt"), poisonSource);
+    await fs.writeFile(path.join(workspace, "b-healthy.kt"), 'fun greet() {\n  println("hi")\n}\n');
+    process.env.OSNOVA_EXTRACT_WORKERS = "0";
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    const deleteSpy = vi.spyOn(Parser.prototype, "delete").mockImplementation(() => {
+      throw new Error("RuntimeError: memory access out of bounds");
+    });
+    try {
+      const index = await buildIndex(workspace, { cacheDir });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(deleteSpy).toHaveBeenCalled();
+      expect(unhandled).toEqual([]);
+      const healthy = index.files.get("b-healthy.kt");
+      expect(healthy?.diagnostics ?? []).toEqual([]);
+      expect(healthy?.symbols.map((symbol) => symbol.name)).toEqual(["greet"]);
+    } finally {
+      deleteSpy.mockRestore();
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
+
+describe("bash files with many heredoc starts", () => {
+  const lines = (count: number, line: (i: number) => string): string => Array.from({ length: count }, (_, i) => line(i)).join("\n") + "\n";
+  const heavy: Record<string, string> = {
+    "a-functions.sh": lines(200, (i) => `f${i}() { cat <<EOF\nEOF\n}`),
+    "a-herestrings.sh": lines(250, (i) => `cat <<< "x${i}"`),
+    "a-open.sh": lines(1000, (i) => `cat <<EOF\n\${x${i}}`),
+    "a-one-line.sh": "cat " + Array.from({ length: 300 }, (_, i) => `<<DELIMITER_${i}`).join(" ") + "\n",
+  };
+  const healthy = ["b-one.sh", "b-two.sh", "b-three.sh"];
+
+  it.each(["0", "2"])("indexes healthy sibling scripts cleanly with %s extract workers", async (workers) => {
+    for (const [file, source] of Object.entries(heavy)) await fs.writeFile(path.join(workspace, file), source);
+    for (const file of healthy) await fs.writeFile(path.join(workspace, file), `greet_${file.slice(2, -3)}() {\n  echo hi\n}\n`);
+    process.env.OSNOVA_EXTRACT_WORKERS = workers;
+
+    const index = await buildIndex(workspace, { cacheDir });
+
+    expect(index.files.size).toBe(Object.keys(heavy).length + healthy.length);
+    for (const file of healthy) {
+      const card = index.files.get(file);
+      expect(card?.diagnostics ?? [], file).toEqual([]);
+      expect(card?.symbols.map((symbol) => symbol.name), file).toEqual([`greet_${file.slice(2, -3)}`]);
+    }
+    expect((index.diagnostics ?? []).filter((entry) => healthy.includes(entry.path))).toEqual([]);
   });
 });
 
