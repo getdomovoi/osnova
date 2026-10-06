@@ -311,7 +311,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = numericOption(parsed.values.limit, "limit", "ground");
+      const limitValue = numericOption(parsed.values.limit, "limit", "ground", 1);
       const lean = parsed.values.lean === true;
       if (parsed.values.scoped === true) {
         const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: lean ? false : parsed.values.full });
@@ -430,7 +430,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", "footing", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limit = numericOption(parsed.values.limit, "limit", "footing");
+      const limit = numericOption(parsed.values.limit, "limit", "footing", 1);
       const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
       const result = withCommandError("footing", () => taskContext(index, { task, question, symbols: parsed.values.symbol,
         in: parsed.values.in, limit, maxDepth, maxCodeUnits: budget }),
@@ -506,7 +506,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const file = parsed.values.file;
       if (symbols.length === 0 && file === undefined) throw new Error("osnova tests: give <symbol...> or --file <path>");
       if (symbols.length > 0 && file !== undefined) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
-      const limit = numericOption(parsed.values.limit, "limit", "tests");
+      const limit = numericOption(parsed.values.limit, "limit", "tests", 1);
       const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
@@ -523,7 +523,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       }
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = unreferenced(index, {
-        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", "unreferenced"), includeExported: parsed.values.exported,
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", "unreferenced", 1), includeExported: parsed.values.exported,
       });
       io.stdout(formatUnreferenced(result));
       return EXIT_OK;
