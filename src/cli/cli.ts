@@ -120,7 +120,8 @@ function requirePositional(values: readonly string[], name: string, command: str
   return value;
 }
 
-function numericOption(value: string | undefined, name: string, command: string, minimum = 0): number | undefined {  if (value === undefined) return undefined;
+function numericOption(value: string | undefined, name: string, command: string, minimum = 0): number | undefined {
+  if (value === undefined) return undefined;
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < minimum) {
     throw new RangeError(`osnova ${command}: --${name} must be a safe integer >= ${minimum}`);
@@ -346,7 +347,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const pattern = requirePositional(parsed.positionals, "pattern", "thread");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit", "thread");
-      const result = withCommandError("thread", () => findTextDetailed(index, pattern, {        fixed: parsed.values.fixed,
+      const result = withCommandError("thread", () => findTextDetailed(index, pattern, {
+        fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
         in: parsed.values.in,
         limit: limitValue ?? 50,
@@ -381,7 +383,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const symbol = requirePositional(parsed.positionals, "symbol", "warp");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "warp", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const depthValue = numericOption(parsed.values.depth, "depth", "warp", 1);      const direction = parsed.values.direction;
+      const depthValue = numericOption(parsed.values.depth, "depth", "warp", 1);
+      const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") {
         throw new Error(`osnova warp: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
       }
@@ -403,7 +406,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
         },
       });
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", "groundwork", 1);      io.stdout(
+      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", "groundwork", 1);
+      io.stdout(
         formatMap(
           map(index, {
             maxDirs: maxDirsValue,
@@ -430,7 +434,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
       const result = withCommandError("footing", () => taskContext(index, { task, question, symbols: parsed.values.symbol,
         in: parsed.values.in, limit, maxDepth, maxCodeUnits: budget }),
-        (error) => error instanceof TaskContextBudgetError ? `--max-code-units ${budget} cannot retain receipts and omissions; give at least ${error.minimum}` : undefined);      io.stdout(jsonOutput(result, "footing"));
+        (error) => error instanceof TaskContextBudgetError ? `--max-code-units ${budget} cannot retain receipts and omissions; give at least ${error.minimum}` : undefined);
+      io.stdout(jsonOutput(result, "footing"));
       return EXIT_OK;
     }
     case "settle": {
@@ -441,7 +446,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       if (baseCache === undefined && baseRef === undefined) throw new Error("osnova settle: --base-ref or --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const maxDepth = numericOption(parsed.values.depth, "depth", "settle", 1) ?? 1;      let result;
+      const maxDepth = numericOption(parsed.values.depth, "depth", "settle", 1) ?? 1;
+      let result;
       if (baseRef !== undefined) {
         const base = await materializeBaseRef(root, baseRef, { cacheDir });
         io.stderr(`osnova settle: base ${baseRef} = ${base.sha} ${base.reused ? "reused" : "built"} at ${base.dir}`);
@@ -487,7 +493,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const claims = parseClaims([...(parsed.values.site ?? []), ...fromFile]);
       if (claims.length === 0) throw new Error("osnova plumb: give at least one --site path:line or a --sites-file");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", "plumb", 1) });      io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
+      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", "plumb", 1) });
+      io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
       return EXIT_OK;
     }
     case "tests": {
@@ -499,7 +506,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const file = parsed.values.file;
       if (symbols.length === 0 && file === undefined) throw new Error("osnova tests: give <symbol...> or --file <path>");
       if (symbols.length > 0 && file !== undefined) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
-      const limit = numericOption(parsed.values.limit, "limit", "tests", 1);      const includeImportOnly = parsed.values["no-import-only"] !== true;
+      const limit = numericOption(parsed.values.limit, "limit", "tests", 1);
+      const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
       return EXIT_OK;
@@ -515,7 +523,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       }
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = unreferenced(index, {
-        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", "unreferenced", 1), includeExported: parsed.values.exported,      });
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", "unreferenced", 1), includeExported: parsed.values.exported,
+      });
       io.stdout(formatUnreferenced(result));
       return EXIT_OK;
     }

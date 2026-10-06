@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { runCli } from "../src/cli/cli.js";
 
 function capture(): { lines: string[]; io: { stdout: (t: string) => void; stderr: (t: string) => void } } {
