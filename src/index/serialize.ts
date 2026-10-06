@@ -41,7 +41,7 @@ import { grammarFile } from "../grammar/languages.js";
 import { queriesFingerprint } from "../grammar/queries/index.js";
 
 const GZIP_THRESHOLD_BYTES = 4 * 1024 * 1024;
-export const extractionVersion = `structural-9.40.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
+export const extractionVersion = `structural-9.41.scan-4.tree-sitter-0.25.10.grammars-0.1.13.queries-${queriesFingerprint}`;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 const diagnosticPhases = membersOf<IndexDiagnostic["phase"]>({ scan: true, read: true, parse: true, cache: true });
@@ -84,7 +84,12 @@ interface SerializedSymbol {
   readonly signature: string;
   readonly shadowed?: true | undefined;
   readonly primary?: true | undefined;
-  readonly access?: "private" | "package" | undefined;
+  readonly access?: "private" | "package" | "protected" | undefined;
+  readonly arity?: number | undefined;
+  readonly namespace?: string | undefined;
+  readonly baseType?: string | undefined;
+  readonly unparsedHeader?: true | undefined;
+  readonly conditional?: true | undefined;
   readonly partial?: string | undefined;
   readonly supertypes?: number | undefined;
   readonly interfaces?: readonly SymbolBinding[] | undefined;
@@ -180,6 +185,11 @@ export function serializeSections(
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.primary === undefined ? {} : { primary: symbol.primary }),
         ...(symbol.access === undefined ? {} : { access: symbol.access }),
+        ...(symbol.arity === undefined ? {} : { arity: symbol.arity }),
+        ...(symbol.namespace === undefined ? {} : { namespace: symbol.namespace }),
+        ...(symbol.baseType === undefined ? {} : { baseType: symbol.baseType }),
+        ...(symbol.unparsedHeader === undefined ? {} : { unparsedHeader: symbol.unparsedHeader }),
+        ...(symbol.conditional === undefined ? {} : { conditional: symbol.conditional }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
         ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
         ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),
@@ -375,9 +385,14 @@ function deserializeBody(
       }
       if (symbol.shadowed !== undefined && symbol.shadowed !== true) throw new Error("osnova: corrupt shadowing metadata");
       if (symbol.primary !== undefined && (symbol.primary !== true || !["class", "struct"].includes(symbol.kind))) throw new Error("osnova: corrupt primary constructor metadata");
-      if (symbol.access !== undefined && (!(symbol.access === "private" || symbol.access === "package") || !["class", "interface", "enum"].includes(symbol.kind))) throw new Error("osnova: corrupt member-type access metadata");
+      if (symbol.access !== undefined && (!(symbol.access === "private" || symbol.access === "package" || symbol.access === "protected") || !["class", "interface", "enum", "struct", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt member-type access metadata");
+      if (symbol.conditional !== undefined && (symbol.conditional !== true || !["class", "interface", "struct", "enum", "type", "method"].includes(symbol.kind))) throw new Error("osnova: corrupt conditional metadata");
+      if (symbol.unparsedHeader !== undefined && (symbol.unparsedHeader !== true || !["class", "interface", "struct", "enum"].includes(symbol.kind))) throw new Error("osnova: corrupt header metadata");
+      if (symbol.baseType !== undefined && (typeof symbol.baseType !== "string" || symbol.baseType.length === 0 || /\s/u.test(symbol.baseType) || !["class", "interface", "struct"].includes(symbol.kind))) throw new Error("osnova: corrupt base type metadata");
+      if (symbol.namespace !== undefined && (typeof symbol.namespace !== "string" || !/^[^\s.]+(?:\.[^\s.]+)*$/u.test(symbol.namespace) || !["class", "interface", "struct", "enum", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt namespace metadata");
+      if (symbol.arity !== undefined && (!Number.isSafeInteger(symbol.arity) || symbol.arity < 1 || !["class", "interface", "struct", "type"].includes(symbol.kind))) throw new Error("osnova: corrupt generic arity metadata");
       if (symbol.supertypes !== undefined && (!Number.isSafeInteger(symbol.supertypes) || symbol.supertypes < 1)) throw new Error("osnova: corrupt supertype count");
-      if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^[^\s`]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
+      if (symbol.partial !== undefined && (typeof symbol.partial !== "string" || !/^(?:class|interface|struct|enum|record|record-struct)(?:\.(?:class|interface|struct|enum|record|record-struct))*:[^\s`:]*`\d+(?:\.\d+)*$/u.test(symbol.partial))) throw new Error("osnova: corrupt partial metadata");
       if (symbol.memberKind !== undefined && !memberKinds.has(symbol.memberKind)) throw new Error("osnova: corrupt member-kind metadata");
       const validBinding = (item: unknown): boolean => typeof item === "object" && item !== null &&
         (((item as { kind?: unknown }).kind === "local" && typeof (item as { name?: unknown }).name === "string") ||
@@ -417,6 +432,11 @@ function deserializeBody(
         ...(symbol.shadowed === undefined ? {} : { shadowed: symbol.shadowed }),
         ...(symbol.primary === undefined ? {} : { primary: symbol.primary }),
         ...(symbol.access === undefined ? {} : { access: symbol.access }),
+        ...(symbol.arity === undefined ? {} : { arity: symbol.arity }),
+        ...(symbol.namespace === undefined ? {} : { namespace: symbol.namespace }),
+        ...(symbol.baseType === undefined ? {} : { baseType: symbol.baseType }),
+        ...(symbol.unparsedHeader === undefined ? {} : { unparsedHeader: symbol.unparsedHeader }),
+        ...(symbol.conditional === undefined ? {} : { conditional: symbol.conditional }),
         ...(symbol.partial === undefined ? {} : { partial: symbol.partial }),
         ...(symbol.supertypes === undefined ? {} : { supertypes: symbol.supertypes }),
         ...(symbol.interfaces === undefined ? {} : { interfaces: symbol.interfaces }),

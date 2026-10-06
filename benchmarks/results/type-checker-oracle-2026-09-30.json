@@ -2,8 +2,9 @@
   "schemaVersion": 1,
   "measured": "call edge precision and recall against each language's type checker on six pinned checkouts",
   "osnova": {
-    "commit": "18391d510b2866120a00b6dfbd7bf7dd9f9a3c15",
-    "version": "0.12.0"
+    "commit": "cc3ac11fc984a377cb400c2091a1147ecab64e77",
+    "version": "0.12.0",
+    "unreleased": "C# object creation names the constructor it runs"
   },
   "machine": "macOS, Darwin 25.6.0 on arm64 (Apple silicon), Node.js 26.10.0; times are wall clock on that machine",
   "method": {
@@ -409,16 +410,16 @@
         "external": 14017,
         "noVerdict": 428
       },
-      "claimedEdges": 7660,
-      "decided": 7363,
-      "undecided": 297,
-      "truePositive": 7360,
+      "claimedEdges": 7695,
+      "decided": 7421,
+      "undecided": 274,
+      "truePositive": 7418,
       "falsePositive": 3,
       "precision": 0.9996,
-      "falseEdgeRate": 0.00041,
+      "falseEdgeRate": 0.0004,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 7358,
-      "recall": 0.6222,
+      "coveredInRepoSites": 7416,
+      "recall": 0.6271,
       "falseByCause": [
         {
           "cause": "local function in top-level statements",
@@ -444,7 +445,7 @@
         "corruption": "25 corrupted target spans gave exactly 25 more false edges (617 to 642)",
         "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
       },
-      "overloadUndetermined": 602,
+      "overloadUndetermined": 645,
       "falseEdgesWithCorrectTarget": 1,
       "previous": {
         "osnova": {

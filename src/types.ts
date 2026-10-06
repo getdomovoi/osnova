@@ -53,11 +53,23 @@ export interface OsnovaSymbol {
   readonly signature: string;
   readonly lineCount: number;
   readonly shadowed?: true | undefined;
-  // A Java record: its canonical constructor is written on the type's declaration.
+  // A Java record or a C# type with a primary constructor: a constructor is written on the type's declaration.
   readonly primary?: true | undefined;
   // A Java member type a subclass does not inherit: `private`, or `package` (no access modifier, outside an
-  // interface), which a subclass in another package does not inherit.
-  readonly access?: "private" | "package" | undefined;
+  // interface), which a subclass in another package does not inherit. A C# member type a derived type or a static import cannot see is
+  // `private` (written so, or with no access modifier in a class or struct), and one only a derived type can see is `protected`.
+  readonly access?: "private" | "package" | "protected" | undefined;
+  // A generic C# type: how many type parameters it declares, since `Box` and `Box<T>` are different types.
+  readonly arity?: number | undefined;
+  // A top-level C# type: the namespace it is declared in, when any.
+  readonly namespace?: string | undefined;
+  // A C# type: its first base as written, with each segment's generic arity (``Base`1``); `?` when an interface
+  // names several bases.
+  readonly baseType?: string | undefined;
+  // A C# type whose declaration header holds a parse error, so its generic arity and base cannot be trusted.
+  readonly unparsedHeader?: true | undefined;
+  // A C# type declared inside an `#if` region, which the index cannot tell is compiled.
+  readonly conditional?: true | undefined;
   // A C# type written `partial`, as its namespace and the generic arity of each enclosing type and itself
   // (`N.M`1.0` for `Outer<T>.Inner`): the other partial declarations
   // of the same local name with the same value, in other files, are parts of it.
@@ -96,7 +108,7 @@ export interface ParameterRange {
   readonly extension?: true | undefined;
   readonly overrides?: true | undefined;
   readonly access?: "private" | "package" | undefined;
-  // A Java constructor (not a method named like its class).
+  // An instance constructor (not a C# static constructor, nor a Java method named like its class).
   readonly constructs?: true | undefined;
   // Java: each parameter's type as written, whitespace removed (a varargs type ends in `...`).
   readonly types?: readonly string[] | undefined;
@@ -190,7 +202,7 @@ export interface OsnovaEdge {
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
   readonly arguments?: number | undefined;
-  // A Java object creation: `instance` for `new T(...)`, which runs a constructor of T, and `anonymous`
+  // A Java or C# object creation: `instance` for `new T(...)`, which runs a constructor of T, and `anonymous`
   // for `new T(...) { ... }`, which creates an anonymous subclass of T.
   readonly constructs?: Construction | undefined;
   readonly overload?: OverloadChoice | undefined;
