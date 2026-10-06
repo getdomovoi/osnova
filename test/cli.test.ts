@@ -237,6 +237,21 @@ describe("cli", () => {
     expect(run("thread", "[")).toEqual({ status: 2, stderr: "osnova: osnova thread: invalid pattern \"[\": SyntaxError: Invalid regular expression: /[/g: Unterminated character class\n" });
   }, 60_000);
 
+  it("rejects a blank footing question unless symbols are named", () => {
+    const bin = path.join(import.meta.dirname, "..", "dist", "bin.js");
+    const run = (...args: string[]): { status: number | null; stdout: string; stderr: string } => {
+      const result = spawnSync(process.execPath, [bin, ...args, "--workspace", workspace, ...cacheArgs], { encoding: "utf8" });
+      return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    };
+    const missing = { status: 2, stdout: "", stderr: "osnova: osnova footing: missing <question> argument\n" };
+    expect(run("footing")).toEqual(missing);
+    expect(run("footing", "")).toEqual(missing);
+    expect(run("footing", "   ")).toEqual(missing);
+    const withSymbol = run("footing", "", "--symbol", "src/two.ts#two");
+    expect(withSymbol.status).toBe(0);
+    expect(JSON.parse(withSymbol.stdout).requested).toEqual([{ name: "src/two.ts#two", status: "returned" }]);
+  }, 60_000);
+
   it("rejects a stray directory positional and points at --workspace", async () => {
     const stray = capture();
     expect(await runCli(["ground", "three", workspace, ...cacheArgs], stray.io)).toBe(2);

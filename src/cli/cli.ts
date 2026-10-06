@@ -422,6 +422,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
         limit: { type: "string", short: "n" }, depth: { type: "string" }, "max-code-units": { type: "string" },
         workspace: { type: "string" }, "cache-dir": { type: "string" },
       } });
+      const question = parsed.positionals.join(" ");
+      if (question.trim().length === 0 && parsed.values.symbol === undefined) throw new Error("osnova footing: missing <question> argument");
       const task = parsed.values.task;
       if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova footing: --task must be understand, change or review");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
@@ -430,7 +432,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limit = numericOption(parsed.values.limit, "limit", "footing");
       const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
-      const result = withCommandError("footing", () => taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
+      const result = withCommandError("footing", () => taskContext(index, { task, question, symbols: parsed.values.symbol,
         in: parsed.values.in, limit, maxDepth, maxCodeUnits: budget }),
         (error) => error instanceof TaskContextBudgetError ? `--max-code-units ${budget} cannot retain receipts and omissions; give at least ${error.minimum}` : undefined);
       io.stdout(jsonOutput(result, "footing"));
