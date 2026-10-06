@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Parser } from "web-tree-sitter";
 import { getParser, loadLanguage } from "../src/grammar/loader.js";
 import { buildIndex } from "../src/index.js";
@@ -196,6 +199,46 @@ describe("bash heredocs pending past the scanner state buffer", () => {
     for (const shape of overflowing) expect(pooled.files.get(`a-${shape}.sh`)?.diagnostics, shape).toEqual([{ phase: "parse", path: `a-${shape}.sh`, code: "syntax-errors" }]);
     expect(pooled.diagnostics).toEqual(sequential.diagnostics);
     expect(serializeArtifact(pooled).equals(serializeArtifact(sequential))).toBe(true);
+  });
+});
+
+// web-tree-sitter keeps one runtime per package copy and ignores init options after the first Parser.init, so a host
+// that initializes it before loading Osnova decides which runtime Osnova's grammars load into. The host has to
+// go first in a process of its own.
+describe("a host that initializes web-tree-sitter before Osnova", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+  const pendingPipeline = Array.from({ length: 200 }, () => "cat <<E").join(" | ") + "\n" + "x\nE\n".repeat(200);
+
+  it("extracts healthy bash, case statements and scripts after an overflowing one", async () => {
+    await fs.copyFile(path.join(root, "test/fixtures/sample-repo/src/breadth/greeter.sh"), path.join(workspace, "greeter.sh"));
+    await fs.writeFile(path.join(workspace, "a-case.sh"), 'greet() { echo hi; }\ncase "$1" in a|b) greet ;; esac\n');
+    await fs.writeFile(path.join(workspace, "a-pipeline.sh"), pendingPipeline);
+    await fs.writeFile(path.join(workspace, "b-healthy.sh"), "hello() {\n  cat <<EOF\nhi $1\nEOF\n}\n");
+    const script = [
+      'import { Parser } from "web-tree-sitter";',
+      "await Parser.init();",
+      `const { buildIndex } = await import(${JSON.stringify(pathToFileURL(path.join(root, "src", "index.ts")).href)});`,
+      `const index = await buildIndex(${JSON.stringify(workspace)}, { cacheDir: ${JSON.stringify(cacheDir)} });`,
+      "const files = Object.fromEntries([...index.files].map(([file, card]) => [file, { diagnostics: card.diagnostics ?? [], symbols: card.symbols.map((symbol) => symbol.name) }]));",
+      "process.stdout.write(JSON.stringify({ diagnostics: index.diagnostics ?? [], files }));",
+    ].join("\n");
+
+    const output = execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, OSNOVA_EXTRACT_WORKERS: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const { diagnostics, files } = JSON.parse(output) as {
+      diagnostics: unknown[];
+      files: Record<string, { diagnostics: unknown[]; symbols: string[] }>;
+    };
+    expect(files["greeter.sh"]).toEqual({ diagnostics: [], symbols: ["greet", "format"] });
+    expect(files["a-case.sh"]).toEqual({ diagnostics: [], symbols: ["greet"] });
+    expect(files["b-healthy.sh"]).toEqual({ diagnostics: [], symbols: ["hello"] });
+    expect(diagnostics).toEqual([{ phase: "parse", path: "a-pipeline.sh", code: "syntax-errors" }]);
   });
 });
 

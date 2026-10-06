@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Parser, Language } from "web-tree-sitter";
@@ -42,6 +43,16 @@ function packageFile(packageName: string, relativeFile: string): string {
 
 let initPromise: Promise<void> | undefined;
 
+// web-tree-sitter keeps one runtime per copy of the package and ignores init options once anyone, Osnova or its
+// host, has called Parser.init, so Osnova cannot rely on an init hook.
+async function ensureInit(): Promise<void> {
+  initPromise ??= (async () => {
+    const wasmPath = packageFile("web-tree-sitter", "tree-sitter.wasm");
+    await Parser.init({ locateFile: () => wasmPath });
+  })();
+  return initPromise;
+}
+
 // Prebuilt grammars resolve their C library imports against the runtime's import table. The bash scanner
 // imports `isalpha`, which this web-tree-sitter build does not export, so a parse that reaches a `case`
 // pattern calls an unresolved stub and throws. Supply it with musl's C-locale definition.
@@ -49,12 +60,10 @@ const missingLibcImports: Readonly<Record<string, (c: number) => number>> = {
   isalpha: (c) => (((c | 32) - 97) >>> 0 < 26 ? 1 : 0),
 };
 
-// The ES2023 lib and Node's types declare no WebAssembly values; these are the parts init and the scanner
-// state guard use.
+// The ES2023 lib and Node's types declare no WebAssembly values; these are the parts grammar loading and the
+// scanner state guard use.
 type WasmFunction = (...args: number[]) => number;
-interface WasmImports {
-  readonly env: Record<string, unknown>;
-}
+type WasmImports = Readonly<Record<string, unknown>> & { readonly env: object };
 interface WasmInstance {
   readonly exports: Record<string, unknown>;
 }
@@ -66,9 +75,11 @@ interface WasmTable {
   grow(delta: number): number;
   set(index: number, value: unknown): void;
 }
+type WasmInstantiate = (bytes: unknown, imports?: WasmImports) => Promise<unknown>;
 interface WasmRuntime {
   readonly Module: new (bytes: Uint8Array) => object;
   readonly Instance: new (module: object, imports: object) => WasmInstance;
+  instantiate: WasmInstantiate;
 }
 const wasm = (globalThis as unknown as { readonly WebAssembly: WasmRuntime }).WebAssembly;
 
@@ -77,39 +88,50 @@ interface RuntimeHandles {
   readonly table: WasmTable;
   readonly malloc: WasmFunction;
 }
-// web-tree-sitter instantiates its runtime once per copy of the package, so a second evaluation of this module
-// (a test runner re-importing it) never sees instantiateWasm. The handles are therefore kept per Parser class,
-// which identifies that copy, in a registry that outlives this module.
-const runtimeRegistryKey = Symbol.for("@getdomovoi/osnova/tree-sitter-runtime");
-const runtimeRegistry = ((globalThis as unknown as Record<symbol, WeakMap<object, RuntimeHandles> | undefined>)[runtimeRegistryKey] ??=
-  new WeakMap<object, RuntimeHandles>());
 
-function captureRuntime(env: Record<string, unknown>, exports: Record<string, unknown>): RuntimeHandles | undefined {
-  const memory = env.memory as Partial<WasmMemory> | undefined;
-  const table = env.__indirect_function_table as Partial<WasmTable> | undefined;
-  const malloc = exports.malloc;
+function captureRuntime(env: object): RuntimeHandles | undefined {
+  const { memory, __indirect_function_table: table, malloc } = env as {
+    readonly memory?: Partial<WasmMemory>;
+    readonly __indirect_function_table?: Partial<WasmTable>;
+    readonly malloc?: unknown;
+  };
   if (!(memory?.buffer instanceof ArrayBuffer) || typeof table?.grow !== "function" || typeof malloc !== "function") return undefined;
   return { memory: memory as WasmMemory, table: table as WasmTable, malloc: malloc as WasmFunction };
 }
 
-async function ensureInit(): Promise<void> {
-  initPromise ??= (async () => {
-    const wasmPath = packageFile("web-tree-sitter", "tree-sitter.wasm");
-    await Parser.init({
-      locateFile: () => wasmPath,
-      // Compiled synchronously so a failure throws inside the runtime's promise executor and rejects init.
-      instantiateWasm(imports: WasmImports, receive: (instance: object, module: object) => void) {
-        Object.assign(imports.env, missingLibcImports);
-        const module = new wasm.Module(readFileSync(wasmPath));
-        const instance = new wasm.Instance(module, imports);
-        const handles = captureRuntime(imports.env, instance.exports);
-        if (handles !== undefined) runtimeRegistry.set(Parser, handles);
-        receive(instance, module);
-        return {};
-      },
-    });
-  })();
-  return initPromise;
+function withLibcImports(env: object): object {
+  return new Proxy(env, {
+    get: (target, name, receiver) =>
+      typeof name === "string" && Object.hasOwn(missingLibcImports, name) ? missingLibcImports[name] : Reflect.get(target, name, receiver),
+  });
+}
+
+// Language.load instantiates a grammar as a side module whose `env` imports resolve against the live runtime,
+// whoever initialized it. Observing that one instantiation yields the runtime's memory, function table and malloc
+// and lets the missing C library imports in. The observer replaces WebAssembly.instantiate only while a load is
+// pending and passes every other module through untouched; loads run one at a time so each restores the
+// function it replaced.
+let grammarLoads: Promise<unknown> = Promise.resolve();
+
+function loadGrammar(wasmPath: string): Promise<{ readonly loaded: Language; readonly runtime: RuntimeHandles | undefined }> {
+  const run = grammarLoads.then(async () => {
+    const bytes = new Uint8Array(await readFile(wasmPath));
+    let runtime: RuntimeHandles | undefined;
+    const instantiate = wasm.instantiate;
+    const observe: WasmInstantiate = (binary, imports) => {
+      if (binary !== bytes || imports === undefined) return instantiate.call(wasm, binary, imports);
+      runtime = captureRuntime(imports.env);
+      return instantiate.call(wasm, binary, { ...imports, env: withLibcImports(imports.env) });
+    };
+    wasm.instantiate = observe;
+    try {
+      return { loaded: await Language.load(bytes), runtime };
+    } finally {
+      if (wasm.instantiate === observe) wasm.instantiate = instantiate;
+    }
+  });
+  grammarLoads = run.catch(() => undefined);
+  return run;
 }
 
 // The bash scanner serializes every pending heredoc into the parser's 1024-byte scanner state buffer and checks
@@ -142,8 +164,7 @@ const reexportModule = new Uint8Array([
   0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00,
 ]);
 
-function guardScannerState(language: LanguageId, loaded: Language): void {
-  const handles = runtimeRegistry.get(Parser);
+function guardScannerState(language: LanguageId, loaded: Language, handles: RuntimeHandles | undefined): void {
   if (handles === undefined) throw new Error("osnova: the tree-sitter runtime exposes no memory, function table or malloc");
   const base = (loaded as unknown as { readonly 0: number })[0];
   const view = (): DataView => new DataView(handles.memory.buffer);
@@ -186,8 +207,9 @@ export async function loadLanguage(language: LanguageId): Promise<Language> {
       await ensureInit();
       const wasmPath = packageFile("tree-sitter-wasms", path.join("out", grammarFile[language]));
       let loaded: Language;
+      let runtime: RuntimeHandles | undefined;
       try {
-        loaded = await Language.load(wasmPath);
+        ({ loaded, runtime } = await loadGrammar(wasmPath));
       } catch (error) {
         throw new Error(
           `osnova: failed to load tree-sitter grammar "${language}" from ${wasmPath}. ` +
@@ -198,7 +220,7 @@ export async function loadLanguage(language: LanguageId): Promise<Language> {
           { cause: error },
         );
       }
-      if (guardedScannerLanguages.has(language)) guardScannerState(language, loaded);
+      if (guardedScannerLanguages.has(language)) guardScannerState(language, loaded, runtime);
       loadedLanguages.set(language, loaded);
       return loaded;
     })();
