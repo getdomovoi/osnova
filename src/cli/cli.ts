@@ -10,7 +10,7 @@ import { indexHealth } from "../index/health.js";
 import { loadArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
-import { findTextDetailed } from "../query/findText.js";
+import { findTextDetailed, InvalidPatternError } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
@@ -25,7 +25,7 @@ import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
-import { taskContext } from "../query/task-context.js";
+import { taskContext, TaskContextBudgetError } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
 import { doctor, setupClients } from "../diagnostics/index.js";
 import type { SetupClientId } from "../diagnostics/index.js";
@@ -120,11 +120,11 @@ function requirePositional(values: readonly string[], name: string, command: str
   return value;
 }
 
-function numericOption(value: string | undefined, name: string, minimum = 0): number | undefined {
+function numericOption(value: string | undefined, name: string, command: string, minimum = 0): number | undefined {
   if (value === undefined) return undefined;
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < minimum) {
-    throw new RangeError(`osnova: --${name} must be a safe integer >= ${minimum}`);
+    throw new RangeError(`osnova ${command}: --${name} must be a safe integer >= ${minimum}`);
   }
   return number;
 }
@@ -177,6 +177,17 @@ function jsonOutput(value: unknown, label: string): string {
   return text;
 }
 
+// Shared query errors keep the wording the API and MCP tools report; the CLI names the command that was typed instead.
+function withCommandError<T>(command: string, run: () => T, describe: (error: unknown) => string | undefined): T {
+  try {
+    return run();
+  } catch (error) {
+    const message = describe(error);
+    if (message === undefined) throw error;
+    throw new Error(`osnova ${command}: ${message}`, { cause: error });
+  }
+}
+
 const lspLanguageNames: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
 
 // The language server for the MCP tools is named on the command line that starts the MCP server, never read from
@@ -218,7 +229,18 @@ export async function runCli(
     io.stdout(USAGE);
     return command.length === 0 ? EXIT_ERROR : EXIT_OK;
   }
+  try {
+    return await runCommand(command, rest, io);
+  } catch (error) {
+    // node:util parseArgs reports unknown options and stray positionals without the command that was typed.
+    if (error instanceof Error && "code" in error && typeof error.code === "string" && error.code.startsWith("ERR_PARSE_ARGS_")) {
+      throw new TypeError(`osnova ${command}: ${error.message}`, { cause: error });
+    }
+    throw error;
+  }
+}
 
+async function runCommand(command: string, rest: string[], io: CliIo): Promise<number> {
   switch (command) {
     case "build": {
       const parsed = parseArgs({
@@ -289,7 +311,7 @@ export async function runCli(
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = numericOption(parsed.values.limit, "limit");
+      const limitValue = numericOption(parsed.values.limit, "limit", "ground");
       const lean = parsed.values.lean === true;
       if (parsed.values.scoped === true) {
         const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: lean ? false : parsed.values.full });
@@ -322,16 +344,16 @@ export async function runCli(
           "cache-dir": { type: "string" },
         },
       });
-      const pattern = requirePositional(parsed.positionals, "pattern", "grep");
+      const pattern = requirePositional(parsed.positionals, "pattern", "thread");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = numericOption(parsed.values.limit, "limit");
-      const result = findTextDetailed(index, pattern, {
+      const limitValue = numericOption(parsed.values.limit, "limit", "thread");
+      const result = withCommandError("thread", () => findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
         in: parsed.values.in,
         limit: limitValue ?? 50,
         matchesPerGroup: threadMatchesPerGroup,
-      });
+      }), (error) => error instanceof InvalidPatternError ? error.message.replace(/^osnova: /, "") : undefined);
       io.stdout(formatFindTextResult(result, threadMatchesPerGroup));
       return EXIT_OK;
     }
@@ -341,7 +363,7 @@ export async function runCli(
         allowPositionals: true,
         options: { workspace: { type: "string" }, "cache-dir": { type: "string" } },
       });
-      const file = requirePositional(parsed.positionals, "file", "skeleton");
+      const file = requirePositional(parsed.positionals, "file", "outline");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(formatSkeleton(skeleton(index, file)));
       return EXIT_OK;
@@ -358,10 +380,10 @@ export async function runCli(
           "cache-dir": { type: "string" },
         },
       });
-      const symbol = requirePositional(parsed.positionals, "symbol", "callers");
+      const symbol = requirePositional(parsed.positionals, "symbol", "warp");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "warp", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const depthValue = numericOption(parsed.values.depth, "depth", 1);
+      const depthValue = numericOption(parsed.values.depth, "depth", "warp", 1);
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") {
         throw new Error(`osnova warp: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
@@ -384,7 +406,7 @@ export async function runCli(
         },
       });
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", 1);
+      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", "groundwork", 1);
       io.stdout(
         formatMap(
           map(index, {
@@ -400,15 +422,19 @@ export async function runCli(
         limit: { type: "string", short: "n" }, depth: { type: "string" }, "max-code-units": { type: "string" },
         workspace: { type: "string" }, "cache-dir": { type: "string" },
       } });
+      const question = parsed.positionals.join(" ");
+      if (question.trim().length === 0 && parsed.values.symbol === undefined) throw new Error("osnova footing: missing <question> argument");
       const task = parsed.values.task;
-      if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
+      if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova footing: --task must be understand, change or review");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
-      const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
-      if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
+      const budget = numericOption(parsed.values["max-code-units"], "max-code-units", "footing", 1) ?? maximumTextResponseCodeUnits;
+      if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
-        in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit"),
-        maxDepth: numericOption(parsed.values.depth, "depth", 1), maxCodeUnits: budget });
+      const limit = numericOption(parsed.values.limit, "limit", "footing");
+      const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
+      const result = withCommandError("footing", () => taskContext(index, { task, question, symbols: parsed.values.symbol,
+        in: parsed.values.in, limit, maxDepth, maxCodeUnits: budget }),
+        (error) => error instanceof TaskContextBudgetError ? `--max-code-units ${budget} cannot retain receipts and omissions; give at least ${error.minimum}` : undefined);
       io.stdout(jsonOutput(result, "footing"));
       return EXIT_OK;
     }
@@ -420,7 +446,7 @@ export async function runCli(
       if (baseCache === undefined && baseRef === undefined) throw new Error("osnova settle: --base-ref or --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const maxDepth = numericOption(parsed.values.depth, "depth", 1) ?? 1;
+      const maxDepth = numericOption(parsed.values.depth, "depth", "settle", 1) ?? 1;
       let result;
       if (baseRef !== undefined) {
         const base = await materializeBaseRef(root, baseRef, { cacheDir });
@@ -467,7 +493,7 @@ export async function runCli(
       const claims = parseClaims([...(parsed.values.site ?? []), ...fromFile]);
       if (claims.length === 0) throw new Error("osnova plumb: give at least one --site path:line or a --sites-file");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", 1) });
+      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", "plumb", 1) });
       io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
       return EXIT_OK;
     }
@@ -478,8 +504,9 @@ export async function runCli(
       const symbols = parsed.positionals.filter((name) => name.length > 0);
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "tests", io)) return EXIT_ERROR;
       const file = parsed.values.file;
-      if ((symbols.length === 0) === (file === undefined)) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
-      const limit = numericOption(parsed.values.limit, "limit");
+      if (symbols.length === 0 && file === undefined) throw new Error("osnova tests: give <symbol...> or --file <path>");
+      if (symbols.length > 0 && file !== undefined) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
+      const limit = numericOption(parsed.values.limit, "limit", "tests");
       const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
@@ -496,7 +523,7 @@ export async function runCli(
       }
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = unreferenced(index, {
-        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit"), includeExported: parsed.values.exported,
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", "unreferenced"), includeExported: parsed.values.exported,
       });
       io.stdout(formatUnreferenced(result));
       return EXIT_OK;

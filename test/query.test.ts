@@ -154,7 +154,7 @@ describe("findText", () => {
   });
 
   it("rejects invalid regex with a clear error", () => {
-    expect(() => findText(index, "[")).toThrow(/invalid pattern/);
+    expect(() => findText(index, "[")).toThrow(/^osnova: invalid pattern "\[": SyntaxError: /);
   });
 });
 

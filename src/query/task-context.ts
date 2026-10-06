@@ -6,6 +6,12 @@ import { askDetailed } from "./ask.js";
 import { isTestFile } from "./tests.js";
 import { reachCounter } from "./reach.js";
 
+export class TaskContextBudgetError extends RangeError {
+  constructor(readonly minimum: number) {
+    super(`osnova: task context budget cannot retain receipts and omissions; minimum ${minimum} UTF-16 code units`);
+  }
+}
+
 export interface TaskContextOptions {
   readonly task: "understand" | "change" | "review";
   readonly question: string;
@@ -214,7 +220,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
   };
   const measure = options.measure ?? ((value: TaskContextResult): number => JSON.stringify(value).length);
   const size = (): number => measure(result);
-  if (size() > maxCodeUnits) throw new RangeError(`osnova: task context budget cannot retain receipts and omissions; minimum ${size()} UTF-16 code units`);
+  if (size() > maxCodeUnits) throw new TaskContextBudgetError(size());
   const append = <T>(items: Iterable<T>, target: T[], field: "definitions" | "relationships" | "candidateTests", limit = maxCodeUnits): T[] => {
     const left: T[] = [];
     for (const item of items) {
@@ -265,7 +271,7 @@ export function taskContext(index: OsnovaIndex, options: TaskContextOptions): Ta
     else if (result.candidateTests.length > 0) { result.candidateTests.pop(); result.omitted.candidateTests++; }
     else if (result.relationships.length > 0) { result.relationships.pop(); result.omitted.relationships++; }
     else if (result.definitions.length > 0) { result.definitions.pop(); result.omitted.definitions++; }
-    else throw new RangeError(`osnova: task context budget cannot retain receipts and omissions; minimum ${size()} UTF-16 code units`);
+    else throw new TaskContextBudgetError(size());
     settleStatuses();
   }
   return result;

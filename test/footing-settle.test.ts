@@ -205,6 +205,10 @@ describe("footing seed filter", () => {
     expect(result.omitted.retrievalHits).toBe(5);
     expect(() => taskContext(index([fn]), { task: "understand", question: "lock", kinds: [] })).toThrow("kinds must be a non-empty array");
   });
+  it("reports the minimum budget in the shared wording when receipts do not fit", () => {
+    expect(() => taskContext(index([fn]), { task: "understand", question: "lock", maxCodeUnits: 1 }))
+      .toThrow(/^osnova: task context budget cannot retain receipts and omissions; minimum \d+ UTF-16 code units$/);
+  });
 });
 
 describe("footing formatting", () => {
