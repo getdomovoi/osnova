@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Parser, Language } from "web-tree-sitter";
@@ -42,10 +42,36 @@ function packageFile(packageName: string, relativeFile: string): string {
 
 let initPromise: Promise<void> | undefined;
 
+// Prebuilt grammars resolve their C library imports against the runtime's import table. The bash scanner
+// imports `isalpha`, which this web-tree-sitter build does not export, so a parse that reaches a `case`
+// pattern calls an unresolved stub and throws. Supply it with musl's C-locale definition.
+const missingLibcImports: Readonly<Record<string, (c: number) => number>> = {
+  isalpha: (c) => (((c | 32) - 97) >>> 0 < 26 ? 1 : 0),
+};
+
+// The ES2023 lib and Node's types declare no WebAssembly values; these are the two constructors init uses.
+interface WasmImports {
+  readonly env: Record<string, unknown>;
+}
+interface WasmRuntime {
+  readonly Module: new (bytes: Uint8Array) => object;
+  readonly Instance: new (module: object, imports: WasmImports) => object;
+}
+const wasm = (globalThis as unknown as { readonly WebAssembly: WasmRuntime }).WebAssembly;
+
 async function ensureInit(): Promise<void> {
   initPromise ??= (async () => {
     const wasmPath = packageFile("web-tree-sitter", "tree-sitter.wasm");
-    await Parser.init({ locateFile: () => wasmPath });
+    await Parser.init({
+      locateFile: () => wasmPath,
+      // Compiled synchronously so a failure throws inside the runtime's promise executor and rejects init.
+      instantiateWasm(imports: WasmImports, receive: (instance: object, module: object) => void) {
+        Object.assign(imports.env, missingLibcImports);
+        const module = new wasm.Module(readFileSync(wasmPath));
+        receive(new wasm.Instance(module, imports), module);
+        return {};
+      },
+    });
   })();
   return initPromise;
 }
