@@ -100,6 +100,25 @@ describe("edge store", () => {
     expect(second.hash).toBe(first.hash);
   });
 
+  it("encodes a shared evidence or binding object once however many edges carry it, to the same bytes as distinct copies", async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const base = index.edges.find((edge) => edge.evidence !== undefined && edge.binding !== undefined)!;
+    expect(base).toBeDefined();
+    let reads = 0;
+    const counted = <T extends object>(value: T): T => new Proxy(value, {
+      get(target, key, receiver) { reads += 1; return Reflect.get(target, key, receiver) as unknown; },
+    });
+    const evidence = counted(base.evidence!);
+    const binding = counted(base.binding!);
+    const shared: OsnovaEdge[] = Array.from({ length: 400 }, () => ({ ...base, evidence, binding }));
+    const copies: OsnovaEdge[] = shared.map(() => ({ ...base, evidence: structuredClone(base.evidence!), binding: structuredClone(base.binding!) }));
+    reads = 0;
+    const layout = serializeEdges(shared, paths);
+    expect(reads).toBeLessThan(40);
+    expect(layout.bytes.equals(serializeEdges(copies, paths).bytes)).toBe(true);
+  });
+
   it("refuses to serialize an unknown edge kind", async () => {
     const index = await buildIndex(FIXTURE);
     const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));

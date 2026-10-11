@@ -56,6 +56,8 @@ const constructionCodes: readonly (Construction | undefined)[] = [undefined, "in
 
 const MAX_ARRAY_INDEX = 4294967294;
 
+const unknownEvidence: EdgeEvidence = Object.freeze({ source: "unknown" });
+
 function arrayIndexOf(key: string): number {
   if (key === "0") return 0;
   if (key.length === 0 || key.length > 10 || key.charCodeAt(0) < 49 || key.charCodeAt(0) > 57) return -1;
@@ -107,8 +109,19 @@ export function canonical(value: unknown): string {
   return canonicalValue(value, "") as string;
 }
 
-function intern<T>(values: readonly (T | undefined)[]): { table: T[]; ids: number[] } {
-  const keys = values.map((value) => (value === undefined ? undefined : canonical(value)));
+// A loaded index shares one decoded object per table entry across all its edges, so each distinct object is
+// prepared and encoded once per call. The key is a pure function of the object, so the bytes do not change.
+function intern<T>(values: readonly (T | undefined)[], prepare: (value: T) => T = (value) => value): { table: T[]; ids: number[] } {
+  const encoded = new Map<T, string>();
+  const keys = values.map((value) => {
+    if (value === undefined) return undefined;
+    let key = encoded.get(value);
+    if (key === undefined) {
+      key = canonical(prepare(value));
+      encoded.set(value, key);
+    }
+    return key;
+  });
   const byKey = new Set<string>();
   for (const key of keys) if (key !== undefined) byKey.add(key);
   const sorted = [...byKey].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
@@ -119,10 +132,10 @@ function intern<T>(values: readonly (T | undefined)[]): { table: T[]; ids: numbe
 export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly string[]): EdgeLayout {
   const pathIndex = new Map(paths.map((p, i) => [p, i]));
   const knownPaths = new Set(paths);
-  const evidence = intern(edges.map((edge) => edge.evidence ?? { source: "unknown" as const }));
+  const evidence = intern(edges.map((edge) => edge.evidence ?? unknownEvidence));
   const bindings = intern(edges.map((edge) => edge.binding));
-  const routes = intern(edges.map((edge) => (edge.route === undefined ? undefined : validateRoute(edge.route))));
-  const overloads = intern(edges.map((edge) => (edge.overload === undefined ? undefined : validateOverload(edge.overload, knownPaths))));
+  const routes = intern(edges.map((edge) => edge.route), validateRoute);
+  const overloads = intern(edges.map((edge) => edge.overload), (overload) => validateOverload(overload, knownPaths));
   const header: EdgeHeader = { formatVersion: 13, count: edges.length, evidence: evidence.table, bindings: bindings.table, routes: routes.table, overloads: overloads.table };
   const lines = [JSON.stringify(header)];
   for (const [i, edge] of edges.entries()) {

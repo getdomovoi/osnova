@@ -4,6 +4,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Changed
+
+- Publishing the edge section after a refresh encodes each distinct evidence, binding, route and overload object once, not once per edge. A loaded index shares one decoded object per table entry across all its edges, so an edited refresh of a cache-loaded index no longer re-encodes the same few hundred objects tens of thousands of times; this was most of the time spent saving the artifact. The edge section bytes, their hash and every other section are unchanged, and a route or overload that fails validation is still refused.
+
 ### Fixed
 
 - A shell script with about 130 heredocs pending at once, such as a pipeline or `&&` list of `cat <<E` commands joined across lines, corrupted the bash parser without an error. The prebuilt bash grammar's scanner stores every pending heredoc in the parser's 1024-byte scanner state buffer and checks the bound a few bytes short, so it wrote past the buffer into the parser's stack pointer. The parse returned a tree, and later scripts on the same runtime reported false `syntax-errors`, lost their symbols, or failed with out-of-bounds memory errors. Osnova now routes the bash scanner's state through a 4096-byte scratch buffer when the grammar loads and keeps only a state that fits in 1024 bytes; a larger one is dropped, as the scanner itself does when its own check catches it. Such a script now indexes with `syntax-errors`, and the scripts after it index as they do alone. A script whose scanner state fits gets the same tree as before. Loading the bash grammar fails with an error if its scanner layout does not match. The guard and `isalpha` also apply when the host process called web-tree-sitter's `Parser.init` before loading Osnova, which keeps that one runtime; Osnova reads the runtime's memory and function table from the import table web-tree-sitter gives the grammar as it loads. Extraction version `structural-9.42`, so the first run after upgrading rebuilds the cache once and drops diagnostics a corrupted parser left on healthy scripts.
