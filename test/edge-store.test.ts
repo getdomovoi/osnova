@@ -119,6 +119,31 @@ describe("edge store", () => {
     expect(layout.bytes.equals(serializeEdges(copies, paths).bytes)).toBe(true);
   });
 
+  it("serializes shared, equal and reordered copies of the same tables to the bytes of fresh distinct objects", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mixed-")); dirs.push(dir);
+    const repo = path.join(dir, "repo");
+    await fs.mkdir(repo);
+    await fs.writeFile(path.join(repo, "a.ts"), "export class A { run() { return 1; } }\nexport function alpha() { return 1; }\nalpha();\n");
+    await fs.writeFile(path.join(repo, "b.ts"), "import { A, alpha } from \"./a\";\nexport function beta() { const x = new A(); return x.run() + alpha(); }\n");
+    const index = await buildIndex(repo, { cacheDir: path.join(dir, "cache") });
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const reverse = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(reverse)
+        : value !== null && typeof value === "object"
+          ? Object.fromEntries(Object.entries(value as Record<string, unknown>).reverse().map(([key, item]) => [key, reverse(item)]))
+          : value;
+    const distinct = index.edges.map((edge) => structuredClone(edge));
+    const mixed = index.edges.flatMap((edge) => [
+      edge,
+      { ...edge, evidence: structuredClone(edge.evidence), binding: structuredClone(edge.binding) },
+      reverse(edge) as OsnovaEdge,
+    ]);
+    const tripled = distinct.flatMap((edge) => [edge, structuredClone(edge), structuredClone(edge)]);
+    expect(mixed.some((edge) => edge.binding !== undefined && Object.keys(edge.binding).length > 1)).toBe(true);
+    expect(serializeEdges(mixed, paths).bytes.equals(serializeEdges(tripled, paths).bytes)).toBe(true);
+  });
+
   it("refuses to serialize an unknown edge kind", async () => {
     const index = await buildIndex(FIXTURE);
     const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));

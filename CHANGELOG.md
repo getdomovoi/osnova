@@ -6,7 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
-- Publishing the edge section after a refresh encodes each distinct evidence, binding, route and overload object once, not once per edge. A loaded index shares one decoded object per table entry across all its edges, so an edited refresh of a cache-loaded index no longer re-encodes the same few hundred objects tens of thousands of times; this was most of the time spent saving the artifact. The edge section bytes, their hash and every other section are unchanged, and a route or overload that fails validation is still refused.
+- Publishing the edge section encodes each distinct evidence, binding, route and overload value once, not once per edge. A loaded index shares one decoded object per table entry across all its edges, and a fresh build holds equal copies of the same few hundred values, so saving the artifact no longer re-encodes them tens of thousands of times; this was most of the time spent saving it after a build or an edited refresh. The edge section bytes, their hash and every other section are unchanged, and a route or overload that fails validation is still refused.
 
 ### Fixed
 

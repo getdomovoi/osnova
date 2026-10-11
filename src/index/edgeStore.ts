@@ -110,15 +110,23 @@ export function canonical(value: unknown): string {
 }
 
 // A loaded index shares one decoded object per table entry across all its edges, so each distinct object is
-// prepared and encoded once per call. The key is a pure function of the object, so the bytes do not change.
+// prepared and encoded once per call. A fresh build holds equal copies instead; their JSON text fixes the
+// structure canonical() encodes, so equal text reuses the key and a different property order only misses.
 function intern<T>(values: readonly (T | undefined)[], prepare: (value: T) => T = (value) => value): { table: T[]; ids: number[] } {
-  const encoded = new Map<T, string>();
+  const byObject = new Map<T, string>();
+  const byText = new Map<string, string>();
   const keys = values.map((value) => {
     if (value === undefined) return undefined;
-    let key = encoded.get(value);
+    let key = byObject.get(value);
     if (key === undefined) {
-      key = canonical(prepare(value));
-      encoded.set(value, key);
+      const prepared = prepare(value);
+      const text = JSON.stringify(prepared) as string | undefined;
+      key = text === undefined ? undefined : byText.get(text);
+      if (key === undefined) {
+        key = canonical(prepared);
+        if (text !== undefined) byText.set(text, key);
+      }
+      byObject.set(value, key);
     }
     return key;
   });
