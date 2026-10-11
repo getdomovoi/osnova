@@ -109,9 +109,25 @@ export function canonical(value: unknown): string {
   return canonicalValue(value, "") as string;
 }
 
+// JSON text and canonical() agree on structure only for plain data; a boxed primitive, for one, is 1 in JSON
+// text and {} in canonical(). An undefined property is dropped by both.
+function plainData(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  switch (typeof value) {
+    case "string": case "number": case "boolean": return true;
+    case "object": break;
+    default: return false;
+  }
+  if (Array.isArray(value)) return Object.getPrototypeOf(value) === Array.prototype && value.every(plainData);
+  const proto = Object.getPrototypeOf(value) as unknown;
+  if (proto !== Object.prototype && proto !== null) return false;
+  for (const name in value) if (!plainData((value as Record<string, unknown>)[name])) return false;
+  return true;
+}
+
 // A loaded index shares one decoded object per table entry across all its edges, so each distinct object is
-// prepared and encoded once per call. A fresh build holds equal copies instead; their JSON text fixes the
-// structure canonical() encodes, so equal text reuses the key and a different property order only misses.
+// prepared and encoded once per call. A fresh build holds equal copies instead; for plain data their JSON text
+// fixes the structure canonical() encodes, so equal text reuses the key and a different property order only misses.
 function intern<T>(values: readonly (T | undefined)[], prepare: (value: T) => T = (value) => value): { table: T[]; ids: number[] } {
   const byObject = new Map<T, string>();
   const byText = new Map<string, string>();
@@ -120,7 +136,7 @@ function intern<T>(values: readonly (T | undefined)[], prepare: (value: T) => T 
     let key = byObject.get(value);
     if (key === undefined) {
       const prepared = prepare(value);
-      const text = JSON.stringify(prepared) as string | undefined;
+      const text = plainData(prepared) ? JSON.stringify(prepared) as string | undefined : undefined;
       key = text === undefined ? undefined : byText.get(text);
       if (key === undefined) {
         key = canonical(prepared);

@@ -144,6 +144,26 @@ describe("edge store", () => {
     expect(serializeEdges(mixed, paths).bytes.equals(serializeEdges(tripled, paths).bytes)).toBe(true);
   });
 
+  it("keeps JSON-equal table values with different canonical encodings apart", async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const base = index.edges.find((edge) => edge.binding !== undefined)!;
+    expect(base).toBeDefined();
+    const withExtra = (extra: unknown): OsnovaEdge => ({ ...base, binding: { ...base.binding!, extra } as unknown as OsnovaEdge["binding"] });
+    const plainOnly = serializeEdges([withExtra(1)], paths);
+    for (const order of [[new Number(1), 1], [1, new Number(1)]]) {
+      const edges = order.map(withExtra);
+      expect(JSON.stringify(edges[0]!.binding)).toBe(JSON.stringify(edges[1]!.binding));
+      const layout = serializeEdges(edges, paths);
+      const header = JSON.parse(layout.bytes.toString("utf8").split("\n")[0]!) as { bindings: unknown[] };
+      expect(header.bindings).toHaveLength(2);
+      const back = deserializeEdges(layout.bytes, paths, index.files);
+      const plain = back[order.indexOf(1)]!;
+      expect((plain.binding as unknown as { extra: unknown }).extra).toBe(1);
+      expect(serializeEdges([plain], paths).bytes.equals(plainOnly.bytes)).toBe(true);
+    }
+  });
+
   it("refuses to serialize an unknown edge kind", async () => {
     const index = await buildIndex(FIXTURE);
     const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
