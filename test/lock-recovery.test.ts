@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { withCacheLock } from "../src/cache/lock.js";
+import { foreignLockHolds, withCacheLock } from "../src/cache/lock.js";
 
 async function exitedPid(): Promise<number> {
   const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
@@ -99,4 +99,29 @@ it("clears a lock directory it emptied itself, without waiting out the grace per
   // abandonedLockGraceMs for it is the bug.
   expect(performance.now() - started).toBeLessThan(1_000);
   expect(rmdirFailures).toBe(0);
+});
+
+it("reports a lock as held when a publisher reclaims the exited owner while the probe reads it", async () => {
+  const lockPath = await deadLock();
+  const readFile = fs.readFile.bind(fs);
+  let release!: () => void;
+  const releasing = new Promise<void>((resolve) => { release = resolve; });
+  let publisher: Promise<void> | undefined;
+  vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+    const text = await readFile(target as never, options as never) as never;
+    if (publisher === undefined && String(target) === path.join(lockPath, "owner.json")) {
+      let acquired!: () => void;
+      const holding = new Promise<void>((resolve) => { acquired = resolve; });
+      publisher = withCacheLock(lockPath, async () => { acquired(); await releasing; }, { lockTimeoutMs: 5_000, lockPollMs: 5 });
+      await holding;
+    }
+    return text;
+  });
+  try {
+    await expect(foreignLockHolds(lockPath)).resolves.toBe(true);
+    expect(publisher).toBeDefined();
+  } finally {
+    release();
+    await publisher;
+  }
 });
