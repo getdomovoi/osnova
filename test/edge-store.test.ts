@@ -7,7 +7,7 @@ import { buildIndex } from "../src/index/build.js";
 import { loadIndex, refreshWorkspace } from "../src/api.js";
 import { serializeSections } from "../src/index/serialize.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
-import { serializeEdges, deserializeEdges, edgeKinds } from "../src/index/edgeStore.js";
+import { canonical, serializeEdges, deserializeEdges, edgeKinds } from "../src/index/edgeStore.js";
 import { sha256Hex } from "../src/index/scan.js";
 import type { OsnovaEdge } from "../src/types.js";
 
@@ -150,17 +150,30 @@ describe("edge store", () => {
     const base = index.edges.find((edge) => edge.binding !== undefined)!;
     expect(base).toBeDefined();
     const withExtra = (extra: unknown): OsnovaEdge => ({ ...base, binding: { ...base.binding!, extra } as unknown as OsnovaEdge["binding"] });
-    const plainOnly = serializeEdges([withExtra(1)], paths);
-    for (const order of [[new Number(1), 1], [1, new Number(1)]]) {
-      const edges = order.map(withExtra);
-      expect(JSON.stringify(edges[0]!.binding)).toBe(JSON.stringify(edges[1]!.binding));
-      const layout = serializeEdges(edges, paths);
-      const header = JSON.parse(layout.bytes.toString("utf8").split("\n")[0]!) as { bindings: unknown[] };
-      expect(header.bindings).toHaveLength(2);
-      const back = deserializeEdges(layout.bytes, paths, index.files);
-      const plain = back[order.indexOf(1)]!;
-      expect((plain.binding as unknown as { extra: unknown }).extra).toBe(1);
-      expect(serializeEdges([plain], paths).bytes.equals(plainOnly.bytes)).toBe(true);
+    const readSecondOnly = (): object => {
+      let reads = 0;
+      return Object.defineProperty({}, "a", { enumerable: true, get: () => (++reads === 2 ? 1 : 2) });
+    };
+    const cases: [string, () => unknown, unknown][] = [
+      ["a boxed primitive", () => new Number(1), 1],
+      ["an object with a non-enumerable toJSON hook", () => Object.defineProperty({}, "toJSON", { value: () => new Number(1) }), 1],
+      ["an array with a non-enumerable toJSON hook", () => Object.defineProperty([], "toJSON", { value: () => new Number(1) }), 1],
+      ["an object with an accessor property", readSecondOnly, { a: 1 }],
+    ];
+    for (const [label, hostile, plainValue] of cases) {
+      expect(canonical(hostile()), label).not.toBe(canonical(plainValue));
+      if (label !== "an object with an accessor property") expect(JSON.stringify(hostile()), label).toBe(JSON.stringify(plainValue));
+      const plainOnly = serializeEdges([withExtra(plainValue)], paths);
+      for (const plainFirst of [true, false]) {
+        const edges = plainFirst ? [withExtra(plainValue), withExtra(hostile())] : [withExtra(hostile()), withExtra(plainValue)];
+        const layout = serializeEdges(edges, paths);
+        const header = JSON.parse(layout.bytes.toString("utf8").split("\n")[0]!) as { bindings: unknown[] };
+        expect(header.bindings, `${label}, plain first: ${plainFirst}`).toHaveLength(2);
+        const back = deserializeEdges(layout.bytes, paths, index.files);
+        const plain = back[plainFirst ? 0 : 1]!;
+        expect((plain.binding as unknown as { extra: unknown }).extra, `${label}, plain first: ${plainFirst}`).toEqual(plainValue);
+        expect(serializeEdges([plain], paths).bytes.equals(plainOnly.bytes), `${label}, plain first: ${plainFirst}`).toBe(true);
+      }
     }
   });
 

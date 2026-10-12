@@ -110,7 +110,8 @@ export function canonical(value: unknown): string {
 }
 
 // JSON text and canonical() agree on structure only for plain data; a boxed primitive, for one, is 1 in JSON
-// text and {} in canonical(). An undefined property is dropped by both.
+// text and {} in canonical(). An undefined property is dropped by both. A toJSON hook, enumerable or not, and an
+// accessor, which may answer each read differently, also leave plain data, so their holders take canonical().
 function plainData(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   switch (typeof value) {
@@ -118,11 +119,21 @@ function plainData(value: unknown): boolean {
     case "object": break;
     default: return false;
   }
-  if (Array.isArray(value)) return Object.getPrototypeOf(value) === Array.prototype && value.every(plainData);
+  if ("toJSON" in value) return false;
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
+    for (let i = 0; i < value.length; i += 1) if (!plainProperty(value, String(i))) return false;
+    return true;
+  }
   const proto = Object.getPrototypeOf(value) as unknown;
   if (proto !== Object.prototype && proto !== null) return false;
-  for (const name in value) if (!plainData((value as Record<string, unknown>)[name])) return false;
+  for (const name in value) if (!plainProperty(value, name)) return false;
   return true;
+}
+
+function plainProperty(value: object, name: string): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  return descriptor !== undefined && "value" in descriptor && plainData(descriptor.value);
 }
 
 // A loaded index shares one decoded object per table entry across all its edges, so each distinct object is
