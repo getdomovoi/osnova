@@ -7,9 +7,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { refreshWorkspace, indexGeneration } from "../api.js";
+import { refreshWorkspaceWitnessed, indexGeneration } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
-import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
+import { DEFAULT_SKIP_DIRS, witnessHolds } from "../index/scan.js";
+import type { ScanWitness } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
@@ -270,6 +271,7 @@ export function createOsnovaMcpServer(
   const debounceMs = watchOptions?.debounceMs ?? 200;
   const maxStaleMs = watchOptions?.maxStaleMs ?? 30_000;
   let latest: OsnovaIndex | undefined;
+  let witness: ScanWitness | undefined;
   let inFlight: Promise<OsnovaIndex> | undefined;
   let dirty = true;
   let changes = 0;
@@ -298,18 +300,25 @@ export function createOsnovaMcpServer(
   function refresh(): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
-    inFlight = refreshWorkspace(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs }).then((index) => {
+    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs }).then(({ index, witness: verified }) => {
       const changed = latest !== index;
-      latest = index; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
+      latest = index; witness = verified; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
       if (changed) prewarm(index);
       return index;
     }).finally(() => { inFlight = undefined; });
     return inFlight;
   }
   // With a watcher, a query reuses the last verified index while no change has been seen and the
-  // verification is recent; without one, every query verifies the working tree first.
-  function current(): Promise<OsnovaIndex> {
-    if (watcher !== undefined && latest !== undefined && !dirty && Date.now() - verifiedAt < maxStaleMs) return Promise.resolve(latest);
+  // verification is recent. Without one, a query reuses it while every file, directory and ignore file its scan
+  // read still stats the same; a full refresh per query cost more than the cheap tools it served.
+  async function current(): Promise<OsnovaIndex> {
+    if (watcher !== undefined) {
+      if (latest !== undefined && !dirty && Date.now() - verifiedAt < maxStaleMs) return latest;
+      return refresh();
+    }
+    const index = latest;
+    const verified = witness;
+    if (inFlight === undefined && index !== undefined && verified !== undefined && await witnessHolds(absRoot, verified)) return index;
     return refresh();
   }
   let watcher: FSWatcher | undefined;

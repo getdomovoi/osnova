@@ -9,7 +9,8 @@ import { cacheLockTimeoutIn, withCacheLock } from "./cache/lock.js";
 import { buildIndexSnapshot } from "./index/build.js";
 import { applyFreshnessReport, inspectFreshness, isStale } from "./index/incremental.js";
 import { loadVerification, saveVerification } from "./index/verification.js";
-import { scanFiles, sameFileMetadata } from "./index/scan.js";
+import { scanWorkspace, sameFileMetadata } from "./index/scan.js";
+import type { ScanWitness } from "./index/scan.js";
 import { IndexingError } from "./index/diagnostics.js";
 import { knownIndexGeneration, rememberIndexGeneration } from "./index/generation.js";
 import { ensureFamilySidecar, seedProgress, seedWorkspace } from "./index/seed.js";
@@ -38,7 +39,7 @@ export function evidenceFingerprint(index: OsnovaIndex, paths: Iterable<string> 
   return { workspace: workspaceKey(index.root), generation: indexGeneration(index), extractionVersion, sourceHashes };
 }
 
-const refreshing = new Map<string, Promise<OsnovaIndex>>();
+const refreshing = new Map<string, Promise<WitnessedIndex>>();
 const loadedIndexes = new Map<string, { index: OsnovaIndex; artifact: string }>();
 
 async function artifactSignature(root: string, cacheDir: string): Promise<string | undefined> {
@@ -89,6 +90,17 @@ async function readGeneration(root: string, cacheDir: string): Promise<string | 
 }
 
 export async function refreshWorkspace(root: string, options: WorkspaceOptions = {}): Promise<OsnovaIndex> {
+  return (await refreshWorkspaceWitnessed(root, options)).index;
+}
+
+// The index together with the witness of the scan it was verified against. The witness is taken before verification,
+// so while it still holds, the working tree is the one the index was verified against.
+export interface WitnessedIndex {
+  readonly index: OsnovaIndex;
+  readonly witness: ScanWitness;
+}
+
+export async function refreshWorkspaceWitnessed(root: string, options: WorkspaceOptions = {}): Promise<WitnessedIndex> {
   const canonicalRoot = await canonicalWorkspaceRoot(root);
   const limits = cacheLimits(options);
   const cacheDir = resolveCacheDir(options.cacheDir);
@@ -107,7 +119,7 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
     const cached = loadedIndexes.get(indexKey);
     const generation = await readGeneration(canonicalRoot, canonicalCache);
     const verified = generation === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, generation))?.files;
-    const scan = await scanFiles(canonicalRoot, canonicalCache);
+    const { scan, witness } = await scanWorkspace(canonicalRoot, canonicalCache);
     const clean = verified !== undefined && scan.paths.length === verified.size &&
       scan.paths.every((p) => sameFileMetadata(verified.get(p), scan.metadata.get(p)));
     let index: OsnovaIndex | undefined;
@@ -162,7 +174,7 @@ export async function refreshWorkspace(root: string, options: WorkspaceOptions =
           if (options.reuseMemory === true) {
             rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
           }
-          return index;
+          return { index, witness };
         }
         index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
         known = inspection.metadata;
