@@ -5,7 +5,7 @@ import { resolveCacheDir, workspaceDirFor, workspaceLockPath, workspaceKey, cach
 import type { LoadIndexOptions, OsnovaIndex } from "./types.js";
 import { canonicalWorkspaceRoot, workspaceIdentity, validRelativePath } from "./index/workspace.js";
 import type { WorkspaceOptions } from "./index/workspace.js";
-import { cacheLockTimeoutIn, withCacheLock } from "./cache/lock.js";
+import { cacheLockTimeoutIn, foreignLockHolds, withCacheLock } from "./cache/lock.js";
 import { buildIndexSnapshot } from "./index/build.js";
 import { applyFreshnessReport, inspectFreshness, isStale } from "./index/incremental.js";
 import { loadVerification, saveVerification } from "./index/verification.js";
@@ -208,6 +208,20 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   } finally {
     if (refreshing.get(taskKey) === task) refreshing.delete(taskKey);
   }
+}
+
+// Whether another owner may hold the lock a refresh of this workspace would take. It takes no lock and creates
+// nothing, so a caller may ask before every reuse of a kept index; a cache directory that does not exist holds no lock.
+export async function workspaceLockContended(root: string, cacheDir?: string | undefined): Promise<boolean> {
+  const canonicalRoot = await canonicalWorkspaceRoot(root);
+  let canonicalCache: string;
+  try {
+    canonicalCache = await fs.realpath(resolveCacheDir(cacheDir));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    return true;
+  }
+  return foreignLockHolds(workspaceLockPath(canonicalCache, canonicalRoot));
 }
 
 export async function loadIndex(

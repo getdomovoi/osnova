@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure } from "../api.js";
+import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure, workspaceLockContended } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS, witnessHolds } from "../index/scan.js";
 import type { ScanWitness } from "../index/scan.js";
@@ -250,6 +250,8 @@ export interface OsnovaMcpOptions {
   readonly cacheDir?: string;
   readonly watch?: boolean | OsnovaMcpWatchOptions;
   readonly prewarm?: boolean;
+  /** How long a refresh waits for the workspace lock before the query fails; defaults to two minutes. */
+  readonly refreshLockTimeoutMs?: number | undefined;
   /** A language server whose references osnova_warp, osnova_plumb, osnova_settle and osnova_tests add to their answers, each in its own section. */
   readonly lsp?: LspServerLaunch;
 }
@@ -300,7 +302,7 @@ export function createOsnovaMcpServer(
   function refresh(rebuild?: { superseded: OsnovaIndex | undefined } | undefined): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
-    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness: verified }) => {
+    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness: verified }) => {
       const changed = latest !== index;
       latest = index; witness = verified; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
       if (rebuild !== undefined) lastRebuild = { superseded: rebuild.superseded === undefined ? undefined : new WeakRef(rebuild.superseded) };
@@ -311,7 +313,9 @@ export function createOsnovaMcpServer(
   }
   // With a watcher, a query reuses the last verified index while no change has been seen and the
   // verification is recent. Without one, a query reuses it while every file, directory and ignore file its scan
-  // read still stats the same; a full refresh per query cost more than the cheap tools it served.
+  // read still stats the same and no other owner may hold the workspace lock; a full refresh per query cost more than
+  // the cheap tools it served. A contended lock sends the query to a refresh, which waits for the lock or fails, and
+  // drops the witness, so the next query verifies the tree under the lock again.
   async function current(): Promise<OsnovaIndex> {
     if (watcher !== undefined) {
       if (latest !== undefined && !dirty && Date.now() - verifiedAt < maxStaleMs) return latest;
@@ -319,7 +323,10 @@ export function createOsnovaMcpServer(
     }
     const index = latest;
     const verified = witness;
-    if (inFlight === undefined && index !== undefined && verified !== undefined && await witnessHolds(absRoot, verified)) return index;
+    if (inFlight === undefined && index !== undefined && verified !== undefined && await witnessHolds(absRoot, verified)) {
+      if (!await workspaceLockContended(absRoot, cacheDir)) return index;
+      if (witness === verified) witness = undefined;
+    }
     return refresh();
   }
   // A kept index reads cached source text only when a query needs it, and loading checks the text sidecar's size, not

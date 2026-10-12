@@ -215,6 +215,25 @@ async function reclaimAbandonedLock(lockPath: string): Promise<void> {
   }
 }
 
+// Whether a lock this process does not hold may be held by someone else. Only two states answer no: no
+// lock directory, and a settled lock that names nothing but exited owners on this host, which the next
+// acquirer reclaims at once. Every other state, including one that cannot be read, answers yes.
+export async function foreignLockHolds(lockPath: string): Promise<boolean> {
+  lockPath = path.resolve(lockPath);
+  if (holdsCacheLock(lockPath)) return false;
+  try {
+    await fs.lstat(lockPath);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    return true;
+  }
+  const lock = await snapshot(lockPath).catch(() => undefined);
+  if (lock === undefined || !lock.settled || lock.owners.length === 0) return true;
+  if (lock.names.some((name) => !isKnownEntry(name))) return true;
+  return !lock.owners.every((entry) => entry.owner !== undefined && lockOwnerExited(entry.owner));
+}
+
 async function describeHolder(lockPath: string): Promise<string> {
   const remedy = `if no osnova process is using this cache, delete ${lockPath}`;
   const lock = await snapshot(lockPath).catch(() => undefined);
