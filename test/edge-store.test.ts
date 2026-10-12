@@ -279,7 +279,7 @@ describe("edge store", () => {
       expect(back, label).toEqual(observed);
       expect(serializeEdges(back, paths).bytes.equals(layout.bytes), label).toBe(true);
     };
-    return { routeEdge, overloadEdge, expectRebuild };
+    return { routeEdge, overloadEdge, expectRebuild, paths };
   };
 
   it("encodes each occurrence of a shared route or overload with what preparation reads through hidden properties", async () => {
@@ -336,6 +336,30 @@ describe("edge store", () => {
       const input = edges();
       expectRebuild(input, input.map(() => plain), label);
     }
+  });
+
+  it("scans a route whose ignored extra field shares acyclic subobjects once per object", async () => {
+    const { routeEdge, expectRebuild, paths } = await preparedEdges();
+    const plain = routeEdge({ method: "GET", path: "/d" });
+    let tree: object = {};
+    let list: unknown[] = [];
+    for (let i = 0; i < 40; i += 1) { tree = { left: tree, right: tree }; list = [list, list]; }
+    const route = { method: "GET", path: "/d", extra: { tree, list } };
+    const input = [routeEdge(route), routeEdge(route), routeEdge({ ...route })];
+    const describeProperty = Object.getOwnPropertyDescriptor;
+    let reads = 0;
+    vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation((value, key) => {
+      reads += 1;
+      if (reads > 2_000) throw new Error("descriptor read budget exceeded");
+      return describeProperty(value, key);
+    });
+    try {
+      serializeEdges(input, paths);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(reads).toBeLessThanOrEqual(2_000);
+    expectRebuild(input, input.map(() => plain), "shared acyclic subobjects");
   });
 
   it("refuses to serialize an unknown edge kind", async () => {

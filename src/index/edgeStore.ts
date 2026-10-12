@@ -119,27 +119,41 @@ export function canonical(value: unknown): string {
 // Preparation reads more than JSON text does: a hidden path getter or an own every method on an array would run
 // code there, so every own property, hidden or symbol-keyed, must hold plain data. The scan meets raw values before
 // preparation drops their ignored fields, so a cycle, or nesting deeper than any table value, is simply not plain.
+// An object shared along several paths is scanned once: its count of nested object levels decides the depth limit
+// on every later path, so a scan of shared acyclic subobjects stays linear in their properties.
 const PLAIN_DEPTH = 256;
 
-function plainData(value: unknown, active = new Set<object>(), depth = 0): boolean {
-  if (value === null || value === undefined) return true;
-  switch (typeof value) {
-    case "string": case "number": case "boolean": return true;
-    case "object": break;
-    default: return false;
-  }
-  if (isProxy(value) || depth > PLAIN_DEPTH || active.has(value)) return false;
-  const proto = Object.getPrototypeOf(value) as unknown;
-  if (Array.isArray(value) ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return false;
-  if ("toJSON" in value) return false;
-  if (Array.isArray(value)) for (let i = 0; i < value.length; i += 1) if (!Object.hasOwn(value, i)) return false;
-  active.add(value);
-  for (const name of Reflect.ownKeys(value)) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name)!;
-    if (!("value" in descriptor) || !plainData(descriptor.value, active, depth + 1)) return false;
-  }
-  active.delete(value);
-  return true;
+function plainData(value: unknown): boolean {
+  const active = new Set<object>();
+  const levels = new Map<object, number>();
+  const scan = (item: unknown, depth: number): number => {
+    if (item === null || item === undefined) return 0;
+    switch (typeof item) {
+      case "string": case "number": case "boolean": return 0;
+      case "object": break;
+      default: return -1;
+    }
+    if (isProxy(item) || active.has(item)) return -1;
+    const known = levels.get(item);
+    if (known !== undefined) return depth + known - 1 > PLAIN_DEPTH ? -1 : known;
+    if (depth > PLAIN_DEPTH) return -1;
+    const proto = Object.getPrototypeOf(item) as unknown;
+    if (Array.isArray(item) ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return -1;
+    if ("toJSON" in item) return -1;
+    if (Array.isArray(item)) for (let i = 0; i < item.length; i += 1) if (!Object.hasOwn(item, i)) return -1;
+    active.add(item);
+    let below = 0;
+    for (const name of Reflect.ownKeys(item)) {
+      const descriptor = Object.getOwnPropertyDescriptor(item, name)!;
+      const child = "value" in descriptor ? scan(descriptor.value, depth + 1) : -1;
+      if (child < 0) return -1;
+      if (child > below) below = child;
+    }
+    active.delete(item);
+    levels.set(item, below + 1);
+    return below + 1;
+  };
+  return scan(value, 0) >= 0;
 }
 
 // A loaded index shares one decoded object per table entry across all its edges, so each distinct plain object is
