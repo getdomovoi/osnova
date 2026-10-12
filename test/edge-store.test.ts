@@ -261,6 +261,83 @@ describe("edge store", () => {
     for (const [label, edges, expected] of cases) expectObservedRebuild(edges(), expected, paths, index.files, label);
   });
 
+  // Route and overload edges built on one resolved call; the reload of the serialized bytes must give back the
+  // edges each occurrence observed, and those bytes must equal the bytes of fresh plain copies of them.
+  const preparedEdges = async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const call = index.edges.find((edge) => edge.kind === "calls" && edge.toSymbol !== undefined)!;
+    expect(call).toBeDefined();
+    const core: { -readonly [K in keyof OsnovaEdge]: OsnovaEdge[K] } = { ...call };
+    delete core.binding; delete core.route; delete core.arguments; delete core.overload; delete core.constructs;
+    const routeEdge = (route: object): OsnovaEdge => ({ ...core, kind: "routes", route: route as OsnovaEdge["route"] & object });
+    const overloadEdge = (overload: object): OsnovaEdge => ({ ...core, kind: "calls", arguments: 2, overload: overload as OsnovaEdge["overload"] & object });
+    const expectRebuild = (edges: OsnovaEdge[], observed: OsnovaEdge[], label: string): void => {
+      const layout = serializeEdges(edges, paths);
+      expect(layout.bytes.equals(serializeEdges(observed, paths).bytes), label).toBe(true);
+      const back = deserializeEdges(layout.bytes, paths, index.files);
+      expect(back, label).toEqual(observed);
+      expect(serializeEdges(back, paths).bytes.equals(layout.bytes), label).toBe(true);
+    };
+    return { routeEdge, overloadEdge, expectRebuild };
+  };
+
+  it("encodes each occurrence of a shared route or overload with what preparation reads through hidden properties", async () => {
+    const { routeEdge, overloadEdge, expectRebuild } = await preparedEdges();
+    const hiddenPath = (read: () => string): object => Object.defineProperty({ method: "GET" }, "path", { get: read });
+    const hiddenEvery = (candidates: number[], effect: () => void): number[] => Object.defineProperty(candidates, "every", {
+      value(this: number[], test: (item: number, i: number, all: number[]) => boolean) { effect(); return Array.prototype.every.call(this, test as never); },
+    });
+    const route = (path: string): OsnovaEdge => routeEdge({ method: "GET", path });
+    const overload = (first: number): OsnovaEdge => overloadEdge({ candidates: [first, 10] });
+    // Preparation may read a property more than once, so each hidden read answers the same within one occurrence;
+    // the hostile value in the middle changes what the shared one answers at its next occurrence.
+    const cases: [string, () => OsnovaEdge[], OsnovaEdge[]][] = [
+      ["one shared route whose path is a hidden getter", () => {
+        const state = { path: "/g" };
+        const shared = routeEdge(hiddenPath(() => state.path));
+        return [shared, routeEdge(hiddenPath(() => { state.path = "/i"; return "/h"; })), shared];
+      }, [route("/g"), route("/h"), route("/i")]],
+      ["one shared overload whose candidates hide a stateful every", () => {
+        const state = { first: 1 };
+        const candidates = [0, 10];
+        const shared = overloadEdge({ candidates: hiddenEvery(candidates, () => { candidates[0] = state.first; }) });
+        return [shared, overloadEdge({ candidates: hiddenEvery([5, 10], () => { state.first = 2; }) }), shared];
+      }, [overload(1), overload(5), overload(2)]],
+      ["a shared plain route a hidden path getter rewrites between its occurrences", () => {
+        const plain = { method: "GET", path: "/g" };
+        const rewriter = hiddenPath(() => { plain.path = "/i"; return "/h"; });
+        return [routeEdge(plain), routeEdge(rewriter), routeEdge(plain)];
+      }, [route("/g"), route("/h"), route("/i")]],
+      ["a shared plain overload a hidden every rewrites between its occurrences", () => {
+        const plain = { candidates: [1, 10] };
+        const rewriter = { candidates: hiddenEvery([5, 10], () => { plain.candidates[0] = 2; }) };
+        return [overloadEdge(plain), overloadEdge(rewriter), overloadEdge(plain)];
+      }, [overload(1), overload(5), overload(2)]],
+    ];
+    for (const [label, edges, expected] of cases) expectRebuild(edges(), expected, label);
+  });
+
+  it("encodes a valid route whose ignored extra field is cyclic or deeply nested as the route alone", async () => {
+    const { routeEdge, expectRebuild } = await preparedEdges();
+    const plain = routeEdge({ method: "GET", path: "/c" });
+    const cyclic: Record<string, unknown> = { method: "GET", path: "/c" };
+    cyclic.self = cyclic;
+    const loop: unknown[] = [];
+    loop.push({ back: loop });
+    let deep: object = {};
+    for (let i = 0; i < 100_000; i += 1) deep = { next: deep };
+    const cases: [string, () => OsnovaEdge[]][] = [
+      ["a route that holds itself", () => { const shared = routeEdge(cyclic); return [shared, shared]; }],
+      ["copies of a route whose extra field is a cyclic array", () => [routeEdge({ method: "GET", path: "/c", extra: loop }), routeEdge({ method: "GET", path: "/c", extra: loop })]],
+      ["a route whose extra field nests deeper than the stack", () => [routeEdge({ method: "GET", path: "/c", extra: deep })]],
+    ];
+    for (const [label, edges] of cases) {
+      const input = edges();
+      expectRebuild(input, input.map(() => plain), label);
+    }
+  });
+
   it("refuses to serialize an unknown edge kind", async () => {
     const index = await buildIndex(FIXTURE);
     const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));

@@ -116,28 +116,30 @@ export function canonical(value: unknown): string {
 // A proxy leaves it too: its traps can report a plain descriptor or prototype while its get trap answers
 // something else. isProxy reads the engine's own marker and runs no trap, so it is tested before any check
 // below that a trap could answer. Reading plain data runs no code, so it also cannot change between two reads.
-function plainData(value: unknown): boolean {
+// Preparation reads more than JSON text does: a hidden path getter or an own every method on an array would run
+// code there, so every own property, hidden or symbol-keyed, must hold plain data. The scan meets raw values before
+// preparation drops their ignored fields, so a cycle, or nesting deeper than any table value, is simply not plain.
+const PLAIN_DEPTH = 256;
+
+function plainData(value: unknown, active = new Set<object>(), depth = 0): boolean {
   if (value === null || value === undefined) return true;
   switch (typeof value) {
     case "string": case "number": case "boolean": return true;
     case "object": break;
     default: return false;
   }
-  if (isProxy(value) || "toJSON" in value) return false;
-  if (Array.isArray(value)) {
-    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
-    for (let i = 0; i < value.length; i += 1) if (!plainProperty(value, String(i))) return false;
-    return true;
-  }
+  if (isProxy(value) || depth > PLAIN_DEPTH || active.has(value)) return false;
   const proto = Object.getPrototypeOf(value) as unknown;
-  if (proto !== Object.prototype && proto !== null) return false;
-  for (const name in value) if (!plainProperty(value, name)) return false;
+  if (Array.isArray(value) ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return false;
+  if ("toJSON" in value) return false;
+  if (Array.isArray(value)) for (let i = 0; i < value.length; i += 1) if (!Object.hasOwn(value, i)) return false;
+  active.add(value);
+  for (const name of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name)!;
+    if (!("value" in descriptor) || !plainData(descriptor.value, active, depth + 1)) return false;
+  }
+  active.delete(value);
   return true;
-}
-
-function plainProperty(value: object, name: string): boolean {
-  const descriptor = Object.getOwnPropertyDescriptor(value, name);
-  return descriptor !== undefined && "value" in descriptor && plainData(descriptor.value);
 }
 
 // A loaded index shares one decoded object per table entry across all its edges, so each distinct plain object is
