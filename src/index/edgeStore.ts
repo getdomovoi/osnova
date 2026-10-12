@@ -56,6 +56,8 @@ const constructionCodes: readonly (Construction | undefined)[] = [undefined, "in
 
 const MAX_ARRAY_INDEX = 4294967294;
 
+const unknownEvidence: EdgeEvidence = Object.freeze({ source: "unknown" });
+
 function arrayIndexOf(key: string): number {
   if (key === "0") return 0;
   if (key.length === 0 || key.length > 10 || key.charCodeAt(0) < 49 || key.charCodeAt(0) > 57) return -1;
@@ -107,8 +109,54 @@ export function canonical(value: unknown): string {
   return canonicalValue(value, "") as string;
 }
 
-function intern<T>(values: readonly (T | undefined)[]): { table: T[]; ids: number[] } {
-  const keys = values.map((value) => (value === undefined ? undefined : canonical(value)));
+// JSON text and canonical() agree on structure only for plain data; a boxed primitive, for one, is 1 in JSON
+// text and {} in canonical(). An undefined property is dropped by both. A toJSON hook, enumerable or not, and an
+// accessor, which may answer each read differently, also leave plain data, so their holders take canonical().
+function plainData(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  switch (typeof value) {
+    case "string": case "number": case "boolean": return true;
+    case "object": break;
+    default: return false;
+  }
+  if ("toJSON" in value) return false;
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
+    for (let i = 0; i < value.length; i += 1) if (!plainProperty(value, String(i))) return false;
+    return true;
+  }
+  const proto = Object.getPrototypeOf(value) as unknown;
+  if (proto !== Object.prototype && proto !== null) return false;
+  for (const name in value) if (!plainProperty(value, name)) return false;
+  return true;
+}
+
+function plainProperty(value: object, name: string): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  return descriptor !== undefined && "value" in descriptor && plainData(descriptor.value);
+}
+
+// A loaded index shares one decoded object per table entry across all its edges, so each distinct object is
+// prepared and encoded once per call. A fresh build holds equal copies instead; for plain data their JSON text
+// fixes the structure canonical() encodes, so equal text reuses the key and a different property order only misses.
+function intern<T>(values: readonly (T | undefined)[], prepare: (value: T) => T = (value) => value): { table: T[]; ids: number[] } {
+  const byObject = new Map<T, string>();
+  const byText = new Map<string, string>();
+  const keys = values.map((value) => {
+    if (value === undefined) return undefined;
+    let key = byObject.get(value);
+    if (key === undefined) {
+      const prepared = prepare(value);
+      const text = plainData(prepared) ? JSON.stringify(prepared) as string | undefined : undefined;
+      key = text === undefined ? undefined : byText.get(text);
+      if (key === undefined) {
+        key = canonical(prepared);
+        if (text !== undefined) byText.set(text, key);
+      }
+      byObject.set(value, key);
+    }
+    return key;
+  });
   const byKey = new Set<string>();
   for (const key of keys) if (key !== undefined) byKey.add(key);
   const sorted = [...byKey].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
@@ -119,10 +167,10 @@ function intern<T>(values: readonly (T | undefined)[]): { table: T[]; ids: numbe
 export function serializeEdges(edges: readonly OsnovaEdge[], paths: readonly string[]): EdgeLayout {
   const pathIndex = new Map(paths.map((p, i) => [p, i]));
   const knownPaths = new Set(paths);
-  const evidence = intern(edges.map((edge) => edge.evidence ?? { source: "unknown" as const }));
+  const evidence = intern(edges.map((edge) => edge.evidence ?? unknownEvidence));
   const bindings = intern(edges.map((edge) => edge.binding));
-  const routes = intern(edges.map((edge) => (edge.route === undefined ? undefined : validateRoute(edge.route))));
-  const overloads = intern(edges.map((edge) => (edge.overload === undefined ? undefined : validateOverload(edge.overload, knownPaths))));
+  const routes = intern(edges.map((edge) => edge.route), validateRoute);
+  const overloads = intern(edges.map((edge) => edge.overload), (overload) => validateOverload(overload, knownPaths));
   const header: EdgeHeader = { formatVersion: 13, count: edges.length, evidence: evidence.table, bindings: bindings.table, routes: routes.table, overloads: overloads.table };
   const lines = [JSON.stringify(header)];
   for (const [i, edge] of edges.entries()) {
