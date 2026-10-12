@@ -20,7 +20,8 @@ vi.mock("../src/api.js", async (importOriginal) => {
   return { ...actual, refreshWorkspaceWitnessed };
 });
 
-import { indexGeneration } from "../src/api.js";
+import { indexGeneration, refreshWorkspace } from "../src/api.js";
+import { workspaceDirFor } from "../src/cache/cache.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
 const closers: Array<() => void> = [];
@@ -36,7 +37,11 @@ async function serve(workspace: string, cacheDir: string, watch: boolean, deboun
     const result = await client.callTool({ name: "osnova_ground", arguments: { question } });
     return ((result as { content?: readonly ContentBlock[] }).content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
   };
-  return { built, ground };
+  const call = async (name: string, args: Record<string, unknown>): Promise<string> => {
+    const result = await client.callTool({ name, arguments: args });
+    return ((result as { content?: readonly ContentBlock[] }).content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
+  };
+  return { built, ground, call };
 }
 
 async function setup(watch: boolean, debounceMs = 50) {
@@ -93,6 +98,48 @@ describe("MCP watch mode", () => {
 
     const fresh = await serve(workspace, path.join(temporary, "fresh-cache"), false);
     expect(await fresh.ground("renamed")).toBe(reused);
+  });
+
+  describe.each([
+    ["deleted", (file: string) => fs.rm(file)],
+    ["truncated", (file: string) => fs.truncate(file, 3)],
+    ["replaced with other bytes", async (file: string) => fs.writeFile(file, "x".repeat((await fs.stat(file)).size + 7))],
+    ["overwritten in place at the same size", async (file: string) => fs.writeFile(file, "x".repeat((await fs.stat(file)).size))],
+  ])("without a watcher, when the loaded cache's text sidecar is %s", (_label, damage) => {
+    it("repairs the cache before a text query instead of failing on the kept index", async () => {
+      const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+      const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+      await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+      const cacheDir = path.join(temporary, "cache");
+      await refreshWorkspace(workspace, { cacheDir });
+      const { built, call } = await serve(workspace, cacheDir, false);
+      expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+      expect(built.status().refreshes).toBe(1);
+
+      await damage(path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin"));
+      const thread = { pattern: "return 1", fixed: true };
+      const answer = await call("osnova_thread", thread);
+      const expected = await (await serve(workspace, path.join(temporary, "fresh-cache"), false)).call("osnova_thread", thread);
+      expect(answer).not.toContain("cache-read-failed");
+      expect(answer).toBe(expected);
+      expect(await call("osnova_thread", thread)).toBe(expected);
+      expect(built.status().refreshes).toBe(2);
+    });
+  });
+
+  it("reports a text sidecar read failure that rebuilding cannot repair instead of rebuilding", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+    const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+    const cacheDir = path.join(temporary, "cache");
+    await refreshWorkspace(workspace, { cacheDir });
+    const { built, call } = await serve(workspace, cacheDir, false);
+    expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+    const text = path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin");
+    await fs.rm(text);
+    await fs.mkdir(text);
+    expect(await call("osnova_thread", { pattern: "return 1", fixed: true })).toContain("cache-read-failed");
+    expect(built.status().refreshes).toBe(1);
   });
 
   it.skipIf(!recursiveWatch)("reuses the verified index until a change arrives, then refreshes on its own", async () => {

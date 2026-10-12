@@ -65,7 +65,7 @@ function rememberLoaded(key: string, index: OsnovaIndex, artifact: string | unde
 // A cached artifact is derived data. When it cannot be decoded, rebuilding it is the repair, the
 // same as for an inconsistent sidecar. A failure of the file system itself (a system error such as
 // EACCES or EIO) or of a lock is not repaired by rebuilding and is reported instead.
-function isRebuildableCacheFailure(error: unknown): boolean {
+export function isRebuildableCacheFailure(error: unknown): boolean {
   if (isSectionInconsistency(error)) return true;
   let readFailure = false;
   let cause: unknown = error;
@@ -90,7 +90,7 @@ async function readGeneration(root: string, cacheDir: string): Promise<string | 
 }
 
 export async function refreshWorkspace(root: string, options: WorkspaceOptions = {}): Promise<OsnovaIndex> {
-  return (await refreshWorkspaceWitnessed(root, options)).index;
+  return (await refreshWorkspaceWitnessed(root, { ...options, rebuild: false })).index;
 }
 
 // The index together with the witness of the scan it was verified against. The witness is taken before verification,
@@ -100,7 +100,13 @@ export interface WitnessedIndex {
   readonly witness: ScanWitness;
 }
 
-export async function refreshWorkspaceWitnessed(root: string, options: WorkspaceOptions = {}): Promise<WitnessedIndex> {
+// rebuild ignores the cached artifact and the kept index and builds from the working tree, for a caller whose
+// index failed to read a cache section that loading does not fully verify, such as the source text.
+export interface WitnessedRefreshOptions extends WorkspaceOptions {
+  readonly rebuild?: boolean | undefined;
+}
+
+export async function refreshWorkspaceWitnessed(root: string, options: WitnessedRefreshOptions = {}): Promise<WitnessedIndex> {
   const canonicalRoot = await canonicalWorkspaceRoot(root);
   const limits = cacheLimits(options);
   const cacheDir = resolveCacheDir(options.cacheDir);
@@ -111,7 +117,8 @@ export async function refreshWorkspaceWitnessed(root: string, options: Workspace
   }
   const canonicalCache = await fs.realpath(cacheDir);
   const indexKey = JSON.stringify([canonicalCache, canonicalRoot]);
-  const taskKey = JSON.stringify([indexKey, limits, options.lockTimeoutMs, options.lockPollMs, options.reuseMemory]);
+  const rebuild = options.rebuild === true;
+  const taskKey = JSON.stringify([indexKey, limits, options.lockTimeoutMs, options.lockPollMs, options.reuseMemory, rebuild]);
   const running = refreshing.get(taskKey);
   if (running !== undefined) return running;
   const task = withCacheLock(workspaceLockPath(canonicalCache, canonicalRoot), async () => {
@@ -123,7 +130,9 @@ export async function refreshWorkspaceWitnessed(root: string, options: Workspace
     const clean = verified !== undefined && scan.paths.length === verified.size &&
       scan.paths.every((p) => sameFileMetadata(verified.get(p), scan.metadata.get(p)));
     let index: OsnovaIndex | undefined;
-    if (options.reuseMemory === true && cached !== undefined && cached.artifact === published &&
+    if (rebuild) {
+      index = undefined;
+    } else if (options.reuseMemory === true && cached !== undefined && cached.artifact === published &&
       generation !== undefined && /^[a-f0-9]{64}$/.test(generation) && indexGeneration(cached.index) === generation) {
       index = cached.index;
     } else if (clean || generation !== undefined) {
@@ -134,7 +143,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Workspace
         index = undefined;
       }
     }
-    const seed = index === undefined && generation === undefined
+    const seed = index === undefined && generation === undefined && !rebuild
       ? await seedWorkspace(canonicalRoot, canonicalCache, options)
       : undefined;
     let seededFrom = seed?.sibling;

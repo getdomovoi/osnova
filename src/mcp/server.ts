@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { refreshWorkspaceWitnessed, indexGeneration } from "../api.js";
+import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS, witnessHolds } from "../index/scan.js";
 import type { ScanWitness } from "../index/scan.js";
@@ -297,10 +297,10 @@ export function createOsnovaMcpServer(
     });
   }
   // One refresh at a time; a change that arrives during a refresh marks the result stale again.
-  function refresh(): Promise<OsnovaIndex> {
+  function refresh(rebuild = false): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
-    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs }).then(({ index, witness: verified }) => {
+    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs, rebuild }).then(({ index, witness: verified }) => {
       const changed = latest !== index;
       latest = index; witness = verified; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
       if (changed) prewarm(index);
@@ -320,6 +320,12 @@ export function createOsnovaMcpServer(
     const verified = witness;
     if (inFlight === undefined && index !== undefined && verified !== undefined && await witnessHolds(absRoot, verified)) return index;
     return refresh();
+  }
+  // A kept index reads cached source text only when a query needs it, and loading checks the text sidecar's size, not
+  // its bytes, so a damaged sidecar shows as a failed query. Without a watcher, that query rebuilds once and runs again.
+  async function rebuild(): Promise<OsnovaIndex> {
+    while (inFlight !== undefined) await inFlight.catch(() => undefined);
+    return refresh(true);
   }
   let watcher: FSWatcher | undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -365,11 +371,10 @@ export function createOsnovaMcpServer(
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const name = request.params.name;
+  const callTool = async (name: string, rawArguments: unknown, repair: boolean): Promise<ReturnType<typeof textResult> | ReturnType<typeof errorResult>> => {
     try {
-      const args = checkArguments(name, request.params.arguments);
-      const index = await current();
+      const args = checkArguments(name, rawArguments);
+      const index = repair ? await rebuild() : await current();
       const generation = `osnova generation ${indexGeneration(index).slice(0, mcpGenerationDigits)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
       switch (name) {
@@ -528,6 +533,7 @@ export function createOsnovaMcpServer(
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
     } catch (error) {
+      if (!repair && watcher === undefined && isRebuildableCacheFailure(error)) return callTool(name, rawArguments, true);
       const message = error instanceof Error ? error.message : String(error);
       // Agents working in another worktree or clone retried the same lookup; say which checkout this server reads.
       const where = latest?.root ?? absRoot;
@@ -536,9 +542,10 @@ export function createOsnovaMcpServer(
         : /is not indexed; search|no indexed symbol named/.test(message) ? `; this server indexes ${where}, and a file in another checkout or worktree is not in it` : "";
       return errorResult(`${message}${hint}`, toolErrorBudget(name));
     }
-  });
+  };
+  server.setRequestHandler(CallToolRequestSchema, async (request) => callTool(request.params.name, request.params.arguments, false));
 
-  return { server, refresh, status, close };
+  return { server, refresh: () => refresh(), status, close };
 }
 
 class OutsideWorkspaceError extends Error {}
