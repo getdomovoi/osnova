@@ -7,11 +7,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import type { WitnessedIndex } from "../src/api.js";
 
-const refreshGate = vi.hoisted(() => ({ next: undefined as ((run: () => Promise<WitnessedIndex>) => Promise<WitnessedIndex>) | undefined }));
+const refreshGate = vi.hoisted(() => ({ next: undefined as ((run: () => Promise<WitnessedIndex>) => Promise<WitnessedIndex>) | undefined, rebuilds: 0 }));
 
 vi.mock("../src/api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/api.js")>();
   const refreshWorkspaceWitnessed = (...args: Parameters<typeof actual.refreshWorkspaceWitnessed>): Promise<WitnessedIndex> => {
+    if (args[1]?.rebuild === true) refreshGate.rebuilds += 1;
     const gate = refreshGate.next;
     refreshGate.next = undefined;
     const run = (): Promise<WitnessedIndex> => actual.refreshWorkspaceWitnessed(...args);
@@ -122,6 +123,27 @@ describe("MCP watch mode", () => {
       const expected = await (await serve(workspace, path.join(temporary, "fresh-cache"), false)).call("osnova_thread", thread);
       expect(answer).not.toContain("cache-read-failed");
       expect(answer).toBe(expected);
+      expect(await call("osnova_thread", thread)).toBe(expected);
+      expect(built.status().refreshes).toBe(2);
+    });
+
+    it("rebuilds once for simultaneous text queries that fail on the same kept index", async () => {
+      const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+      const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+      await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+      const cacheDir = path.join(temporary, "cache");
+      await refreshWorkspace(workspace, { cacheDir });
+      const { built, call } = await serve(workspace, cacheDir, false);
+      expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+
+      await damage(path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin"));
+      const thread = { pattern: "return 1", fixed: true };
+      refreshGate.rebuilds = 0;
+      const answers = await Promise.all([1, 2, 3, 4].map(() => call("osnova_thread", thread)));
+      const expected = await (await serve(workspace, path.join(temporary, "fresh-cache"), false)).call("osnova_thread", thread);
+      expect(refreshGate.rebuilds).toBe(1);
+      expect(built.status().refreshes).toBe(2);
+      expect(answers).toEqual([expected, expected, expected, expected]);
       expect(await call("osnova_thread", thread)).toBe(expected);
       expect(built.status().refreshes).toBe(2);
     });

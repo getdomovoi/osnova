@@ -303,6 +303,7 @@ export function createOsnovaMcpServer(
     inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs, rebuild }).then(({ index, witness: verified }) => {
       const changed = latest !== index;
       latest = index; witness = verified; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
+      if (rebuild) rebuilt = index;
       if (changed) prewarm(index);
       return index;
     }).finally(() => { inFlight = undefined; });
@@ -323,9 +324,22 @@ export function createOsnovaMcpServer(
   }
   // A kept index reads cached source text only when a query needs it, and loading checks the text sidecar's size, not
   // its bytes, so a damaged sidecar shows as a failed query. Without a watcher, that query rebuilds once and runs again.
-  async function rebuild(): Promise<OsnovaIndex> {
-    while (inFlight !== undefined) await inFlight.catch(() => undefined);
-    return refresh(true);
+  // Queries that failed on the same index share one rebuild, and a query that failed on an index a rebuild has since
+  // replaced runs again on the rebuilt one.
+  let rebuilt: OsnovaIndex | undefined;
+  let repairing: { failed: OsnovaIndex | undefined; done: Promise<OsnovaIndex> } | undefined;
+  function repair(failed: OsnovaIndex | undefined): Promise<OsnovaIndex> {
+    if (repairing !== undefined && repairing.failed === failed) return repairing.done;
+    const done = (async () => {
+      while (inFlight !== undefined) await inFlight.catch(() => undefined);
+      if (rebuilt !== undefined && rebuilt === latest && rebuilt !== failed) return current();
+      return refresh(true);
+    })();
+    const entry = { failed, done };
+    repairing = entry;
+    const clear = (): void => { if (repairing === entry) repairing = undefined; };
+    done.then(clear, clear);
+    return done;
   }
   let watcher: FSWatcher | undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -371,10 +385,12 @@ export function createOsnovaMcpServer(
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));
 
-  const callTool = async (name: string, rawArguments: unknown, repair: boolean): Promise<ReturnType<typeof textResult> | ReturnType<typeof errorResult>> => {
+  const callTool = async (name: string, rawArguments: unknown, failed?: { index: OsnovaIndex | undefined } | undefined): Promise<ReturnType<typeof textResult> | ReturnType<typeof errorResult>> => {
+    let used = latest;
     try {
       const args = checkArguments(name, rawArguments);
-      const index = repair ? await rebuild() : await current();
+      const index = failed === undefined ? await current() : await repair(failed.index);
+      used = index;
       const generation = `osnova generation ${indexGeneration(index).slice(0, mcpGenerationDigits)}`;
       const prefix = [generation, formatIndexHealthSummary(index)].filter(Boolean).join("\n");
       switch (name) {
@@ -533,7 +549,7 @@ export function createOsnovaMcpServer(
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
     } catch (error) {
-      if (!repair && watcher === undefined && isRebuildableCacheFailure(error)) return callTool(name, rawArguments, true);
+      if (failed === undefined && watcher === undefined && isRebuildableCacheFailure(error)) return callTool(name, rawArguments, { index: used });
       const message = error instanceof Error ? error.message : String(error);
       // Agents working in another worktree or clone retried the same lookup; say which checkout this server reads.
       const where = latest?.root ?? absRoot;
@@ -543,7 +559,7 @@ export function createOsnovaMcpServer(
       return errorResult(`${message}${hint}`, toolErrorBudget(name));
     }
   };
-  server.setRequestHandler(CallToolRequestSchema, async (request) => callTool(request.params.name, request.params.arguments, false));
+  server.setRequestHandler(CallToolRequestSchema, async (request) => callTool(request.params.name, request.params.arguments));
 
   return { server, refresh: () => refresh(), status, close };
 }
