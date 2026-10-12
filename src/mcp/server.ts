@@ -297,13 +297,13 @@ export function createOsnovaMcpServer(
     });
   }
   // One refresh at a time; a change that arrives during a refresh marks the result stale again.
-  function refresh(rebuild = false): Promise<OsnovaIndex> {
+  function refresh(rebuild?: { superseded: OsnovaIndex | undefined } | undefined): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
-    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs, rebuild }).then(({ index, witness: verified }) => {
+    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness: verified }) => {
       const changed = latest !== index;
       latest = index; witness = verified; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
-      if (rebuild) rebuilt = index;
+      if (rebuild !== undefined) lastRebuild = { superseded: rebuild.superseded === undefined ? undefined : new WeakRef(rebuild.superseded) };
       if (changed) prewarm(index);
       return index;
     }).finally(() => { inFlight = undefined; });
@@ -325,15 +325,19 @@ export function createOsnovaMcpServer(
   // A kept index reads cached source text only when a query needs it, and loading checks the text sidecar's size, not
   // its bytes, so a damaged sidecar shows as a failed query. Without a watcher, that query rebuilds once and runs again.
   // Queries that failed on the same index share one rebuild, and a query that failed on an index a rebuild has since
-  // replaced runs again on the rebuilt one.
-  let rebuilt: OsnovaIndex | undefined;
+  // replaced runs again on the verified one, even after later refreshes. Only the last rebuild is remembered, and it
+  // holds the index it replaced weakly: no caller can fail on an index nothing references, and no retired index stays.
+  // A query that failed before any index existed started before every rebuild, so any rebuild has replaced its state.
+  let lastRebuild: { superseded: WeakRef<OsnovaIndex> | undefined } | undefined;
+  const rebuiltAfter = (failed: OsnovaIndex | undefined): boolean => lastRebuild !== undefined
+    && (failed === undefined || lastRebuild.superseded?.deref() === failed);
   let repairing: { failed: OsnovaIndex | undefined; done: Promise<OsnovaIndex> } | undefined;
   function repair(failed: OsnovaIndex | undefined): Promise<OsnovaIndex> {
     if (repairing !== undefined && repairing.failed === failed) return repairing.done;
     const done = (async () => {
       while (inFlight !== undefined) await inFlight.catch(() => undefined);
-      if (rebuilt !== undefined && rebuilt === latest && rebuilt !== failed) return current();
-      return refresh(true);
+      if (rebuiltAfter(failed)) return current();
+      return refresh({ superseded: failed });
     })();
     const entry = { failed, done };
     repairing = entry;
