@@ -1,4 +1,5 @@
 import type { Construction, EdgeBinding, EdgeEvidence, EdgeKind, EdgeResolution, ExportHop, FileCard, OsnovaEdge, OverloadChoice, OverloadDeclaration, ReceiverBasis, ReceiverMode, RouteInfo } from "../types.js";
+import { isProxy } from "node:util/types";
 import { sha256Hex } from "./scan.js";
 
 // The position in this list is the stored encoding of an edge's kind, so the order is written down
@@ -112,6 +113,9 @@ export function canonical(value: unknown): string {
 // JSON text and canonical() agree on structure only for plain data; a boxed primitive, for one, is 1 in JSON
 // text and {} in canonical(). An undefined property is dropped by both. A toJSON hook, enumerable or not, and an
 // accessor, which may answer each read differently, also leave plain data, so their holders take canonical().
+// A proxy leaves it too: its traps can report a plain descriptor or prototype while its get trap answers
+// something else. isProxy reads the engine's own marker and runs no trap, so it is tested before any check
+// below that a trap could answer. Reading plain data runs no code, so it also cannot change between two reads.
 function plainData(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   switch (typeof value) {
@@ -119,7 +123,7 @@ function plainData(value: unknown): boolean {
     case "object": break;
     default: return false;
   }
-  if ("toJSON" in value) return false;
+  if (isProxy(value) || "toJSON" in value) return false;
   if (Array.isArray(value)) {
     if (Object.getPrototypeOf(value) !== Array.prototype) return false;
     for (let i = 0; i < value.length; i += 1) if (!plainProperty(value, String(i))) return false;
@@ -136,25 +140,28 @@ function plainProperty(value: object, name: string): boolean {
   return descriptor !== undefined && "value" in descriptor && plainData(descriptor.value);
 }
 
-// A loaded index shares one decoded object per table entry across all its edges, so each distinct object is
+// A loaded index shares one decoded object per table entry across all its edges, so each distinct plain object is
 // prepared and encoded once per call. A fresh build holds equal copies instead; for plain data their JSON text
 // fixes the structure canonical() encodes, so equal text reuses the key and a different property order only misses.
+// Any other value may answer each occurrence differently, so each occurrence is prepared and encoded on its own.
+// Encoding one runs its code, which may rewrite an object already cached, so the object cache starts over.
 function intern<T>(values: readonly (T | undefined)[], prepare: (value: T) => T = (value) => value): { table: T[]; ids: number[] } {
   const byObject = new Map<T, string>();
   const byText = new Map<string, string>();
   const keys = values.map((value) => {
     if (value === undefined) return undefined;
-    let key = byObject.get(value);
+    const cached = byObject.get(value);
+    if (cached !== undefined) return cached;
+    const plain = plainData(value);
+    const prepared = prepare(value);
+    const text = (plain && prepared === value) || plainData(prepared) ? JSON.stringify(prepared) as string | undefined : undefined;
+    let key = text === undefined ? undefined : byText.get(text);
     if (key === undefined) {
-      const prepared = prepare(value);
-      const text = plainData(prepared) ? JSON.stringify(prepared) as string | undefined : undefined;
-      key = text === undefined ? undefined : byText.get(text);
-      if (key === undefined) {
-        key = canonical(prepared);
-        if (text !== undefined) byText.set(text, key);
-      }
-      byObject.set(value, key);
+      key = canonical(prepared);
+      if (text !== undefined) byText.set(text, key);
     }
+    if (plain) byObject.set(value, key);
+    else byObject.clear();
     return key;
   });
   const byKey = new Set<string>();

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { gunzipSync } from "node:zlib";
@@ -100,23 +100,39 @@ describe("edge store", () => {
     expect(second.hash).toBe(first.hash);
   });
 
-  it("encodes a shared evidence or binding object once however many edges carry it, to the same bytes as distinct copies", async () => {
+  it("encodes a shared plain evidence or binding object once however many edges carry it, to the same bytes as distinct copies", async () => {
     const index = await buildIndex(FIXTURE);
     const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     const base = index.edges.find((edge) => edge.evidence !== undefined && edge.binding !== undefined)!;
     expect(base).toBeDefined();
+    const evidence = structuredClone(base.evidence!);
+    const binding = structuredClone(base.binding!);
+    const nodes = new Set<unknown>();
+    const collect = (value: unknown): void => {
+      if (typeof value !== "object" || value === null || nodes.has(value)) return;
+      nodes.add(value);
+      for (const item of Object.values(value)) collect(item);
+    };
+    collect(evidence); collect(binding);
     let reads = 0;
-    const counted = <T extends object>(value: T): T => new Proxy(value, {
-      get(target, key, receiver) { reads += 1; return Reflect.get(target, key, receiver) as unknown; },
-    });
-    const evidence = counted(base.evidence!);
-    const binding = counted(base.binding!);
+    const describeProperty = Object.getOwnPropertyDescriptor;
+    const keysOf = Object.keys;
     const shared: OsnovaEdge[] = Array.from({ length: 400 }, () => ({ ...base, evidence, binding }));
     const copies: OsnovaEdge[] = shared.map(() => ({ ...base, evidence: structuredClone(base.evidence!), binding: structuredClone(base.binding!) }));
-    reads = 0;
-    const layout = serializeEdges(shared, paths);
+    vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation((value, key) => { if (nodes.has(value)) reads += 1; return describeProperty(value, key); });
+    vi.spyOn(Object, "keys").mockImplementation((value: object) => { if (nodes.has(value)) reads += 1; return keysOf(value); });
+    let layout: ReturnType<typeof serializeEdges>;
+    try {
+      layout = serializeEdges(shared, paths);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(reads).toBeGreaterThan(0);
     expect(reads).toBeLessThan(40);
     expect(layout.bytes.equals(serializeEdges(copies, paths).bytes)).toBe(true);
+    const transparent = <T extends object>(value: T): T => new Proxy(value, {});
+    const proxied = { evidence: transparent(structuredClone(base.evidence!)), binding: transparent(structuredClone(base.binding!)) };
+    expect(serializeEdges(shared.map(() => ({ ...base, ...proxied })), paths).bytes.equals(layout.bytes)).toBe(true);
   });
 
   it("serializes shared, equal and reordered copies of the same tables to the bytes of fresh distinct objects", async () => {
@@ -175,6 +191,74 @@ describe("edge store", () => {
         expect(serializeEdges([plain], paths).bytes.equals(plainOnly.bytes), `${label}, plain first: ${plainFirst}`).toBe(true);
       }
     }
+  });
+
+  // Serializing hostile edges must give the bytes of fresh plain edges holding what each occurrence observed, and a
+  // reload of those bytes must give back the observed edges and the same bytes again.
+  const expectObservedRebuild = (edges: OsnovaEdge[], observed: OsnovaEdge[], paths: readonly string[], files: Parameters<typeof deserializeEdges>[2], label: string): void => {
+    const layout = serializeEdges(edges, paths);
+    const header = JSON.parse(layout.bytes.toString("utf8").split("\n")[0]!) as { bindings: unknown[] };
+    const expected = serializeEdges(observed, paths);
+    expect(header.bindings, label).toHaveLength(new Set(observed.map((edge) => canonical(edge.binding))).size);
+    expect(layout.bytes.equals(expected.bytes), label).toBe(true);
+    const back = deserializeEdges(layout.bytes, paths, files);
+    expect(back, label).toEqual(observed);
+    expect(serializeEdges(back, paths).bytes.equals(layout.bytes), label).toBe(true);
+  };
+
+  it("keeps proxies, nested ones included, out of JSON text key reuse in either input order", async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const base = index.edges.find((edge) => edge.binding !== undefined)!;
+    expect(base).toBeDefined();
+    const withExtra = (extra: unknown): OsnovaEdge => ({ ...base, binding: { ...base.binding!, extra } as unknown as OsnovaEdge["binding"] });
+    const lying = <T extends object>(target: T, key: string, answer: () => unknown): T =>
+      new Proxy(target, { get: (t, k, r) => (k === key ? answer() : Reflect.get(t, k, r) as unknown) });
+    const cases: [string, () => OsnovaEdge, unknown, unknown][] = [
+      ["a binding proxy whose get trap boxes a value its descriptor reports plain",
+        () => ({ ...base, binding: lying({ ...base.binding!, extra: 1 }, "extra", () => new Number(1)) }), 1, {}],
+      ["a nested object proxy", () => withExtra(lying({ a: 1 }, "a", () => new Number(1))), { a: 1 }, { a: {} }],
+      ["a nested array proxy", () => withExtra(lying([1], "0", () => new Number(1))), [1], [{}]],
+      ["a binding proxy whose get trap supplies a toJSON hook its has trap hides",
+        () => ({ ...base, binding: lying({ ...base.binding!, extra: 1 }, "toJSON", () => () => ({ ...base.binding!, extra: new Number(1) })) }), 1, {}],
+    ];
+    for (const [label, hostile, plainValue, observedValue] of cases) {
+      expect(JSON.stringify(hostile()), label).toBe(JSON.stringify(withExtra(plainValue)));
+      for (const plainFirst of [true, false]) {
+        const edges = plainFirst ? [withExtra(plainValue), hostile()] : [hostile(), withExtra(plainValue)];
+        const observed = plainFirst ? [withExtra(plainValue), withExtra(observedValue)] : [withExtra(observedValue), withExtra(plainValue)];
+        expectObservedRebuild(edges, observed, paths, index.files, `${label}, plain first: ${plainFirst}`);
+      }
+    }
+  });
+
+  it("encodes each occurrence of a shared stateful table value with what that occurrence observes", async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const base = index.edges.find((edge) => edge.binding !== undefined)!;
+    expect(base).toBeDefined();
+    const withExtra = (extra: unknown): OsnovaEdge => ({ ...base, binding: { ...base.binding!, extra } as unknown as OsnovaEdge["binding"] });
+    const bindingOf = (value: object): OsnovaEdge => ({ ...base, binding: value as OsnovaEdge["binding"] });
+    const accessor = (next: () => unknown): object => Object.defineProperty({ ...base.binding! }, "extra", { enumerable: true, get: next });
+    const hook = (next: () => unknown): object => Object.defineProperty({ ...base.binding! }, "toJSON", { value: () => ({ ...base.binding!, extra: next() }) });
+    const proxy = (next: () => unknown): object =>
+      new Proxy({ ...base.binding!, extra: "x" }, { get: (t, k, r) => (k === "extra" ? next() : Reflect.get(t, k, r) as unknown) });
+    const sequence = (): (() => unknown) => { const values = ["g", "h", "i"]; return () => values.shift(); };
+    const observed = (count: number): OsnovaEdge[] => ["g", "h", "i"].slice(0, count).map(withExtra);
+    const cases: [string, () => OsnovaEdge[], OsnovaEdge[]][] = [
+      ["one shared accessor", () => { const shared = bindingOf(accessor(sequence())); return [shared, shared, shared]; }, observed(3)],
+      ["one shared toJSON hook", () => { const shared = bindingOf(hook(sequence())); return [shared, shared, shared]; }, observed(3)],
+      ["one shared stateful proxy", () => { const shared = bindingOf(proxy(sequence())); return [shared, shared, shared]; }, observed(3)],
+      ["distinct accessor copies", () => { const next = sequence(); return [bindingOf(accessor(next)), bindingOf(accessor(next))]; }, observed(2)],
+      ["distinct toJSON hook copies", () => { const next = sequence(); return [bindingOf(hook(next)), bindingOf(hook(next))]; }, observed(2)],
+      ["distinct stateful proxy copies", () => { const next = sequence(); return [bindingOf(proxy(next)), bindingOf(proxy(next))]; }, observed(2)],
+      ["a shared plain value a hook rewrites between its occurrences", () => {
+        const plain = { ...base.binding!, extra: "g" };
+        const rewriter = Object.defineProperty({ ...base.binding! }, "toJSON", { value: () => { plain.extra = "i"; return { ...base.binding!, extra: "h" }; } });
+        return [bindingOf(plain), bindingOf(rewriter), bindingOf(plain)];
+      }, observed(3)],
+    ];
+    for (const [label, edges, expected] of cases) expectObservedRebuild(edges(), expected, paths, index.files, label);
   });
 
   it("refuses to serialize an unknown edge kind", async () => {

@@ -6,7 +6,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Changed
 
-- Publishing the edge section encodes each distinct evidence, binding, route and overload value once per save, and every edge that carries the same object, or an equal copy made only of plain objects, arrays, strings, numbers, booleans and null, reuses that encoding. Any other value, such as a boxed number, is encoded on its own, so two values with the same JSON text but different encodings stay separate table entries. The edge section format, its bytes, their hash and every other section are unchanged, so an existing cache loads without a rebuild, and a route or overload that fails validation is still refused.
+- Publishing the edge section encodes each distinct evidence, binding, route and overload value once per save, and every edge that carries the same value made only of plain objects, arrays, strings, numbers, booleans and null, or an equal copy of one, reuses that encoding. Any other value, such as a boxed number, a proxy, or an object with an accessor or a `toJSON` hook, is encoded on its own at each edge that carries it, so two values with the same JSON text but different encodings stay separate table entries, and a value that answers each read differently keeps what each edge read. The edge section format, its bytes, their hash and every other section are unchanged, so an existing cache loads without a rebuild, and a route or overload that fails validation is still refused.
 
 ### Fixed
 
