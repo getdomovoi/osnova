@@ -14,14 +14,14 @@ import { createOsnovaMcpServer } from "../src/mcp/server.js";
 const closers: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const close of closers.splice(0).reverse()) await close(); });
 
-async function setup() {
+async function setup(serverOptions: { watch?: boolean | { debounceMs: number; maxStaleMs: number } | undefined; refreshLockTimeoutMs?: number | undefined } = {}) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-lock-"));
   closers.push(() => fs.rm(temporary, { recursive: true, force: true }));
   const workspace = path.join(temporary, "ws");
   await fs.mkdir(workspace);
   await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
   const cacheDir = path.join(temporary, "cache");
-  const built = createOsnovaMcpServer(workspace, { cacheDir, watch: false, refreshLockTimeoutMs: 250 });
+  const built = createOsnovaMcpServer(workspace, { cacheDir, watch: serverOptions.watch ?? false, refreshLockTimeoutMs: serverOptions.refreshLockTimeoutMs ?? 250 });
   closers.push(built.close);
   const client = new Client({ name: "t", version: "0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -34,6 +34,7 @@ async function setup() {
   expect(warmed.isError).toBe(false);
   expect(warmed.text).toContain("first");
   expect(built.status().refreshes).toBe(1);
+  expect(built.status().watching).toBe(serverOptions.watch !== undefined && serverOptions.watch !== false);
   const lockPath = workspaceLockPath(await fs.realpath(cacheDir), await fs.realpath(workspace));
   return { built, ground, lockPath };
 }
@@ -132,5 +133,78 @@ describe("MCP warm queries and the workspace lock", () => {
     expect(answered.text).toContain("first");
     expect(built.status().refreshes).toBe(2);
     await expect(fs.lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("MCP warm queries and the workspace lock with a watcher", () => {
+  const watch = { debounceMs: 50, maxStaleMs: 60_000 };
+
+  it("reuses the warm index while no lock contends", async () => {
+    const { built, ground } = await setup({ watch });
+    expect((await ground()).isError).toBe(false);
+    expect(built.status().refreshes).toBe(1);
+  });
+
+  it("fails closed when a live foreign owner holds the workspace lock", async () => {
+    const { built, ground, lockPath } = await setup({ watch });
+    await plantLock(lockPath, owner(liveChild().pid!));
+    const contended = await ground();
+    expect(contended.isError).toBe(true);
+    expect(contended.text).toMatch(/lock/);
+    expect(built.status().refreshes).toBe(1);
+    const again = await ground();
+    expect(again.isError).toBe(true);
+    expect(again.text).toMatch(/lock/);
+  });
+
+  it("recovers after the fixture lock is released", async () => {
+    const { built, ground, lockPath } = await setup({ watch });
+    const child = liveChild();
+    await plantLock(lockPath, owner(child.pid!));
+    expect((await ground()).isError).toBe(true);
+    child.kill();
+    await fs.rm(lockPath, { recursive: true, force: true });
+    const recovered = await ground();
+    expect(recovered.isError).toBe(false);
+    expect(recovered.text).toContain("first");
+    expect(built.status().refreshes).toBe(2);
+    expect((await ground()).isError).toBe(false);
+    expect(built.status().refreshes).toBe(2);
+  });
+
+  it("fails a contended query only after the refresh lock timeout", async () => {
+    const { built, ground, lockPath } = await setup({ watch, refreshLockTimeoutMs: 400 });
+    let acquired!: () => void;
+    const holding = new Promise<void>((resolve) => { acquired = resolve; });
+    const publisher = withCacheLock(lockPath, async () => {
+      acquired();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    });
+    await holding;
+    const started = Date.now();
+    const contended = await ground();
+    expect(contended.isError).toBe(true);
+    expect(contended.text).toMatch(/lock/);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(350);
+    expect(built.status().refreshes).toBe(1);
+    await publisher;
+    expect((await ground()).isError).toBe(false);
+    expect(built.status().refreshes).toBe(2);
+  });
+
+  it("answers through a refresh when the contending publisher releases within the timeout", async () => {
+    const { built, ground, lockPath } = await setup({ watch, refreshLockTimeoutMs: 5000 });
+    let acquired!: () => void;
+    const holding = new Promise<void>((resolve) => { acquired = resolve; });
+    const publisher = withCacheLock(lockPath, async () => {
+      acquired();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    await holding;
+    const answered = await ground();
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("first");
+    expect(built.status().refreshes).toBe(2);
+    await publisher;
   });
 });

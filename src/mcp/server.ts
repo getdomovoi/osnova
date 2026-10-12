@@ -314,18 +314,19 @@ export function createOsnovaMcpServer(
   // With a watcher, a query reuses the last verified index while no change has been seen and the
   // verification is recent. Without one, a query reuses it while every file, directory and ignore file its scan
   // read still stats the same and no other owner may hold the workspace lock; a full refresh per query cost more than
-  // the cheap tools it served. A contended lock sends the query to a refresh, which waits for the lock or fails, and
-  // drops the witness, so the next query verifies the tree under the lock again.
+  // the cheap tools it served. In both modes a contended lock sends the query to a refresh, which waits for the lock or
+  // fails, and drops the witness and the verification time, so the next query verifies the tree under the lock again.
   async function current(): Promise<OsnovaIndex> {
-    if (watcher !== undefined) {
-      if (latest !== undefined && !dirty && Date.now() - verifiedAt < maxStaleMs) return latest;
-      return refresh();
-    }
     const index = latest;
     const verified = witness;
-    if (inFlight === undefined && index !== undefined && verified !== undefined && await witnessHolds(absRoot, verified)) {
+    const at = verifiedAt;
+    const reusable = watcher !== undefined
+      ? !dirty && Date.now() - at < maxStaleMs
+      : inFlight === undefined && verified !== undefined && await witnessHolds(absRoot, verified);
+    if (index !== undefined && reusable) {
       if (!await workspaceLockContended(absRoot, cacheDir)) return index;
       if (witness === verified) witness = undefined;
+      if (verifiedAt === at) verifiedAt = 0;
     }
     return refresh();
   }
