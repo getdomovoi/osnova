@@ -124,10 +124,13 @@ describe("MCP warm queries and the workspace lock", () => {
     expect(contended.text).toMatch(/lock/);
   });
 
-  it("keeps warm reuse when the lock names only an exited owner", async () => {
+  it("answers through a refresh that reclaims a lock naming only an exited owner", async () => {
     const { built, ground, lockPath } = await setup();
     await plantLock(lockPath, owner(await exitedPid()));
-    expect((await ground()).isError).toBe(false);
-    expect(built.status().refreshes).toBe(1);
+    const answered = await ground();
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("first");
+    expect(built.status().refreshes).toBe(2);
+    await expect(fs.lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

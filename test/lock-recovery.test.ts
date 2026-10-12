@@ -101,27 +101,67 @@ it("clears a lock directory it emptied itself, without waiting out the grace per
   expect(rmdirFailures).toBe(0);
 });
 
-it("reports a lock as held when a publisher reclaims the exited owner while the probe reads it", async () => {
+// Runs the probe on an exited owner's lock and, once its nth read of the lock directory or a file in it has
+// returned, lets a publisher reclaim that lock and take it before the probe goes on. Whatever the probe
+// read up to then describes only the exited owner.
+async function probeRacingPublisherAt(nth: number): Promise<{ held: boolean; raced: boolean }> {
   const lockPath = await deadLock();
+  const lstat = fs.lstat.bind(fs);
   const readFile = fs.readFile.bind(fs);
   let release!: () => void;
   const releasing = new Promise<void>((resolve) => { release = resolve; });
+  let reads = 0;
   let publisher: Promise<void> | undefined;
+  const afterRead = async (target: unknown): Promise<void> => {
+    const name = String(target);
+    if (publisher !== undefined || (name !== lockPath && path.dirname(name) !== lockPath) || ++reads !== nth) return;
+    let acquired!: () => void;
+    const holding = new Promise<void>((resolve) => { acquired = resolve; });
+    publisher = withCacheLock(lockPath, async () => { acquired(); await releasing; }, { lockTimeoutMs: 5_000, lockPollMs: 5 });
+    await holding;
+  };
+  vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+    const stat = await lstat(target, options as never) as never;
+    await afterRead(target);
+    return stat;
+  });
   vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
     const text = await readFile(target as never, options as never) as never;
-    if (publisher === undefined && String(target) === path.join(lockPath, "owner.json")) {
-      let acquired!: () => void;
-      const holding = new Promise<void>((resolve) => { acquired = resolve; });
-      publisher = withCacheLock(lockPath, async () => { acquired(); await releasing; }, { lockTimeoutMs: 5_000, lockPollMs: 5 });
-      await holding;
-    }
+    await afterRead(target);
     return text;
   });
   try {
-    await expect(foreignLockHolds(lockPath)).resolves.toBe(true);
-    expect(publisher).toBeDefined();
+    return { held: await foreignLockHolds(lockPath), raced: publisher !== undefined };
   } finally {
+    vi.restoreAllMocks();
     release();
     await publisher;
   }
+}
+
+it("reports a lock as held when a publisher reclaims the exited owner while the probe reads it", async () => {
+  const { held, raced } = await probeRacingPublisherAt(1);
+  expect(held).toBe(true);
+  expect(raced).toBe(true);
+});
+
+it("reports a lock as held when a publisher takes it after any read of the exited owner's lock", async () => {
+  for (let nth = 1; ; nth += 1) {
+    const { held, raced } = await probeRacingPublisherAt(nth);
+    if (!raced) {
+      expect(nth).toBeGreaterThan(1);
+      break;
+    }
+    expect({ nth, held }).toEqual({ nth, held: true });
+  }
+});
+
+it("reports any existing lock directory this process does not hold as held, and a missing one as free", async () => {
+  const lockPath = await deadLock();
+  await expect(foreignLockHolds(lockPath)).resolves.toBe(true);
+  await fs.rm(lockPath, { recursive: true, force: true });
+  await expect(foreignLockHolds(lockPath)).resolves.toBe(false);
+  await withCacheLock(lockPath, async () => {
+    await expect(foreignLockHolds(lockPath)).resolves.toBe(false);
+  });
 });

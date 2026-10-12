@@ -107,8 +107,6 @@ interface OwnerEntry {
 }
 
 interface LockSnapshot {
-  readonly dev: number;
-  readonly ino: number;
   readonly mtimeMs: number;
   readonly names: readonly string[];
   readonly owners: readonly OwnerEntry[];
@@ -133,7 +131,7 @@ async function snapshot(dir: string): Promise<LockSnapshot | undefined> {
         settled = false;
       }
     }
-    return { dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, names, owners, settled };
+    return { mtimeMs: stat.mtimeMs, names, owners, settled };
   } catch (error) {
     if (TRANSIENT_CODES.has(errorCode(error))) return undefined;
     throw error;
@@ -217,35 +215,20 @@ async function reclaimAbandonedLock(lockPath: string): Promise<void> {
   }
 }
 
-// Whether a lock this process does not hold may be held by someone else. Only two states answer no: no
-// lock directory, and a settled lock that names nothing but exited owners on this host, which the next
-// acquirer reclaims at once. Every other state, including one that cannot be read, answers yes.
+// Whether a lock this process does not hold may be held by someone else. Only a missing lock directory
+// answers no. Any existing one answers yes whatever it contains: its owner files can change hands while
+// they are read, and no number of reads proves they did not, so even a lock naming only exited owners
+// counts as held. Acquisition reclaims such a lock atomically, so the caller loses nothing by waiting on it.
 export async function foreignLockHolds(lockPath: string): Promise<boolean> {
   lockPath = path.resolve(lockPath);
   if (holdsCacheLock(lockPath)) return false;
   try {
     await fs.lstat(lockPath);
+    return true;
   } catch (error) {
     const code = errorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") return false;
-    return true;
+    return code !== "ENOENT" && code !== "ENOTDIR";
   }
-  const lock = await snapshot(lockPath).catch(() => undefined);
-  if (lock === undefined || !lock.settled || lock.owners.length === 0) return true;
-  if (lock.names.some((name) => !isKnownEntry(name))) return true;
-  if (!lock.owners.every((entry) => entry.owner !== undefined && lockOwnerExited(entry.owner))) return true;
-  // The owner files read above may already be gone: a publisher can reclaim the exited owner and put
-  // its own lock in place while they are read. Only a second look that finds the same directory with
-  // the same owner files proves the exited owners were still all there was.
-  const again = await snapshot(lockPath).catch(() => undefined);
-  return again === undefined || !again.settled || !sameSnapshot(lock, again);
-}
-
-function sameSnapshot(a: LockSnapshot, b: LockSnapshot): boolean {
-  return a.dev === b.dev && a.ino === b.ino && a.mtimeMs === b.mtimeMs &&
-    a.names.length === b.names.length && a.names.every((name, index) => name === b.names[index]) &&
-    a.owners.length === b.owners.length &&
-    a.owners.every((entry, index) => entry.name === b.owners[index]?.name && entry.text === b.owners[index]?.text);
 }
 
 async function describeHolder(lockPath: string): Promise<string> {
