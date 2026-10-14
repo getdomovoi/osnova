@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -13,7 +13,7 @@ import { withCacheLock } from "../src/cache/lock.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
 const closers: Array<() => Promise<void> | void> = [];
-afterEach(async () => { for (const close of closers.splice(0).reverse()) await close(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const close of closers.splice(0).reverse()) await close(); });
 
 async function setup(serverOptions: { watch?: boolean | { debounceMs: number; maxStaleMs: number } | undefined; refreshLockTimeoutMs?: number | undefined } = {}) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-lock-"));
@@ -27,8 +27,8 @@ async function setup(serverOptions: { watch?: boolean | { debounceMs: number; ma
   const client = new Client({ name: "t", version: "0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([built.server.connect(serverTransport), client.connect(clientTransport)]);
-  const ground = async (): Promise<{ text: string; isError: boolean }> => {
-    const result = await client.callTool({ name: "osnova_ground", arguments: { question: "first" } }) as { content?: readonly ContentBlock[]; isError?: boolean };
+  const ground = async (question = "first"): Promise<{ text: string; isError: boolean }> => {
+    const result = await client.callTool({ name: "osnova_ground", arguments: { question } }) as { content?: readonly ContentBlock[]; isError?: boolean };
     return { text: (result.content ?? []).map((c) => (c.type === "text" ? c.text : "")).join(""), isError: result.isError === true };
   };
   const warmed = await ground();
@@ -39,6 +39,30 @@ async function setup(serverOptions: { watch?: boolean | { debounceMs: number; ma
   const lockPath = workspaceLockPath(await fs.realpath(cacheDir), await fs.realpath(workspace));
   return { built, ground, lockPath, workspace, cacheDir };
 }
+
+// Runs during the first probe of the workspace lock, while a warm query waits for it, then lets the probe read the
+// real lock state.
+function duringLockProbe(lockPath: string, interlude: () => Promise<void>): void {
+  const lstat = fs.lstat.bind(fs);
+  let pending = true;
+  vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+    if (pending && path.resolve(String(target)) === lockPath) {
+      pending = false;
+      await interlude();
+    }
+    return await lstat(target, options as never) as never;
+  });
+}
+
+async function until(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("condition not met");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+const second = "export function first() { return 1; }\nexport function secondHelper() { return 2; }\n";
 
 function liveChild(): ChildProcess {
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
@@ -135,6 +159,35 @@ describe("MCP warm queries and the workspace lock", () => {
     expect(built.status().refreshes).toBe(2);
     await expect(fs.lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("does not reuse an index a refresh replaced while the lock was probed", async () => {
+    const { built, ground, lockPath, workspace } = await setup();
+    duringLockProbe(lockPath, async () => {
+      await fs.writeFile(path.join(workspace, "a.ts"), second);
+      await built.refresh();
+    });
+    const answered = await ground("secondHelper");
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("secondHelper");
+  });
+
+  it("verifies under the lock again when it contends after a refresh replaced the index", async () => {
+    const { built, ground, lockPath, workspace } = await setup();
+    const child = liveChild();
+    duringLockProbe(lockPath, async () => {
+      await fs.writeFile(path.join(workspace, "a.ts"), second);
+      await built.refresh();
+      await plantLock(lockPath, owner(child.pid!));
+    });
+    const contended = await ground();
+    expect(contended.isError).toBe(true);
+    expect(contended.text).toMatch(/lock/);
+    expect(built.status().refreshes).toBe(2);
+    child.kill();
+    await fs.rm(lockPath, { recursive: true, force: true });
+    expect((await ground()).isError).toBe(false);
+    expect(built.status().refreshes).toBe(3);
+  });
 });
 
 describe("MCP warm queries and the workspace lock with a watcher", () => {
@@ -207,6 +260,32 @@ describe("MCP warm queries and the workspace lock with a watcher", () => {
     expect(answered.text).toContain("first");
     expect(built.status().refreshes).toBe(2);
     await publisher;
+  });
+
+  it("does not reuse an index the watcher saw change while the lock was probed", async () => {
+    const { built, ground, lockPath, workspace } = await setup({ watch });
+    duringLockProbe(lockPath, async () => {
+      await fs.writeFile(path.join(workspace, "a.ts"), second);
+      await until(() => built.status().pendingChanges);
+    });
+    const answered = await ground("secondHelper");
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("secondHelper");
+  });
+
+  it("verifies under the lock again after a contended refresh timed out, however long reuse may last", async () => {
+    const { built, ground, lockPath } = await setup({ watch: { debounceMs: 50, maxStaleMs: Infinity }, refreshLockTimeoutMs: 300 });
+    const child = liveChild();
+    await plantLock(lockPath, owner(child.pid!));
+    const contended = await ground();
+    expect(contended.isError).toBe(true);
+    expect(contended.text).toMatch(/lock/);
+    child.kill();
+    await fs.rm(lockPath, { recursive: true, force: true });
+    expect(built.status().pendingChanges).toBe(false);
+    const recovered = await ground();
+    expect(recovered.isError).toBe(false);
+    expect(built.status().refreshes).toBe(2);
   });
 
   it("fails closed when the owner file cannot be parsed", async () => {

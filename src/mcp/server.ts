@@ -313,20 +313,27 @@ export function createOsnovaMcpServer(
   }
   // With a watcher, a query reuses the last verified index while no change has been seen and the
   // verification is recent. Without one, a query reuses it while every file, directory and ignore file its scan
-  // read still stats the same and no other owner may hold the workspace lock; a full refresh per query cost more than
-  // the cheap tools it served. In both modes a contended lock sends the query to a refresh, which waits for the lock or
-  // fails, and drops the witness and the verification time, so the next query verifies the tree under the lock again.
+  // read still stats the same; a full refresh per query cost more than the cheap tools it served. In both modes reuse
+  // also needs the witness of the last refresh and no other owner that may hold the workspace lock. A contended lock
+  // sends the query to a refresh, which waits for the lock or fails, and drops the witness, even one a refresh set
+  // while the lock was probed, so the next query verifies the tree under the lock again however long reuse may last.
+  // Each check awaits, and a change, a refresh or a dropped witness can land meanwhile, so the query reuses the index
+  // only if everything still holds after the last await. When a refresh replaced the index and its witness meanwhile,
+  // the query checks the new pair from the start instead.
   async function current(): Promise<OsnovaIndex> {
     const index = latest;
     const verified = witness;
-    const at = verifiedAt;
-    const reusable = watcher !== undefined
-      ? !dirty && Date.now() - at < maxStaleMs
-      : inFlight === undefined && verified !== undefined && await witnessHolds(absRoot, verified);
-    if (index !== undefined && reusable) {
-      if (!await workspaceLockContended(absRoot, cacheDir)) return index;
-      if (witness === verified) witness = undefined;
-      if (verifiedAt === at) verifiedAt = 0;
+    const replaced = (): boolean => latest !== index || witness !== verified;
+    const kept = (): boolean => !replaced() &&
+      (watcher !== undefined ? !dirty && Date.now() - verifiedAt < maxStaleMs : inFlight === undefined);
+    if (index !== undefined && verified !== undefined && kept() && (watcher !== undefined || await witnessHolds(absRoot, verified))) {
+      if (await workspaceLockContended(absRoot, cacheDir)) {
+        witness = undefined;
+      } else if (kept()) {
+        return index;
+      } else if (replaced() && latest !== undefined && witness !== undefined) {
+        return current();
+      }
     }
     return refresh();
   }
