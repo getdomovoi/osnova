@@ -212,8 +212,14 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
 
 // Whether another owner may hold the lock a refresh of this workspace would take. It takes no lock and creates
 // nothing, so a caller may ask before every reuse of a kept index; a cache directory that does not exist holds no lock.
+// A root or cache directory that cannot be resolved names no lock path to check, so it counts as contended.
 export async function workspaceLockContended(root: string, cacheDir?: string | undefined): Promise<boolean> {
-  const canonicalRoot = await canonicalWorkspaceRoot(root);
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await canonicalWorkspaceRoot(root);
+  } catch {
+    return true;
+  }
   let canonicalCache: string;
   try {
     canonicalCache = await fs.realpath(resolveCacheDir(cacheDir));

@@ -7,6 +7,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { workspaceLockContended } from "../src/api.js";
 import { workspaceLockPath } from "../src/cache/cache.js";
 import { withCacheLock } from "../src/cache/lock.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
@@ -36,7 +37,7 @@ async function setup(serverOptions: { watch?: boolean | { debounceMs: number; ma
   expect(built.status().refreshes).toBe(1);
   expect(built.status().watching).toBe(serverOptions.watch !== undefined && serverOptions.watch !== false);
   const lockPath = workspaceLockPath(await fs.realpath(cacheDir), await fs.realpath(workspace));
-  return { built, ground, lockPath };
+  return { built, ground, lockPath, workspace, cacheDir };
 }
 
 function liveChild(): ChildProcess {
@@ -206,5 +207,54 @@ describe("MCP warm queries and the workspace lock with a watcher", () => {
     expect(answered.text).toContain("first");
     expect(built.status().refreshes).toBe(2);
     await publisher;
+  });
+
+  it("fails closed when the owner file cannot be parsed", async () => {
+    const { built, ground, lockPath } = await setup({ watch });
+    await plantLock(lockPath, "not an owner");
+    const contended = await ground();
+    expect(contended.isError).toBe(true);
+    expect(contended.text).toMatch(/lock/);
+    await fs.rm(lockPath, { recursive: true, force: true });
+    expect((await ground()).isError).toBe(false);
+    expect(built.status().refreshes).toBe(2);
+  });
+
+  it("fails closed when the lock directory holds an unexpected entry", async () => {
+    const { built, ground, lockPath } = await setup({ watch });
+    await plantLock(lockPath, owner(await exitedPid()));
+    await fs.writeFile(path.join(lockPath, "stray"), "");
+    const contended = await ground();
+    expect(contended.isError).toBe(true);
+    expect(contended.text).toMatch(/lock/);
+    expect(built.status().refreshes).toBe(1);
+  });
+
+  it("answers through a refresh that reclaims a lock naming only an exited owner", async () => {
+    const { built, ground, lockPath } = await setup({ watch });
+    await plantLock(lockPath, owner(await exitedPid()));
+    const answered = await ground();
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("first");
+    expect(built.status().refreshes).toBe(2);
+    await expect(fs.lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("workspaceLockContended", () => {
+  it("counts a workspace root it cannot read as contended", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-lock-"));
+    closers.push(() => fs.rm(temporary, { recursive: true, force: true }));
+    await fs.mkdir(path.join(temporary, "cache"));
+    await expect(workspaceLockContended(path.join(temporary, "missing"), path.join(temporary, "cache"))).resolves.toBe(true);
+  });
+
+  it("probes a lock naming only an exited owner without changing it", async () => {
+    const { lockPath, workspace, cacheDir } = await setup();
+    const ownerText = owner(await exitedPid());
+    await plantLock(lockPath, ownerText);
+    await expect(workspaceLockContended(workspace, cacheDir)).resolves.toBe(true);
+    expect(await fs.readdir(lockPath)).toEqual(["owner.json"]);
+    expect(await fs.readFile(path.join(lockPath, "owner.json"), "utf8")).toBe(ownerText);
   });
 });
