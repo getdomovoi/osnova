@@ -125,7 +125,9 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   const running = refreshing.get(taskKey);
   if (running !== undefined) return running;
   // The coalescing key and the lock both name the root resolved above, never what the path resolves to later. A root
-  // retargeted since then is not the root this lock covers, so the refresh fails instead.
+  // retargeted since then, or by the time the scan resolves it again, is not the root this lock covers, so the refresh
+  // fails instead. Cache paths inside the lock resolve the root again too, and a retarget undone between two of these
+  // checks is not seen.
   const task = withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
     if (await canonicalWorkspaceRoot(canonicalRoot) !== canonicalRoot) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
     const published = await artifactSignature(canonicalRoot, canonicalCache);
@@ -133,6 +135,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
     const generation = await readGeneration(canonicalRoot, canonicalCache);
     const verified = generation === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, generation))?.files;
     const { scan, witness } = await scanWorkspace(canonicalRoot, canonicalCache);
+    if (witness.root !== canonicalRoot) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
     const clean = verified !== undefined && scan.paths.length === verified.size &&
       scan.paths.every((p) => sameFileMetadata(verified.get(p), scan.metadata.get(p)));
     let index: OsnovaIndex | undefined;

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { refreshWorkspaceWitnessed } from "../src/api.js";
 import { workspaceLockPath } from "../src/cache/cache.js";
+import { scanSerial } from "../src/index/scan.js";
 
 const closers: Array<() => Promise<void> | void> = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of closers.splice(0).reverse()) await close(); });
@@ -24,15 +25,19 @@ async function plantLiveLock(lockPath: string): Promise<void> {
 }
 
 // Runs once, during the first call of fs.realpath on the given path that the condition accepts, then lets the call
-// proceed with what the path names after the interlude.
-function duringRealpath(target: string, accept: () => boolean, interlude: () => Promise<void>): void {
+// proceed with what the path names after the interlude. afterwards, if given, runs once that call has settled and
+// before its caller sees the result.
+function duringRealpath(target: string, accept: () => boolean, interlude: () => Promise<void>, afterwards?: () => Promise<void>): void {
   const original = fs.realpath.bind(fs) as (...args: unknown[]) => Promise<unknown>;
   let pending = true;
   vi.spyOn(fs, "realpath").mockImplementation((async (...args: unknown[]) => {
     if (!pending || path.resolve(String(args[0])) !== target || !accept()) return await original(...args);
     pending = false;
     await interlude();
-    return await original(...args);
+    const settled = await original(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+    await afterwards?.();
+    if ("error" in settled) throw settled.error;
+    return settled.value;
   }) as never);
 }
 
@@ -79,5 +84,30 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     expect(second.witness.root).toBe(rootA);
     expect(names(second.index)).toContain("onlyInA");
     expect(await first).toMatchObject({ diagnostic: { code: "workspace-changing" } });
+  });
+
+  // The root was checked once the lock was taken, but the scan resolves it again, and a parent directory that became
+  // a symlink in between makes the same path name another directory, whose lock the refresh does not hold. The parent
+  // is restored as soon as the scan has resolved the root, so later checks of the path find nothing amiss.
+  it("fails instead of answering from another directory's scan when a parent is a symlink only while the scan resolves the root", async () => {
+    const temporary = await temporaryDir();
+    const parent = path.join(temporary, "p");
+    const elsewhere = path.join(temporary, "q");
+    const root = path.join(parent, "root");
+    await fs.mkdir(root, { recursive: true });
+    await fs.mkdir(path.join(elsewhere, "root"), { recursive: true });
+    await fs.writeFile(path.join(root, "a.ts"), "export function onlyInP() { return 1; }\n");
+    await fs.writeFile(path.join(elsewhere, "root", "a.ts"), "export function onlyInQ() { return 2; }\n");
+    const cacheDir = path.join(temporary, "cache");
+    expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("onlyInP");
+    const before = scanSerial();
+    duringRealpath(root, () => scanSerial() > before, async () => {
+      await fs.rename(parent, `${parent}-saved`);
+      await fs.symlink(elsewhere, parent, "dir");
+    }, async () => {
+      await fs.unlink(parent);
+      await fs.rename(`${parent}-saved`, parent);
+    });
+    await expect(refreshWorkspaceWitnessed(root, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "workspace-changing" } });
   });
 });
