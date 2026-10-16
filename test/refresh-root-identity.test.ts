@@ -204,8 +204,8 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     expect(names(after.index)).not.toContain("onlyInQ");
   });
 
-  // Inspection resolved the locked root, then a parent became a symlink to a directory with the same sources, so the
-  // hashes match and nothing is stale. Writing the verification now would resolve the path to the other directory.
+  // Inspection read the locked root's source, then a parent became a symlink to a directory with the same sources, so
+  // the hashes match and nothing is stale. Writing the verification now would resolve the path to the other directory.
   it("fails before writing anything when a parent is retargeted while the refresh inspects the files", async () => {
     const temporary = await temporaryDir();
     const parent = path.join(temporary, "p");
@@ -218,10 +218,7 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     const cacheDir = path.join(temporary, "cache");
     expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("shared");
     await fs.utimes(path.join(root, "a.ts"), new Date(2_000_000_000_000), new Date(2_000_000_000_000));
-    duringRealpath(root, () => new Error().stack?.includes("inspectFreshness") === true, async () => {}, async () => {
-      await fs.rename(parent, `${parent}-saved`);
-      await fs.symlink(elsewhere, parent, "dir");
-    });
+    aroundFirst("readFile", (file) => file === path.join(root, "a.ts"), async () => {}, () => retargetToSymlink(parent, elsewhere));
     const outcome = await refreshWorkspaceWitnessed(root, { cacheDir }).then(() => "answered", (error: unknown) => error);
     vi.restoreAllMocks();
     const otherCache = workspaceDirFor(cacheDir, path.join(elsewhere, "root"));
