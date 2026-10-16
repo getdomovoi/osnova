@@ -14,6 +14,7 @@ import type { ScanWitness } from "./index/scan.js";
 import { IndexingError } from "./index/diagnostics.js";
 import { knownIndexGeneration, rememberIndexGeneration } from "./index/generation.js";
 import { ensureFamilySidecar, seedProgress, seedWorkspace } from "./index/seed.js";
+import { cacheFs, ensureCacheDir, withBoundCacheDir } from "./cache/bound.js";
 
 export type { WorkspaceOptions } from "./index/workspace.js";
 export type { CachePolicy } from "./cache/cache.js";
@@ -49,7 +50,7 @@ async function artifactSignature(canonicalRoot: string, cacheDir: string): Promi
   if (artifact === undefined || edges === undefined || text === undefined) return undefined;
   const parts: string[] = [];
   for (const file of [artifact, edges, text]) {
-    const stat = await fs.stat(file, { bigint: true });
+    const stat = await cacheFs.stat(file, { bigint: true });
     parts.push([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":"));
   }
   return parts.join("|");
@@ -82,7 +83,7 @@ export function isRebuildableCacheFailure(error: unknown): boolean {
 async function readGeneration(canonicalRoot: string, cacheDir: string): Promise<string | undefined> {
   const file = path.join(workspaceDirFor(cacheDir, canonicalRoot, true), "index.sha");
   try {
-    return (await fs.readFile(file, "utf8")).trim();
+    return (await cacheFs.readFile(file, "utf8")).trim();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -129,11 +130,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   if (options.canonical === true && canonicalRoot !== root) throw new IndexingError({ phase: "scan", path: root, code: "workspace-changing" });
   const limits = cacheLimits(options);
   const cacheDir = resolveCacheDir(options.cacheDir);
-  try {
-    await fs.mkdir(cacheDir, { recursive: true });
-  } catch (error) {
-    throw new IndexingError({ phase: "cache", path: cacheDir, code: "cache-write-failed" }, error);
-  }
+  const cacheIdentity = await ensureCacheDir(cacheDir);
   const canonicalCache = await fs.realpath(cacheDir);
   const indexKey = JSON.stringify([canonicalCache, canonicalRoot]);
   const rebuild = options.rebuild === true;
@@ -143,12 +140,14 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   // The coalescing key and the lock both name the root resolved above, never what the path resolves to later, and the
   // directory it named once the lock was held is known by its device and inode. A root retargeted since then, or by the
   // time the scan resolves and stats it again, is not the root this lock covers, so the refresh fails instead. Loading
-  // names the locked root's lock and entry without resolving the path again. Building and inspection read sources through
-  // the path, so an index of another root, or one read through a retargeted path, fails the refresh before its files are
-  // inspected, before anything is written, before each later write and before it returns. An index the scan verified unchanged reads no source after the scan and skips those rechecks.
-  // Every cache path inside the lock names the locked root's entry without resolving the path again, so a retarget
-  // undone between two checks cannot redirect a write; one undone while sources are read is not seen.
-  const task = withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
+  // names the locked root's lock and entry without resolving the path again. Building and inspection read sources
+  // through the path, so an index of another root, or one read through a retargeted path, fails the refresh before its
+  // files are inspected, before anything is written, before each later write and before it returns. An index the scan
+  // verified unchanged reads no source after the scan and skips those rechecks. Every cache path inside the lock names
+  // the locked root's entry without resolving the path again, and where the platform allows, every cache operation
+  // reaches the cache directory the lock was taken in without resolving its ancestors again, so a retarget undone
+  // between two checks cannot redirect a write; one undone while sources are read is not seen.
+  const task = withBoundCacheDir(canonicalCache, cacheIdentity, () => withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
     const changing = (): IndexingError => new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
     const identity = await rootIdentity(canonicalRoot);
     if (identity === undefined) throw changing();
@@ -206,7 +205,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
           if (dirty) await saveArtifact(index, canonicalCache, options, true);
           else {
             const artifact = await artifactPathFor(canonicalRoot, canonicalCache, true);
-            if (limits.maxWorkspaces === 0 || artifact === undefined || (await fs.stat(artifact)).size > limits.maxBytes) {
+            if (limits.maxWorkspaces === 0 || artifact === undefined || (await cacheFs.stat(artifact)).size > limits.maxBytes) {
               throw new IndexingError({ phase: "cache", path: canonicalCache, code: "cache-limit-exceeded" });
             }
             await evictLru(canonicalCache, options);
@@ -239,7 +238,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
       }
     }
     throw changing();
-  }, options).catch((error: unknown) => {
+  }, options)).catch((error: unknown) => {
     // The lock a refresh actually waited on is often a nested one, such as the cache-wide eviction
     // lock, wrapped in a read or write failure that names only the workspace directory.
     throw cacheLockTimeoutIn(error) ?? error;

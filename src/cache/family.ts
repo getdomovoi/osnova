@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { cacheFs } from "./bound.js";
 import path from "node:path";
 import { promisify } from "node:util";
 import { workspaceDirFor } from "./cache.js";
@@ -69,7 +70,7 @@ function parseSidecar(text: string): FamilySidecar | undefined {
 
 export async function loadFamily(cacheDir: string, root: string, canonical = false): Promise<FamilySidecar | undefined> {
   try {
-    return parseSidecar(await fs.readFile(familyPath(cacheDir, root, canonical), "utf8"));
+    return parseSidecar(await cacheFs.readFile(familyPath(cacheDir, root, canonical), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -78,14 +79,14 @@ export async function loadFamily(cacheDir: string, root: string, canonical = fal
 
 export async function saveFamily(cacheDir: string, root: string, family: string | undefined, canonical = false): Promise<void> {
   const target = familyPath(cacheDir, root, canonical);
-  await fs.mkdir(path.dirname(target), { recursive: true });
+  await cacheFs.mkdir(path.dirname(target), { recursive: true });
   const content = JSON.stringify({ version: familyVersion, family: family ?? null, root });
   const temporary = `${target}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await fs.writeFile(temporary, content, { flag: "wx", mode: 0o600 });
-    await fs.rename(temporary, target);
+    await cacheFs.writeFile(temporary, content, { flag: "wx", mode: 0o600 });
+    await cacheFs.rename(temporary, target);
   } finally {
-    await fs.rm(temporary, { force: true }).catch(() => {});
+    await cacheFs.rm(temporary, { force: true }).catch(() => {});
   }
 }
 
@@ -94,7 +95,7 @@ export async function familySiblings(cacheDir: string, root: string, family: str
   const ownRoot = workspaceIdentity(root);
   let entries;
   try {
-    entries = await fs.readdir(cacheDir, { withFileTypes: true });
+    entries = await cacheFs.readdir(cacheDir, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
@@ -106,7 +107,7 @@ export async function familySiblings(cacheDir: string, root: string, family: str
     if (dir === own) continue;
     let sidecar: FamilySidecar | undefined;
     try {
-      sidecar = parseSidecar(await fs.readFile(path.join(dir, "family.json"), "utf8"));
+      sidecar = parseSidecar(await cacheFs.readFile(path.join(dir, "family.json"), "utf8"));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       continue;
@@ -115,7 +116,7 @@ export async function familySiblings(cacheDir: string, root: string, family: str
     if (workspaceDirFor(cacheDir, sidecar.root) !== dir) continue;
     let access = 0;
     try {
-      const value = Number(await fs.readFile(path.join(dir, "access"), "utf8"));
+      const value = Number(await cacheFs.readFile(path.join(dir, "access"), "utf8"));
       if (Number.isSafeInteger(value) && value > 0) access = value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

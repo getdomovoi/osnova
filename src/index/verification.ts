@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { cacheFs as fs } from "../cache/bound.js";
 import path from "node:path";
 import { workspaceDirFor } from "../cache/cache.js";
 import type { FileMetadata } from "./scan.js";

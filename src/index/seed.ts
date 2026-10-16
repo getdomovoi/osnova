@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { cacheFs as fs } from "../cache/bound.js";
 import path from "node:path";
 import { familySiblings, loadFamily, saveFamily, seedingEnabled, workspaceFamily } from "../cache/family.js";
 import { CacheLockTimeoutError } from "../cache/lock.js";

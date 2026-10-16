@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { cacheFs as fs } from "./bound.js";
 import { createHash, randomUUID } from "node:crypto";
 import { workspaceIdentity } from "../index/workspace.js";
 import { CacheLockTimeoutError, holdsCacheLock, lockOwnerExited, parseOwner, sweepLockDebris, withCacheLock } from "./lock.js";

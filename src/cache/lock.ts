@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { promises as fs, lstatSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { cacheFs as fs } from "./bound.js";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";

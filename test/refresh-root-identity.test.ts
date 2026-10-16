@@ -7,6 +7,7 @@ import path from "node:path";
 import { refreshWorkspaceWitnessed } from "../src/api.js";
 import { workspaceDirFor, workspaceLockPath } from "../src/cache/cache.js";
 import { scanSerial } from "../src/index/scan.js";
+import { reachedPath } from "./reached-path.js";
 
 const closers: Array<() => Promise<void> | void> = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of closers.splice(0).reverse()) await close(); });
@@ -46,7 +47,7 @@ function renamedOnto(target: string): Promise<void> {
   const original = fs.rename.bind(fs) as (...args: unknown[]) => Promise<unknown>;
   return new Promise((resolve) => {
     vi.spyOn(fs, "rename").mockImplementation((async (...args: unknown[]) => {
-      if (path.resolve(String(args[1])) === target) resolve();
+      if (reachedPath(String(args[1])) === target) resolve();
       return await original(...args);
     }) as never);
   });
@@ -59,7 +60,7 @@ function aroundFirst(method: "readFile" | "rename", accept: (file: string) => bo
   const at = method === "rename" ? 1 : 0;
   let pending = true;
   vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
-    if (!pending || typeof args[at] !== "string" || !accept(path.resolve(args[at]))) return await original(...args);
+    if (!pending || typeof args[at] !== "string" || !accept(reachedPath(args[at]))) return await original(...args);
     pending = false;
     await before();
     const settled = await original(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
@@ -344,6 +345,59 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     const after = await refreshWorkspaceWitnessed(root, { cacheDir });
     expect(after.witness.root).toBe(root);
     expect(names(after.index)).toEqual(expect.arrayContaining(["onlyInP", "addedInP"]));
+  });
+
+  // The cache lies beneath the same parent as the root. The parent becomes a symlink to a directory with a cache of its
+  // own just as the verification is published, after the check before that write, and is restored once it is written,
+  // before the next check. Every write must still land in the cache directory whose lock the refresh holds.
+  it("writes only the locked cache directory when a parent of the cache is retargeted and restored during verification publication", async () => {
+    const temporary = await temporaryDir();
+    const parent = path.join(temporary, "p");
+    const elsewhere = path.join(temporary, "q");
+    const root = path.join(parent, "root");
+    const other = path.join(elsewhere, "root");
+    await fs.mkdir(root, { recursive: true });
+    await fs.mkdir(other, { recursive: true });
+    await fs.writeFile(path.join(root, "a.ts"), "export function onlyInP() { return 1; }\n");
+    await fs.writeFile(path.join(other, "a.ts"), "export function onlyInQ() { return 2; }\n");
+    const cacheDir = path.join(parent, "cache");
+    const otherCacheDir = path.join(elsewhere, "cache");
+    expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("onlyInP");
+    expect(names((await refreshWorkspaceWitnessed(other, { cacheDir: otherCacheDir })).index)).toContain("onlyInQ");
+    const otherEntries = (await fs.readdir(otherCacheDir)).sort();
+    await fs.appendFile(path.join(root, "a.ts"), "export function addedInP() { return 3; }\n");
+    const key = path.basename(workspaceDirFor(cacheDir, root));
+    let published = false;
+    let retargeted = false;
+    let restored = false;
+    const mkdir = fs.mkdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(fs, "mkdir").mockImplementation((async (...args: unknown[]) => {
+      if (published && !retargeted && path.basename(String(args[0])) === key) {
+        await retargetToSymlink(parent, elsewhere);
+        retargeted = true;
+      }
+      return await mkdir(...args);
+    }) as never);
+    const rename = fs.rename.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(fs, "rename").mockImplementation((async (...args: unknown[]) => {
+      const settled = await rename(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      const name = path.basename(String(args[1]));
+      if (name === "index.sha") published = true;
+      if (retargeted && !restored && name === "verification.json") {
+        await restoreFromSymlink(parent);
+        restored = true;
+      }
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }) as never);
+    const outcome = await refreshWorkspaceWitnessed(root, { cacheDir }).then((answer) => answer, (error: unknown) => error);
+    vi.restoreAllMocks();
+    await restoreFromSymlink(parent);
+    expect(retargeted && restored).toBe(true);
+    expect((await fs.readdir(otherCacheDir)).sort()).toEqual(otherEntries);
+    expect(outcome).toMatchObject({ witness: { root } });
+    expect(names((outcome as Awaited<ReturnType<typeof refreshWorkspaceWitnessed>>).index)).toEqual(expect.arrayContaining(["onlyInP", "addedInP"]));
+    await expect(fs.access(path.join(cacheDir, key, "verification.json"))).resolves.toBeUndefined();
   });
 
   // The checks between writes cannot see a retarget undone before the next check, so each write must name the locked

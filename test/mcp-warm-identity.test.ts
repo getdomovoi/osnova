@@ -10,6 +10,7 @@ import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { workspaceLockPath } from "../src/cache/cache.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 import type { OsnovaIndex } from "../src/types.js";
+import { reachedPath } from "./reached-path.js";
 
 const watchers = vi.hoisted(() => [] as FSWatcher[]);
 vi.mock("node:fs", async (importOriginal) => {
@@ -83,7 +84,7 @@ function during(method: "lstat" | "realpath", target: string | undefined, interl
   let pending = true;
   return new Promise((resolve) => {
     vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
-      if (!pending || (target !== undefined && path.resolve(String(args[0])) !== target)) return await original(...args);
+      if (!pending || (target !== undefined && reachedPath(String(args[0])) !== target)) return await original(...args);
       pending = false;
       await interlude();
       try {
@@ -101,7 +102,7 @@ function after(method: "lstat", target: string, interlude: () => Promise<void>):
   const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
   let pending = true;
   vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
-    if (!pending || path.resolve(String(args[0])) !== target) return await original(...args);
+    if (!pending || reachedPath(String(args[0])) !== target) return await original(...args);
     pending = false;
     const settled = await original(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
     await interlude();
@@ -115,7 +116,7 @@ function reached(method: "rename", target: string, position: number): Promise<vo
   const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
   return new Promise((resolve) => {
     vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
-      if (path.resolve(String(args[position])) === target) resolve();
+      if (reachedPath(String(args[position])) === target) resolve();
       return await original(...args);
     }) as never);
   });
@@ -132,7 +133,7 @@ function hold(method: "rename", target: string, position: number, afterwards?: (
   const reached = new Promise<void>((resolve) => { arrive = resolve; });
   const released = new Promise<void>((resolve) => { release = resolve; });
   vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
-    if (pending && path.resolve(String(args[position])) === target) {
+    if (pending && reachedPath(String(args[position])) === target) {
       pending = false;
       arrive();
       await released;
