@@ -1,7 +1,7 @@
 import { promises as fs, realpathSync } from "node:fs";
 import path from "node:path";
 import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor, artifactTextPathFor, artifactEdgesPathFor, isSectionInconsistency } from "./index/serialize.js";
-import { resolveCacheDir, workspaceDirFor, workspaceLockPath, workspaceKey, cacheLimits, evictLru } from "./cache/cache.js";
+import { resolveCacheDir, workspaceDirFor, canonicalWorkspaceLockPath, workspaceKey, cacheLimits, evictLru } from "./cache/cache.js";
 import type { LoadIndexOptions, OsnovaIndex } from "./types.js";
 import { canonicalWorkspaceRoot, canonicalWorkspaceRootSync, workspaceIdentity, validRelativePath } from "./index/workspace.js";
 import type { WorkspaceOptions } from "./index/workspace.js";
@@ -124,7 +124,10 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   const taskKey = JSON.stringify([indexKey, limits, options.lockTimeoutMs, options.lockPollMs, options.reuseMemory, rebuild]);
   const running = refreshing.get(taskKey);
   if (running !== undefined) return running;
-  const task = withCacheLock(workspaceLockPath(canonicalCache, canonicalRoot), async () => {
+  // The coalescing key and the lock both name the root resolved above, never what the path resolves to later. A root
+  // retargeted since then is not the root this lock covers, so the refresh fails instead.
+  const task = withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
+    if (await canonicalWorkspaceRoot(canonicalRoot) !== canonicalRoot) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
     const published = await artifactSignature(canonicalRoot, canonicalCache);
     const cached = loadedIndexes.get(indexKey);
     const generation = await readGeneration(canonicalRoot, canonicalCache);
@@ -230,7 +233,7 @@ export async function workspaceLockContended(root: string, cacheDir?: string | u
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     return true;
   }
-  return foreignLockHolds(workspaceLockPath(canonicalCache, canonicalRoot));
+  return foreignLockHolds(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot));
 }
 
 // workspaceLockContended without yielding, so a caller can act on the answer before anything else runs.
@@ -248,7 +251,7 @@ export function workspaceLockContendedSync(root: string, cacheDir?: string | und
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     return true;
   }
-  return foreignLockHoldsSync(workspaceLockPath(canonicalCache, canonicalRoot));
+  return foreignLockHoldsSync(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot));
 }
 
 export async function loadIndex(
