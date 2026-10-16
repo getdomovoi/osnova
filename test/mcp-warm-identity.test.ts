@@ -70,17 +70,23 @@ async function setup(serverOptions: { watch?: { debounceMs: number; maxStaleMs: 
   return { built, ground, workspace, rootA, rootB, retarget, restore, lockA: workspaceLockPath(canonicalCache, rootA), lockB: workspaceLockPath(canonicalCache, rootB) };
 }
 
-// Runs once, during the first call of the named promise-API method on the given path, then lets the call proceed.
-function during(method: "lstat" | "realpath", target: string, interlude: () => Promise<void>): void {
+// Runs once, during the first call of the named promise-API method on the given path, or on any path when none is
+// given, then lets the call proceed. Resolves once that call has settled.
+function during(method: "lstat" | "realpath", target: string | undefined, interlude: () => Promise<void>): Promise<void> {
   const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
   let pending = true;
-  vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
-    if (pending && path.resolve(String(args[0])) === target) {
+  return new Promise((resolve) => {
+    vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+      if (!pending || (target !== undefined && path.resolve(String(args[0])) !== target)) return await original(...args);
       pending = false;
       await interlude();
-    }
-    return await original(...args);
-  }) as never);
+      try {
+        return await original(...args);
+      } finally {
+        resolve();
+      }
+    }) as never);
+  });
 }
 
 // Runs once, after the first call of the named promise-API method on the given path has settled, then hands the
@@ -177,6 +183,22 @@ describe("warm reuse and the workspace root", () => {
     const waiting = reached("rename", lockA, 1);
     const pending = built.refresh().then(() => "answered", () => "failed");
     await waiting;
+    await retarget();
+    const answered = await ground("retargetedHelper");
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("retargetedHelper");
+    expect(await pending).toBe("failed");
+  });
+
+  // The pending refresh resolved the workspace while it named the other root, so it waits on that root's held lock;
+  // a query that resolves the first root again must not wait on it.
+  it("does not join a pending refresh of the other root when the workspace is retargeted away and back as it starts", async () => {
+    const { built, ground, retarget, restore, lockA } = await setup();
+    await retarget();
+    await plantLiveLock(lockA);
+    const resolved = during("realpath", undefined, restore);
+    const pending = built.refresh().then(() => "answered", () => "failed");
+    await resolved;
     await retarget();
     const answered = await ground("retargetedHelper");
     expect(answered.isError).toBe(false);

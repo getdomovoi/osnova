@@ -7,7 +7,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { workspaceLockContended } from "../src/api.js";
+import { refreshWorkspaceWitnessed, workspaceLockContended } from "../src/api.js";
 import { workspaceLockPath } from "../src/cache/cache.js";
 import { withCacheLock } from "../src/cache/lock.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
@@ -335,5 +335,21 @@ describe("workspaceLockContended", () => {
     await expect(workspaceLockContended(workspace, cacheDir)).resolves.toBe(true);
     expect(await fs.readdir(lockPath)).toEqual(["owner.json"]);
     expect(await fs.readFile(path.join(lockPath, "owner.json"), "utf8")).toBe(ownerText);
+  });
+});
+
+describe("refreshWorkspaceWitnessed", () => {
+  it("refuses a root named as canonical that resolves to another root, before it creates or locks anything", async () => {
+    const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-lock-")));
+    closers.push(() => fs.rm(temporary, { recursive: true, force: true }));
+    const root = path.join(temporary, "root");
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "a.ts"), "export function first() { return 1; }\n");
+    const link = path.join(temporary, "link");
+    await fs.symlink(root, link, "dir");
+    const cacheDir = path.join(temporary, "cache");
+    await expect(refreshWorkspaceWitnessed(link, { cacheDir, canonical: true })).rejects.toMatchObject({ diagnostic: { code: "workspace-changing" } });
+    await expect(fs.access(cacheDir)).rejects.toThrow();
+    expect((await refreshWorkspaceWitnessed(root, { cacheDir, canonical: true })).witness.root).toBe(root);
   });
 });

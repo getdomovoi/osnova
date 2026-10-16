@@ -10,6 +10,7 @@ import type { FSWatcher } from "node:fs";
 import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure, workspaceLockContended, workspaceLockContendedSync } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS, witnessHolds } from "../index/scan.js";
+import { canonicalWorkspaceRoot } from "../index/workspace.js";
 import type { ScanWitness } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
@@ -298,9 +299,10 @@ interface Verified {
   readonly at: number;
 }
 
-// A refresh and the canonical root the workspace path resolved to when it started, if it resolved.
+// A refresh and the canonical root it resolved the workspace path to, undefined if the path did not resolve. It locks
+// that root or fails, so a query that resolves the same root waits on that root's lock and no other.
 interface Refresh {
-  readonly root: string | undefined;
+  readonly root: Promise<string | undefined>;
   readonly done: Promise<Verified>;
 }
 
@@ -350,12 +352,14 @@ export function createOsnovaMcpServer(
   }
   // A change that arrives during a refresh marks the result stale again. Refreshes run beside each other only when the
   // workspace path resolved to different roots for them, and a record never replaces one from a later-started refresh.
-  function start(root: string | undefined, rebuild: { superseded: OsnovaIndex | undefined } | undefined): Promise<Verified> {
+  function start(rebuild: { superseded: OsnovaIndex | undefined } | undefined): Promise<Verified> {
     const seen = changes;
     const observer = watch;
     refreshesStarted += 1;
     const order = refreshesStarted;
-    const done = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness }) => {
+    const resolved = canonicalWorkspaceRoot(absRoot);
+    const done = resolved.then(async (root): Promise<Verified> => {
+      const { index, witness } = await refreshWorkspaceWitnessed(root, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined, canonical: true });
       const scanned = witness.directories.get("");
       const directory = scanned === undefined ? undefined : { dev: scanned.dev, ino: scanned.ino };
       const observed = observer !== undefined && observer === watch && observer.root === witness.root && sameDirectory(observer.directory, directory) ? observer : undefined;
@@ -370,23 +374,21 @@ export function createOsnovaMcpServer(
       }
       return record;
     });
-    const entry: Refresh = { root, done: done.finally(() => { if (inFlight === entry) inFlight = undefined; }) };
+    const entry: Refresh = { root: resolved.catch(() => undefined), done: done.finally(() => { if (inFlight === entry) inFlight = undefined; }) };
     inFlight = entry;
     return entry.done;
   }
-  // A query shares the pending refresh only when the workspace path resolves to the root that refresh started for, and
-  // answers from it only when it verified that root: a refresh that started before the path was retargeted may wait on
-  // the old root's lock and verifies the old root. A refresh the query starts itself resolves the path while the query
-  // runs, so the query answers from whatever root it verified.
+  // A query shares the pending refresh only when the workspace path resolves to the root that refresh locks, and
+  // answers from it only when it verified that root. A refresh the query starts itself resolves the path while the
+  // query runs, so the query answers from whatever root it verified.
   async function refresh(rebuild?: { superseded: OsnovaIndex | undefined } | undefined): Promise<OsnovaIndex> {
     const root = canonicalRootNow(absRoot);
     const pending = inFlight;
-    if (rebuild === undefined && pending !== undefined && root !== undefined && pending.root === root) {
+    if (rebuild === undefined && pending !== undefined && root !== undefined && await pending.root === root) {
       const shared = await pending.done;
       if (shared.witness.root === root) return shared.index;
-      return (await start(canonicalRootNow(absRoot), rebuild)).index;
     }
-    return (await start(root, rebuild)).index;
+    return (await start(rebuild)).index;
   }
   // A query may reuse only the verified state of the last refresh, held as one record that is replaced or dropped
   // whole: the index, the scan witness with the canonical root it was verified at, the root directory that scan read,

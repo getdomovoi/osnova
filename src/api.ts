@@ -101,13 +101,16 @@ export interface WitnessedIndex {
 }
 
 // rebuild ignores the cached artifact and the kept index and builds from the working tree, for a caller whose
-// index failed to read a cache section that loading does not fully verify, such as the source text.
+// index failed to read a cache section that loading does not fully verify, such as the source text. canonical says root
+// is a canonical root the caller resolved, so the refresh locks that root or fails, never another one the path names.
 export interface WitnessedRefreshOptions extends WorkspaceOptions {
   readonly rebuild?: boolean | undefined;
+  readonly canonical?: boolean | undefined;
 }
 
 export async function refreshWorkspaceWitnessed(root: string, options: WitnessedRefreshOptions = {}): Promise<WitnessedIndex> {
   const canonicalRoot = await canonicalWorkspaceRoot(root);
+  if (options.canonical === true && canonicalRoot !== root) throw new IndexingError({ phase: "scan", path: root, code: "workspace-changing" });
   const limits = cacheLimits(options);
   const cacheDir = resolveCacheDir(options.cacheDir);
   try {
