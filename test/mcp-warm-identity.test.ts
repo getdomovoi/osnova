@@ -33,6 +33,19 @@ const first = "export function first() { return 1; }\n";
 const second = "export function first() { return 1; }\nexport function secondHelper() { return 2; }\n";
 const retargeted = "export function first() { return 1; }\nexport function retargetedHelper() { return 3; }\n";
 
+async function serve(workspace: string, cacheDir: string, mode: { debounceMs: number; maxStaleMs: number } | false) {
+  const built = createOsnovaMcpServer(workspace, { cacheDir, watch: mode, refreshLockTimeoutMs: 250 });
+  closers.push(built.close);
+  const client = new Client({ name: "t", version: "0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([built.server.connect(serverTransport), client.connect(clientTransport)]);
+  const ground = async (question = "first"): Promise<{ text: string; isError: boolean }> => {
+    const result = await client.callTool({ name: "osnova_ground", arguments: { question } }) as { content?: readonly ContentBlock[]; isError?: boolean };
+    return { text: (result.content ?? []).map((c) => (c.type === "text" ? c.text : "")).join(""), isError: result.isError === true };
+  };
+  return { built, ground };
+}
+
 // The workspace is a symlink to one of two roots, so a test can retarget it to the other.
 async function setup(serverOptions: { watch?: { debounceMs: number; maxStaleMs: number } | false } = {}) {
   const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-identity-")));
@@ -46,15 +59,7 @@ async function setup(serverOptions: { watch?: { debounceMs: number; maxStaleMs: 
   const workspace = path.join(temporary, "ws");
   await fs.symlink(rootA, workspace, "dir");
   const cacheDir = path.join(temporary, "cache");
-  const built = createOsnovaMcpServer(workspace, { cacheDir, watch: serverOptions.watch ?? false, refreshLockTimeoutMs: 250 });
-  closers.push(built.close);
-  const client = new Client({ name: "t", version: "0" });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await Promise.all([built.server.connect(serverTransport), client.connect(clientTransport)]);
-  const ground = async (question = "first"): Promise<{ text: string; isError: boolean }> => {
-    const result = await client.callTool({ name: "osnova_ground", arguments: { question } }) as { content?: readonly ContentBlock[]; isError?: boolean };
-    return { text: (result.content ?? []).map((c) => (c.type === "text" ? c.text : "")).join(""), isError: result.isError === true };
-  };
+  const { built, ground } = await serve(workspace, cacheDir, serverOptions.watch ?? false);
   const warmed = await ground();
   expect(warmed.isError).toBe(false);
   expect(warmed.text).toContain("first");
@@ -67,7 +72,7 @@ async function setup(serverOptions: { watch?: { debounceMs: number; maxStaleMs: 
   };
   const retarget = (): Promise<void> => pointAt(rootB);
   const restore = (): Promise<void> => pointAt(rootA);
-  return { built, ground, workspace, rootA, rootB, retarget, restore, lockA: workspaceLockPath(canonicalCache, rootA), lockB: workspaceLockPath(canonicalCache, rootB) };
+  return { built, ground, workspace, cacheDir, rootA, rootB, retarget, restore, lockA: workspaceLockPath(canonicalCache, rootA), lockB: workspaceLockPath(canonicalCache, rootB) };
 }
 
 // Runs once, during the first call of the named promise-API method on the given path, or on any path when none is
@@ -114,6 +119,28 @@ function reached(method: "rename", target: string, position: number): Promise<vo
     }) as never);
   });
 }
+
+// Holds the first call of the named promise-API method with the given path as the argument at that position until
+// release is called; reached resolves when that call arrives.
+function hold(method: "rename", target: string, position: number): { reached: Promise<void>; release: () => void } {
+  const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  let pending = true;
+  let arrive!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => { arrive = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+    if (pending && path.resolve(String(args[position])) === target) {
+      pending = false;
+      arrive();
+      await released;
+    }
+    return await original(...args);
+  }) as never);
+  return { reached, release };
+}
+
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function until(condition: () => boolean): Promise<void> {
   const deadline = Date.now() + 5000;
@@ -303,5 +330,30 @@ describe("warm reuse and the index generation", () => {
     await fs.rm(lockA, { recursive: true, force: true });
     expect((await ground("secondHelper")).text).toContain("secondHelper");
     expect(built.status().refreshes).toBe(3);
+  });
+});
+
+describe("warm reuse across servers", () => {
+  // Another server's refresh scanned the tree before the edit, and this server's watcher started after it, so the
+  // watcher never saw the edit and cannot vouch for that refresh's record.
+  it("does not let a watcher started after an edit vouch for another server's refresh that scanned before it", async () => {
+    const { built, workspace, cacheDir, rootA, lockA } = await setup();
+    const held = hold("rename", lockA, 0);
+    const pending = built.refresh();
+    await held.reached;
+    await fs.writeFile(path.join(rootA, "a.ts"), second);
+    const other = await serve(workspace, cacheDir, watch);
+    const joining = during("realpath", cacheDir, async () => {});
+    const shared = other.built.refresh();
+    await joining;
+    await tick();
+    held.release();
+    await pending;
+    await shared;
+    for (let query = 0; query < 2; query += 1) {
+      const answered = await other.ground("secondHelper");
+      expect(answered.isError).toBe(false);
+      expect(answered.text).toContain("secondHelper");
+    }
   });
 });

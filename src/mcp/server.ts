@@ -9,7 +9,7 @@ import { realpathSync, statSync, watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure, workspaceLockContended, workspaceLockContendedSync } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
-import { DEFAULT_SKIP_DIRS, witnessHolds } from "../index/scan.js";
+import { DEFAULT_SKIP_DIRS, scanSerial, witnessHolds } from "../index/scan.js";
 import { canonicalWorkspaceRoot } from "../index/workspace.js";
 import type { ScanWitness } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
@@ -280,11 +280,13 @@ function directoryAt(directory: string): DirectoryIdentity {
 const sameDirectory = (a: DirectoryIdentity | undefined, b: DirectoryIdentity | undefined): boolean =>
   a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
 
-// A running watcher, the canonical root it observes and the directory that root named when it started.
+// A running watcher, the canonical root it observes, the directory that root named when it started and the serial of
+// the latest scan started by then: it saw no change made before it started, so it vouches only for later scans.
 interface Watch {
   readonly watcher: FSWatcher;
   readonly root: string;
   readonly directory: DirectoryIdentity;
+  readonly scans: number;
 }
 
 // What one refresh verified, replaced or dropped as a whole so its parts cannot disagree. directory is the root
@@ -362,7 +364,8 @@ export function createOsnovaMcpServer(
       const { index, witness } = await refreshWorkspaceWitnessed(root, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined, canonical: true });
       const scanned = witness.directories.get("");
       const directory = scanned === undefined ? undefined : { dev: scanned.dev, ino: scanned.ino };
-      const observed = observer !== undefined && observer === watch && observer.root === witness.root && sameDirectory(observer.directory, directory) ? observer : undefined;
+      // A refresh can share another one's scan, even another server's, so the scan may predate the watcher.
+      const observed = observer !== undefined && observer === watch && witness.serial > observer.scans && observer.root === witness.root && sameDirectory(observer.directory, directory) ? observer : undefined;
       const record: Verified = { index, witness, directory, watch: observed, changes: seen, at: Date.now() };
       refreshes += 1;
       if (rebuild !== undefined) lastRebuild = { superseded: rebuild.superseded === undefined ? undefined : new WeakRef(rebuild.superseded) };
@@ -483,7 +486,7 @@ export function createOsnovaMcpServer(
         watcher.close();
         throw new Error(`${root} was replaced while the watcher started`);
       }
-      const started: Watch = { watcher, root, directory };
+      const started: Watch = { watcher, root, directory, scans: scanSerial() };
       watch = started;
       watcher.on("error", (error) => { process.stderr.write(`osnova: watcher stopped: ${error.message}\n`); watcher.close(); if (watch === started) watch = undefined; });
     } catch (error) {

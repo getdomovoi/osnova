@@ -96,8 +96,11 @@ function metadataOf(stat: BigIntStats): FileMetadata {
 
 // Everything a scan's result depends on, each taken before it was read: the canonical root, the walked directories
 // (whose listings decide which paths exist), the ignore files read, each followed symlink's target kind and each
-// file's metadata. While all of it still stats the same, a new scan would return the same paths and metadata.
+// file's metadata. While all of it still stats the same, a new scan would return the same paths and metadata. serial
+// is the scan's place among the scans this process started, taken as it began, so a caller can tell whether the scan
+// began after something it observed; scanSerial is the serial of the latest scan started.
 export interface ScanWitness {
+  readonly serial: number;
   readonly root: string;
   readonly directories: ReadonlyMap<string, FileMetadata>;
   readonly ignoreFiles: ReadonlyMap<string, FileMetadata>;
@@ -119,6 +122,12 @@ const missingEntry = (error: unknown): boolean => {
   const code = (error as NodeJS.ErrnoException).code;
   return code === "ENOENT" || code === "ENOTDIR";
 };
+
+let scansStarted = 0;
+
+export function scanSerial(): number {
+  return scansStarted;
+}
 
 const witnessBatch = 1_024;
 
@@ -156,6 +165,8 @@ export async function scanFiles(absRoot: string, cacheDir?: string): Promise<Sca
 }
 
 export async function scanWorkspace(absRoot: string, cacheDir?: string): Promise<{ scan: ScanResult; witness: ScanWitness }> {
+  scansStarted += 1;
+  const serial = scansStarted;
   absRoot = await canonicalWorkspaceRoot(absRoot);
 
   const errors: IndexingError[] = [];
@@ -270,6 +281,6 @@ export async function scanWorkspace(absRoot: string, cacheDir?: string): Promise
   oversized.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return {
     scan: { paths, truncated: oversized.length, oversized, metadata, symlinkedDirectories },
-    witness: { root: absRoot, directories, ignoreFiles, symlinkDirectories, files: metadata },
+    witness: { serial, root: absRoot, directories, ignoreFiles, symlinkDirectories, files: metadata },
   };
 }
