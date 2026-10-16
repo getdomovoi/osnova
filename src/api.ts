@@ -126,10 +126,13 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   if (running !== undefined) return running;
   // The coalescing key and the lock both name the root resolved above, never what the path resolves to later. A root
   // retargeted since then, or by the time the scan resolves it again, is not the root this lock covers, so the refresh
-  // fails instead. Cache paths inside the lock resolve the root again too, and a retarget undone between two of these
-  // checks is not seen.
+  // fails instead. Loading and building resolve the path again after the scan, so an index of another root, or one read
+  // through a retargeted path, fails the refresh before its files are inspected or anything is written. An index the
+  // scan verified unchanged reads no source after the scan and skips those rechecks. Cache paths inside the lock
+  // resolve the root again too, and a retarget undone between two of these checks is not seen.
+  const rootMoved = async (): Promise<boolean> => await canonicalWorkspaceRoot(canonicalRoot) !== canonicalRoot;
   const task = withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
-    if (await canonicalWorkspaceRoot(canonicalRoot) !== canonicalRoot) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
+    if (await rootMoved()) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
     const published = await artifactSignature(canonicalRoot, canonicalCache);
     const cached = loadedIndexes.get(indexKey);
     const generation = await readGeneration(canonicalRoot, canonicalCache);
@@ -164,6 +167,9 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
       try {
         index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
         const unchanged = clean && known !== undefined && attempt === 0 && !dirty;
+        if (index.root !== canonicalRoot || (!unchanged && await rootMoved())) {
+          throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
+        }
         const inspection = unchanged
           ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
           : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
@@ -173,6 +179,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
           seededFrom = undefined;
         }
         if (!isStale(report)) {
+          if (!unchanged && await rootMoved()) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
           if (dirty) await saveArtifact(index, canonicalCache, options);
           else {
             const artifact = await artifactPathFor(canonicalRoot, canonicalCache);
