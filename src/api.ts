@@ -143,9 +143,9 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   // The coalescing key and the lock both name the root resolved above, never what the path resolves to later, and the
   // directory it named once the lock was held is known by its device and inode. A root retargeted since then, or by the
   // time the scan resolves and stats it again, is not the root this lock covers, so the refresh fails instead. Loading
-  // and building resolve the path again after the scan, so an index of another root, or one read through a retargeted
-  // path, fails the refresh before its files are inspected, before anything is written, before each later write and
-  // before it returns. An index the scan verified unchanged reads no source after the scan and skips those rechecks.
+  // names the locked root's lock and entry without resolving the path again. Building and inspection read sources through
+  // the path, so an index of another root, or one read through a retargeted path, fails the refresh before its files are
+  // inspected, before anything is written, before each later write and before it returns. An index the scan verified unchanged reads no source after the scan and skips those rechecks.
   // Every cache path inside the lock names the locked root's entry without resolving the path again, so a retarget
   // undone between two checks cannot redirect a write; one undone while sources are read is not seen.
   const task = withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
@@ -170,7 +170,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
       index = cached.index;
     } else if (clean || generation !== undefined) {
       try {
-        index = await loadArtifact(canonicalRoot, canonicalCache);
+        index = await loadArtifact(canonicalRoot, canonicalCache, true);
       } catch (error) {
         if (!isRebuildableCacheFailure(error)) throw error;
         index = undefined;

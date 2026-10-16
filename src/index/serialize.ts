@@ -569,10 +569,12 @@ export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy:
   });
 }
 
-export async function loadArtifact(root: string, cacheDir: string): Promise<OsnovaIndexImpl | undefined> {
-  root = workspaceIdentity(root);
-  return withCacheLock(workspaceLockPath(cacheDir, root), async () => {
-    const dir = workspaceDirFor(cacheDir, root);
+// canonical says root is a canonical root the caller already resolved and holds the lock of, so its lock and entry are
+// named without resolving the path again: by now the path may name another root, whose lock and entry are not this one.
+export async function loadArtifact(root: string, cacheDir: string, canonical = false): Promise<OsnovaIndexImpl | undefined> {
+  if (!canonical) root = workspaceIdentity(root);
+  return withCacheLock(workspaceLockPath(cacheDir, root, canonical), async () => {
+    const dir = workspaceDirFor(cacheDir, root, canonical);
     try {
       if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error("cache workspace must not be a symlink");
       const corePath = path.join(dir, "index.json");

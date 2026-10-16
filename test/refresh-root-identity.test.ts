@@ -160,9 +160,11 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     await expect(refreshWorkspaceWitnessed(root, { cacheDir })).rejects.toMatchObject({ diagnostic: { code: "workspace-changing" } });
   });
 
-  // The scan resolved the locked root, then a parent directory became a symlink, so loading the cached index or
-  // building one resolves the same path to another directory. Restoring the parent afterwards must not leave a
-  // witness of the locked root's scan paired with the other directory's index.
+  // The scan resolved the locked root, then a parent directory became a symlink as the cached index is read, so building
+  // an index, or inspecting the loaded one, reads the same path from another directory. Restoring the parent afterwards
+  // must not leave a witness of the locked root's scan paired with the other directory's index. The source is newer
+  // than the verification, so the refresh reads it after the scan; building follows a cached index that fails its
+  // checksum.
   it.each([
     ["loads", true],
     ["builds", false],
@@ -178,17 +180,23 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     const cacheDir = path.join(temporary, "cache");
     expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("onlyInP");
     if (otherCached) expect(names((await refreshWorkspaceWitnessed(path.join(elsewhere, "root"), { cacheDir })).index)).toContain("onlyInQ");
+    await fs.utimes(path.join(root, "a.ts"), new Date(2_000_000_000_000), new Date(2_000_000_000_000));
+    const own = workspaceDirFor(cacheDir, root);
+    if (!otherCached) await fs.writeFile(path.join(own, "index.sha"), `${"0".repeat(64)}\n`);
     const before = scanSerial();
-    const original = realpathSync.native;
     let retargeted = false;
+    const retarget = (): void => {
+      if (retargeted) return;
+      retargeted = true;
+      renameSync(parent, `${parent}-saved`);
+      symlinkSync(elsewhere, parent, "dir");
+    };
+    const original = realpathSync.native;
     vi.spyOn(realpathSync, "native").mockImplementation(((...args: Parameters<typeof original>) => {
-      if (!retargeted && scanSerial() > before && path.resolve(String(args[0])) === root) {
-        retargeted = true;
-        renameSync(parent, `${parent}-saved`);
-        symlinkSync(elsewhere, parent, "dir");
-      }
+      if (scanSerial() > before && path.resolve(String(args[0])) === root) retarget();
       return original(...args);
     }) as typeof original);
+    aroundFirst("readFile", (file) => scanSerial() > before && file === path.join(own, "index.json"), async () => { retarget(); });
     const outcome = await refreshWorkspaceWitnessed(root, { cacheDir }).then(
       (answer) => names(answer.index),
       (error: unknown) => error,
@@ -202,6 +210,52 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     expect(after.witness.root).toBe(root);
     expect(names(after.index)).toContain("onlyInP");
     expect(names(after.index)).not.toContain("onlyInQ");
+  });
+
+  // The scan resolved the locked root, then a parent became a symlink as the cached index loads. Loading must name the
+  // locked root's entry and lock, never the other root's: waiting on that root's lock, held here by another owner, or
+  // recording a reader in its entry, would act for a workspace this refresh did not lock. The scan verified the cached
+  // index unchanged before the retarget, so that index is the answer.
+  it.each([
+    ["held by another owner", true],
+    ["free", false],
+  ])("loads only the locked root's entry when a parent is retargeted after the scan and the other root's lock is %s", async (_, otherLocked) => {
+    const { parent, elsewhere, root, other, cacheDir } = await parentAndElsewhere();
+    expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("onlyInP");
+    expect(names((await refreshWorkspaceWitnessed(other, { cacheDir })).index)).toContain("onlyInQ");
+    const otherAccess = path.join(workspaceDirFor(cacheDir, other), "access");
+    const accessBefore = await fs.readFile(otherAccess, "utf8");
+    const otherLock = workspaceLockPath(cacheDir, other);
+    if (otherLocked) await plantLiveLock(otherLock);
+    const ownerBefore = otherLocked ? await fs.readFile(path.join(otherLock, "owner.json"), "utf8") : undefined;
+    const ownIndex = path.join(workspaceDirFor(cacheDir, root), "index.json");
+    const before = scanSerial();
+    let retargeted = false;
+    const retarget = (): void => {
+      if (retargeted) return;
+      retargeted = true;
+      renameSync(parent, `${parent}-saved`);
+      symlinkSync(elsewhere, parent, "dir");
+    };
+    const original = realpathSync.native;
+    vi.spyOn(realpathSync, "native").mockImplementation(((...args: Parameters<typeof original>) => {
+      if (scanSerial() > before && path.resolve(String(args[0])) === root) retarget();
+      return original(...args);
+    }) as typeof original);
+    aroundFirst("readFile", (file) => scanSerial() > before && file === ownIndex, async () => { retarget(); });
+    const started = performance.now();
+    const outcome = await refreshWorkspaceWitnessed(root, { cacheDir, lockTimeoutMs: 1_500 }).then((answer) => names(answer.index), (error: unknown) => error);
+    const elapsed = performance.now() - started;
+    vi.restoreAllMocks();
+    expect(retargeted).toBe(true);
+    await restoreFromSymlink(parent);
+    expect(outcome).toEqual(["onlyInP"]);
+    expect(elapsed).toBeLessThan(1_000);
+    expect(await fs.readFile(otherAccess, "utf8")).toBe(accessBefore);
+    if (otherLocked) expect(await fs.readFile(path.join(otherLock, "owner.json"), "utf8")).toBe(ownerBefore);
+    const after = await refreshWorkspaceWitnessed(root, { cacheDir });
+    expect(after.witness.root).toBe(root);
+    expect(names(after.index)).toContain("onlyInP");
   });
 
   // Inspection read the locked root's source, then a parent became a symlink to a directory with the same sources, so
