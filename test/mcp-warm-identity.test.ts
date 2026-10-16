@@ -9,6 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { workspaceLockPath } from "../src/cache/cache.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
+import type { OsnovaIndex } from "../src/types.js";
 
 const watchers = vi.hoisted(() => [] as FSWatcher[]);
 vi.mock("node:fs", async (importOriginal) => {
@@ -141,6 +142,8 @@ function hold(method: "rename", target: string, position: number): { reached: Pr
 }
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+const names = (index: OsnovaIndex): string[] => [...index.symbols.values()].map((symbol) => symbol.name);
 
 async function until(condition: () => boolean): Promise<void> {
   const deadline = Date.now() + 5000;
@@ -355,5 +358,38 @@ describe("warm reuse across servers", () => {
       expect(answered.isError).toBe(false);
       expect(answered.text).toContain("secondHelper");
     }
+  });
+
+  it("does not answer a query from another server's refresh that scanned before an edit the query follows", async () => {
+    const { built, workspace, cacheDir, rootA, lockA } = await setup();
+    const held = hold("rename", lockA, 0);
+    const pending = built.refresh();
+    await held.reached;
+    await fs.writeFile(path.join(rootA, "a.ts"), second);
+    const other = await serve(workspace, cacheDir, false);
+    const joining = during("realpath", cacheDir, async () => {});
+    const shared = other.built.refresh();
+    await joining;
+    await tick();
+    held.release();
+    await pending;
+    expect(names(await shared)).toContain("secondHelper");
+  });
+});
+
+describe("warm reuse and a pending refresh", () => {
+  it("does not answer from a pending refresh of a directory replaced at the same path", async () => {
+    const { built, rootA, lockA } = await setup();
+    const held = hold("rename", lockA, 0);
+    const pending = built.refresh();
+    await held.reached;
+    await fs.rename(rootA, `${rootA}-replaced`);
+    await fs.mkdir(rootA);
+    await fs.writeFile(path.join(rootA, "a.ts"), second);
+    const answered = built.refresh();
+    await tick();
+    held.release();
+    expect(names(await answered)).toContain("secondHelper");
+    await pending;
   });
 });

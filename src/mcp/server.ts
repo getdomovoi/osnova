@@ -301,16 +301,25 @@ interface Verified {
   readonly at: number;
 }
 
-// A refresh and the canonical root it resolved the workspace path to, undefined if the path did not resolve. It locks
-// that root or fails, so a query that resolves the same root waits on that root's lock and no other.
+// A refresh and the canonical root it resolved the workspace path to, with the directory that root named then,
+// undefined if the path did not resolve. It locks that root or fails, so a query that resolves the same root waits on
+// that root's lock and no other.
 interface Refresh {
-  readonly root: Promise<string | undefined>;
+  readonly target: Promise<{ readonly root: string; readonly directory: DirectoryIdentity | undefined } | undefined>;
   readonly done: Promise<Verified>;
 }
 
 function canonicalRootNow(root: string): string | undefined {
   try {
     return realpathSync.native(root);
+  } catch {
+    return undefined;
+  }
+}
+
+function directoryNow(directory: string): DirectoryIdentity | undefined {
+  try {
+    return directoryAt(directory);
   } catch {
     return undefined;
   }
@@ -377,21 +386,34 @@ export function createOsnovaMcpServer(
       }
       return record;
     });
-    const entry: Refresh = { root: resolved.catch(() => undefined), done: done.finally(() => { if (inFlight === entry) inFlight = undefined; }) };
+    const target = resolved.then((root) => ({ root, directory: directoryNow(root) }), () => undefined);
+    const entry: Refresh = { target, done: done.finally(() => { if (inFlight === entry) inFlight = undefined; }) };
     inFlight = entry;
     return entry.done;
   }
-  // A query shares the pending refresh only when the workspace path resolves to the root that refresh locks, and
-  // answers from it only when it verified that root. A refresh the query starts itself resolves the path while the
-  // query runs, so the query answers from whatever root it verified.
+  // A query shares the pending refresh only when the workspace path resolves to the root that refresh locks and that
+  // root is still the directory it named when the refresh resolved it. A refresh may share a scan that began before the
+  // query did, the pending refresh's or, through the API, another server's, and the tree may have changed after that
+  // scan and before the query began. The query answers from such a scan only while its witness still holds and the
+  // workspace path still resolves to its root, names its directory and no other owner may hold its lock; otherwise it
+  // starts a refresh again. A scan that began after the query did answers it as it is, so the loop ends once no refresh
+  // that started before the query is left to share.
   async function refresh(rebuild?: { superseded: OsnovaIndex | undefined } | undefined): Promise<OsnovaIndex> {
+    const asked = scanSerial();
     const root = canonicalRootNow(absRoot);
     const pending = inFlight;
-    if (rebuild === undefined && pending !== undefined && root !== undefined && await pending.root === root) {
+    const target = rebuild === undefined && pending !== undefined && root !== undefined ? await pending.target : undefined;
+    if (pending !== undefined && target !== undefined && target.root === root && sameDirectory(target.directory, directoryNow(root))) {
       const shared = await pending.done;
-      if (shared.witness.root === root) return shared.index;
+      if (shared.witness.root === root && await answers(shared, asked)) return shared.index;
     }
-    return (await start(rebuild)).index;
+    let record = await start(rebuild);
+    while (!(await answers(record, asked))) record = await start(rebuild);
+    return record.index;
+  }
+  async function answers(record: Verified, asked: number): Promise<boolean> {
+    if (record.witness.serial > asked) return true;
+    return await witnessHolds(absRoot, record.witness) && standing(record) === "holds";
   }
   // A query may reuse only the verified state of the last refresh, held as one record that is replaced or dropped
   // whole: the index, the scan witness with the canonical root it was verified at, the root directory that scan read,
