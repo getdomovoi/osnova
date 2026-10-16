@@ -5,7 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { watch as fsWatch } from "node:fs";
+import { promises as fs, realpathSync, watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure, workspaceLockContended } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
@@ -263,6 +263,30 @@ export interface OsnovaMcpStatus {
   readonly warm: "off" | "idle" | "warming" | "warm" | "closed";
 }
 
+// A running watcher and the canonical root it observes.
+interface Watch {
+  readonly watcher: FSWatcher;
+  readonly root: string;
+}
+
+// What one refresh verified, replaced or dropped as a whole so its parts cannot disagree. watch is the watcher that
+// observed the witness root from before the scan to the end of the refresh, if any.
+interface Verified {
+  readonly index: OsnovaIndex;
+  readonly witness: ScanWitness;
+  readonly watch: Watch | undefined;
+  readonly changes: number;
+  readonly at: number;
+}
+
+async function resolvesTo(root: string, canonical: string): Promise<boolean> {
+  try {
+    return await fs.realpath(root) === canonical;
+  } catch {
+    return false;
+  }
+}
+
 export function createOsnovaMcpServer(
   workspace: string,
   options?: OsnovaMcpOptions,
@@ -273,11 +297,10 @@ export function createOsnovaMcpServer(
   const debounceMs = watchOptions?.debounceMs ?? 200;
   const maxStaleMs = watchOptions?.maxStaleMs ?? 30_000;
   let latest: OsnovaIndex | undefined;
-  let witness: ScanWitness | undefined;
+  let verified: Verified | undefined;
   let inFlight: Promise<OsnovaIndex> | undefined;
-  let dirty = true;
   let changes = 0;
-  let verifiedAt = 0;
+  let settled: number | undefined;
   let refreshes = 0;
   let warm: OsnovaMcpStatus["warm"] = options?.prewarm === true ? "idle" : "off";
   // After each refresh, build the ranking corpus and footing's edge maps between requests, so the first
@@ -302,36 +325,42 @@ export function createOsnovaMcpServer(
   function refresh(rebuild?: { superseded: OsnovaIndex | undefined } | undefined): Promise<OsnovaIndex> {
     if (inFlight !== undefined) return inFlight;
     const seen = changes;
-    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness: verified }) => {
+    const observer = watch;
+    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness }) => {
       const changed = latest !== index;
-      latest = index; witness = verified; verifiedAt = Date.now(); refreshes += 1; if (changes === seen) dirty = false;
+      const observed = observer !== undefined && observer === watch && observer.root === witness.root ? observer : undefined;
+      latest = index; verified = { index, witness, watch: observed, changes: seen, at: Date.now() }; refreshes += 1; settled = seen;
       if (rebuild !== undefined) lastRebuild = { superseded: rebuild.superseded === undefined ? undefined : new WeakRef(rebuild.superseded) };
       if (changed) prewarm(index);
       return index;
     }).finally(() => { inFlight = undefined; });
     return inFlight;
   }
-  // With a watcher, a query reuses the last verified index while no change has been seen and the
-  // verification is recent. Without one, a query reuses it while every file, directory and ignore file its scan
-  // read still stats the same; a full refresh per query cost more than the cheap tools it served. In both modes reuse
-  // also needs the witness of the last refresh and no other owner that may hold the workspace lock. A contended lock
-  // sends the query to a refresh, which waits for the lock or fails, and drops the witness, even one a refresh set
-  // while the lock was probed, so the next query verifies the tree under the lock again however long reuse may last.
-  // Each check awaits, and a change, a refresh or a dropped witness can land meanwhile, so the query reuses the index
-  // only if everything still holds after the last await. When a refresh replaced the index and its witness meanwhile,
-  // the query checks the new pair from the start instead.
+  // A query may reuse only the verified state of the last refresh, held as one record that is replaced or dropped
+  // whole: the index, the scan witness with the canonical root it was verified at, the watcher that observed that root
+  // from before the scan, the change count the refresh started from and the time it finished. While that watcher is
+  // still the running one, the record is reused while the watcher has seen no change and the verification is recent.
+  // Otherwise it is reused while every file, directory and ignore file its scan read still stats the same; a full
+  // refresh per query cost more than the cheap tools it served. Either way reuse also needs no other owner that may hold
+  // the lock of the witness root, and the workspace path to still resolve to that root. A contended lock sends the
+  // query to a refresh, which waits for the lock or fails, and drops the record, even one a refresh set while the lock
+  // was probed, so the next query verifies the tree under the lock again however long reuse may last. Each check
+  // awaits, and a change, a refresh, a stopped watcher or a dropped record can land meanwhile, so the query reuses the
+  // index only if the same record still holds after the last await. When a refresh replaced the record meanwhile, the
+  // query checks the new one from the start instead.
   async function current(): Promise<OsnovaIndex> {
-    const index = latest;
-    const verified = witness;
-    const replaced = (): boolean => latest !== index || witness !== verified;
-    const kept = (): boolean => !replaced() &&
-      (watcher !== undefined ? !dirty && Date.now() - verifiedAt < maxStaleMs : inFlight === undefined);
-    if (index !== undefined && verified !== undefined && kept() && (watcher !== undefined || await witnessHolds(absRoot, verified))) {
-      if (await workspaceLockContended(absRoot, cacheDir)) {
-        witness = undefined;
-      } else if (kept()) {
-        return index;
-      } else if (replaced() && latest !== undefined && witness !== undefined) {
+    const held = verified;
+    if (held === undefined) return refresh();
+    const watched = held.watch !== undefined && held.watch === watch;
+    const kept = (): boolean => verified === held && (watched
+      ? watch === held.watch && changes === held.changes && Date.now() - held.at < maxStaleMs
+      : inFlight === undefined);
+    if (kept() && (watched || await witnessHolds(absRoot, held.witness))) {
+      if (await workspaceLockContended(held.witness.root, cacheDir)) {
+        verified = undefined;
+      } else if (await resolvesTo(absRoot, held.witness.root) && kept()) {
+        return held.index;
+      } else if (verified !== held && verified !== undefined) {
         return current();
       }
     }
@@ -360,7 +389,7 @@ export function createOsnovaMcpServer(
     done.then(clear, clear);
     return done;
   }
-  let watcher: FSWatcher | undefined;
+  let watch: Watch | undefined;
   let timer: NodeJS.Timeout | undefined;
   const cacheInside = path.relative(absRoot, path.resolve(cacheDir));
   const ignoredChange = (file: string | null): boolean => {
@@ -371,18 +400,22 @@ export function createOsnovaMcpServer(
   };
   if (watchOptions !== undefined) {
     try {
-      watcher = fsWatch(absRoot, { recursive: true, persistent: false }, (_event, file) => {
+      // The watcher observes the directory the workspace path resolved to when it started, and only that one, so it
+      // vouches for nothing once the path names another directory.
+      const root = realpathSync.native(absRoot);
+      const watcher = fsWatch(root, { recursive: true, persistent: false }, (_event, file) => {
         if (ignoredChange(file)) return;
-        dirty = true;
         changes += 1;
         if (timer !== undefined) clearTimeout(timer);
         timer = setTimeout(() => { timer = undefined; refresh().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
         timer.unref();
       });
-      watcher.on("error", (error) => { process.stderr.write(`osnova: watcher stopped: ${error.message}\n`); watcher?.close(); watcher = undefined; });
+      const started: Watch = { watcher, root };
+      watch = started;
+      watcher.on("error", (error) => { process.stderr.write(`osnova: watcher stopped: ${error.message}\n`); watcher.close(); if (watch === started) watch = undefined; });
     } catch (error) {
       process.stderr.write(`osnova: watch unavailable, refreshing per query: ${error instanceof Error ? error.message : String(error)}\n`);
-      watcher = undefined;
+      watch = undefined;
     }
   }
   const lspSession = options?.lsp === undefined ? undefined : new LspReferenceSession(absRoot, options.lsp, options.cacheDir);
@@ -390,12 +423,12 @@ export function createOsnovaMcpServer(
   // period has passed; the rest of close is immediate.
   const close = (): Promise<void> => {
     if (timer !== undefined) clearTimeout(timer);
-    watcher?.close(); watcher = undefined;
+    watch?.watcher.close(); watch = undefined;
     closed = true;
     if (warm !== "off") warm = "closed";
     return lspSession?.close() ?? Promise.resolve();
   };
-  const status = (): OsnovaMcpStatus => ({ watching: watcher !== undefined, refreshes, pendingChanges: dirty, warm });
+  const status = (): OsnovaMcpStatus => ({ watching: watch !== undefined, refreshes, pendingChanges: settled !== changes, warm });
 
   const server = new Server(
     { name: "osnova", version: OSNOVA_VERSION },
@@ -568,7 +601,7 @@ export function createOsnovaMcpServer(
           return errorResult(`unknown tool ${JSON.stringify(name)}`);
       }
     } catch (error) {
-      if (failed === undefined && watcher === undefined && isRebuildableCacheFailure(error)) return callTool(name, rawArguments, { index: used });
+      if (failed === undefined && watch === undefined && isRebuildableCacheFailure(error)) return callTool(name, rawArguments, { index: used });
       const message = error instanceof Error ? error.message : String(error);
       // Agents working in another worktree or clone retried the same lookup; say which checkout this server reads.
       const where = latest?.root ?? absRoot;
