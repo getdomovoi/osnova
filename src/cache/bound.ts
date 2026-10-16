@@ -25,7 +25,11 @@ interface Handle {
 const binding = new AsyncLocalStorage<{ readonly handle: Handle; live: boolean }>();
 // Kept open between refreshes, so a refresh of a cache directory already open compares the stat ensureCacheDir took with
 // it and opens nothing. A handle in use is never closed; one no longer the directory's handle closes with its last user.
-const handles = new Map<string, Handle>();
+// The registry is one per process: a module loaded again, as a test runner does for each file, would otherwise drop
+// handles still open, and Node treats a FileHandle collected while open as an error.
+const registry = Symbol.for("osnova.boundCacheHandles");
+const shared = globalThis as typeof globalThis & { [registry]?: Map<string, Handle> | undefined };
+const handles = shared[registry] ??= new Map<string, Handle>();
 const keptHandles = 4;
 let unsupported = process.platform !== "linux";
 
