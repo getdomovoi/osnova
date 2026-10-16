@@ -42,10 +42,10 @@ export function evidenceFingerprint(index: OsnovaIndex, paths: Iterable<string> 
 const refreshing = new Map<string, Promise<WitnessedIndex>>();
 const loadedIndexes = new Map<string, { index: OsnovaIndex; artifact: string }>();
 
-async function artifactSignature(root: string, cacheDir: string): Promise<string | undefined> {
-  const artifact = await artifactPathFor(root, cacheDir);
-  const edges = await artifactEdgesPathFor(root, cacheDir);
-  const text = await artifactTextPathFor(root, cacheDir);
+async function artifactSignature(canonicalRoot: string, cacheDir: string): Promise<string | undefined> {
+  const artifact = await artifactPathFor(canonicalRoot, cacheDir, true);
+  const edges = await artifactEdgesPathFor(canonicalRoot, cacheDir, true);
+  const text = await artifactTextPathFor(canonicalRoot, cacheDir, true);
   if (artifact === undefined || edges === undefined || text === undefined) return undefined;
   const parts: string[] = [];
   for (const file of [artifact, edges, text]) {
@@ -79,14 +79,30 @@ export function isRebuildableCacheFailure(error: unknown): boolean {
   return cause instanceof Error && typeof (cause as NodeJS.ErrnoException).syscall !== "string";
 }
 
-async function readGeneration(root: string, cacheDir: string): Promise<string | undefined> {
-  const file = path.join(workspaceDirFor(cacheDir, root), "index.sha");
+async function readGeneration(canonicalRoot: string, cacheDir: string): Promise<string | undefined> {
+  const file = path.join(workspaceDirFor(cacheDir, canonicalRoot, true), "index.sha");
   try {
     return (await fs.readFile(file, "utf8")).trim();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
+}
+
+// The device and inode of the directory a canonical root names now, or undefined when the path resolves to another
+// path. An ordinary directory renamed into a parent's place leaves every path the same, so only these tell it apart.
+async function rootIdentity(canonicalRoot: string): Promise<string | undefined> {
+  let resolved: string;
+  let identity: string;
+  try {
+    resolved = await fs.realpath(canonicalRoot);
+    const stat = await fs.stat(canonicalRoot, { bigint: true });
+    if (!stat.isDirectory()) throw new Error("workspace root is not a directory");
+    identity = `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "directory-unreadable" }, error);
+  }
+  return resolved === canonicalRoot ? identity : undefined;
 }
 
 export async function refreshWorkspace(root: string, options: WorkspaceOptions = {}): Promise<OsnovaIndex> {
@@ -124,21 +140,26 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   const taskKey = JSON.stringify([indexKey, limits, options.lockTimeoutMs, options.lockPollMs, options.reuseMemory, rebuild]);
   const running = refreshing.get(taskKey);
   if (running !== undefined) return running;
-  // The coalescing key and the lock both name the root resolved above, never what the path resolves to later. A root
-  // retargeted since then, or by the time the scan resolves it again, is not the root this lock covers, so the refresh
-  // fails instead. Loading and building resolve the path again after the scan, so an index of another root, or one read
-  // through a retargeted path, fails the refresh before its files are inspected or anything is written. An index the
-  // scan verified unchanged reads no source after the scan and skips those rechecks. Cache paths inside the lock
-  // resolve the root again too, and a retarget undone between two of these checks is not seen.
-  const rootMoved = async (): Promise<boolean> => await canonicalWorkspaceRoot(canonicalRoot) !== canonicalRoot;
+  // The coalescing key and the lock both name the root resolved above, never what the path resolves to later, and the
+  // directory it named once the lock was held is known by its device and inode. A root retargeted since then, or by the
+  // time the scan resolves and stats it again, is not the root this lock covers, so the refresh fails instead. Loading
+  // and building resolve the path again after the scan, so an index of another root, or one read through a retargeted
+  // path, fails the refresh before its files are inspected, before anything is written, before each later write and
+  // before it returns. An index the scan verified unchanged reads no source after the scan and skips those rechecks.
+  // Every cache path inside the lock names the locked root's entry without resolving the path again, so a retarget
+  // undone between two checks cannot redirect a write; one undone while sources are read is not seen.
   const task = withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
-    if (await rootMoved()) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
+    const changing = (): IndexingError => new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
+    const identity = await rootIdentity(canonicalRoot);
+    if (identity === undefined) throw changing();
+    const rootMoved = async (): Promise<boolean> => await rootIdentity(canonicalRoot) !== identity;
     const published = await artifactSignature(canonicalRoot, canonicalCache);
     const cached = loadedIndexes.get(indexKey);
     const generation = await readGeneration(canonicalRoot, canonicalCache);
-    const verified = generation === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, generation))?.files;
+    const verified = generation === undefined ? undefined : (await loadVerification(canonicalCache, canonicalRoot, generation, true))?.files;
     const { scan, witness } = await scanWorkspace(canonicalRoot, canonicalCache);
-    if (witness.root !== canonicalRoot) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
+    const scanned = witness.directories.get("");
+    if (witness.root !== canonicalRoot || scanned === undefined || `${scanned.dev}:${scanned.ino}` !== identity) throw changing();
     const clean = verified !== undefined && scan.paths.length === verified.size &&
       scan.paths.every((p) => sameFileMetadata(verified.get(p), scan.metadata.get(p)));
     let index: OsnovaIndex | undefined;
@@ -156,7 +177,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
       }
     }
     const seed = index === undefined && generation === undefined && !rebuild
-      ? await seedWorkspace(canonicalRoot, canonicalCache, options)
+      ? await seedWorkspace(canonicalRoot, canonicalCache, options, true)
       : undefined;
     let seededFrom = seed?.sibling;
     index ??= seed?.index;
@@ -167,9 +188,11 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
       try {
         index ??= await buildIndexSnapshot(canonicalRoot, options.onProgress, canonicalCache);
         const unchanged = clean && known !== undefined && attempt === 0 && !dirty;
-        if (index.root !== canonicalRoot || (!unchanged && await rootMoved())) {
-          throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
-        }
+        const ensureRoot = async (): Promise<void> => {
+          if (!unchanged && await rootMoved()) throw changing();
+        };
+        if (index.root !== canonicalRoot) throw changing();
+        await ensureRoot();
         const inspection = unchanged
           ? { report: { added: [], changed: [], deleted: [] }, metadata: scan.metadata, hashedFiles: 0 }
           : await inspectFreshness(index, canonicalRoot, known, attempt === 0 ? scan : undefined);
@@ -179,26 +202,29 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
           seededFrom = undefined;
         }
         if (!isStale(report)) {
-          if (!unchanged && await rootMoved()) throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
-          if (dirty) await saveArtifact(index, canonicalCache, options);
+          await ensureRoot();
+          if (dirty) await saveArtifact(index, canonicalCache, options, true);
           else {
-            const artifact = await artifactPathFor(canonicalRoot, canonicalCache);
+            const artifact = await artifactPathFor(canonicalRoot, canonicalCache, true);
             if (limits.maxWorkspaces === 0 || artifact === undefined || (await fs.stat(artifact)).size > limits.maxBytes) {
               throw new IndexingError({ phase: "cache", path: canonicalCache, code: "cache-limit-exceeded" });
             }
             await evictLru(canonicalCache, options);
           }
           if (!unchanged) {
+            await ensureRoot();
             try {
-              await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata);
+              await saveVerification(canonicalCache, canonicalRoot, indexGeneration(index), inspection.metadata, true);
             } catch (error) {
               throw new IndexingError({ phase: "cache", path: canonicalCache, code: "verification-write-failed" }, error);
             }
           }
-          await ensureFamilySidecar(canonicalCache, canonicalRoot, seed?.family, seed !== undefined);
+          await ensureRoot();
+          await ensureFamilySidecar(canonicalCache, canonicalRoot, seed?.family, seed !== undefined, true);
           if (options.reuseMemory === true) {
             rememberLoaded(indexKey, index, await artifactSignature(canonicalRoot, canonicalCache), limits.maxWorkspaces);
           }
+          await ensureRoot();
           return { index, witness };
         }
         index = await applyFreshnessReport(index, canonicalRoot, [...report.added, ...report.changed, ...report.deleted], report);
@@ -212,7 +238,7 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
         dirty = true;
       }
     }
-    throw new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
+    throw changing();
   }, options).catch((error: unknown) => {
     // The lock a refresh actually waited on is often a nested one, such as the cache-wide eviction
     // lock, wrapped in a read or write failure that names only the workspace directory.

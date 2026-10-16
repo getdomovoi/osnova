@@ -22,8 +22,8 @@ function validMetadata(value: unknown): value is FileMetadata {
     ["mtimeNs", "ctimeNs", "ino", "dev"].every((key) => typeof item[key] === "string" && /^\d+$/.test(item[key] as string));
 }
 
-export async function loadVerification(cacheDir: string, root: string, generation: string): Promise<VerificationState | undefined> {
-  const file = path.join(workspaceDirFor(cacheDir, root), "verification.json");
+export async function loadVerification(cacheDir: string, root: string, generation: string, canonical = false): Promise<VerificationState | undefined> {
+  const file = path.join(workspaceDirFor(cacheDir, root, canonical), "verification.json");
   try {
     const value: unknown = JSON.parse(await fs.readFile(file, "utf8"));
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -40,8 +40,8 @@ export async function loadVerification(cacheDir: string, root: string, generatio
   }
 }
 
-export async function saveVerification(cacheDir: string, root: string, generation: string, files: ReadonlyMap<string, FileMetadata>): Promise<void> {
-  const dir = workspaceDirFor(cacheDir, root);
+export async function saveVerification(cacheDir: string, root: string, generation: string, files: ReadonlyMap<string, FileMetadata>, canonical = false): Promise<void> {
+  const dir = workspaceDirFor(cacheDir, root, canonical);
   await fs.mkdir(dir, { recursive: true });
   const ordered = Object.fromEntries([...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
   const payload = { version: verificationVersion, generation, files: ordered };

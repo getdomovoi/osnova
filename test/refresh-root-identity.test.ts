@@ -52,6 +52,55 @@ function renamedOnto(target: string): Promise<void> {
   });
 }
 
+// Runs before, then the first call of fs[method] whose path (the destination, for rename) the condition accepts, then
+// after, once that call has settled and before its caller sees the result.
+function aroundFirst(method: "readFile" | "rename", accept: (file: string) => boolean, before: () => Promise<void>, after?: () => Promise<void>): void {
+  const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  const at = method === "rename" ? 1 : 0;
+  let pending = true;
+  vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+    if (!pending || typeof args[at] !== "string" || !accept(path.resolve(args[at]))) return await original(...args);
+    pending = false;
+    await before();
+    const settled = await original(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+    await after?.();
+    if ("error" in settled) throw settled.error;
+    return settled.value;
+  }) as never);
+}
+
+// A parent directory p holding the root, and a directory q holding a root of the same name with other sources.
+async function parentAndElsewhere(): Promise<{ parent: string; elsewhere: string; root: string; other: string; cacheDir: string }> {
+  const temporary = await temporaryDir();
+  const parent = path.join(temporary, "p");
+  const elsewhere = path.join(temporary, "q");
+  const root = path.join(parent, "root");
+  const other = path.join(elsewhere, "root");
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(other, { recursive: true });
+  await fs.writeFile(path.join(root, "a.ts"), "export function onlyInP() { return 1; }\n");
+  await fs.writeFile(path.join(other, "a.ts"), "export function onlyInQ() { return 2; }\n");
+  return { parent, elsewhere, root, other, cacheDir: path.join(temporary, "cache") };
+}
+
+// Exchanges two ordinary directories, so every path stays the same and names the other directory's contents.
+async function swapDirectories(a: string, b: string): Promise<void> {
+  await fs.rename(a, `${a}-swap`);
+  await fs.rename(b, a);
+  await fs.rename(`${a}-swap`, b);
+}
+
+async function retargetToSymlink(parent: string, elsewhere: string): Promise<void> {
+  await fs.rename(parent, `${parent}-saved`);
+  await fs.symlink(elsewhere, parent, "dir");
+}
+
+async function restoreFromSymlink(parent: string): Promise<void> {
+  if (!(await fs.lstat(parent)).isSymbolicLink()) return;
+  await fs.unlink(parent);
+  await fs.rename(`${parent}-saved`, parent);
+}
+
 const names = (index: { symbols: ReadonlyMap<string, { name: string }> }): string[] => [...index.symbols.values()].map((symbol) => symbol.name);
 
 describe("refreshWorkspaceWitnessed and the root it captured", () => {
@@ -183,5 +232,101 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
     const after = await refreshWorkspaceWitnessed(root, { cacheDir });
     expect(after.witness.root).toBe(root);
     expect(names(after.index)).toContain("shared");
+  });
+
+  // A parent exchanged with another ordinary directory leaves every path the same, so only the root directory's
+  // device and inode tell the two apart. Once the parent is restored, the locked root's witness holds again and must
+  // not vouch for an index of the other directory's sources.
+  it.each([
+    ["while the scan resolves the root", "scan"],
+    ["while the cached index loads", "load"],
+    ["while the refresh reads a source", "inspect"],
+  ] as const)("fails instead of answering with another directory's sources when a parent is exchanged with an ordinary directory %s", async (_, moment) => {
+    const { parent, elsewhere, root, cacheDir } = await parentAndElsewhere();
+    expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("onlyInP");
+    await fs.utimes(path.join(root, "a.ts"), new Date(2_000_000_000_000), new Date(2_000_000_000_000));
+    let swapped = false;
+    const swap = async (): Promise<void> => { await swapDirectories(parent, elsewhere); swapped = true; };
+    if (moment === "scan") {
+      const before = scanSerial();
+      duringRealpath(root, () => scanSerial() > before, swap);
+    } else {
+      const file = moment === "load" ? path.join(workspaceDirFor(cacheDir, root), "index.json") : path.join(root, "a.ts");
+      aroundFirst("readFile", (read) => read === file, swap);
+    }
+    const outcome = await refreshWorkspaceWitnessed(root, { cacheDir }).then((answer) => names(answer.index), (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(swapped).toBe(true);
+    await swapDirectories(parent, elsewhere);
+    expect(outcome).toMatchObject({ diagnostic: { code: "workspace-changing" } });
+    const after = await refreshWorkspaceWitnessed(root, { cacheDir });
+    expect(after.witness.root).toBe(root);
+    expect(names(after.index)).toContain("onlyInP");
+    expect(names(after.index)).not.toContain("onlyInQ");
+  });
+
+  // saveArtifact has published the locked root's index, then a parent is replaced. The writes that follow must still
+  // name the locked root's cache entry, never the one the path now resolves to, and the refresh must not report success
+  // for a root that no longer names the directory it scanned.
+  it.each([
+    ["a symlink", "symlink"],
+    ["an ordinary directory", "exchange"],
+  ] as const)("fails without writing another directory's cache when a parent is replaced by %s as the index is published", async (_, kind) => {
+    const { parent, elsewhere, root, other, cacheDir } = await parentAndElsewhere();
+    expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("onlyInP");
+    await fs.appendFile(path.join(root, "a.ts"), "export function addedInP() { return 3; }\n");
+    const otherCache = workspaceDirFor(cacheDir, other);
+    const published = path.join(workspaceDirFor(cacheDir, root), "index.sha");
+    let replaced = false;
+    aroundFirst("rename", (file) => file === published, async () => {}, async () => {
+      if (kind === "symlink") await retargetToSymlink(parent, elsewhere);
+      else await swapDirectories(parent, elsewhere);
+      replaced = true;
+    });
+    const outcome = await refreshWorkspaceWitnessed(root, { cacheDir }).then((answer) => names(answer.index), (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(replaced).toBe(true);
+    if (kind === "symlink") await restoreFromSymlink(parent);
+    else await swapDirectories(parent, elsewhere);
+    expect(outcome).toMatchObject({ diagnostic: { code: "workspace-changing" } });
+    await expect(fs.access(otherCache)).rejects.toMatchObject({ code: "ENOENT" });
+    const after = await refreshWorkspaceWitnessed(root, { cacheDir });
+    expect(after.witness.root).toBe(root);
+    expect(names(after.index)).toEqual(expect.arrayContaining(["onlyInP", "addedInP"]));
+  });
+
+  // The checks between writes cannot see a retarget undone before the next check, so each write must name the locked
+  // root's cache entry without resolving the path again. Here the parent is a symlink only while the refresh records
+  // the workspace family, between the check before that write and the check before the refresh returns.
+  it("writes only the locked root's cache when a parent is retargeted and restored between two checks", async () => {
+    const { parent, elsewhere, root, other, cacheDir } = await parentAndElsewhere();
+    expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toContain("onlyInP");
+    await fs.utimes(path.join(root, "a.ts"), new Date(2_000_000_000_000), new Date(2_000_000_000_000));
+    const own = workspaceDirFor(cacheDir, root);
+    const otherCache = workspaceDirFor(cacheDir, other);
+    await fs.rm(path.join(own, "family.json"));
+    let retargeted = false;
+    let restored = false;
+    aroundFirst("readFile", (file) => file === path.join(own, "family.json"), async () => {
+      await retargetToSymlink(parent, elsewhere);
+      retargeted = true;
+    });
+    const original = fs.rename.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(fs, "rename").mockImplementation((async (...args: unknown[]) => {
+      const settled = await original(...args);
+      if (retargeted && !restored && path.basename(String(args[1])) === "family.json") {
+        restored = true;
+        await restoreFromSymlink(parent);
+      }
+      return settled;
+    }) as never);
+    const outcome = await refreshWorkspaceWitnessed(root, { cacheDir }).then((answer) => answer, (error: unknown) => error);
+    vi.restoreAllMocks();
+    await restoreFromSymlink(parent);
+    expect(retargeted && restored).toBe(true);
+    expect(outcome).toMatchObject({ witness: { root } });
+    expect(names((outcome as Awaited<ReturnType<typeof refreshWorkspaceWitnessed>>).index)).toContain("onlyInP");
+    await expect(fs.access(path.join(own, "family.json"))).resolves.toBeUndefined();
+    await expect(fs.access(otherCache)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

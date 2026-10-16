@@ -49,8 +49,8 @@ export async function workspaceFamily(root: string): Promise<string | undefined>
   }
 }
 
-function familyPath(cacheDir: string, root: string): string {
-  return path.join(workspaceDirFor(cacheDir, root), "family.json");
+function familyPath(cacheDir: string, root: string, canonical: boolean): string {
+  return path.join(workspaceDirFor(cacheDir, root, canonical), "family.json");
 }
 
 function parseSidecar(text: string): FamilySidecar | undefined {
@@ -67,17 +67,17 @@ function parseSidecar(text: string): FamilySidecar | undefined {
   return { family: parsed.family === null ? undefined : parsed.family, root: parsed.root };
 }
 
-export async function loadFamily(cacheDir: string, root: string): Promise<FamilySidecar | undefined> {
+export async function loadFamily(cacheDir: string, root: string, canonical = false): Promise<FamilySidecar | undefined> {
   try {
-    return parseSidecar(await fs.readFile(familyPath(cacheDir, root), "utf8"));
+    return parseSidecar(await fs.readFile(familyPath(cacheDir, root, canonical), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
 }
 
-export async function saveFamily(cacheDir: string, root: string, family: string | undefined): Promise<void> {
-  const target = familyPath(cacheDir, root);
+export async function saveFamily(cacheDir: string, root: string, family: string | undefined, canonical = false): Promise<void> {
+  const target = familyPath(cacheDir, root, canonical);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const content = JSON.stringify({ version: familyVersion, family: family ?? null, root });
   const temporary = `${target}.tmp-${process.pid}-${randomUUID()}`;

@@ -14,7 +14,7 @@ export interface SeedOutcome {
   readonly sibling?: string | undefined;
 }
 
-export async function seedWorkspace(absRoot: string, cacheDir: string, options: WorkspaceOptions & LockOptions = {}): Promise<SeedOutcome> {
+export async function seedWorkspace(absRoot: string, cacheDir: string, options: WorkspaceOptions & LockOptions = {}, canonical = false): Promise<SeedOutcome> {
   const family = await workspaceFamily(absRoot);
   if (family === undefined || !seedingEnabled(options)) return { family };
   for (const sibling of await familySiblings(cacheDir, absRoot, family)) {
@@ -27,7 +27,7 @@ export async function seedWorkspace(absRoot: string, cacheDir: string, options: 
     }
     if (!/^[a-f0-9]{64}$/.test(generation) || (await loadVerification(cacheDir, sibling.root, generation)) === undefined) continue;
     try {
-      const seeded = await seedArtifactFrom(cacheDir, sibling.root, absRoot, options);
+      const seeded = await seedArtifactFrom(cacheDir, sibling.root, absRoot, options, canonical);
       if (seeded === undefined || seeded.generation !== generation) continue;
       return { family, index: seeded.index, sibling: sibling.root };
     } catch (error) {
@@ -42,7 +42,7 @@ export function seedProgress(sibling: string, total: number, report: { readonly 
   return { phase: "seed", done: total - report.changed.length - report.deleted.length, total, sibling };
 }
 
-export async function ensureFamilySidecar(cacheDir: string, root: string, family: string | undefined, resolved: boolean): Promise<void> {
-  if ((await loadFamily(cacheDir, root)) !== undefined) return;
-  await saveFamily(cacheDir, root, resolved ? family : await workspaceFamily(root));
+export async function ensureFamilySidecar(cacheDir: string, root: string, family: string | undefined, resolved: boolean, canonical = false): Promise<void> {
+  if ((await loadFamily(cacheDir, root, canonical)) !== undefined) return;
+  await saveFamily(cacheDir, root, resolved ? family : await workspaceFamily(root), canonical);
 }

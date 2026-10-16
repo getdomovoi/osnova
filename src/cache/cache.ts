@@ -70,8 +70,10 @@ function identityKey(identity: string): string {
   return createHash("sha256").update(identity).digest("hex").slice(0, 16);
 }
 
-export function workspaceDirFor(cacheDir: string, absRoot: string): string {
-  return path.join(cacheDir, workspaceKey(absRoot));
+// canonical says absRoot is a canonical root the caller already resolved and holds the lock of, so its entry is named
+// without resolving the path again: by now the path may name another directory, whose entry that lock does not cover.
+export function workspaceDirFor(cacheDir: string, absRoot: string, canonical = false): string {
+  return path.join(cacheDir, canonical ? identityKey(absRoot) : workspaceKey(absRoot));
 }
 
 export const defaultLruCap = 32;
@@ -91,14 +93,14 @@ export function cacheLimits(policy: CachePolicy = {}): { maxWorkspaces: number; 
   return { maxWorkspaces, maxBytes };
 }
 
-export function workspaceLockPath(cacheDir: string, root: string): string {
-  return `${workspaceDirFor(cacheDir, root)}.lock`;
+export function workspaceLockPath(cacheDir: string, root: string, canonical = false): string {
+  return `${workspaceDirFor(cacheDir, root, canonical)}.lock`;
 }
 
 // The lock of a canonical root the caller already resolved, without resolving it again: by now the path may name
 // another directory, and the caller must not wait on that directory's lock in its place.
 export function canonicalWorkspaceLockPath(cacheDir: string, canonicalRoot: string): string {
-  return `${path.join(cacheDir, identityKey(canonicalRoot))}.lock`;
+  return workspaceLockPath(cacheDir, canonicalRoot, true);
 }
 
 export async function touchWorkspace(dir: string): Promise<void> {

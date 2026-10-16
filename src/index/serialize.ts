@@ -507,9 +507,9 @@ function readReExport(value: unknown): ReExport {
   throw new Error("osnova: corrupt re-export metadata");
 }
 
-export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy: CachePolicy = {}): Promise<string> {
-  return withCacheLock(workspaceLockPath(cacheDir, index.root), async () => {
-    const dir = workspaceDirFor(cacheDir, index.root);
+export async function saveArtifact(index: OsnovaIndex, cacheDir: string, policy: CachePolicy = {}, canonical = false): Promise<string> {
+  return withCacheLock(workspaceLockPath(cacheDir, index.root, canonical), async () => {
+    const dir = workspaceDirFor(cacheDir, index.root, canonical);
     let tmpPath: string | undefined;
     let textTmp: string | undefined;
     let edgesTmp: string | undefined;
@@ -652,9 +652,9 @@ export interface SeededArtifact {
   readonly generation: string;
 }
 
-export async function seedArtifactFrom(cacheDir: string, siblingRoot: string, targetRoot: string, options: LockOptions = {}): Promise<SeededArtifact | undefined> {
+export async function seedArtifactFrom(cacheDir: string, siblingRoot: string, targetRoot: string, options: LockOptions = {}, canonicalTarget = false): Promise<SeededArtifact | undefined> {
   const source = workspaceDirFor(cacheDir, siblingRoot);
-  const target = workspaceDirFor(cacheDir, targetRoot);
+  const target = workspaceDirFor(cacheDir, targetRoot, canonicalTarget);
   if (source === target) return undefined;
   return withCacheLock(workspaceLockPath(cacheDir, siblingRoot), async () => {
     try {
@@ -716,8 +716,8 @@ export function isSectionInconsistency(error: unknown): boolean {
 
 export const isTextSidecarInconsistency = isSectionInconsistency;
 
-export async function artifactPathFor(root: string, cacheDir: string): Promise<string | undefined> {
-  const dir = workspaceDirFor(cacheDir, root);
+export async function artifactPathFor(root: string, cacheDir: string, canonical = false): Promise<string | undefined> {
+  const dir = workspaceDirFor(cacheDir, root, canonical);
   for (const name of ["index.json", "index.json.gz"]) {
     try {
       await fs.access(path.join(dir, name));
@@ -729,16 +729,16 @@ export async function artifactPathFor(root: string, cacheDir: string): Promise<s
   return undefined;
 }
 
-export async function artifactTextPathFor(root: string, cacheDir: string): Promise<string | undefined> {
-  const file = path.join(workspaceDirFor(cacheDir, root), "text.bin");
+export async function artifactTextPathFor(root: string, cacheDir: string, canonical = false): Promise<string | undefined> {
+  const file = path.join(workspaceDirFor(cacheDir, root, canonical), "text.bin");
   try { await fs.access(file); return file; } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return undefined;
   }
 }
 
-export async function artifactEdgesPathFor(root: string, cacheDir: string): Promise<string | undefined> {
-  const file = path.join(workspaceDirFor(cacheDir, root), "edges.json");
+export async function artifactEdgesPathFor(root: string, cacheDir: string, canonical = false): Promise<string | undefined> {
+  const file = path.join(workspaceDirFor(cacheDir, root, canonical), "edges.json");
   try { await fs.access(file); return file; } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return undefined;
