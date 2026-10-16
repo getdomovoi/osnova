@@ -83,6 +83,32 @@ function during(method: "lstat" | "realpath", target: string, interlude: () => P
   }) as never);
 }
 
+// Runs once, after the first call of the named promise-API method on the given path has settled, then hands the
+// caller that call's result.
+function after(method: "lstat", target: string, interlude: () => Promise<void>): void {
+  const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  let pending = true;
+  vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+    if (!pending || path.resolve(String(args[0])) !== target) return await original(...args);
+    pending = false;
+    const settled = await original(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+    await interlude();
+    if ("error" in settled) throw settled.error;
+    return settled.value;
+  }) as never);
+}
+
+// Resolves when the named promise-API method is first called with the given path as the argument at that position.
+function reached(method: "rename", target: string, position: number): Promise<void> {
+  const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  return new Promise((resolve) => {
+    vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+      if (path.resolve(String(args[position])) === target) resolve();
+      return await original(...args);
+    }) as never);
+  });
+}
+
 async function until(condition: () => boolean): Promise<void> {
   const deadline = Date.now() + 5000;
   while (!condition()) {
@@ -142,6 +168,22 @@ describe("warm reuse and the workspace root", () => {
     expect(built.status().refreshes).toBe(2);
   });
 
+  it.each([
+    ["with a watcher", watch],
+    ["without a watcher", false as const],
+  ])("does not join a refresh of the old root that is still pending when the workspace is retargeted, %s", async (_label, mode) => {
+    const { built, ground, retarget, lockA } = await setup({ watch: mode });
+    await plantLiveLock(lockA);
+    const waiting = reached("rename", lockA, 1);
+    const pending = built.refresh().then(() => "answered", () => "failed");
+    await waiting;
+    await retarget();
+    const answered = await ground("retargetedHelper");
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("retargetedHelper");
+    expect(await pending).toBe("failed");
+  });
+
   it("does not take a watcher on the old root as evidence for the new root", async () => {
     const { built, ground, retarget, rootB } = await setup({ watch });
     await retarget();
@@ -180,10 +222,36 @@ describe("warm reuse and the watcher", () => {
     expect(answered.text).toContain("secondHelper");
   });
 
+  it("does not keep a watcher as evidence once its directory is replaced at the same path", async () => {
+    const { ground, rootA } = await setup({ watch });
+    await fs.rename(rootA, `${rootA}-replaced`);
+    await fs.mkdir(rootA);
+    await fs.writeFile(path.join(rootA, "a.ts"), second);
+    expect((await ground("secondHelper")).text).toContain("secondHelper");
+    await fs.writeFile(path.join(rootA, "a.ts"), `${second}export function laterHelper() { return 4; }\n`);
+    const answered = await ground("laterHelper");
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("laterHelper");
+  });
+
   it("keeps the metadata-only reuse while the watcher is healthy and the root unchanged", async () => {
     const { built, ground } = await setup({ watch });
     for (let query = 0; query < 3; query += 1) expect((await ground()).isError).toBe(false);
     expect(built.status()).toMatchObject({ watching: true, refreshes: 1, pendingChanges: false });
+  });
+});
+
+describe("warm reuse and the workspace lock", () => {
+  it.each([
+    ["with a watcher", watch],
+    ["without a watcher", false as const],
+  ])("does not answer from the kept index when another owner takes the lock after the probe found it free, %s", async (_label, mode) => {
+    const { built, ground, lockA } = await setup({ watch: mode });
+    after("lstat", lockA, () => plantLiveLock(lockA));
+    const answered = await ground();
+    expect(answered.isError).toBe(true);
+    expect(answered.text).toMatch(/lock/);
+    expect(built.status().refreshes).toBe(1);
   });
 });
 

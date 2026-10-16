@@ -1,11 +1,11 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import path from "node:path";
 import { loadArtifact, saveArtifact, serializeArtifact, extractionVersion, artifactPathFor, artifactTextPathFor, artifactEdgesPathFor, isSectionInconsistency } from "./index/serialize.js";
 import { resolveCacheDir, workspaceDirFor, workspaceLockPath, workspaceKey, cacheLimits, evictLru } from "./cache/cache.js";
 import type { LoadIndexOptions, OsnovaIndex } from "./types.js";
-import { canonicalWorkspaceRoot, workspaceIdentity, validRelativePath } from "./index/workspace.js";
+import { canonicalWorkspaceRoot, canonicalWorkspaceRootSync, workspaceIdentity, validRelativePath } from "./index/workspace.js";
 import type { WorkspaceOptions } from "./index/workspace.js";
-import { cacheLockTimeoutIn, foreignLockHolds, withCacheLock } from "./cache/lock.js";
+import { cacheLockTimeoutIn, foreignLockHolds, foreignLockHoldsSync, withCacheLock } from "./cache/lock.js";
 import { buildIndexSnapshot } from "./index/build.js";
 import { applyFreshnessReport, inspectFreshness, isStale } from "./index/incremental.js";
 import { loadVerification, saveVerification } from "./index/verification.js";
@@ -228,6 +228,24 @@ export async function workspaceLockContended(root: string, cacheDir?: string | u
     return true;
   }
   return foreignLockHolds(workspaceLockPath(canonicalCache, canonicalRoot));
+}
+
+// workspaceLockContended without yielding, so a caller can act on the answer before anything else runs.
+export function workspaceLockContendedSync(root: string, cacheDir?: string | undefined): boolean {
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = canonicalWorkspaceRootSync(root);
+  } catch {
+    return true;
+  }
+  let canonicalCache: string;
+  try {
+    canonicalCache = realpathSync.native(resolveCacheDir(cacheDir));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    return true;
+  }
+  return foreignLockHoldsSync(workspaceLockPath(canonicalCache, canonicalRoot));
 }
 
 export async function loadIndex(

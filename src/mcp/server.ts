@@ -5,9 +5,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { promises as fs, realpathSync, watch as fsWatch } from "node:fs";
+import { realpathSync, statSync, watch as fsWatch } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure, workspaceLockContended } from "../api.js";
+import { refreshWorkspaceWitnessed, indexGeneration, isRebuildableCacheFailure, workspaceLockContended, workspaceLockContendedSync } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS, witnessHolds } from "../index/scan.js";
 import type { ScanWitness } from "../index/scan.js";
@@ -263,27 +263,52 @@ export interface OsnovaMcpStatus {
   readonly warm: "off" | "idle" | "warming" | "warm" | "closed";
 }
 
-// A running watcher and the canonical root it observes.
+// Which directory a path named: a path can name another directory later, after a rename and a new directory in its
+// place, so the path alone does not identify it.
+interface DirectoryIdentity {
+  readonly dev: string;
+  readonly ino: string;
+}
+
+function directoryAt(directory: string): DirectoryIdentity {
+  const stat = statSync(directory, { bigint: true });
+  if (!stat.isDirectory()) throw new Error(`${directory} is not a directory`);
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+
+const sameDirectory = (a: DirectoryIdentity | undefined, b: DirectoryIdentity | undefined): boolean =>
+  a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
+
+// A running watcher, the canonical root it observes and the directory that root named when it started.
 interface Watch {
   readonly watcher: FSWatcher;
   readonly root: string;
+  readonly directory: DirectoryIdentity;
 }
 
-// What one refresh verified, replaced or dropped as a whole so its parts cannot disagree. watch is the watcher that
-// observed the witness root from before the scan to the end of the refresh, if any.
+// What one refresh verified, replaced or dropped as a whole so its parts cannot disagree. directory is the root
+// directory its scan read, if the scan recorded it, and watch the watcher that observed that directory from before the
+// scan to the end of the refresh, if any.
 interface Verified {
   readonly index: OsnovaIndex;
   readonly witness: ScanWitness;
+  readonly directory: DirectoryIdentity | undefined;
   readonly watch: Watch | undefined;
   readonly changes: number;
   readonly at: number;
 }
 
-async function resolvesTo(root: string, canonical: string): Promise<boolean> {
+// A refresh and the canonical root the workspace path resolved to when it started, if it resolved.
+interface Refresh {
+  readonly root: string | undefined;
+  readonly done: Promise<Verified>;
+}
+
+function canonicalRootNow(root: string): string | undefined {
   try {
-    return await fs.realpath(root) === canonical;
+    return realpathSync.native(root);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -298,7 +323,9 @@ export function createOsnovaMcpServer(
   const maxStaleMs = watchOptions?.maxStaleMs ?? 30_000;
   let latest: OsnovaIndex | undefined;
   let verified: Verified | undefined;
-  let inFlight: Promise<OsnovaIndex> | undefined;
+  let inFlight: Refresh | undefined;
+  let refreshesStarted = 0;
+  let newestPublished = 0;
   let changes = 0;
   let settled: number | undefined;
   let refreshes = 0;
@@ -321,33 +348,59 @@ export function createOsnovaMcpServer(
       process.stderr.write(`osnova: prewarm failed: ${error instanceof Error ? error.message : String(error)}\n`);
     });
   }
-  // One refresh at a time; a change that arrives during a refresh marks the result stale again.
-  function refresh(rebuild?: { superseded: OsnovaIndex | undefined } | undefined): Promise<OsnovaIndex> {
-    if (inFlight !== undefined) return inFlight;
+  // A change that arrives during a refresh marks the result stale again. Refreshes run beside each other only when the
+  // workspace path resolved to different roots for them, and a record never replaces one from a later-started refresh.
+  function start(root: string | undefined, rebuild: { superseded: OsnovaIndex | undefined } | undefined): Promise<Verified> {
     const seen = changes;
     const observer = watch;
-    inFlight = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness }) => {
-      const changed = latest !== index;
-      const observed = observer !== undefined && observer === watch && observer.root === witness.root ? observer : undefined;
-      latest = index; verified = { index, witness, watch: observed, changes: seen, at: Date.now() }; refreshes += 1; settled = seen;
+    refreshesStarted += 1;
+    const order = refreshesStarted;
+    const done = refreshWorkspaceWitnessed(absRoot, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined }).then(({ index, witness }) => {
+      const scanned = witness.directories.get("");
+      const directory = scanned === undefined ? undefined : { dev: scanned.dev, ino: scanned.ino };
+      const observed = observer !== undefined && observer === watch && observer.root === witness.root && sameDirectory(observer.directory, directory) ? observer : undefined;
+      const record: Verified = { index, witness, directory, watch: observed, changes: seen, at: Date.now() };
+      refreshes += 1;
       if (rebuild !== undefined) lastRebuild = { superseded: rebuild.superseded === undefined ? undefined : new WeakRef(rebuild.superseded) };
-      if (changed) prewarm(index);
-      return index;
-    }).finally(() => { inFlight = undefined; });
-    return inFlight;
+      if (order > newestPublished) {
+        newestPublished = order;
+        const changed = latest !== index;
+        latest = index; verified = record; settled = seen;
+        if (changed) prewarm(index);
+      }
+      return record;
+    });
+    const entry: Refresh = { root, done: done.finally(() => { if (inFlight === entry) inFlight = undefined; }) };
+    inFlight = entry;
+    return entry.done;
+  }
+  // A query shares the pending refresh only when the workspace path resolves to the root that refresh started for, and
+  // answers from it only when it verified that root: a refresh that started before the path was retargeted may wait on
+  // the old root's lock and verifies the old root. A refresh the query starts itself resolves the path while the query
+  // runs, so the query answers from whatever root it verified.
+  async function refresh(rebuild?: { superseded: OsnovaIndex | undefined } | undefined): Promise<OsnovaIndex> {
+    const root = canonicalRootNow(absRoot);
+    const pending = inFlight;
+    if (rebuild === undefined && pending !== undefined && root !== undefined && pending.root === root) {
+      const shared = await pending.done;
+      if (shared.witness.root === root) return shared.index;
+      return (await start(canonicalRootNow(absRoot), rebuild)).index;
+    }
+    return (await start(root, rebuild)).index;
   }
   // A query may reuse only the verified state of the last refresh, held as one record that is replaced or dropped
-  // whole: the index, the scan witness with the canonical root it was verified at, the watcher that observed that root
-  // from before the scan, the change count the refresh started from and the time it finished. While that watcher is
-  // still the running one, the record is reused while the watcher has seen no change and the verification is recent.
-  // Otherwise it is reused while every file, directory and ignore file its scan read still stats the same; a full
-  // refresh per query cost more than the cheap tools it served. Either way reuse also needs no other owner that may hold
-  // the lock of the witness root, and the workspace path to still resolve to that root. A contended lock sends the
-  // query to a refresh, which waits for the lock or fails, and drops the record, even one a refresh set while the lock
-  // was probed, so the next query verifies the tree under the lock again however long reuse may last. Each check
-  // awaits, and a change, a refresh, a stopped watcher or a dropped record can land meanwhile, so the query reuses the
-  // index only if the same record still holds after the last await. When a refresh replaced the record meanwhile, the
-  // query checks the new one from the start instead.
+  // whole: the index, the scan witness with the canonical root it was verified at, the root directory that scan read,
+  // the watcher that observed that directory from before the scan, the change count the refresh started from and the
+  // time it finished. While that watcher is still the running one, the record is reused while the watcher has seen no
+  // change and the verification is recent. Otherwise it is reused while every file, directory and ignore file its scan
+  // read still stats the same; a full refresh per query cost more than the cheap tools it served. Either way reuse also
+  // needs no other owner that may hold the lock of the witness root, and the workspace path to still resolve to that
+  // root and name that directory. A contended lock sends the query to a refresh, which waits for the lock or fails, and
+  // drops the record, even one a refresh set while the lock was probed, so the next query verifies the tree under the
+  // lock again however long reuse may last. Each awaited check lets a change, a refresh, a stopped watcher, a dropped
+  // record, a retargeted path or another lock owner land meanwhile, so after the last await the query checks the
+  // record, the root, the directory and the lock again without yielding, and reuses the index only if all of them still
+  // hold. When a refresh replaced the record meanwhile, the query checks the new one from the start instead.
   async function current(): Promise<OsnovaIndex> {
     const held = verified;
     if (held === undefined) return refresh();
@@ -358,13 +411,26 @@ export function createOsnovaMcpServer(
     if (kept() && (watched || await witnessHolds(absRoot, held.witness))) {
       if (await workspaceLockContended(held.witness.root, cacheDir)) {
         verified = undefined;
-      } else if (await resolvesTo(absRoot, held.witness.root) && kept()) {
-        return held.index;
-      } else if (verified !== held && verified !== undefined) {
-        return current();
+      } else if (verified !== held) {
+        if (verified !== undefined) return current();
+      } else {
+        const now = standing(held);
+        if (now === "contended") verified = undefined;
+        else if (now === "holds" && kept()) return held.index;
       }
     }
     return refresh();
+  }
+  // Whether, at this moment, the workspace path resolves to the record's root, that root is the directory its scan
+  // read and no other owner may hold its lock. Anything it cannot tell counts as moved.
+  function standing(held: Verified): "holds" | "moved" | "contended" {
+    if (canonicalRootNow(absRoot) !== held.witness.root) return "moved";
+    try {
+      if (!sameDirectory(directoryAt(held.witness.root), held.directory)) return "moved";
+    } catch {
+      return "moved";
+    }
+    return workspaceLockContendedSync(held.witness.root, cacheDir) ? "contended" : "holds";
   }
   // A kept index reads cached source text only when a query needs it, and loading checks the text sidecar's size, not
   // its bytes, so a damaged sidecar shows as a failed query. Without a watcher, that query rebuilds once and runs again.
@@ -379,7 +445,7 @@ export function createOsnovaMcpServer(
   function repair(failed: OsnovaIndex | undefined): Promise<OsnovaIndex> {
     if (repairing !== undefined && repairing.failed === failed) return repairing.done;
     const done = (async () => {
-      while (inFlight !== undefined) await inFlight.catch(() => undefined);
+      while (inFlight !== undefined) await inFlight.done.catch(() => undefined);
       if (rebuiltAfter(failed)) return current();
       return refresh({ superseded: failed });
     })();
@@ -401,8 +467,9 @@ export function createOsnovaMcpServer(
   if (watchOptions !== undefined) {
     try {
       // The watcher observes the directory the workspace path resolved to when it started, and only that one, so it
-      // vouches for nothing once the path names another directory.
+      // vouches for nothing once the path names another directory or another directory took that one's place.
       const root = realpathSync.native(absRoot);
+      const directory = directoryAt(root);
       const watcher = fsWatch(root, { recursive: true, persistent: false }, (_event, file) => {
         if (ignoredChange(file)) return;
         changes += 1;
@@ -410,7 +477,11 @@ export function createOsnovaMcpServer(
         timer = setTimeout(() => { timer = undefined; refresh().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
         timer.unref();
       });
-      const started: Watch = { watcher, root };
+      if (!sameDirectory(directoryAt(root), directory)) {
+        watcher.close();
+        throw new Error(`${root} was replaced while the watcher started`);
+      }
+      const started: Watch = { watcher, root, directory };
       watch = started;
       watcher.on("error", (error) => { process.stderr.write(`osnova: watcher stopped: ${error.message}\n`); watcher.close(); if (watch === started) watch = undefined; });
     } catch (error) {

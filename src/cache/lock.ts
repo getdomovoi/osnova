@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { promises as fs, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { promises as fs, lstatSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -226,9 +226,25 @@ export async function foreignLockHolds(lockPath: string): Promise<boolean> {
     await fs.lstat(lockPath);
     return true;
   } catch (error) {
-    const code = errorCode(error);
-    return code !== "ENOENT" && code !== "ENOTDIR";
+    return !lockMissing(error);
   }
+}
+
+// foreignLockHolds without yielding, for a caller whose decision must not interleave with other work.
+export function foreignLockHoldsSync(lockPath: string): boolean {
+  lockPath = path.resolve(lockPath);
+  if (holdsCacheLock(lockPath)) return false;
+  try {
+    lstatSync(lockPath);
+    return true;
+  } catch (error) {
+    return !lockMissing(error);
+  }
+}
+
+function lockMissing(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 async function describeHolder(lockPath: string): Promise<string> {
