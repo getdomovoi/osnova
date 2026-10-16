@@ -122,8 +122,9 @@ function reached(method: "rename", target: string, position: number): Promise<vo
 }
 
 // Holds the first call of the named promise-API method with the given path as the argument at that position until
-// release is called; reached resolves when that call arrives.
-function hold(method: "rename", target: string, position: number): { reached: Promise<void>; release: () => void } {
+// release is called; reached resolves when that call arrives. afterwards, if given, runs once that call has settled
+// and before its caller sees the result.
+function hold(method: "rename", target: string, position: number, afterwards?: () => Promise<void>): { reached: Promise<void>; release: () => void } {
   const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
   let pending = true;
   let arrive!: () => void;
@@ -135,6 +136,10 @@ function hold(method: "rename", target: string, position: number): { reached: Pr
       pending = false;
       arrive();
       await released;
+      const settled = await original(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      await afterwards?.();
+      if ("error" in settled) throw settled.error;
+      return settled.value;
     }
     return await original(...args);
   }) as never);
@@ -374,6 +379,33 @@ describe("warm reuse across servers", () => {
     held.release();
     await pending;
     expect(names(await shared)).toContain("secondHelper");
+  });
+
+  // Both watchers predate the shared scan, and this server's watcher saw the edit before its refresh joined that scan,
+  // so the change count the refresh starts from includes an edit the scan never read. The corrective refresh fails on
+  // a held lock, and the record the shared scan left must not be reused as if the watcher vouched for it.
+  it("does not let a watcher vouch for a shared scan that predates an edit it saw before joining, when the corrective refresh fails", async () => {
+    const { built, workspace, cacheDir, rootA, lockA } = await setup({ watch });
+    const other = await serve(workspace, cacheDir, watch);
+    expect((await other.ground()).isError).toBe(false);
+    expect(other.built.status()).toMatchObject({ watching: true, pendingChanges: false });
+    const held = hold("rename", lockA, 0, () => plantLiveLock(lockA));
+    const pending = built.refresh();
+    await held.reached;
+    await fs.writeFile(path.join(rootA, "a.ts"), second);
+    await until(() => other.built.status().pendingChanges);
+    const joining = during("realpath", cacheDir, async () => {});
+    const shared = other.built.refresh().then(() => "answered", () => "failed");
+    await joining;
+    await tick();
+    held.release();
+    await pending;
+    expect(await shared).toBe("failed");
+    expect(other.built.status().pendingChanges).toBe(true);
+    await fs.rm(lockA, { recursive: true, force: true });
+    const answered = await other.ground("secondHelper");
+    expect(answered.isError).toBe(false);
+    expect(answered.text).toContain("secondHelper");
   });
 });
 

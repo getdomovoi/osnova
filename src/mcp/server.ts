@@ -340,6 +340,9 @@ export function createOsnovaMcpServer(
   let refreshesStarted = 0;
   let newestPublished = 0;
   let changes = 0;
+  // The serial of the latest scan started when the watcher counted its latest change: a scan with a greater serial
+  // began after every change counted so far.
+  let changedAt = 0;
   let settled: number | undefined;
   let refreshes = 0;
   let warm: OsnovaMcpStatus["warm"] = options?.prewarm === true ? "idle" : "off";
@@ -365,6 +368,7 @@ export function createOsnovaMcpServer(
   // workspace path resolved to different roots for them, and a record never replaces one from a later-started refresh.
   function start(rebuild: { superseded: OsnovaIndex | undefined } | undefined): Promise<Verified> {
     const seen = changes;
+    const seenAt = changedAt;
     const observer = watch;
     refreshesStarted += 1;
     const order = refreshesStarted;
@@ -373,15 +377,19 @@ export function createOsnovaMcpServer(
       const { index, witness } = await refreshWorkspaceWitnessed(root, { cacheDir, reuseMemory: true, lockTimeoutMs: options?.refreshLockTimeoutMs ?? mcpRefreshLockTimeoutMs, rebuild: rebuild !== undefined, canonical: true });
       const scanned = witness.directories.get("");
       const directory = scanned === undefined ? undefined : { dev: scanned.dev, ino: scanned.ino };
-      // A refresh can share another one's scan, even another server's, so the scan may predate the watcher.
-      const observed = observer !== undefined && observer === watch && witness.serial > observer.scans && observer.root === witness.root && sameDirectory(observer.directory, directory) ? observer : undefined;
+      // A refresh can share another one's scan, even another server's, so the scan may predate the watcher or a change
+      // the watcher counted before the refresh started. Such a scan settles none of the counted changes and the watcher
+      // does not vouch for it, so its record is reused only while its witness holds.
+      const follows = witness.serial > seenAt;
+      const observed = follows && observer !== undefined && observer === watch && witness.serial > observer.scans && observer.root === witness.root && sameDirectory(observer.directory, directory) ? observer : undefined;
       const record: Verified = { index, witness, directory, watch: observed, changes: seen, at: Date.now() };
       refreshes += 1;
       if (rebuild !== undefined) lastRebuild = { superseded: rebuild.superseded === undefined ? undefined : new WeakRef(rebuild.superseded) };
       if (order > newestPublished) {
         newestPublished = order;
         const changed = latest !== index;
-        latest = index; verified = record; settled = seen;
+        latest = index; verified = record;
+        if (follows) settled = seen;
         if (changed) prewarm(index);
       }
       return record;
@@ -500,6 +508,7 @@ export function createOsnovaMcpServer(
       const watcher = fsWatch(root, { recursive: true, persistent: false }, (_event, file) => {
         if (ignoredChange(file)) return;
         changes += 1;
+        changedAt = scanSerial();
         if (timer !== undefined) clearTimeout(timer);
         timer = setTimeout(() => { timer = undefined; refresh().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
         timer.unref();
