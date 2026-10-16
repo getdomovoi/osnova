@@ -8,21 +8,29 @@ import { IndexingError } from "../index/diagnostics.js";
 // retargeted between two calls sends the second into another cache directory, whose locks this process does not hold.
 // On Linux, /proc/self/fd/<n> names the directory an open descriptor refers to wherever it has moved, so a path below
 // it reaches that directory without resolving the cache directory's ancestors again. Inside withBoundCacheDir every
-// cacheFs call on a path within the cache directory goes through such a descriptor; elsewhere, and on platforms
-// without /proc/self/fd, cacheFs calls the path as given. Paths kept in indexes and errors still name the cache
-// directory itself.
-interface Handle {
+// cacheFs call on a path within the cache directory goes through such a descriptor; elsewhere cacheFs calls the path as
+// given. Paths kept in indexes and errors still name the cache directory itself.
+// Where no descriptor can bind the cache directory, on platforms without /proc/self/fd or where its probe fails, the
+// guarantee is weaker: every cacheFs call inside withBoundCacheDir that changes a path within the cache directory stats
+// the cache directory before and after the call and fails with cache-changing when it is not the directory the
+// identity names, so a retarget seen by either check stops the operation before its next write. A retarget during one
+// call can still send that call, and only that call, into the other directory, and one undone between two checks is
+// not seen. Reads are not checked.
+interface Scope {
   readonly dir: string;
   readonly prefix: string;
-  readonly via: string;
   readonly identity: string;
+}
+
+interface Handle extends Scope {
+  readonly via: string;
   readonly file: FileHandle;
   users: number;
 }
 
 // live ends with the operation, so a call that outlives it, from work the operation started without awaiting, uses the
-// path as given rather than a descriptor that may since have closed and been reused.
-const binding = new AsyncLocalStorage<{ readonly handle: Handle; live: boolean }>();
+// path as given rather than a descriptor that may since have closed and been reused. A run without a handle is checked.
+const binding = new AsyncLocalStorage<{ readonly scope: Scope; readonly handle: Handle | undefined; live: boolean }>();
 // Kept open between refreshes, so a refresh of a cache directory already open compares the stat ensureCacheDir took with
 // it and opens nothing. A handle in use is never closed; one no longer the directory's handle closes with its last user.
 // The registry is one per process: a module loaded again, as a test runner does for each file, would otherwise drop
@@ -34,6 +42,7 @@ const keptHandles = 4;
 let unsupported = process.platform !== "linux";
 
 const identityOf = (stat: { readonly dev: bigint; readonly ino: bigint }): string => `${stat.dev}:${stat.ino}`;
+const prefixOf = (dir: string): string => dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
 
 function close(handle: Handle): void {
   void handle.file.close().catch(() => {});
@@ -70,7 +79,7 @@ async function open(dir: string, identity: string): Promise<Handle | undefined> 
       await file.close();
       return undefined;
     }
-    return { dir, prefix: dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`, via, identity, file, users: 0 };
+    return { dir, prefix: prefixOf(dir), via, identity, file, users: 0 };
   } catch (error) {
     await file.close().catch(() => {});
     throw error;
@@ -94,23 +103,49 @@ export async function ensureCacheDir(cacheDir: string): Promise<string> {
 }
 
 // Runs operation with every cacheFs call on a path within the canonical cache directory bound to the directory with
-// the given identity, the one ensureCacheDir found. A directory that path no longer names fails the operation.
+// the given identity, the one ensureCacheDir found. A directory that path no longer names fails the operation. Where the
+// directory cannot be bound, each change within it is checked against the identity instead, as described above.
 export async function withBoundCacheDir<T>(canonicalCache: string, identity: string, operation: () => Promise<T>): Promise<T> {
-  if (unsupported) return operation();
-  let handle = handles.get(canonicalCache);
-  if (handle === undefined || handle.identity !== identity) {
-    handle = await open(canonicalCache, identity);
-    if (handle === undefined) return operation();
+  let handle = unsupported ? undefined : handles.get(canonicalCache);
+  if (!unsupported && (handle === undefined || handle.identity !== identity)) handle = await open(canonicalCache, identity);
+  if (handle === undefined) {
+    const checked = { scope: { dir: canonicalCache, prefix: prefixOf(canonicalCache), identity }, handle, live: true };
+    try {
+      return await binding.run(checked, operation);
+    } finally {
+      checked.live = false;
+    }
   }
   handle.users += 1;
   keep(handle);
-  const run = { handle, live: true };
+  const run = { scope: handle, handle, live: true };
   try {
     return await binding.run(run, operation);
   } finally {
     run.live = false;
     release(handle);
   }
+}
+
+// The cache-changing failure behind a write failure that wraps it, so a caller sees that the cache directory moved.
+export function cacheChangingIn(error: unknown): IndexingError | undefined {
+  let cause: unknown = error;
+  for (let depth = 0; depth < 8 && cause !== null && cause !== undefined; depth += 1) {
+    if (cause instanceof IndexingError && cause.diagnostic.code === "cache-changing") return cause;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+function within(scope: Scope, target: unknown): boolean {
+  if (typeof target !== "string") return false;
+  const absolute = path.resolve(target);
+  return absolute === scope.dir || absolute.startsWith(scope.prefix);
+}
+
+async function ensureSame(scope: Scope): Promise<void> {
+  const seen = await promises.stat(scope.dir, { bigint: true }).then(identityOf, () => undefined);
+  if (seen !== scope.identity) throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" });
 }
 
 function bound(handle: Handle, target: unknown): unknown {
@@ -135,6 +170,7 @@ function unbound(handle: Handle, error: unknown): unknown {
 
 type Promises = typeof promises;
 type Bindable = "access" | "copyFile" | "lstat" | "mkdir" | "readFile" | "readdir" | "rename" | "rm" | "rmdir" | "stat" | "unlink" | "writeFile";
+const changes = new Set<Bindable>(["copyFile", "mkdir", "rename", "rm", "rmdir", "unlink", "writeFile"]);
 
 // The method is looked up on each call, so whatever replaces it on the promises API sees the call.
 function through<K extends Bindable>(name: K, paths: 1 | 2): Promises[K] {
@@ -143,6 +179,14 @@ function through<K extends Bindable>(name: K, paths: 1 | 2): Promises[K] {
     const run = binding.getStore();
     if (run?.live !== true) return await call(...args);
     const handle = run.handle;
+    if (handle === undefined) {
+      if (!changes.has(name) || !args.slice(0, paths).some((target) => within(run.scope, target))) return await call(...args);
+      await ensureSame(run.scope);
+      const settled = await call(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      await ensureSame(run.scope);
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }
     for (let index = 0; index < paths; index += 1) args[index] = bound(handle, args[index]);
     let result: unknown;
     try {

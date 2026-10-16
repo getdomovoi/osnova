@@ -349,8 +349,9 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
 
   // The cache lies beneath the same parent as the root. The parent becomes a symlink to a directory with a cache of its
   // own just as the verification is published, after the check before that write, and is restored once it is written,
-  // before the next check. Every write must still land in the cache directory whose lock the refresh holds.
-  it("writes only the locked cache directory when a parent of the cache is retargeted and restored during verification publication", async () => {
+  // before the next check. Every write must still land in the cache directory whose lock the refresh holds. That takes a
+  // descriptor bound to the cache directory; test/cache-bound-fallback.test.ts covers the platforms without one.
+  it.runIf(process.platform === "linux")("writes only the locked cache directory when a parent of the cache is retargeted and restored during verification publication", async () => {
     const temporary = await temporaryDir();
     const parent = path.join(temporary, "p");
     const elsewhere = path.join(temporary, "q");
