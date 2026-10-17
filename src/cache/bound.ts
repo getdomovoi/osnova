@@ -370,7 +370,12 @@ async function remove(anchor: Anchor, call: Call, target: string, options: unkno
     await missing(error, reported);
     return false;
   });
-  if (moved) await call(trash, { ...given, force: true });
+  if (!moved) return;
+  // The tree is known to be there, so whatever of it is found missing was looked for elsewhere. An error names the
+  // target and what it held, not where they were moved.
+  await call(trash, { ...given, force: false }).catch((error: unknown) => {
+    throw codeOf(error) === "ENOENT" ? changingIn(anchor) : unbound({ ...anchor, dir: target, prefix: prefixOf(target), via: trash }, error);
+  });
 }
 
 async function changeThrough(anchor: Anchor, name: Bindable, call: Call, args: unknown[], paths: number): Promise<unknown> {

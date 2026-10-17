@@ -313,11 +313,11 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
 
   // Retargets the parent inside the first call of name on a path the condition accepts, and restores it when restore
   // says, so a call made between the two resolves the cache path into the other directory.
-  function retargetedAround(name: "mkdir" | "rename", parent: string, elsewhere: string, accept: (target: string) => boolean, until: "after the call" | "never"): () => boolean {
+  function retargetedAround(name: "mkdir" | "rename" | "rm", parent: string, elsewhere: string, accept: (target: string) => boolean, until: "after the call" | "never"): () => boolean {
     const original = fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>;
     let done = false;
     vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
-      if (done || !accept(path.basename(String(args[0])))) return await original(...args);
+      if (done || !accept(String(args[0]))) return await original(...args);
       done = true;
       await retarget(parent, elsewhere);
       try {
@@ -347,7 +347,7 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedAround("mkdir", parent, elsewhere, (name) => name.startsWith(".osnova-bound"), "after the call");
+    const retargeted = retargetedAround("mkdir", parent, elsewhere, (target) => path.basename(target).startsWith(".osnova-bound"), "after the call");
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
     expect(retargeted()).toBe(true);
@@ -360,7 +360,7 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedAround("mkdir", parent, elsewhere, (name) => name.startsWith(".osnova-bound"), "never");
+    const retargeted = retargetedAround("mkdir", parent, elsewhere, (target) => path.basename(target).startsWith(".osnova-bound"), "never");
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
     await restore(parent);
@@ -374,13 +374,65 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedAround("rename", parent, elsewhere, (name) => name.startsWith(".osnova-bound"), "after the call");
+    const retargeted = retargetedAround("rename", parent, elsewhere, (target) => path.basename(target).startsWith(".osnova-bound"), "after the call");
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
     expect(retargeted()).toBe(true);
     expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
     expect(await contents(cacheDir)).toEqual(ours);
     expect(await contents(otherCacheDir)).toEqual(others);
+  });
+
+  // A recursive rm first moves its target into the anchor, under a name of its own, and then removes it there.
+  const stagedInAnchor = (target: string): boolean => anchorName.test(path.basename(path.dirname(target)));
+
+  it("fails, and changes nothing in the other cache, when a parent is retargeted during the removal of a tree moved into the anchor and restored after it", async () => {
+    const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const ours = await contents(cacheDir);
+    const others = await contents(otherCacheDir);
+    const retargeted = retargetedAround("rm", parent, elsewhere, stagedInAnchor, "after the call");
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true }))
+      .then(() => "removed", (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(retargeted()).toBe(true);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(await contents(otherCacheDir)).toEqual(others);
+    // The run drops its anchor, and with it the tree moved into it.
+    expect(await contents(cacheDir)).toEqual(Object.fromEntries(Object.entries(ours).filter(([name]) => name.split(path.sep)[0] !== "tree")));
+  });
+
+  it("names the requested path, not the anchor, in the error of a removal that fails once its tree is moved into the anchor", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const identity = await ensureCacheDir(cacheDir);
+    const rm = fs.rm.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let failing = "";
+    vi.spyOn(fs, "rm").mockImplementation((async (...args: unknown[]) => {
+      const target = String(args[0]);
+      if (!stagedInAnchor(target)) return await rm(...args);
+      const failed = path.join(target, failing);
+      throw Object.assign(new Error(`EACCES: permission denied, rm '${failed}'`), { code: "EACCES", errno: -13, syscall: "rm", path: failed });
+    }) as never);
+    const outcomes = await withBoundCacheDir(cacheDir, identity, async () => {
+      await cacheFs.mkdir(path.join(cacheDir, "tree", "branch"), { recursive: true });
+      await cacheFs.writeFile(path.join(cacheDir, "tree", "branch", "leaf"), "x");
+      await cacheFs.mkdir(path.join(cacheDir, "other"));
+      const settle = async (target: string, inside: string): Promise<unknown> => {
+        failing = inside;
+        return await cacheFs.rm(target, { recursive: true }).then(() => "removed", (error: unknown) => {
+          const failure = error as NodeJS.ErrnoException;
+          return { code: failure.code, path: failure.path, message: failure.message };
+        });
+      };
+      return [await settle(path.join(cacheDir, "tree"), path.join("branch", "leaf")), await settle(path.join(cacheDir, "other"), "")];
+    });
+    const leaf = path.join(cacheDir, "tree", "branch", "leaf");
+    const other = path.join(cacheDir, "other");
+    expect(outcomes).toEqual([
+      { code: "EACCES", path: leaf, message: `EACCES: permission denied, rm '${leaf}'` },
+      { code: "EACCES", path: other, message: `EACCES: permission denied, rm '${other}'` },
+    ]);
   });
 
   it("writes as before to a cache directory left as it was", async () => {
