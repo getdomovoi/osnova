@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { cacheFs as fs } from "./bound.js";
 import { createHash, randomUUID } from "node:crypto";
 import { workspaceIdentity } from "../index/workspace.js";
 import { CacheLockTimeoutError, holdsCacheLock, lockOwnerExited, parseOwner, sweepLockDebris, withCacheLock } from "./lock.js";
@@ -63,11 +63,17 @@ export function resolveCacheDir(explicit?: string): string {
 }
 
 export function workspaceKey(absRoot: string): string {
-  return createHash("sha256").update(workspaceIdentity(absRoot)).digest("hex").slice(0, 16);
+  return identityKey(workspaceIdentity(absRoot));
 }
 
-export function workspaceDirFor(cacheDir: string, absRoot: string): string {
-  return path.join(cacheDir, workspaceKey(absRoot));
+function identityKey(identity: string): string {
+  return createHash("sha256").update(identity).digest("hex").slice(0, 16);
+}
+
+// canonical says absRoot is a canonical root the caller already resolved and holds the lock of, so its entry is named
+// without resolving the path again: by now the path may name another directory, whose entry that lock does not cover.
+export function workspaceDirFor(cacheDir: string, absRoot: string, canonical = false): string {
+  return path.join(cacheDir, canonical ? identityKey(absRoot) : workspaceKey(absRoot));
 }
 
 export const defaultLruCap = 32;
@@ -87,8 +93,14 @@ export function cacheLimits(policy: CachePolicy = {}): { maxWorkspaces: number; 
   return { maxWorkspaces, maxBytes };
 }
 
-export function workspaceLockPath(cacheDir: string, root: string): string {
-  return `${workspaceDirFor(cacheDir, root)}.lock`;
+export function workspaceLockPath(cacheDir: string, root: string, canonical = false): string {
+  return `${workspaceDirFor(cacheDir, root, canonical)}.lock`;
+}
+
+// The lock of a canonical root the caller already resolved, without resolving it again: by now the path may name
+// another directory, and the caller must not wait on that directory's lock in its place.
+export function canonicalWorkspaceLockPath(cacheDir: string, canonicalRoot: string): string {
+  return workspaceLockPath(cacheDir, canonicalRoot, true);
 }
 
 export async function touchWorkspace(dir: string): Promise<void> {

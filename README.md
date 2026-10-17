@@ -54,16 +54,16 @@ Or add the MCP entry by hand; replace `osnova` with `npx -y @getdomovoi/osnova` 
 `osnova warp src/api.ts#refreshWorkspace` on this repository, cut to twelve lines (`test/docs-readme-warp.test.ts` fails when the first two no longer reproduce):
 
 ```text
-function src/api.ts#refreshWorkspace: 83 indexed edges
-reach: d1 callers 83 in 14 files (3 dirs); d2 +16 in 2 files; unresolved same-name 10; tests 18
-d1 calls src/cli/cli.ts#ensureIndex:78 [import-binding]
+function src/api.ts#refreshWorkspace: 87 indexed edges
+reach: d1 callers 87 in 14 files (2 dirs); d2 +13 in 1 files; unresolved same-name 8; tests 22
+d1 calls src/cli/cli.ts#ensureIndex:81 [import-binding]
 d1 calls src/cli/hook.ts#runHook:191,203,225,240 [import-binding]
-d1 calls src/mcp/server.ts#createOsnovaMcpServer.refresh:297 [import-binding]
 d1 calls test/verification-fastpath.test.ts#<module>:37,47,48,51,53,57,58,64,68,74,78,85,110,114,132,145,154,166,171,197 [re-export-binding]
-  via src/index.ts:65 refreshWorkspace -> src/api.ts (export refreshWorkspace)
+  via src/index.ts:68 refreshWorkspace -> src/api.ts (export refreshWorkspace)
+d1 calls test/workspace-refresh.test.ts#<module>:33,41,48,50,55,62,63,71,77,90,96,202 [import-binding]
 This does not prove absence of callers or that deletion is safe.
-unresolved evidence (10); not confirmed relationships
-candidates for refreshWorkspace (2, unverified): src/api.ts#refreshWorkspace, test/mcp-watch.test.ts#refreshWorkspace
+unresolved evidence (8); not confirmed relationships
+candidates for refreshWorkspace (1, unverified): src/api.ts#refreshWorkspace
 d1 calls refreshWorkspace test/artifact-format9.test.ts:78,85,104,120,140 [binding-blocked]
 d1 calls refreshWorkspace scripts/perf.mjs:485,486,491 [import-target-unresolved]
 ```

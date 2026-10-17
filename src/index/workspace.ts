@@ -1,5 +1,5 @@
 import path from "node:path";
-import { promises as fs, realpathSync } from "node:fs";
+import { promises as fs, realpathSync, statSync } from "node:fs";
 import { IndexingError } from "./diagnostics.js";
 import type { BuildOptions, OsnovaIndex } from "../types.js";
 import type { CachePolicy } from "../cache/cache.js";
@@ -34,6 +34,16 @@ export function workspaceIdentity(root: string): string {
       suffix.unshift(path.basename(ancestor));
       ancestor = parent;
     }
+  }
+}
+
+export function canonicalWorkspaceRootSync(root: string): string {
+  try {
+    const canonical = realpathSync.native(root);
+    if (!statSync(canonical).isDirectory()) throw new Error("workspace root is not a directory");
+    return canonical;
+  } catch (error) {
+    throw new IndexingError({ phase: "scan", path: root, code: "directory-unreadable" }, error);
   }
 }
 
