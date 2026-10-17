@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { constants, promises } from "node:fs";
+import { constants, promises, rmdirSync, rmSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { IndexingError } from "../index/diagnostics.js";
@@ -12,7 +12,8 @@ import { IndexingError } from "../index/diagnostics.js";
 // cacheFs call on a path within the cache directory goes through such a descriptor; elsewhere cacheFs calls the path as
 // given. Paths kept in indexes and errors still name the cache directory itself.
 // Where no descriptor can bind the cache directory, on platforms without /proc/self/fd or where its probe fails, the
-// run makes an anchor: an empty directory under a random name in the cache directory, and every cacheFs call on a path
+// first run of a process makes an anchor, which later runs reuse: an empty directory under a random name in the cache
+// directory, and every cacheFs call on a path
 // within it goes through <cache>/<anchor>/.., which the kernel resolves through the anchor's own parent. A call sent
 // into any other directory finds no anchor there and fails with ENOENT before it changes anything. A change that fails
 // with ENOENT is checked against the cache directory through the anchor, and fails with cache-changing when what it
@@ -20,8 +21,9 @@ import { IndexingError } from "../index/diagnostics.js";
 // directory in turn, and a recursive rm first moves its target into the anchor. Every change is also checked before
 // and after against the cache directory's identity, which stops a run once a retarget stays in place. What remains
 // unbound is the creation of the anchor itself: a retarget at that moment leaves one empty directory under the random
-// name elsewhere, and the run fails. An anchor is left behind when the run ends after the cache directory moved, or
-// when the process dies. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
+// name elsewhere, and the run fails. A run that finds the cache directory moved, or the anchor gone, drops the anchor,
+// so the next run makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when
+// the process dies without exiting. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
 // directory, and every change is only checked before and after: a retarget during one call can still send that call,
 // and only that call, into the other directory, and one undone between two checks is not seen.
 interface Scope {
@@ -34,12 +36,15 @@ interface Bound extends Scope {
   readonly via: string;
 }
 
-interface Handle extends Bound {
-  readonly file: FileHandle;
+interface Kept extends Bound {
   users: number;
 }
 
-interface Anchor extends Bound {
+interface Handle extends Kept {
+  readonly file: FileHandle;
+}
+
+interface Anchor extends Kept {
   readonly anchor: string;
 }
 
@@ -49,11 +54,18 @@ interface Anchor extends Bound {
 const binding = new AsyncLocalStorage<{ readonly scope: Scope; readonly handle: Handle | Anchor | undefined; live: boolean }>();
 // Kept open between refreshes, so a refresh of a cache directory already open compares the stat ensureCacheDir took with
 // it and opens nothing. A handle in use is never closed; one no longer the directory's handle closes with its last user.
-// The registry is one per process: a module loaded again, as a test runner does for each file, would otherwise drop
-// handles still open, and Node treats a FileHandle collected while open as an error.
+// Anchors are kept the same way, so a refresh of a cache directory already anchored makes no anchor; each is removed
+// once displaced and unused, or as the process exits. The registries are one per process: a module loaded again, as a
+// test runner does for each file, would otherwise drop handles still open, and Node treats a FileHandle collected while
+// open as an error.
 const registry = Symbol.for("osnova.boundCacheHandles");
-const shared = globalThis as typeof globalThis & { [registry]?: Map<string, Handle> | undefined };
+const anchorRegistry = Symbol.for("osnova.boundCacheAnchors");
+const shared = globalThis as typeof globalThis & {
+  [registry]?: Map<string, Handle> | undefined;
+  [anchorRegistry]?: Map<string, Anchor> | undefined;
+};
 const handles = shared[registry] ??= new Map<string, Handle>();
+const anchors = shared[anchorRegistry] ??= removedOnExit(new Map<string, Anchor>());
 const keptHandles = 4;
 let unsupported = process.platform !== "linux";
 // Whether .. resolves through the directory before it, probed by the first run that needs an anchor.
@@ -62,27 +74,33 @@ let physicalParent: boolean | undefined;
 const identityOf = (stat: { readonly dev: bigint; readonly ino: bigint }): string => `${stat.dev}:${stat.ino}`;
 const prefixOf = (dir: string): string => dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
 const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | undefined)?.code;
-const changingIn = (scope: Scope): IndexingError => new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" });
+
+// A kept anchor through which a call found its cache directory moved, or the anchor missing, is no longer kept, so the
+// next run makes a new one.
+function changingIn(scope: Scope): IndexingError {
+  if (anchors.get(scope.dir) === scope) anchors.delete(scope.dir);
+  return new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" });
+}
 
 function close(handle: Handle): void {
   void handle.file.close().catch(() => {});
 }
 
-function release(handle: Handle): void {
-  handle.users -= 1;
-  if (handle.users === 0 && handles.get(handle.dir) !== handle) close(handle);
+function release<T extends Kept, R>(registered: Map<string, T>, item: T, dispose: (item: T) => R): R | undefined {
+  item.users -= 1;
+  return item.users === 0 && registered.get(item.dir) !== item ? dispose(item) : undefined;
 }
 
-function keep(handle: Handle): void {
-  const previous = handles.get(handle.dir);
-  handles.delete(handle.dir);
-  handles.set(handle.dir, handle);
-  if (previous !== undefined && previous !== handle && previous.users === 0) close(previous);
-  for (const [dir, kept] of handles) {
-    if (handles.size <= keptHandles) break;
+function keep<T extends Kept>(registered: Map<string, T>, item: T, dispose: (item: T) => unknown): void {
+  const previous = registered.get(item.dir);
+  registered.delete(item.dir);
+  registered.set(item.dir, item);
+  if (previous !== undefined && previous !== item && previous.users === 0) dispose(previous);
+  for (const [dir, kept] of registered) {
+    if (registered.size <= keptHandles) break;
     if (kept.users > 0) continue;
-    handles.delete(dir);
-    close(kept);
+    registered.delete(dir);
+    dispose(kept);
   }
 }
 
@@ -121,7 +139,7 @@ async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
     await promises.rmdir(anchor).catch(() => {});
     throw changingIn(scope);
   }
-  return { ...scope, via, anchor };
+  return { ...scope, via, anchor, users: 0 };
 }
 
 // The path names the anchor itself, so wherever it resolves, this removes nothing but the anchor.
@@ -129,6 +147,20 @@ async function removeAnchor(anchor: Anchor): Promise<void> {
   await promises.rmdir(anchor.anchor).catch(async (error: unknown) => {
     if (codeOf(error) === "ENOTEMPTY" || codeOf(error) === "EEXIST") await promises.rm(anchor.anchor, { recursive: true, force: true }).catch(() => {});
   });
+}
+
+function removedOnExit(kept: Map<string, Anchor>): Map<string, Anchor> {
+  process.once("exit", () => {
+    for (const anchor of kept.values()) {
+      try {
+        rmdirSync(anchor.anchor);
+      } catch (error) {
+        if (codeOf(error) !== "ENOTEMPTY" && codeOf(error) !== "EEXIST") continue;
+        try { rmSync(anchor.anchor, { recursive: true, force: true }); } catch { /* exiting: the anchor stays behind */ }
+      }
+    }
+  });
+  return kept;
 }
 
 // Creates the cache directory when it is missing and returns the device and inode of the directory it names. The stat
@@ -155,23 +187,34 @@ export async function withBoundCacheDir<T>(canonicalCache: string, identity: str
   if (!unsupported && (handle === undefined || handle.identity !== identity)) handle = await open(canonicalCache, identity);
   if (handle === undefined) {
     const scope = { dir: canonicalCache, prefix: prefixOf(canonicalCache), identity };
-    const anchor = await anchorIn(scope);
-    const checked = { scope, handle: anchor, live: true };
+    let anchor = anchors.get(canonicalCache);
+    if (anchor === undefined || anchor.identity !== identity) anchor = await anchorIn(scope);
+    if (anchor === undefined) {
+      const checked = { scope, handle: undefined, live: true };
+      try {
+        return await binding.run(checked, operation);
+      } finally {
+        checked.live = false;
+      }
+    }
+    anchor.users += 1;
+    keep(anchors, anchor, removeAnchor);
+    const anchored = { scope: anchor, handle: anchor, live: true };
     try {
-      return await binding.run(checked, operation);
+      return await binding.run(anchored, operation);
     } finally {
-      checked.live = false;
-      if (anchor !== undefined) await removeAnchor(anchor);
+      anchored.live = false;
+      await release(anchors, anchor, removeAnchor);
     }
   }
   handle.users += 1;
-  keep(handle);
+  keep(handles, handle, close);
   const run = { scope: handle, handle, live: true };
   try {
     return await binding.run(run, operation);
   } finally {
     run.live = false;
-    release(handle);
+    release(handles, handle, close);
   }
 }
 

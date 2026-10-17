@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { refreshWorkspaceWitnessed } from "../src/api.js";
 import { cacheFs, ensureCacheDir, withBoundCacheDir } from "../src/cache/bound.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
@@ -9,6 +12,8 @@ import { workspaceDirFor } from "../src/cache/cache.js";
 // Every test here runs where a cache directory cannot be bound to a descriptor. Platforms without /proc/self/fd are such
 // a place already; elsewhere the probe of /proc/self/fd fails, as it does on a restricted Linux.
 const temporaries: string[] = [];
+const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+const anchorName = /^\.osnova-bound-[0-9a-f-]{36}$/;
 let probed = false;
 beforeEach(() => {
   const stat = fs.stat.bind(fs) as (...args: unknown[]) => Promise<unknown>;
@@ -165,19 +170,73 @@ describe("withBoundCacheDir where the cache directory cannot be bound", () => {
       read: enoent(missing),
       tree: { value: undefined },
     });
-    expect(await fs.readdir(cacheDir)).toEqual([]);
+    expect(await fs.readdir(cacheDir)).toEqual([expect.stringMatching(anchorName)]);
   });
 
-  it("leaves no anchor behind in a cache directory left as it was", async () => {
+  it("keeps one empty anchor in a cache directory left as it was, and binds the next run through it", async () => {
     const temporary = await temporaryDir();
     const cacheDir = path.join(temporary, "cache");
     const identity = await ensureCacheDir(cacheDir);
-    await withBoundCacheDir(cacheDir, identity, async () => {
+    const run = async (): Promise<void> => await withBoundCacheDir(cacheDir, identity, async () => {
       await cacheFs.mkdir(path.join(cacheDir, "tree", "branch"), { recursive: true });
       await cacheFs.writeFile(path.join(cacheDir, "tree", "branch", "leaf"), "kept");
       await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true });
     });
-    expect(await fs.readdir(cacheDir)).toEqual([]);
+    await run();
+    const kept = await fs.readdir(cacheDir);
+    expect(kept).toEqual([expect.stringMatching(anchorName)]);
+    expect(await fs.readdir(path.join(cacheDir, kept[0] ?? ""))).toEqual([]);
+    await run();
+    expect(await fs.readdir(cacheDir)).toEqual(kept);
+  });
+
+  it("fails the run that finds its kept anchor removed, and anchors the next one anew", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const identity = await ensureCacheDir(cacheDir);
+    const write = async (name: string): Promise<unknown> => await withBoundCacheDir(cacheDir, identity, async () =>
+      await cacheFs.writeFile(path.join(cacheDir, name), name)).then(() => "written", (error: unknown) => error);
+    expect(await write("first")).toBe("written");
+    const [removed = ""] = (await fs.readdir(cacheDir)).filter((name) => anchorName.test(name));
+    await fs.rmdir(path.join(cacheDir, removed));
+    expect(await write("second")).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(await write("third")).toBe("written");
+    const left = (await fs.readdir(cacheDir)).sort();
+    expect(left).toEqual([expect.stringMatching(anchorName), "first", "third"]);
+    expect(left[0]).not.toBe(removed);
+  });
+
+  it("removes the anchor of a cache directory once more recent ones displace it", async () => {
+    const temporary = await temporaryDir();
+    const dirs = ["a", "b", "c", "d", "e", "f"].map((name) => path.join(temporary, name));
+    for (const dir of dirs) {
+      const identity = await ensureCacheDir(dir);
+      await withBoundCacheDir(dir, identity, async () => await cacheFs.writeFile(path.join(dir, "file"), dir));
+    }
+    await vi.waitFor(async () => expect(await fs.readdir(dirs[0] ?? "")).toEqual(["file"]));
+    expect((await fs.readdir(dirs[5] ?? "")).sort()).toEqual([expect.stringMatching(anchorName), "file"]);
+  });
+
+  it("removes its anchors when the process exits", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const bound = pathToFileURL(path.resolve("src/cache/bound.ts")).href;
+    const script = `
+      import { promises } from "node:fs";
+      const stat = promises.stat.bind(promises);
+      promises.stat = async (target, ...rest) => {
+        if (String(target).startsWith("/proc/self/fd/")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return await stat(target, ...rest);
+      };
+      const { cacheFs, ensureCacheDir, withBoundCacheDir } = await import(${JSON.stringify(bound)});
+      const dir = ${JSON.stringify(cacheDir)};
+      const identity = await ensureCacheDir(dir);
+      await withBoundCacheDir(dir, identity, async () => await cacheFs.writeFile(dir + "/file", "x"));
+      process.stdout.write(JSON.stringify((await promises.readdir(dir)).sort()));
+    `;
+    const during = JSON.parse(execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], { encoding: "utf8" })) as string[];
+    expect(during).toEqual([expect.stringMatching(anchorName), "file"]);
+    expect(await fs.readdir(cacheDir)).toEqual(["file"]);
   });
 
   it("fails a cache write during which a parent of the cache is retargeted, and refuses the next", async () => {
@@ -280,6 +339,40 @@ describe("refreshWorkspaceWitnessed where the cache directory cannot be bound", 
     await fs.appendFile(path.join(root, "a.ts"), "export function addedInP() { return 3; }\n");
     return { parent, elsewhere, root, cacheDir, otherCacheDir, key: path.basename(workspaceDirFor(cacheDir, root)) };
   }
+
+  it("does no anchor work on a warm refresh of a cache directory a run of this process already bound", async () => {
+    const temporary = await temporaryDir();
+    const root = path.join(temporary, "root");
+    const cacheDir = path.join(temporary, "cache");
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "a.ts"), "export function warm() { return 1; }\n");
+    await refreshWorkspaceWitnessed(root, { cacheDir });
+    const [anchor] = (await fs.readdir(cacheDir)).filter((name) => anchorName.test(name));
+    expect(anchor).toBeDefined();
+    const calls: string[] = [];
+    for (const name of ["access", "copyFile", "lstat", "mkdir", "readFile", "readdir", "rename", "rm", "rmdir", "stat", "unlink", "writeFile"] as const) {
+      const original = (vi.isMockFunction(fs[name]) ? vi.mocked(fs[name]).getMockImplementation() : undefined) ?? (fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>);
+      vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
+        calls.push(`${name} ${String(args[0])}`);
+        return await (original as (...args: unknown[]) => Promise<unknown>)(...args);
+      }) as never);
+    }
+    let changes = 0;
+    for (const name of ["copyFile", "mkdir", "rename", "rm", "rmdir", "unlink", "writeFile"] as const) {
+      const original = cacheFs[name] as (...args: unknown[]) => Promise<unknown>;
+      vi.spyOn(cacheFs, name).mockImplementation((async (...args: unknown[]) => {
+        if (args.slice(0, name === "copyFile" || name === "rename" ? 2 : 1).some((target) => String(target) === cacheDir || String(target).startsWith(`${cacheDir}${path.sep}`))) changes += 1;
+        return await original(...args);
+      }) as never);
+    }
+    expect(names((await refreshWorkspaceWitnessed(root, { cacheDir })).index)).toEqual(["warm"]);
+    expect(changes).toBeGreaterThan(0);
+    // ensureCacheDir takes one stat of the cache directory, and each change is checked before and after it.
+    expect(calls.filter((call) => call === `stat ${cacheDir}`)).toHaveLength(2 * changes + 1);
+    expect(calls.filter((call) => /\.osnova-bound/.test(call) && !call.includes(`${path.sep}${anchor}${path.sep}`))).toEqual([]);
+    expect(calls.filter((call) => call.endsWith(`${path.sep}${anchor}`))).toEqual([]);
+    expect((await fs.readdir(cacheDir)).filter((name) => name.includes(".osnova-bound"))).toEqual([anchor]);
+  });
 
   // Once the parent has been retargeted, the first check of the cache directory fails the refresh, and the parent is
   // restored straight after it, so no later check of the root sees the retarget.
