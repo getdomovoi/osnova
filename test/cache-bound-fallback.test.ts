@@ -360,9 +360,19 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     return found;
   }
 
+  // Has every helper process started in the cache directory load hook first. A helper takes no NODE_OPTIONS, so the hook
+  // is passed on its command line.
+  function preloadedInHelpers(cacheDir: string, hook: string): void {
+    const execFile = childProcess.execFile.bind(childProcess) as (...args: unknown[]) => unknown;
+    vi.spyOn(childProcess, "execFile").mockImplementation(((...args: unknown[]) => {
+      if ((args[2] as { cwd?: unknown } | undefined)?.cwd !== cacheDir) return execFile(...args);
+      return execFile(args[0], ["--require", hook, ...(args[1] as string[])], ...args.slice(2));
+    }) as never);
+  }
+
   // Retargets the parent around the mkdir by which the helper process that makes an anchor makes it: from before the
   // call until after it, or from after the call on, so that what runs then resolves the cache path into the other
-  // directory. The helper inherits NODE_OPTIONS, so a module it is told to load first wraps its mkdirSync.
+  // directory. A module the helper is told to load first wraps its mkdirSync.
   async function retargetedAroundTheAnchor(parent: string, elsewhere: string, window: "during the call" | "during and after the call" | "after the call"): Promise<() => boolean> {
     const dir = await temporaryDir();
     const made = path.join(dir, "made");
@@ -393,7 +403,7 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
         }
       };
     `);
-    vi.stubEnv("NODE_OPTIONS", `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(hook)}`);
+    preloadedInHelpers(path.join(parent, "cache"), hook);
     return () => nodeFs.existsSync(made);
   }
 
@@ -533,6 +543,20 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(removed).toBe(true);
     expect(outcome).toBe("written");
     expect(after).toBe(seen);
+    expect(await besidesItsAnchor(cacheDir)).toEqual({ file: `file:${Buffer.from("x").toString("base64")}` });
+  });
+
+  it("makes the anchor while NODE_OPTIONS preloads a module by a path relative to the caller's working directory", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const work = path.join(temporary, "work");
+    await fs.mkdir(work);
+    await fs.writeFile(path.join(work, "hook.cjs"), "");
+    vi.stubEnv("NODE_OPTIONS", `${process.env.NODE_OPTIONS ?? ""} --require ./hook.cjs`);
+    const identity = await ensureCacheDir(cacheDir);
+    const outcome = await workingIn(work, async () => await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.writeFile(path.join(cacheDir, "file"), "x"))
+      .then(() => "written", (error: unknown) => error));
+    expect(outcome).toBe("written");
     expect(await besidesItsAnchor(cacheDir)).toEqual({ file: `file:${Buffer.from("x").toString("base64")}` });
   });
 

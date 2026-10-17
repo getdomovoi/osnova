@@ -137,6 +137,12 @@ const makeAnchor = [
   `fs.mkdirSync(name);`,
 ].join("\n");
 
+// A helper needs no setting Node reads from a NODE_ variable, and one naming a relative path, as a preload in
+// NODE_OPTIONS may, would resolve from the cache directory rather than from the working directory it was written for.
+function helperEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.toUpperCase().startsWith("NODE_")));
+}
+
 // Besides a descriptor, the working directory is the one reference to a directory that the kernel resolves a relative
 // path from without resolving that directory's ancestors again. This process could only enter its own working directory
 // again by the path it had, which a retarget or removal can leave naming another directory or none, so a helper process
@@ -151,7 +157,7 @@ async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
   if (physicalParent !== true || !isMainThread) return undefined;
   await ensureSame(scope);
   const failure = await new Promise<ExecFileException | null>((resolve) => {
-    childProcess.execFile(process.execPath, ["-e", makeAnchor, name, scope.identity], { cwd: scope.dir, windowsHide: true }, (error) => resolve(error));
+    childProcess.execFile(process.execPath, ["-e", makeAnchor, name, scope.identity], { cwd: scope.dir, env: helperEnv(), windowsHide: true }, (error) => resolve(error));
   });
   if (failure === null) return { ...scope, via, anchor, users: 0 };
   throw failure.code === elsewhereExit ? changingIn(scope) : new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, failure);
