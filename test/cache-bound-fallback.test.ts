@@ -235,6 +235,117 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect((await fs.readdir(dirs[5] ?? "")).sort()).toEqual([expect.stringMatching(anchorName), "file"]);
   });
 
+  // A process that binds cache directory a, fails the removal of a tree moved into its anchor, and then, with displace,
+  // binds four more, which displace that anchor. Node's rm loads the fs functions it uses when first called, so they are wrapped in a
+  // process of its own, before it is. With swap, once the removal has failed, the branch left in the anchor is swapped
+  // for a link to outside as this process lists it, or as a helper process examines it.
+  async function afterAFailedRemoval(temporary: string, outside: string, swap: boolean, displace: boolean): Promise<{ failure: unknown; anchor: string; swapped: boolean }> {
+    const phase = path.join(temporary, "phase");
+    const made = path.join(temporary, "swapped");
+    const hook = path.join(temporary, "hook.cjs");
+    await fs.writeFile(hook, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const [phase, outside, made] = ${JSON.stringify([phase, outside, made])};
+      const staged = () => /^\\.osnova-bound-/.test(path.basename(path.dirname(process.cwd())));
+      const unlinkSync = fs.unlinkSync;
+      fs.unlinkSync = (...args) => {
+        if (fs.readFileSync(phase, "utf8") !== "fail" || args[0] !== "leaf") return unlinkSync(...args);
+        throw Object.assign(new Error("EACCES: permission denied, unlink 'leaf'"), { code: "EACCES", errno: -13, syscall: "unlink", path: "leaf" });
+      };
+      const lstatSync = fs.lstatSync;
+      fs.lstatSync = (...args) => {
+        const found = lstatSync(...args);
+        if (fs.readFileSync(phase, "utf8") === "swap" && !fs.existsSync(made) && staged() && args[0] === "branch") {
+          fs.writeFileSync(made, "");
+          fs.rmSync("branch", { recursive: true });
+          fs.symlinkSync(outside, "branch", "dir");
+        }
+        return found;
+      };
+    `);
+    const bound = pathToFileURL(path.resolve("src/cache/bound.ts")).href;
+    const script = `
+      import childProcess from "node:child_process";
+      import nodeFs, { promises } from "node:fs";
+      import path from "node:path";
+      const [temporary, phase, outside, made, hook, swap, displace] = ${JSON.stringify([temporary, phase, outside, made, hook, swap, displace])};
+      const stat = promises.stat.bind(promises);
+      promises.stat = async (target, ...rest) => {
+        if (String(target).startsWith("/proc/self/fd/")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return await stat(target, ...rest);
+      };
+      const spawn = childProcess.spawn;
+      childProcess.spawn = (command, args, ...rest) => spawn(command, ["--require", hook, ...args], ...rest);
+      const readdir = nodeFs.readdir;
+      nodeFs.readdir = (target, ...rest) => {
+        const listing = String(target);
+        if (nodeFs.readFileSync(phase, "utf8") === "swap" && !nodeFs.existsSync(made) && listing.includes(".osnova-bound-") && path.basename(listing) === "branch") {
+          nodeFs.writeFileSync(made, "");
+          nodeFs.rmSync(listing, { recursive: true });
+          nodeFs.symlinkSync(outside, listing, "dir");
+        }
+        return readdir(target, ...rest);
+      };
+      const { cacheFs, ensureCacheDir, withBoundCacheDir } = await import(${JSON.stringify(bound)});
+      nodeFs.writeFileSync(phase, "fail");
+      const first = path.join(temporary, "a");
+      const failure = await withBoundCacheDir(first, await ensureCacheDir(first), async () => {
+        await cacheFs.mkdir(path.join(first, "tree", "branch"), { recursive: true });
+        await cacheFs.writeFile(path.join(first, "tree", "branch", "leaf"), "x");
+        return await cacheFs.rm(path.join(first, "tree"), { recursive: true }).then(() => "removed", (error) => error.code);
+      });
+      const [anchor] = (await promises.readdir(first)).filter((name) => name.startsWith(".osnova-bound-"));
+      nodeFs.writeFileSync(phase, swap ? "swap" : "none");
+      for (const name of displace ? ["b", "c", "d", "e"] : []) {
+        const dir = path.join(temporary, name);
+        await withBoundCacheDir(dir, await ensureCacheDir(dir), async () => await cacheFs.writeFile(path.join(dir, "file"), name));
+      }
+      process.stdout.write(JSON.stringify({ failure, anchor }));
+    `;
+    const reported = JSON.parse(execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], { encoding: "utf8" })) as { failure: unknown; anchor: string };
+    return { ...reported, swapped: nodeFs.existsSync(made) };
+  }
+
+  it("removes what a failed removal left in an anchor through its helper once more recent ones displace it", async () => {
+    const temporary = await temporaryDir();
+    const outside = path.join(temporary, "outside");
+    await fs.mkdir(outside);
+    const { failure, anchor, swapped } = await afterAFailedRemoval(temporary, outside, false, true);
+    expect(failure).toBe("EACCES");
+    expect(anchor).toMatch(anchorName);
+    expect(swapped).toBe(false);
+    expect(await fs.readdir(path.join(temporary, "a"))).toEqual([]);
+  });
+
+  it("deletes nothing outside the cache when a branch left in a displaced anchor is swapped for a link to outside during its removal", async () => {
+    const temporary = await temporaryDir();
+    const outside = path.join(temporary, "outside");
+    await fs.mkdir(path.join(outside, "inner"), { recursive: true });
+    await fs.writeFile(path.join(outside, "leaf"), "outside");
+    await fs.writeFile(path.join(outside, "inner", "leaf"), "outside");
+    const before = await contents(outside);
+    const { failure, anchor, swapped } = await afterAFailedRemoval(temporary, outside, true, true);
+    expect(failure).toBe("EACCES");
+    expect(swapped).toBe(true);
+    expect(await contents(outside)).toEqual(before);
+    // The anchor its helper could not empty stays behind, holding the link.
+    expect(await fs.readdir(path.join(temporary, "a"))).toEqual([anchor]);
+  });
+
+  it("leaves an anchor that still holds what a failed removal left in it when the process exits", async () => {
+    const temporary = await temporaryDir();
+    const outside = path.join(temporary, "outside");
+    await fs.mkdir(outside);
+    const { failure, anchor } = await afterAFailedRemoval(temporary, outside, false, false);
+    expect(failure).toBe("EACCES");
+    expect(await fs.readdir(path.join(temporary, "a"))).toEqual([anchor]);
+    const held = await contents(path.join(temporary, "a", anchor));
+    const [staged = ""] = Object.keys(held).filter((name) => !name.includes(path.sep));
+    expect(staged).toMatch(/^[0-9a-f-]{36}$/);
+    expect(held).toEqual({ [staged]: "dir", [path.join(staged, "branch")]: "dir", [path.join(staged, "branch", "leaf")]: `file:${Buffer.from("x").toString("base64")}` });
+  });
+
   it("removes its anchors when the process exits", async () => {
     const temporary = await temporaryDir();
     const cacheDir = path.join(temporary, "cache");
