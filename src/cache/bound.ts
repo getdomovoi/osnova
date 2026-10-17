@@ -20,8 +20,8 @@ import { IndexingError } from "../index/diagnostics.js";
 // found missing is there. Node's recursive mkdir and rm compose paths of their own, so a recursive mkdir creates each
 // directory in turn, and a recursive rm first moves its target into the anchor. Every change is also checked before
 // and after against the cache directory's identity, which stops a run once a retarget stays in place. What remains
-// unbound is the creation of the anchor itself: a retarget at that moment leaves one empty directory under the random
-// name elsewhere, and the run fails. A run that finds the cache directory moved, or the anchor gone, drops the anchor,
+// unbound is the first mkdir of a new anchor: a retarget undone between it and its check leaves one empty directory
+// under a lock debris name elsewhere, which a later sweep there removes, and the run fails. A run that finds the cache directory moved, or the anchor gone, drops the anchor,
 // so the next run makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when
 // the process dies without exiting. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
 // directory, and every change is only checked before and after: a retarget during one call can still send that call,
@@ -124,20 +124,33 @@ async function open(dir: string, identity: string): Promise<Handle | undefined> 
   }
 }
 
+// Nothing binds the mkdir that starts an anchor, so it makes the directory under a name lock debris sweeps take for an
+// abandoned acquisition: a retarget at that moment leaves it in the other directory, which the next sweep there removes
+// once it has been quiet. Once that directory's own parent is found to be the cache directory, it is renamed through
+// that parent, so the anchor itself lands in the cache directory or nowhere.
 async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
-  const anchor = `${scope.prefix}.osnova-bound-${randomUUID()}`;
+  const name = randomUUID();
+  const anchor = `${scope.prefix}.osnova-bound-${name}`;
+  const pending = `${scope.prefix}.osnova-bound.acquire-${name}`;
   const via = `${anchor}${path.sep}..`;
   physicalParent ??= await promises.stat(via).then(() => false, (error: unknown) => codeOf(error) === "ENOENT" ? true : undefined);
   if (physicalParent !== true) return undefined;
   await ensureSame(scope);
   try {
-    await promises.mkdir(anchor);
+    await promises.mkdir(pending);
   } catch (error) {
     throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
   }
-  if (await promises.stat(via, { bigint: true }).then(identityOf, () => undefined) !== scope.identity) {
-    await promises.rmdir(anchor).catch(() => {});
-    throw changingIn(scope);
+  const parent = `${pending}${path.sep}..`;
+  try {
+    if (await promises.stat(parent, { bigint: true }).then(identityOf, () => undefined) !== scope.identity) throw changingIn(scope);
+    await promises.rename(`${parent}${path.sep}${path.basename(pending)}`, `${parent}${path.sep}${path.basename(anchor)}`).catch((error: unknown) => {
+      throw codeOf(error) === "ENOENT" ? changingIn(scope) : new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
+    });
+  } catch (error) {
+    // The path names the directory just made, so wherever it resolves, this removes nothing else.
+    await promises.rmdir(pending).catch(() => {});
+    throw error;
   }
   return { ...scope, via, anchor, users: 0 };
 }
