@@ -567,13 +567,17 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
   }
 
   // Has every helper process started in the cache directory load hook first. A helper takes no NODE_OPTIONS, so the hook
-  // is passed on its command line.
-  function preloadedInHelpers(cacheDir: string, hook: string): void {
+  // is passed on its command line. Returns the helpers so started.
+  function preloadedInHelpers(cacheDir: string, hook: string): childProcess.ChildProcessWithoutNullStreams[] {
     const spawn = childProcess.spawn.bind(childProcess) as (...args: unknown[]) => unknown;
+    const started: childProcess.ChildProcessWithoutNullStreams[] = [];
     vi.spyOn(childProcess, "spawn").mockImplementation(((...args: unknown[]) => {
       if ((args[2] as { cwd?: unknown } | undefined)?.cwd !== cacheDir) return spawn(...args);
-      return spawn(args[0], ["--require", hook, ...(args[1] as string[])], ...args.slice(2));
+      const helper = spawn(args[0], ["--require", hook, ...(args[1] as string[])], ...args.slice(2)) as childProcess.ChildProcessWithoutNullStreams;
+      started.push(helper);
+      return helper;
     }) as never);
+    return started;
   }
 
   // Retargets the parent around the mkdir by which the helper process that makes an anchor makes it: from before the
@@ -967,6 +971,75 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(again).toBe("removed");
     expect(await contents(outside)).toEqual(before);
     expect(Object.keys(await contents(cacheDir)).filter((name) => name.split(path.sep)[0] === "again")).toEqual([]);
+  });
+
+  // Swaps the tree a recursive rm removes for a symbolic link to outside, once, as the helper's examination of it from the
+  // cache directory settles, so that the helper's entry into it follows the link. The helper then waits until the file
+  // released exists, so a change sent meanwhile queues behind the rm.
+  async function treeSwappedForLinkAsItIsEntered(cacheDir: string, outside: string): Promise<{ started: childProcess.ChildProcessWithoutNullStreams[]; swapped: () => boolean; release: () => void }> {
+    const dir = await temporaryDir();
+    const made = path.join(dir, "swapped");
+    const released = path.join(dir, "released");
+    const hook = path.join(dir, "hook.cjs");
+    await fs.writeFile(hook, `
+      const fs = require("node:fs");
+      const [cacheDir, outside, made, released] = ${JSON.stringify([cacheDir, outside, made, released])};
+      const lstatSync = fs.lstatSync;
+      fs.lstatSync = (...args) => {
+        const found = lstatSync(...args);
+        if (!fs.existsSync(made) && args[0] === "tree" && args[1]?.bigint === true && process.cwd() === cacheDir) {
+          fs.writeFileSync(made, "");
+          fs.rmSync("tree", { recursive: true });
+          fs.symlinkSync(outside, "tree", "dir");
+          const pause = new Int32Array(new SharedArrayBuffer(4));
+          for (const deadline = Date.now() + 10000; !fs.existsSync(released) && Date.now() < deadline;) Atomics.wait(pause, 0, 0, 5);
+        }
+        return found;
+      };
+    `);
+    const started = preloadedInHelpers(cacheDir, hook);
+    return { started, swapped: () => nodeFs.existsSync(made), release: () => nodeFs.writeFileSync(released, "") };
+  }
+
+  it.each([
+    ["once the rm has failed", "written"],
+    ["queued behind the rm", "cache-changing"],
+  ] as const)("changes nothing outside the cache by a change sent %s, when the tree a recursive rm removes is swapped for a link to outside as the helper enters it", async (order, expected) => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const outside = path.join(temporary, "outside");
+    await fs.mkdir(path.join(outside, "inner"), { recursive: true });
+    await fs.writeFile(path.join(outside, "leaf"), "outside");
+    await fs.writeFile(path.join(outside, "inner", "leaf"), "outside");
+    const before = await contents(outside);
+    const identity = await ensureCacheDir(cacheDir);
+    const { started, swapped, release } = await treeSwappedForLinkAsItIsEntered(cacheDir, outside);
+    const settle = async (call: Promise<unknown>): Promise<unknown> => await call.then(() => "written", (error: unknown) => (error as { diagnostic?: { code?: string } }).diagnostic?.code ?? (error as NodeJS.ErrnoException).code);
+    const outcomes = await withBoundCacheDir(cacheDir, identity, async () => {
+      await cacheFs.mkdir(path.join(cacheDir, "tree", "branch"), { recursive: true });
+      await cacheFs.writeFile(path.join(cacheDir, "tree", "branch", "leaf"), "x");
+      if (order === "once the rm has failed") release();
+      const removal = settle(cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true }));
+      if (order === "once the rm has failed") return [await removal, await settle(cacheFs.writeFile(path.join(cacheDir, "after"), "x"))];
+      await vi.waitFor(() => expect(swapped()).toBe(true), { timeout: 5000, interval: 5 });
+      const [helper] = started;
+      const sent: string[] = [];
+      const write = helper?.stdin.write.bind(helper.stdin) as (...args: unknown[]) => boolean;
+      if (helper !== undefined) helper.stdin.write = ((...args: unknown[]) => {
+        sent.push(String(args[0]));
+        return write(...args);
+      }) as never;
+      const queued = settle(cacheFs.writeFile(path.join(cacheDir, "after"), "x"));
+      await vi.waitFor(() => expect(sent.some((line) => line.includes(`"writeFile"`))).toBe(true), { timeout: 5000, interval: 5 });
+      release();
+      return await Promise.all([removal, queued]);
+    });
+    vi.restoreAllMocks();
+    expect(swapped()).toBe(true);
+    expect(outcomes).toEqual(["cache-changing", expected]);
+    expect(await contents(outside)).toEqual(before);
+    if (expected === "written") expect(await fs.readFile(path.join(cacheDir, "after"), "utf8")).toBe("x");
+    else await expect(fs.access(path.join(cacheDir, "after"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("names the requested path, not the helper's, in the error of a recursive rm that fails within its tree", async () => {
