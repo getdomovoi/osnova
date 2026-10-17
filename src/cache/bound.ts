@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import childProcess, { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants, promises, rmdirSync } from "node:fs";
+import { constants, promises } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import type { Socket } from "node:net";
 import path from "node:path";
@@ -26,11 +26,12 @@ import { IndexingError } from "../index/diagnostics.js";
 // place, directory by directory, entering each one and finding it to be the one an lstat just found there, so a
 // directory swapped for a link sends no removal outside the tree. Reads within the cache directory go through
 // <cache>/<anchor>/.., which the kernel resolves through the anchor's own parent. A run that finds the cache directory
-// moved, or the anchor gone, drops the anchor, so the next run makes a new one. An anchor is left behind when it is
-// dropped after the cache directory moved, when it holds anything as it is removed, or when the process dies without
-// exiting. Where .. drops the name before it instead, as Windows resolves it, Node offers no way to bind the directory,
-// and a worker thread makes no anchor, so there every change within the cache directory fails with cache-unbindable
-// before it changes anything; reads go by path.
+// moved, or the anchor gone, drops the anchor, so the next run makes a new one. The helper removes the anchor too, by
+// its name, once displaced, or as its input closes when this process exits or dies. An anchor is left behind when it
+// is removed after the cache directory moved, when it holds anything as it is removed, or when the process ends while
+// the anchor has no helper. Where .. drops the name before it instead, as Windows resolves it, Node offers no way to
+// bind the directory, and a worker thread makes no anchor, so there every change within the cache directory fails with
+// cache-unbindable before it changes anything; reads go by path.
 interface Scope {
   readonly dir: string;
   readonly prefix: string;
@@ -92,7 +93,7 @@ const shared = globalThis as typeof globalThis & {
   [anchorRegistry]?: Map<string, Anchor> | undefined;
 };
 const handles = shared[registry] ??= new Map<string, Handle>();
-const anchors = shared[anchorRegistry] ??= removedOnExit(new Map<string, Anchor>());
+const anchors = shared[anchorRegistry] ??= new Map<string, Anchor>();
 const keptHandles = 4;
 let unsupported = process.platform !== "linux";
 // Whether .. resolves through the directory before it, probed by the first run that needs an anchor.
@@ -183,6 +184,7 @@ const serveAnchor = [
   `}`,
   `const entered = [identity];`,
   `const at = [];`,
+  `let dropped = false;`,
   `const missing = (error) => error !== elsewhere && error.code === "ENOENT";`,
   `const remove = (entry) => {`,
   `  at.push(entry);`,
@@ -235,6 +237,7 @@ const serveAnchor = [
   `  rmdir: ([dir, options]) => fs.rmdirSync(dir, options),`,
   `  unlink: ([file]) => fs.unlinkSync(file),`,
   `  writeFile: ([file, options], data) => fs.writeFileSync(file, data, options),`,
+  `  drop: () => fs.rmdirSync(name),`,
   `};`,
   `const bound = () => {`,
   `  try {`,
@@ -251,6 +254,7 @@ const serveAnchor = [
   `  }`,
   `};`,
   `const answer = (change, data) => {`,
+  `  if (change.name === "drop") dropped = true;`,
   `  if (!home()) return { elsewhere: true, lost: true };`,
   `  if (!bound()) return { elsewhere: true };`,
   `  at.length = 0;`,
@@ -306,6 +310,13 @@ const serveAnchor = [
   `  }`,
   `};`,
   `process.stdin.on("data", take);`,
+  `process.stdin.on("end", () => {`,
+  `  try {`,
+  `    if (!dropped && home() && bound()) fs.rmdirSync(name);`,
+  `  } catch {`,
+  `    // the anchor stays behind`,
+  `  }`,
+  `});`,
   `process.stdout.write("\\n");`,
 ].join("\n");
 
@@ -366,7 +377,7 @@ function serve(anchor: Anchor, mode: "make" | "enter"): Promise<Helper> {
 
 // What the helper of anchor answers to change, or undefined when it exits first. The change is a line of JSON, which
 // names the size of the data that follows it.
-async function ask(anchor: Anchor, change: { readonly name: Bindable; readonly args: readonly unknown[] }, data: Buffer = Buffer.alloc(0)): Promise<Answer | undefined> {
+async function ask(anchor: Anchor, change: { readonly name: Bindable | "drop"; readonly args: readonly unknown[] }, data: Buffer = Buffer.alloc(0)): Promise<Answer | undefined> {
   const serving = anchor.helper ?? serve(anchor, "enter");
   const helper = await serving;
   if (helper.closed) return undefined;
@@ -404,20 +415,13 @@ async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
   return made;
 }
 
-// The path names the anchor itself, so wherever it resolves, this removes nothing but the anchor, and an anchor that
-// holds anything stays behind. Its helper exits once its input is closed.
+// The anchor's path resolves the cache directory's ancestors again, so a parent retargeted would send its removal
+// elsewhere. The helper removes the anchor instead, by its name in the directory it is in, once it has found that
+// directory to be the cache directory and the anchor's path to lead back to it; an anchor that holds anything stays
+// behind. The helper does the same as its input closes, as it does when this process exits or dies, and then exits.
 async function removeAnchor(anchor: Anchor): Promise<void> {
-  await promises.rmdir(anchor.anchor).catch(() => {});
+  await ask(anchor, { name: "drop", args: [] }).catch(() => {});
   void anchor.helper?.then((helper) => helper.child.stdin.end(), () => {});
-}
-
-function removedOnExit(kept: Map<string, Anchor>): Map<string, Anchor> {
-  process.once("exit", () => {
-    for (const anchor of kept.values()) {
-      try { rmdirSync(anchor.anchor); } catch { /* exiting: the anchor stays behind */ }
-    }
-  });
-  return kept;
 }
 
 // Creates the cache directory when it is missing and returns the device and inode of the directory it names. The stat

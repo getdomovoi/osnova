@@ -361,7 +361,8 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(failure).toBe("EACCES");
     expect(anchor).toMatch(anchorName);
     expect(swapped).toBe(false);
-    expect(await contents(path.join(temporary, "a"))).toEqual(leftInPlace);
+    // The anchor's helper removes the anchor as it is displaced, or as its input closes once the process exits.
+    await vi.waitFor(async () => expect(await contents(path.join(temporary, "a"))).toEqual(leftInPlace));
   });
 
   it("deletes nothing outside the cache when what a failed recursive rm left in place is swapped for a link to outside as it is removed again", async () => {
@@ -387,7 +388,8 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     await fs.mkdir(outside);
     const { failure } = await afterAFailedRemoval(temporary, outside, false, false);
     expect(failure).toBe("EACCES");
-    expect(await contents(path.join(temporary, "a"))).toEqual(leftInPlace);
+    // The anchor's helper removes the anchor as its input closes, once the process exits.
+    await vi.waitFor(async () => expect(await contents(path.join(temporary, "a"))).toEqual(leftInPlace));
   });
 
   it("removes its anchors when the process exits", async () => {
@@ -413,7 +415,8 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     `;
     const during = JSON.parse(execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], { encoding: "utf8" })) as string[];
     expect(during).toEqual([expect.stringMatching(anchorName), "file"]);
-    expect(await fs.readdir(cacheDir)).toEqual(["file"]);
+    // The anchor's helper removes the anchor as its input closes, once the process exits.
+    await vi.waitFor(async () => expect(await fs.readdir(cacheDir)).toEqual(["file"]));
   });
 
   it("fails a cache write during which a parent of the cache is retargeted, and refuses the next", async () => {
