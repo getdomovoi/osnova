@@ -440,6 +440,70 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(await contents(cacheDir)).toEqual(ours);
   });
 
+  // Once armed, swaps the anchor of cacheDir for a link to inner, so that its .. names the directory holding inner, and
+  // moves the anchor itself to moved. It does so once, as the first change through the anchor begins, whether this
+  // process or a helper process makes it.
+  async function anchorSwappedForLink(cacheDir: string, inner: string, moved: string): Promise<{ arm: () => void; swapped: () => boolean }> {
+    const dir = await temporaryDir();
+    const armed = path.join(dir, "armed");
+    const made = path.join(dir, "swapped");
+    const swap = `(fs) => {
+      const [cacheDir, inner, moved, armed, made] = ${JSON.stringify([cacheDir, inner, moved, armed, made])};
+      if (!fs.existsSync(armed) || fs.existsSync(made)) return;
+      fs.writeFileSync(made, "");
+      const anchor = cacheDir + "/" + fs.readdirSync(cacheDir).find((name) => /^\\.osnova-bound-/.test(name));
+      fs.renameSync(anchor, moved);
+      fs.symlinkSync(inner, anchor, "dir");
+    }`;
+    const hook = path.join(dir, "hook.cjs");
+    await fs.writeFile(hook, `
+      const fs = require("node:fs");
+      const swap = ${swap};
+      const unwrapped = { ...fs };
+      for (const name of ["copyFileSync", "lstatSync", "mkdirSync", "renameSync", "rmSync", "rmdirSync", "unlinkSync", "writeFileSync"]) {
+        fs[name] = (...args) => {
+          swap(unwrapped);
+          return unwrapped[name](...args);
+        };
+      }
+    `);
+    preloadedInHelpers(cacheDir, hook);
+    const swapHere = (0, eval)(swap) as (api: typeof nodeFs) => void;
+    for (const name of ["copyFile", "lstat", "mkdir", "rename", "rm", "rmdir", "unlink", "writeFile"] as const) {
+      const original = fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+      vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
+        if (args.some((arg) => typeof arg === "string" && arg.includes(".osnova-bound-"))) swapHere(nodeFs);
+        return await original(...args);
+      }) as never);
+    }
+    return { arm: () => nodeFs.writeFileSync(armed, ""), swapped: () => nodeFs.existsSync(made) };
+  }
+
+  it.each([
+    ...changes,
+    ["recursive mkdir", async (cacheDir: string) => await cacheFs.mkdir(path.join(cacheDir, "entry", "made", "deeper"), { recursive: true })],
+  ] as const)("changes nothing outside the cache when the anchor is swapped for a link to outside as a %s begins", async (_name, change) => {
+    const { elsewhere, cacheDir, otherCacheDir } = await twinCaches();
+    const inner = path.join(otherCacheDir, "inner");
+    await fs.mkdir(inner);
+    const moved = path.join(elsewhere, "moved");
+    const identity = await ensureCacheDir(cacheDir);
+    const ours = await contents(cacheDir);
+    const others = await contents(elsewhere);
+    const anchor = await anchorSwappedForLink(cacheDir, inner, moved);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => {
+      anchor.arm();
+      return await change(cacheDir).then(() => "changed", (error: unknown) => (error as { diagnostic?: { code?: string } }).diagnostic?.code ?? error);
+    });
+    vi.restoreAllMocks();
+    expect(anchor.swapped()).toBe(true);
+    expect(["changed", "cache-changing", "cache-unbindable"]).toContain(outcome);
+    // The anchor moved out of the cache holds nothing, and nothing else outside the cache changed.
+    expect(await contents(elsewhere)).toEqual({ ...others, moved: "dir" });
+    // A change that succeeded changed the cache directory.
+    const besidesTheLink = Object.fromEntries(Object.entries(await contents(cacheDir)).filter(([name]) => !anchorName.test(name)));
+    if (outcome === "changed") expect(besidesTheLink).not.toEqual(ours);  });
+
   async function anchoredWrite(cacheDir: string): Promise<unknown> {
     const identity = await ensureCacheDir(cacheDir);
     return await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.writeFile(path.join(cacheDir, "entry", "new"), "x"))
