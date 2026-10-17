@@ -56,10 +56,11 @@ interface Helper {
 }
 
 // What a helper answers to a change: what it returned, or the error it failed with, or that the anchor no longer led
-// back to the cache directory.
+// back to the cache directory, and with lost, that the helper is no longer in the cache directory and exits.
 interface Answer {
   readonly value?: unknown;
   readonly elsewhere?: boolean | undefined;
+  readonly lost?: boolean | undefined;
   readonly code?: string | undefined;
   readonly errno?: number | undefined;
   readonly syscall?: string | undefined;
@@ -158,8 +159,10 @@ const elsewhereExit = 3;
 // the cache directory. A recursive rm enters each directory it removes, and each directory on the way to it, and finds
 // it to be the one an lstat just found there, so a directory replaced, or swapped for a link, before it is entered stops
 // the removal before it changes anything there; what is removed is named relative to the directory entered, so no link
-// is followed. at names what it was removing, relative to the cache directory. A helper that cannot find its way back
-// into the cache directory answers and exits.
+// is followed. at names what it was removing, relative to the cache directory. Before each change the helper checks
+// that "." still has the cache directory's identity. A helper that finds it has not, or whose entry into a directory
+// fails its check, or that cannot find its way back into the cache directory, answers and exits, so no change queued
+// behind is made from wherever it is.
 const serveAnchor = [
   `const fs = require("node:fs");`,
   `const path = require("node:path");`,
@@ -240,15 +243,23 @@ const serveAnchor = [
   `    return false;`,
   `  }`,
   `};`,
+  `const home = () => {`,
+  `  try {`,
+  `    return here() === identity;`,
+  `  } catch {`,
+  `    return false;`,
+  `  }`,
+  `};`,
   `const answer = (change, data) => {`,
+  `  if (!home()) return { elsewhere: true, lost: true };`,
   `  if (!bound()) return { elsewhere: true };`,
   `  at.length = 0;`,
   `  let reply;`,
   `  try {`,
   `    reply = { value: changes[change.name](change.args.map((arg) => arg ?? undefined), data) };`,
   `  } catch (error) {`,
-  `    reply = error === elsewhere ? { elsewhere: true }`,
-  `      : { code: error.code, errno: error.errno, syscall: error.syscall, path: error.path, dest: error.dest, message: error.message, at: [...at] };`,
+  `    if (error === elsewhere) return { elsewhere: true, lost: true };`,
+  `    reply = { code: error.code, errno: error.errno, syscall: error.syscall, path: error.path, dest: error.dest, message: error.message, at: [...at] };`,
   `  }`,
   `  if (entered.length === 1) return reply;`,
   `  try {`,
@@ -320,10 +331,10 @@ function serve(anchor: Anchor, mode: "make" | "enter"): Promise<Helper> {
     let ready = false;
     let buffered = "";
     let stderr = "";
-    const settle = (cause: () => unknown): void => {
+    const settle = (cause: () => unknown, left?: string): void => {
       helper.closed = true;
       if (anchor.helper === started) anchor.helper = undefined;
-      for (const answer of helper.answers.splice(0)) answer(undefined);
+      for (const answer of helper.answers.splice(0)) answer(left);
       if (!ready) reject(cause());
     };
     child.unref();
@@ -346,7 +357,8 @@ function serve(anchor: Anchor, mode: "make" | "enter"): Promise<Helper> {
     });
     child.on("error", (error) => settle(() => new IndexingError({ phase: "cache", path: anchor.dir, code: "cache-write-failed" }, error)));
     child.on("close", (code, signal) => settle(() => code === elsewhereExit ? changingIn(anchor)
-      : new IndexingError({ phase: "cache", path: anchor.dir, code: "cache-write-failed" }, new Error(`the anchor helper exited with ${code ?? signal}: ${stderr}`))));
+      : new IndexingError({ phase: "cache", path: anchor.dir, code: "cache-write-failed" }, new Error(`the anchor helper exited with ${code ?? signal}: ${stderr}`)),
+    code === elsewhereExit ? JSON.stringify({ elsewhere: true }) : undefined));
   });
   anchor.helper = started;
   return started;
@@ -355,7 +367,8 @@ function serve(anchor: Anchor, mode: "make" | "enter"): Promise<Helper> {
 // What the helper of anchor answers to change, or undefined when it exits first. The change is a line of JSON, which
 // names the size of the data that follows it.
 async function ask(anchor: Anchor, change: { readonly name: Bindable; readonly args: readonly unknown[] }, data: Buffer = Buffer.alloc(0)): Promise<Answer | undefined> {
-  const helper = await (anchor.helper ?? serve(anchor, "enter"));
+  const serving = anchor.helper ?? serve(anchor, "enter");
+  const helper = await serving;
   if (helper.closed) return undefined;
   const line = await new Promise<string | undefined>((resolve) => {
     helper.answers.push(resolve);
@@ -363,7 +376,14 @@ async function ask(anchor: Anchor, change: { readonly name: Bindable; readonly a
     helper.child.stdin.write(`${JSON.stringify({ ...change, size: data.length })}\n`);
     if (data.length > 0) helper.child.stdin.write(data);
   });
-  return line === undefined ? undefined : JSON.parse(line) as Answer;
+  if (line === undefined) return undefined;
+  const answer = JSON.parse(line) as Answer;
+  // A change sent after this one would reach the helper as it exits, so the next starts another.
+  if (answer.lost === true) {
+    helper.closed = true;
+    if (anchor.helper === serving) anchor.helper = undefined;
+  }
+  return answer;
 }
 
 // Besides a descriptor, the working directory is the one reference to a directory that the kernel resolves a relative
