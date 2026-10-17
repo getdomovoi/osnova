@@ -21,7 +21,8 @@
     "go": "every ast.CallExpr whose callee is a name or a selector (generic instantiation stripped), resolved with types.Info.Uses after golang.org/x/tools/go/packages loads ./... with tests (truth-go/)",
     "java": "every MethodInvocationTree and NewClassTree, resolved with Trees.getElement after JavacTask.analyze (the constructor; the named type for an anonymous class), declaration line from the element's tree (TruthJava.java)",
     "rust": "every tree-sitter call_expression whose callee is a name, a path, a method field or a turbofish, sent to rust-analyzer textDocument/definition once the server is quiescent (sites-rust.mjs, truth-rust.mjs)",
-    "csharp": "every InvocationExpressionSyntax and ObjectCreationExpressionSyntax with a named callee, bound with SemanticModel.GetSymbolInfo in compilations replayed from a real build's csc arguments with source-generator output (truth-csharp/)"
+    "csharp": "every InvocationExpressionSyntax and ObjectCreationExpressionSyntax with a named callee, bound with SemanticModel.GetSymbolInfo in compilations replayed from a real build's csc arguments with source-generator output (truth-csharp/)",
+    "sameLine": "A line that calls one name more than once has one checker entry per call under one unit key. Each claimed edge there stands for at most one of those calls, paired so that as many claims as possible hold (a maximum matching); a claim left unpaired is false when the key is decided. Before 2026-10-02 the scorer kept only the first entry per key, so a correct edge for the second call scored false: zod 4, gson 3, ripgrep 2 and humanizer 1 false edges were such keys."
   },
   "corpora": [
     {
@@ -90,22 +91,14 @@
       "claimedEdges": 21628,
       "decided": 21593,
       "undecided": 35,
-      "truePositive": 21589,
-      "falsePositive": 4,
-      "precision": 0.9998,
-      "falseEdgeRate": 0.00019,
+      "truePositive": 21593,
+      "falsePositive": 0,
+      "precision": 1,
+      "falseEdgeRate": 0,
       "oracleInRepoSites": 27558,
-      "coveredInRepoSites": 21549,
+      "coveredInRepoSites": 21550,
       "recall": 0.782,
-      "falseByCause": [
-        {
-          "cause": "unchanged from the 2026-09-21 record",
-          "count": 4,
-          "wrong": "osnova",
-          "detail": "the same four sites as recorded on 2026-09-21: three receiver hints name another class's member and one re-export binding names another export",
-          "example": "packages/zod/src/v3/types.ts:3917 create, packages/zod/src/v3/types.ts:3954 create, packages/zod/src/v4/classic/tests/optin-ladder.test.ts:83 string, packages/zod/src/v4/core/tests/locales/tg.test.ts:81 min"
-        }
-      ],
+      "falseByCause": [],
       "runSeconds": {
         "oracle": 3.8,
         "osnovaSites": 3.25
@@ -201,14 +194,14 @@
       "claimedEdges": 8140,
       "decided": 8133,
       "undecided": 7,
-      "truePositive": 8129,
-      "falsePositive": 4,
-      "precision": 0.9995,
-      "falseEdgeRate": 0.00049,
+      "truePositive": 8132,
+      "falsePositive": 1,
+      "precision": 0.9999,
+      "falseEdgeRate": 0.00012,
       "oracleInRepoSites": 11222,
       "coveredInRepoSites": 8119,
       "recall": 0.7235,
-      "falseEdgesWithCorrectTarget": 3,
+      "falseEdgesWithCorrectTarget": 0,
       "falseByCause": [
         {
           "cause": "receiver typed by its initializer, not its declared type",
@@ -216,13 +209,6 @@
           "wrong": "osnova",
           "detail": "Map<String, Integer> map = new LinkedTreeMap<>(); map.put(...) names LinkedTreeMap.put; javac binds java.util.Map.put",
           "example": "gson/src/test/java/com/google/gson/internal/LinkedTreeMapTest.java:215 put"
-        },
-        {
-          "cause": "same-name collision in the unit key",
-          "count": 3,
-          "wrong": "neither",
-          "detail": "two calls with the same name on one line or adjacent lines share one (file, line, name) key; osnova names the checker's declaration for the other call",
-          "example": "gson/src/test/java/com/google/gson/functional/StructTypeAdapterTest.java:104 get"
         }
       ],
       "runSeconds": {
@@ -295,22 +281,15 @@
       "claimedEdges": 6121,
       "decided": 6066,
       "undecided": 55,
-      "truePositive": 6037,
-      "falsePositive": 29,
-      "precision": 0.9952,
-      "falseEdgeRate": 0.00478,
+      "truePositive": 6039,
+      "falsePositive": 27,
+      "precision": 0.9955,
+      "falseEdgeRate": 0.00445,
       "oracleInRepoSites": 7028,
-      "coveredInRepoSites": 6032,
-      "recall": 0.8583,
-      "falseEdgesWithCorrectTarget": 2,
+      "coveredInRepoSites": 6034,
+      "recall": 0.8586,
+      "falseEdgesWithCorrectTarget": 0,
       "falseByCause": [
-        {
-          "cause": "line-anchor collision",
-          "count": 2,
-          "wrong": "neither",
-          "detail": "two calls named new share one line, RefCell::new(CounterWriter::new(wtr)); osnova's CounterWriter::new edge is right and the key carries RefCell::new's external verdict",
-          "example": "crates/printer/src/standard.rs:130 new"
-        },
         {
           "cause": "cfg variants collapse",
           "count": 11,
@@ -413,13 +392,13 @@
       "claimedEdges": 7695,
       "decided": 7421,
       "undecided": 274,
-      "truePositive": 7418,
-      "falsePositive": 3,
-      "precision": 0.9996,
-      "falseEdgeRate": 0.0004,
+      "truePositive": 7419,
+      "falsePositive": 2,
+      "precision": 0.9997,
+      "falseEdgeRate": 0.00027,
       "oracleInRepoSites": 11825,
-      "coveredInRepoSites": 7416,
-      "recall": 0.6271,
+      "coveredInRepoSites": 7417,
+      "recall": 0.6272,
       "falseByCause": [
         {
           "cause": "local function in top-level statements",
@@ -427,13 +406,6 @@
           "wrong": "osnova",
           "detail": "StripComment is a local function of a file-based program's top-level statements, which the index does not record, so the call names a same-named method in another file by unique name",
           "example": "tools/Humanizer.UnicodeDataGenerator/Program.cs:247 StripComment"
-        },
-        {
-          "cause": "same-name collision in the unit key",
-          "count": 1,
-          "wrong": "neither",
-          "detail": "input.ToString(formatProvider) and input.ToString(format, formatProvider) share one line; osnova names ByteSize.ToString(string, IFormatProvider) at 505 for the two-argument call, which is right, and the key carries the one-argument call's verdict",
-          "example": "src/Humanizer/Bytes/ByteSizeExtensions.cs:455 ToString"
         }
       ],
       "runSeconds": {
@@ -446,7 +418,7 @@
         "determinism": "two runs byte-identical, and a third after a full rebuild of the copy"
       },
       "overloadUndetermined": 645,
-      "falseEdgesWithCorrectTarget": 1,
+      "falseEdgesWithCorrectTarget": 0,
       "previous": {
         "osnova": {
           "commit": "bdd5043fa4d90879966de923930b24be7ddde579",
@@ -485,7 +457,7 @@
   "limitations": [
     "The checker's own resolution is the reference; where it returns nothing the site is undecided and counts in neither rate. Dynamic dispatch the checker cannot see is invisible to both sides.",
     "A checker names one declaration, the static one. Where a language has overloads (Java, C#), osnova keeps one symbol per qualified name and records which declaration a call binds only when the written argument count selects exactly one among the declarations of the resolved type, its written-partial parts and its declared base classes; an edge whose count fits several or none names the method but no declaration, is counted in overloadUndetermined and is not claimed. Rust cfg variants of one function still collapse to one record.",
-    "The unit key is (file, line, name). Two calls of the same name on one line share a verdict; falseEdgesWithCorrectTarget counts the false edges where osnova's target is the checker's declaration for the other call. Osnova records a call at the line of the callee name, the line the oracle uses; 0.11.0 recorded the first line of the call expression, which in a chain written one call per line could be lines above the name.",
+    "The unit key is (file, line, name). Two calls of the same name on one line share the key; each claim there is paired with at most one of their checker entries (method.sameLine), so falseEdgesWithCorrectTarget, the false edges whose target is the checker's declaration for the other call, is 0. Recall still counts such a line as one site. Osnova records a call at the line of the callee name, the line the oracle uses; 0.11.0 recorded the first line of the call expression, which in a chain written one call per line could be lines above the name.",
     "Line tolerance of one absorbs multi-line call formatting and could mask a wrong target declared on an adjacent line.",
     "Each oracle sees one build configuration: cobra for darwin and windows, ripgrep for the host target with default features, gson on the classpath at JDK 27's language level, humanizer for net10.0 with .NET SDK 10.0.401 rather than the SDK 11 preview its global.json names. Code compiled only in other configurations is not enumerated.",
     "Recall counts osnova call edges only; import, reference, extends and routes edges are not scored here. Claimed edges in files the oracle does not compile (other languages in the checkout, uncompiled projects) are undecided.",
