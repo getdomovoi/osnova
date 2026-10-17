@@ -11,7 +11,10 @@ import { workspaceDirFor } from "../src/cache/cache.js";
 import { sweepLockDebris } from "../src/cache/lock.js";
 
 // Every test here runs where a cache directory cannot be bound to a descriptor. Platforms without /proc/self/fd are such
-// a place already; elsewhere the probe of /proc/self/fd fails, as it does on a restricted Linux.
+// a place already; elsewhere the probe of /proc/self/fd fails, as it does on a restricted Linux. They need .. to resolve
+// through the directory before it, so an anchor binds the cache directory; Windows resolves .. by name, and
+// cache-bound-lexical.test.ts covers what happens there.
+const anchored = process.platform !== "win32";
 const temporaries: string[] = [];
 const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 const anchorName = /^\.osnova-bound-[0-9a-f-]{36}$/;
@@ -94,7 +97,7 @@ async function contents(dir: string): Promise<Record<string, string>> {
   return found;
 }
 
-describe("withBoundCacheDir where the cache directory cannot be bound", () => {
+describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be bound", () => {
   it("refuses a cache write once a parent of the cache is retargeted", async () => {
     const temporary = await temporaryDir();
     const parent = path.join(temporary, "p");
@@ -393,7 +396,7 @@ describe("withBoundCacheDir where the cache directory cannot be bound", () => {
   });
 });
 
-describe("refreshWorkspaceWitnessed where the cache directory cannot be bound", () => {
+describe.runIf(anchored)("refreshWorkspaceWitnessed where the cache directory cannot be bound", () => {
   // The cache lies beneath the same parent as the root, and q holds a root and a cache of the same names.
   async function sharedParent(): Promise<{ parent: string; elsewhere: string; root: string; cacheDir: string; otherCacheDir: string; key: string }> {
     const temporary = await temporaryDir();

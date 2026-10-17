@@ -14,7 +14,7 @@ import type { ScanWitness } from "./index/scan.js";
 import { IndexingError } from "./index/diagnostics.js";
 import { knownIndexGeneration, rememberIndexGeneration } from "./index/generation.js";
 import { ensureFamilySidecar, seedProgress, seedWorkspace } from "./index/seed.js";
-import { cacheChangingIn, cacheFs, ensureCacheDir, withBoundCacheDir } from "./cache/bound.js";
+import { cacheBindingFailureIn, cacheFs, ensureCacheDir, withBoundCacheDir } from "./cache/bound.js";
 
 export type { WorkspaceOptions } from "./index/workspace.js";
 export type { CachePolicy } from "./cache/cache.js";
@@ -148,8 +148,8 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   // reaches the cache directory the lock was taken in without resolving its ancestors again, so a retarget undone
   // between two checks cannot redirect a write; one undone while sources are read is not seen. Where no descriptor can
   // bind the cache directory, an anchor directory inside it does, and a call a retarget redirects changes nothing and
-  // fails the refresh with cache-changing. Where the platform resolves .. by name, each cache write is only checked
-  // before and after, which cannot stop the one write a retarget lands during (see withBoundCacheDir).
+  // fails the refresh with cache-changing. Where the platform resolves .. by name, nothing can bind a cache write, so the
+  // first one fails the refresh with cache-unbindable before it changes anything (see withBoundCacheDir).
   const task = withBoundCacheDir(canonicalCache, cacheIdentity, () => withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
     const changing = (): IndexingError => new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
     const identity = await rootIdentity(canonicalRoot);
@@ -244,8 +244,8 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   }, options)).catch((error: unknown) => {
     // The lock a refresh actually waited on is often a nested one, such as the cache-wide eviction
     // lock, wrapped in a read or write failure that names only the workspace directory. A cache directory that moved
-    // under a write is reported as such, not as the write that found it.
-    throw cacheLockTimeoutIn(error) ?? cacheChangingIn(error) ?? error;
+    // under a write, or one no write could be bound to, is reported as such, not as the write that found it.
+    throw cacheLockTimeoutIn(error) ?? cacheBindingFailureIn(error) ?? error;
   });
   refreshing.set(taskKey, task);
   try {

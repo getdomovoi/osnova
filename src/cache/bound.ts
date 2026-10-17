@@ -13,19 +13,18 @@ import { IndexingError } from "../index/diagnostics.js";
 // given. Paths kept in indexes and errors still name the cache directory itself.
 // Where no descriptor can bind the cache directory, on platforms without /proc/self/fd or where its probe fails, the
 // first run of a process makes an anchor, which later runs reuse: an empty directory under a random name in the cache
-// directory, and every cacheFs call on a path
-// within it goes through <cache>/<anchor>/.., which the kernel resolves through the anchor's own parent. A call sent
-// into any other directory finds no anchor there and fails with ENOENT before it changes anything. A change that fails
-// with ENOENT is checked against the cache directory through the anchor, and fails with cache-changing when what it
-// found missing is there. Node's recursive mkdir and rm compose paths of their own, so a recursive mkdir creates each
-// directory in turn, and a recursive rm first moves its target into the anchor. Every change is also checked before
-// and after against the cache directory's identity, which stops a run once a retarget stays in place. What remains
-// unbound is the first mkdir of a new anchor: a retarget undone between it and its check leaves one empty directory
-// under a lock debris name elsewhere, which a later sweep there removes, and the run fails. A run that finds the cache directory moved, or the anchor gone, drops the anchor,
-// so the next run makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when
-// the process dies without exiting. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
-// directory, and every change is only checked before and after: a retarget during one call can still send that call,
-// and only that call, into the other directory, and one undone between two checks is not seen.
+// directory, and every cacheFs call on a path within it goes through <cache>/<anchor>/.., which the kernel resolves
+// through the anchor's own parent. A call sent into any other directory finds no anchor there and fails with ENOENT
+// before it changes anything. A change that fails with ENOENT is checked against the cache directory through the
+// anchor, and fails with cache-changing when what it found missing is there. Node's recursive mkdir and rm compose
+// paths of their own, so a recursive mkdir creates each directory in turn, and a recursive rm first moves its target
+// into the anchor. Every change is also checked before and after against the cache directory's identity, which stops a
+// run once a retarget stays in place. What remains unbound is the first mkdir of a new anchor: a retarget undone between
+// it and its check leaves one empty directory under a lock debris name elsewhere, which a later sweep there removes,
+// and the run fails. A run that finds the cache directory moved, or the anchor gone, drops the anchor, so the next run
+// makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when the process
+// dies without exiting. Where .. drops the name before it instead, as Windows resolves it, Node offers no way to bind
+// the directory, so every change within it fails with cache-unbindable before it changes anything; reads go by path.
 interface Scope {
   readonly dir: string;
   readonly prefix: string;
@@ -50,7 +49,7 @@ interface Anchor extends Kept {
 
 // live ends with the operation, so a call that outlives it, from work the operation started without awaiting, uses the
 // path as given rather than a descriptor that may since have closed and been reused, or an anchor since removed. A run
-// without either is checked.
+// without either refuses every change within the cache directory.
 const binding = new AsyncLocalStorage<{ readonly scope: Scope; readonly handle: Handle | Anchor | undefined; live: boolean }>();
 // Kept open between refreshes, so a refresh of a cache directory already open compares the stat ensureCacheDir took with
 // it and opens nothing. A handle in use is never closed; one no longer the directory's handle closes with its last user.
@@ -194,7 +193,7 @@ export async function ensureCacheDir(cacheDir: string): Promise<string> {
 
 // Runs operation with every cacheFs call on a path within the canonical cache directory bound to the directory with
 // the given identity, the one ensureCacheDir found. A directory that path no longer names fails the operation. Where no
-// descriptor can bind the directory, an anchor binds it, or each change within it is checked, as described above.
+// descriptor can bind the directory, an anchor binds it, or each change within it is refused, as described above.
 export async function withBoundCacheDir<T>(canonicalCache: string, identity: string, operation: () => Promise<T>): Promise<T> {
   let handle = unsupported ? undefined : handles.get(canonicalCache);
   if (!unsupported && (handle === undefined || handle.identity !== identity)) handle = await open(canonicalCache, identity);
@@ -203,11 +202,11 @@ export async function withBoundCacheDir<T>(canonicalCache: string, identity: str
     let anchor = anchors.get(canonicalCache);
     if (anchor === undefined || anchor.identity !== identity) anchor = await anchorIn(scope);
     if (anchor === undefined) {
-      const checked = { scope, handle: undefined, live: true };
+      const refused = { scope, handle: undefined, live: true };
       try {
-        return await binding.run(checked, operation);
+        return await binding.run(refused, operation);
       } finally {
-        checked.live = false;
+        refused.live = false;
       }
     }
     anchor.users += 1;
@@ -231,11 +230,12 @@ export async function withBoundCacheDir<T>(canonicalCache: string, identity: str
   }
 }
 
-// The cache-changing failure behind a write failure that wraps it, so a caller sees that the cache directory moved.
-export function cacheChangingIn(error: unknown): IndexingError | undefined {
+// The cache-changing or cache-unbindable failure behind a write failure that wraps it, so a caller sees that the cache
+// directory moved, or that no change of it could be bound.
+export function cacheBindingFailureIn(error: unknown): IndexingError | undefined {
   let cause: unknown = error;
   for (let depth = 0; depth < 8 && cause !== null && cause !== undefined; depth += 1) {
-    if (cause instanceof IndexingError && cause.diagnostic.code === "cache-changing") return cause;
+    if (cause instanceof IndexingError && (cause.diagnostic.code === "cache-changing" || cause.diagnostic.code === "cache-unbindable")) return cause;
     cause = (cause as { cause?: unknown }).cause;
   }
   return undefined;
@@ -399,9 +399,9 @@ function through<K extends Bindable>(name: K, paths: 1 | 2): Promises[K] {
     if (!changes.has(name) || !args.slice(0, paths).some((target) => within(run.scope, target))) {
       return handle === undefined ? await call(...args) : await calling(handle, name, call, args, paths);
     }
+    if (handle === undefined) throw new IndexingError({ phase: "cache", path: run.scope.dir, code: "cache-unbindable" });
     await ensureSame(run.scope);
-    const change = handle === undefined ? call(...args) : changeThrough(handle, name, call, args, paths);
-    const settled = await change.then((value) => ({ value }), (error: unknown) => ({ error }));
+    const settled = await changeThrough(handle, name, call, args, paths).then((value) => ({ value }), (error: unknown) => ({ error }));
     await ensureSame(run.scope);
     if ("error" in settled) throw settled.error;
     return settled.value;
