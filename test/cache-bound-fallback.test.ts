@@ -1042,6 +1042,78 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     else await expect(fs.access(path.join(cacheDir, "after"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  // A module a helper loads first that writes the file exited as the helper exits.
+  async function markingExit(): Promise<{ hook: string; exited: () => boolean }> {
+    const dir = await temporaryDir();
+    const exited = path.join(dir, "exited");
+    const hook = path.join(dir, "hook.cjs");
+    await fs.writeFile(hook, `process.on("exit", () => require("node:fs").writeFileSync(${JSON.stringify(exited)}, ""));`);
+    return { hook, exited: () => nodeFs.existsSync(exited) };
+  }
+
+  // p/cache has an anchor, and q/cache an empty directory of the anchor's name, which the anchor's path names once p is
+  // retargeted to q.
+  async function anchoredTwin(temporary: string, anchor: string): Promise<void> {
+    await fs.mkdir(path.join(temporary, "q", "cache", anchor), { recursive: true });
+    await retarget(path.join(temporary, "p"), path.join(temporary, "q"));
+  }
+
+  it("deletes nothing outside the cache when a parent is retargeted before more recent anchors displace its anchor", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "p", "cache");
+    const identity = await ensureCacheDir(cacheDir);
+    const { hook, exited } = await markingExit();
+    preloadedInHelpers(cacheDir, hook);
+    await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.writeFile(path.join(cacheDir, "file"), "p"));
+    const [anchor = ""] = (await fs.readdir(cacheDir)).filter((name) => anchorName.test(name));
+    await anchoredTwin(temporary, anchor);
+    for (const name of ["b", "c", "d", "e"]) {
+      const dir = path.join(temporary, name);
+      await withBoundCacheDir(dir, await ensureCacheDir(dir), async () => await cacheFs.writeFile(path.join(dir, "file"), name));
+    }
+    await vi.waitFor(() => expect(exited()).toBe(true));
+    vi.restoreAllMocks();
+    await restore(path.join(temporary, "p"));
+    expect(await fs.readdir(path.join(temporary, "q", "cache"))).toEqual([anchor]);
+    // The anchor stays behind, since the cache path named another directory as it was displaced.
+    expect((await fs.readdir(cacheDir)).sort()).toEqual([anchor, "file"]);
+  });
+
+  it("deletes nothing outside the cache when a parent is retargeted before the process exits", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "p", "cache");
+    const { hook, exited } = await markingExit();
+    const bound = pathToFileURL(path.resolve("src/cache/bound.ts")).href;
+    const script = `
+      import childProcess from "node:child_process";
+      import nodeFs, { promises } from "node:fs";
+      import path from "node:path";
+      const [temporary, dir, hook] = ${JSON.stringify([temporary, cacheDir, hook])};
+      const stat = promises.stat.bind(promises);
+      promises.stat = async (target, ...rest) => {
+        if (String(target).startsWith("/proc/self/fd/")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return await stat(target, ...rest);
+      };
+      const spawn = childProcess.spawn;
+      childProcess.spawn = (command, args, ...rest) => spawn(command, ["--require", hook, ...args], ...rest);
+      const { cacheFs, ensureCacheDir, withBoundCacheDir } = await import(${JSON.stringify(bound)});
+      const identity = await ensureCacheDir(dir);
+      await withBoundCacheDir(dir, identity, async () => await cacheFs.writeFile(path.join(dir, "file"), "p"));
+      const [anchor] = (await promises.readdir(dir)).filter((name) => name.startsWith(".osnova-bound-"));
+      nodeFs.mkdirSync(path.join(temporary, "q", "cache", anchor), { recursive: true });
+      nodeFs.renameSync(path.join(temporary, "p"), path.join(temporary, "p-saved"));
+      nodeFs.symlinkSync(path.join(temporary, "q"), path.join(temporary, "p"), "dir");
+      process.stdout.write(JSON.stringify(anchor));
+    `;
+    const anchor = JSON.parse(execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], { encoding: "utf8" })) as string;
+    expect(anchor).toMatch(anchorName);
+    await vi.waitFor(() => expect(exited()).toBe(true));
+    await restore(path.join(temporary, "p"));
+    expect(await fs.readdir(path.join(temporary, "q", "cache"))).toEqual([anchor]);
+    // The anchor stays behind, since the cache path named another directory as the process exited.
+    expect((await fs.readdir(cacheDir)).sort()).toEqual([anchor, "file"]);
+  });
+
   it("names the requested path, not the helper's, in the error of a recursive rm that fails within its tree", async () => {
     const temporary = await temporaryDir();
     const cacheDir = path.join(temporary, "cache");
