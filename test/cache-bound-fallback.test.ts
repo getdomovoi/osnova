@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import nodeFs, { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -18,6 +18,7 @@ const anchored = process.platform !== "win32";
 const temporaries: string[] = [];
 const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 const anchorName = /^\.osnova-bound-[0-9a-f-]{36}$/;
+const identityOf = (stat: nodeFs.BigIntStats): string => `${stat.dev}:${stat.ino}`;
 let probed = false;
 beforeEach(() => {
   const stat = fs.stat.bind(fs) as (...args: unknown[]) => Promise<unknown>;
@@ -31,6 +32,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of temporaries.splice(0)) await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -358,37 +360,41 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     return found;
   }
 
-  // Retargets the parent around the first mkdir, by either API, of a name an anchor or its acquisition takes: from
-  // before the call until after it, or from after the call on, so that what runs then resolves the cache path into the
-  // other directory.
-  function retargetedAroundTheAnchor(parent: string, elsewhere: string, window: "during the call" | "during and after the call" | "after the call"): () => boolean {
-    const mkdir = fs.mkdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
-    const mkdirSync = nodeFs.mkdirSync.bind(nodeFs) as (...args: unknown[]) => unknown;
-    let done = false;
-    const accept = (target: unknown): boolean => !done && path.basename(String(target)).startsWith(".osnova-bound");
-    vi.spyOn(fs, "mkdir").mockImplementation((async (...args: unknown[]) => {
-      if (!accept(args[0])) return await mkdir(...args);
-      done = true;
-      if (window !== "after the call") await retarget(parent, elsewhere);
-      try {
-        return await mkdir(...args);
-      } finally {
-        if (window === "during the call") await restore(parent);
-        else if (window === "after the call") await retarget(parent, elsewhere);
-      }
-    }) as never);
-    vi.spyOn(nodeFs, "mkdirSync").mockImplementation(((...args: unknown[]) => {
-      if (!accept(args[0])) return mkdirSync(...args);
-      done = true;
-      if (window !== "after the call") retargetSync(parent, elsewhere);
-      try {
-        return mkdirSync(...args);
-      } finally {
-        if (window === "during the call") restoreSync(parent);
-        else if (window === "after the call") retargetSync(parent, elsewhere);
-      }
-    }) as never);
-    return () => done;
+  // Retargets the parent around the mkdir by which the helper process that makes an anchor makes it: from before the
+  // call until after it, or from after the call on, so that what runs then resolves the cache path into the other
+  // directory. The helper inherits NODE_OPTIONS, so a module it is told to load first wraps its mkdirSync.
+  async function retargetedAroundTheAnchor(parent: string, elsewhere: string, window: "during the call" | "during and after the call" | "after the call"): Promise<() => boolean> {
+    const dir = await temporaryDir();
+    const made = path.join(dir, "made");
+    const hook = path.join(dir, "hook.cjs");
+    await fs.writeFile(hook, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const [parent, elsewhere, window, made] = ${JSON.stringify([parent, elsewhere, window, made])};
+      const retarget = () => {
+        fs.renameSync(parent, parent + "-saved");
+        fs.symlinkSync(elsewhere, parent, "dir");
+      };
+      const restore = () => {
+        if (!fs.lstatSync(parent).isSymbolicLink()) return;
+        fs.unlinkSync(parent);
+        fs.renameSync(parent + "-saved", parent);
+      };
+      const mkdirSync = fs.mkdirSync;
+      fs.mkdirSync = (...args) => {
+        if (!path.basename(String(args[0])).startsWith(".osnova-bound")) return mkdirSync(...args);
+        fs.writeFileSync(made, "");
+        if (window !== "after the call") retarget();
+        try {
+          return mkdirSync(...args);
+        } finally {
+          if (window === "during the call") restore();
+          else if (window === "after the call") retarget();
+        }
+      };
+    `);
+    vi.stubEnv("NODE_OPTIONS", `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(hook)}`);
+    return () => nodeFs.existsSync(made);
   }
 
   it("makes the anchor in the cache directory, and changes nothing in the other cache, when a parent is retargeted during the creation of the anchor and restored after it", async () => {
@@ -396,7 +402,7 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
     const cwd = process.cwd();
-    const retargeted = retargetedAroundTheAnchor(parent, elsewhere, "during the call");
+    const retargeted = await retargetedAroundTheAnchor(parent, elsewhere, "during the call");
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
     expect(retargeted()).toBe(true);
@@ -411,7 +417,7 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
     const cwd = process.cwd();
-    const retargeted = retargetedAroundTheAnchor(parent, elsewhere, "during and after the call");
+    const retargeted = await retargetedAroundTheAnchor(parent, elsewhere, "during and after the call");
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
     await restore(parent);
@@ -427,7 +433,7 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedAroundTheAnchor(parent, elsewhere, "after the call");
+    const retargeted = await retargetedAroundTheAnchor(parent, elsewhere, "after the call");
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
     await restore(parent);
@@ -442,18 +448,20 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
     const cwd = process.cwd();
-    const chdir = process.chdir.bind(process);
+    // The helper process that makes the anchor enters the cache directory as it starts, and the parent is restored as
+    // it exits.
+    const execFile = childProcess.execFile.bind(childProcess) as (...args: unknown[]) => unknown;
     let retargeted = false;
-    vi.spyOn(process, "chdir").mockImplementation((target: string) => {
-      if (retargeted || target !== cacheDir) return chdir(target);
+    vi.spyOn(childProcess, "execFile").mockImplementation(((...args: unknown[]) => {
+      const callback = args.at(-1);
+      if (retargeted || (args[2] as { cwd?: unknown } | undefined)?.cwd !== cacheDir || typeof callback !== "function") return execFile(...args);
       retargeted = true;
       retargetSync(parent, elsewhere);
-      try {
-        chdir(target);
-      } finally {
+      return execFile(...args.slice(0, -1), (...results: unknown[]) => {
         restoreSync(parent);
-      }
-    });
+        (callback as (...results: unknown[]) => void)(...results);
+      });
+    }) as never);
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
     expect(retargeted).toBe(true);
@@ -461,6 +469,71 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(await contents(otherCacheDir)).toEqual(others);
     expect(await contents(cacheDir)).toEqual(ours);
     expect(process.cwd()).toBe(cwd);
+  });
+
+  // Runs check with the working directory at work, whose path Node has read, as any earlier caller reading it makes Node
+  // keep, and enters the working directory the test started in again afterwards.
+  async function workingIn<T>(work: string, check: (seen: string) => Promise<T>): Promise<T> {
+    const original = process.cwd();
+    process.chdir(work);
+    try {
+      expect(process.cwd()).toBe(work);
+      return await check(identityOf(nodeFs.statSync(".", { bigint: true })));
+    } finally {
+      process.chdir(original);
+    }
+  }
+
+  it("leaves the caller in its working directory when a parent of that directory is retargeted during the creation of the anchor", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const parent = path.join(temporary, "w");
+    const elsewhere = path.join(temporary, "x");
+    const work = path.join(parent, "work");
+    await fs.mkdir(work, { recursive: true });
+    await fs.mkdir(path.join(elsewhere, "work"), { recursive: true });
+    const identity = await ensureCacheDir(cacheDir);
+    const { retargeted, outcome, seen, after } = await workingIn(work, async (seen) => {
+      let retargeted = false;
+      afterStat(cacheDir, () => true, async () => {
+        await retarget(parent, elsewhere);
+        retargeted = true;
+      });
+      const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.writeFile(path.join(cacheDir, "file"), "x"))
+        .then(() => "written", (error: unknown) => error);
+      const after = identityOf(nodeFs.statSync(".", { bigint: true }));
+      vi.restoreAllMocks();
+      await restore(parent);
+      return { retargeted, outcome, seen, after };
+    });
+    expect(retargeted).toBe(true);
+    expect(outcome).toBe("written");
+    expect(after).toBe(seen);
+    expect(await besidesItsAnchor(cacheDir)).toEqual({ file: `file:${Buffer.from("x").toString("base64")}` });
+  });
+
+  it("leaves the caller in its working directory when that directory is removed during the creation of the anchor", async () => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const work = path.join(temporary, "work");
+    await fs.mkdir(work);
+    const identity = await ensureCacheDir(cacheDir);
+    const { removed, outcome, seen, after } = await workingIn(work, async (seen) => {
+      let removed = false;
+      afterStat(cacheDir, () => true, async () => {
+        await fs.rmdir(work);
+        removed = true;
+      });
+      const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.writeFile(path.join(cacheDir, "file"), "x"))
+        .then(() => "written", (error: unknown) => error);
+      const after = identityOf(nodeFs.statSync(".", { bigint: true }));
+      vi.restoreAllMocks();
+      return { removed, outcome, seen, after };
+    });
+    expect(removed).toBe(true);
+    expect(outcome).toBe("written");
+    expect(after).toBe(seen);
+    expect(await besidesItsAnchor(cacheDir)).toEqual({ file: `file:${Buffer.from("x").toString("base64")}` });
   });
 
   it("refuses every change within the cache directory in a worker thread, which cannot make an anchor", async () => {

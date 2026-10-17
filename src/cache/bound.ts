@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import childProcess, { type ExecFileException } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import nodeFs, { constants, promises, rmdirSync, rmSync } from "node:fs";
+import { constants, promises, rmdirSync, rmSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
@@ -20,13 +21,14 @@ import { IndexingError } from "../index/diagnostics.js";
 // anchor, and fails with cache-changing when what it found missing is there. Node's recursive mkdir and rm compose
 // paths of their own, so a recursive mkdir creates each directory in turn, and a recursive rm first moves its target
 // into the anchor. Node's rm also takes a path it finds missing once it has found its target as removed, so an rm
-// deletes by calls that report a missing path instead. Every change is also checked before and after against the cache directory's identity, which stops a
-// run once a retarget stays in place. A new anchor is made relative to the working directory, entered for that step
-// alone, so it is bound as well. A run that finds the cache directory moved, or the anchor gone, drops the anchor, so
-// the next run makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when
-// the process dies without exiting. Where .. drops the name before it instead, as Windows resolves it, or where the
-// working directory cannot be changed, as in a worker thread, Node offers no way to bind the directory, so every change
-// within it fails with cache-unbindable before it changes anything; reads go by path.
+// deletes by calls that report a missing path instead. Every change is also checked before and after against the
+// cache directory's identity, which stops a run once a retarget stays in place. A new anchor is made by a helper
+// process whose working directory is the cache directory, relative to it, so it is bound as well. A run that finds the
+// cache directory moved, or the anchor gone, drops the anchor, so the next run makes a new one. An anchor is left
+// behind when it is dropped after the cache directory moved, or when the process dies without exiting. Where .. drops
+// the name before it instead, as Windows resolves it, Node offers no way to bind the directory, and a worker thread
+// makes no anchor, so there every change within the cache directory fails with cache-unbindable before it changes
+// anything; reads go by path.
 interface Scope {
   readonly dir: string;
   readonly prefix: string;
@@ -125,12 +127,22 @@ async function open(dir: string, identity: string): Promise<Handle | undefined> 
   }
 }
 
+// The exit code of a helper that found its working directory not to be the cache directory.
+const elsewhereExit = 3;
+const makeAnchor = [
+  `const fs = require("node:fs");`,
+  `const [name, identity] = process.argv.slice(1);`,
+  `const seen = fs.statSync(".", { bigint: true });`,
+  `if (\`\${seen.dev}:\${seen.ino}\` !== identity) process.exit(${elsewhereExit});`,
+  `fs.mkdirSync(name);`,
+].join("\n");
+
 // Besides a descriptor, the working directory is the one reference to a directory that the kernel resolves a relative
-// path from without resolving that directory's ancestors again. So the anchor is made by its name alone once the cache
-// directory has been entered and "." found to have its identity, and the working directory is entered again by the
-// path it had; the three steps run synchronously, so no other JavaScript on this thread sees the working directory
-// change. The anchor lands in the cache directory or nowhere. A worker thread cannot change the working directory, and
-// neither can a process whose working directory is gone, so no anchor is made there.
+// path from without resolving that directory's ancestors again. This process could only enter its own working directory
+// again by the path it had, which a retarget or removal can leave naming another directory or none, so a helper process
+// started in the cache directory makes the anchor, by its name alone, once "." has the cache directory's identity. The
+// anchor lands in the cache directory or nowhere, and this process's working directory never changes. A worker thread
+// makes no anchor: one terminated runs no exit handler, so its anchors would stay behind.
 async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
   const name = `.osnova-bound-${randomUUID()}`;
   const anchor = `${scope.prefix}${name}`;
@@ -138,31 +150,11 @@ async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
   physicalParent ??= await promises.stat(via).then(() => false, (error: unknown) => codeOf(error) === "ENOENT" ? true : undefined);
   if (physicalParent !== true || !isMainThread) return undefined;
   await ensureSame(scope);
-  let previous: string;
-  try {
-    previous = process.cwd();
-  } catch {
-    return undefined;
-  }
-  try {
-    process.chdir(scope.dir);
-  } catch (error) {
-    throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
-  }
-  let failure: IndexingError | undefined;
-  try {
-    if (identityOf(nodeFs.statSync(".", { bigint: true })) !== scope.identity) failure = changingIn(scope);
-    else nodeFs.mkdirSync(name);
-  } catch (error) {
-    failure = new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
-  }
-  try {
-    process.chdir(previous);
-  } catch (error) {
-    throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
-  }
-  if (failure !== undefined) throw failure;
-  return { ...scope, via, anchor, users: 0 };
+  const failure = await new Promise<ExecFileException | null>((resolve) => {
+    childProcess.execFile(process.execPath, ["-e", makeAnchor, name, scope.identity], { cwd: scope.dir, windowsHide: true }, (error) => resolve(error));
+  });
+  if (failure === null) return { ...scope, via, anchor, users: 0 };
+  throw failure.code === elsewhereExit ? changingIn(scope) : new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, failure);
 }
 
 // The path names the anchor itself, so wherever it resolves, this removes nothing but the anchor.
