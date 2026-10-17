@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { constants, promises, rmdirSync, rmSync } from "node:fs";
+import nodeFs, { constants, promises, rmdirSync, rmSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { IndexingError } from "../index/diagnostics.js";
 
 // Node has no directory-relative file operations, so a cache path is resolved again by every call, and a parent
@@ -19,12 +20,12 @@ import { IndexingError } from "../index/diagnostics.js";
 // anchor, and fails with cache-changing when what it found missing is there. Node's recursive mkdir and rm compose
 // paths of their own, so a recursive mkdir creates each directory in turn, and a recursive rm first moves its target
 // into the anchor. Every change is also checked before and after against the cache directory's identity, which stops a
-// run once a retarget stays in place. What remains unbound is the first mkdir of a new anchor: a retarget undone between
-// it and its check leaves one empty directory under a lock debris name elsewhere, which a later sweep there removes,
-// and the run fails. A run that finds the cache directory moved, or the anchor gone, drops the anchor, so the next run
-// makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when the process
-// dies without exiting. Where .. drops the name before it instead, as Windows resolves it, Node offers no way to bind
-// the directory, so every change within it fails with cache-unbindable before it changes anything; reads go by path.
+// run once a retarget stays in place. A new anchor is made relative to the working directory, entered for that step
+// alone, so it is bound as well. A run that finds the cache directory moved, or the anchor gone, drops the anchor, so
+// the next run makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when
+// the process dies without exiting. Where .. drops the name before it instead, as Windows resolves it, or where the
+// working directory cannot be changed, as in a worker thread, Node offers no way to bind the directory, so every change
+// within it fails with cache-unbindable before it changes anything; reads go by path.
 interface Scope {
   readonly dir: string;
   readonly prefix: string;
@@ -123,34 +124,43 @@ async function open(dir: string, identity: string): Promise<Handle | undefined> 
   }
 }
 
-// Nothing binds the mkdir that starts an anchor, so it makes the directory under a name lock debris sweeps take for an
-// abandoned acquisition: a retarget at that moment leaves it in the other directory, which the next sweep there removes
-// once it has been quiet. Once that directory's own parent is found to be the cache directory, it is renamed through
-// that parent, so the anchor itself lands in the cache directory or nowhere.
+// Besides a descriptor, the working directory is the one reference to a directory that the kernel resolves a relative
+// path from without resolving that directory's ancestors again. So the anchor is made by its name alone once the cache
+// directory has been entered and "." found to have its identity, and the working directory is entered again by the
+// path it had; the three steps run synchronously, so no other JavaScript on this thread sees the working directory
+// change. The anchor lands in the cache directory or nowhere. A worker thread cannot change the working directory, and
+// neither can a process whose working directory is gone, so no anchor is made there.
 async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
-  const name = randomUUID();
-  const anchor = `${scope.prefix}.osnova-bound-${name}`;
-  const pending = `${scope.prefix}.osnova-bound.acquire-${name}`;
+  const name = `.osnova-bound-${randomUUID()}`;
+  const anchor = `${scope.prefix}${name}`;
   const via = `${anchor}${path.sep}..`;
   physicalParent ??= await promises.stat(via).then(() => false, (error: unknown) => codeOf(error) === "ENOENT" ? true : undefined);
-  if (physicalParent !== true) return undefined;
+  if (physicalParent !== true || !isMainThread) return undefined;
   await ensureSame(scope);
+  let previous: string;
   try {
-    await promises.mkdir(pending);
+    previous = process.cwd();
+  } catch {
+    return undefined;
+  }
+  try {
+    process.chdir(scope.dir);
   } catch (error) {
     throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
   }
-  const parent = `${pending}${path.sep}..`;
+  let failure: IndexingError | undefined;
   try {
-    if (await promises.stat(parent, { bigint: true }).then(identityOf, () => undefined) !== scope.identity) throw changingIn(scope);
-    await promises.rename(`${parent}${path.sep}${path.basename(pending)}`, `${parent}${path.sep}${path.basename(anchor)}`).catch((error: unknown) => {
-      throw codeOf(error) === "ENOENT" ? changingIn(scope) : new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
-    });
+    if (identityOf(nodeFs.statSync(".", { bigint: true })) !== scope.identity) failure = changingIn(scope);
+    else nodeFs.mkdirSync(name);
   } catch (error) {
-    // The path names the directory just made, so wherever it resolves, this removes nothing else.
-    await promises.rmdir(pending).catch(() => {});
-    throw error;
+    failure = new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
   }
+  try {
+    process.chdir(previous);
+  } catch (error) {
+    throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
+  }
+  if (failure !== undefined) throw failure;
   return { ...scope, via, anchor, users: 0 };
 }
 
