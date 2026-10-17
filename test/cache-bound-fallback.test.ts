@@ -249,7 +249,11 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
       const { cacheFs, ensureCacheDir, withBoundCacheDir } = await import(${JSON.stringify(bound)});
       const dir = ${JSON.stringify(cacheDir)};
       const identity = await ensureCacheDir(dir);
-      await withBoundCacheDir(dir, identity, async () => await cacheFs.writeFile(dir + "/file", "x"));
+      await withBoundCacheDir(dir, identity, async () => {
+        await cacheFs.mkdir(dir + "/tree/branch", { recursive: true });
+        await cacheFs.rm(dir + "/tree", { recursive: true });
+        await cacheFs.writeFile(dir + "/file", "x");
+      });
       process.stdout.write(JSON.stringify((await promises.readdir(dir)).sort()));
     `;
     const during = JSON.parse(execFileSync(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], { encoding: "utf8" })) as string[];
@@ -325,24 +329,6 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(await contents(cacheDir)).toEqual(ours);
   });
 
-  // Retargets the parent inside the first call of name on a path the condition accepts, and restores it when restore
-  // says, so a call made between the two resolves the cache path into the other directory.
-  function retargetedAround(name: "lstat" | "mkdir" | "rename" | "rm", parent: string, elsewhere: string, accept: (target: string) => boolean, until: "after the call" | "never"): () => boolean {
-    const original = fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>;
-    let done = false;
-    vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
-      if (done || !accept(String(args[0]))) return await original(...args);
-      done = true;
-      await retarget(parent, elsewhere);
-      try {
-        return await original(...args);
-      } finally {
-        if (until === "after the call") await restore(parent);
-      }
-    }) as never);
-    return () => done;
-  }
-
   async function anchoredWrite(cacheDir: string): Promise<unknown> {
     const identity = await ensureCacheDir(cacheDir);
     return await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.writeFile(path.join(cacheDir, "entry", "new"), "x"))
@@ -363,10 +349,10 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
   // Has every helper process started in the cache directory load hook first. A helper takes no NODE_OPTIONS, so the hook
   // is passed on its command line.
   function preloadedInHelpers(cacheDir: string, hook: string): void {
-    const execFile = childProcess.execFile.bind(childProcess) as (...args: unknown[]) => unknown;
-    vi.spyOn(childProcess, "execFile").mockImplementation(((...args: unknown[]) => {
-      if ((args[2] as { cwd?: unknown } | undefined)?.cwd !== cacheDir) return execFile(...args);
-      return execFile(args[0], ["--require", hook, ...(args[1] as string[])], ...args.slice(2));
+    const spawn = childProcess.spawn.bind(childProcess) as (...args: unknown[]) => unknown;
+    vi.spyOn(childProcess, "spawn").mockImplementation(((...args: unknown[]) => {
+      if ((args[2] as { cwd?: unknown } | undefined)?.cwd !== cacheDir) return spawn(...args);
+      return spawn(args[0], ["--require", hook, ...(args[1] as string[])], ...args.slice(2));
     }) as never);
   }
 
@@ -460,17 +446,13 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const cwd = process.cwd();
     // The helper process that makes the anchor enters the cache directory as it starts, and the parent is restored as
     // it exits.
-    const execFile = childProcess.execFile.bind(childProcess) as (...args: unknown[]) => unknown;
+    const spawn = childProcess.spawn.bind(childProcess) as (...args: unknown[]) => childProcess.ChildProcess;
     let retargeted = false;
-    vi.spyOn(childProcess, "execFile").mockImplementation(((...args: unknown[]) => {
-      const callback = args.at(-1);
-      if (retargeted || (args[2] as { cwd?: unknown } | undefined)?.cwd !== cacheDir || typeof callback !== "function") return execFile(...args);
+    vi.spyOn(childProcess, "spawn").mockImplementation(((...args: unknown[]) => {
+      if (retargeted || (args[2] as { cwd?: unknown } | undefined)?.cwd !== cacheDir) return spawn(...args);
       retargeted = true;
       retargetSync(parent, elsewhere);
-      return execFile(...args.slice(0, -1), (...results: unknown[]) => {
-        restoreSync(parent);
-        (callback as (...results: unknown[]) => void)(...results);
-      });
+      return spawn(...args).once("exit", () => restoreSync(parent));
     }) as never);
     const outcome = await anchoredWrite(cacheDir);
     vi.restoreAllMocks();
@@ -591,24 +573,60 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(answer).toEqual({ outcome: "cache-unbindable", entries: [] });
   });
 
-  // A recursive rm first moves its target into the anchor, under a name of its own, and then removes it there, starting
-  // with an lstat of what it moved.
+  // A recursive rm first moves its target into the anchor, under a name of its own, and then has the helper of the
+  // anchor remove it there, starting with an lstat of what it moved.
   const stagedInAnchor = (target: string): boolean => anchorName.test(path.basename(path.dirname(target)));
 
-  it("fails, and changes nothing in the other cache, when a parent is retargeted during the removal of a tree moved into the anchor and restored after it", async () => {
+  // Retargets the parent around the lstat by which the helper of the anchor finds a tree moved into the anchor, or as
+  // that lstat returns, so that what the helper does then resolves the cache path into the other directory.
+  async function retargetedAroundTheStagedLstat(cacheDir: string, parent: string, elsewhere: string, window: "during the call" | "after the call"): Promise<() => boolean> {
+    const dir = await temporaryDir();
+    const made = path.join(dir, "retargeted");
+    const hook = path.join(dir, "hook.cjs");
+    await fs.writeFile(hook, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const [parent, elsewhere, window, made] = ${JSON.stringify([parent, elsewhere, window, made])};
+      const retarget = () => {
+        fs.renameSync(parent, parent + "-saved");
+        fs.symlinkSync(elsewhere, parent, "dir");
+      };
+      const restore = () => {
+        if (!fs.lstatSync(parent).isSymbolicLink()) return;
+        fs.unlinkSync(parent);
+        fs.renameSync(parent + "-saved", parent);
+      };
+      const lstatSync = fs.lstatSync;
+      fs.lstatSync = (...args) => {
+        if (fs.existsSync(made) || !/^\\.osnova-bound-/.test(path.basename(process.cwd())) || !/^[0-9a-f-]{36}$/.test(String(args[0]))) return lstatSync(...args);
+        fs.writeFileSync(made, "");
+        if (window === "during the call") retarget();
+        try {
+          return lstatSync(...args);
+        } finally {
+          if (window === "during the call") restore();
+          else retarget();
+        }
+      };
+    `);
+    preloadedInHelpers(cacheDir, hook);
+    return () => nodeFs.existsSync(made);
+  }
+
+  // The helper of the anchor has entered it, so the cache path it no longer resolves cannot send it elsewhere.
+  it("removes the tree from the cache directory, and changes nothing in the other cache, when a parent is retargeted during the removal of a tree moved into the anchor and restored after it", async () => {
     const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedAround("lstat", parent, elsewhere, stagedInAnchor, "after the call");
+    const retargeted = await retargetedAroundTheStagedLstat(cacheDir, parent, elsewhere, "during the call");
     const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true }))
       .then(() => "removed", (error: unknown) => error);
     vi.restoreAllMocks();
     expect(retargeted()).toBe(true);
-    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(outcome).toBe("removed");
     expect(await contents(otherCacheDir)).toEqual(others);
-    // The run drops its anchor, and with it the tree moved into it.
-    expect(await contents(cacheDir)).toEqual(Object.fromEntries(Object.entries(ours).filter(([name]) => name.split(path.sep)[0] !== "tree")));
+    expect(await besidesItsAnchor(cacheDir)).toEqual(Object.fromEntries(Object.entries(ours).filter(([name]) => name.split(path.sep)[0] !== "tree")));
   });
 
   // Retargets the parent as the first lstat, by either API, of a target the condition accepts settles, which is how a
@@ -664,48 +682,150 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(await contents(cacheDir)).toEqual(ours);
   });
 
-  it("fails, and changes nothing in the other cache, when a parent is retargeted after rm validates a tree moved into the anchor and restored before it returns", async () => {
+  it("removes the tree from the cache directory, and changes nothing in the other cache, when a parent is retargeted after the removal finds a tree moved into the anchor and restored before it returns", async () => {
     const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedOnceRmFindsItsTarget(cacheDir, parent, elsewhere, (given) => stagedInAnchor(path.resolve(given)));
+    const retargeted = await retargetedAroundTheStagedLstat(cacheDir, parent, elsewhere, "after the call");
+    // The check after the change restores the parent as it begins.
+    const stat = vi.mocked(fs.stat).getMockImplementation() as (...args: unknown[]) => Promise<unknown>;
+    let restored = false;
+    vi.spyOn(fs, "stat").mockImplementation((async (...args: unknown[]) => {
+      if (args[0] === cacheDir && retargeted() && !restored) {
+        await restore(parent);
+        restored = true;
+      }
+      return await stat(...args);
+    }) as never);
     const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true }))
       .then(() => "removed", (error: unknown) => error);
     vi.restoreAllMocks();
     await restore(parent);
     expect(retargeted()).toBe(true);
-    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(restored).toBe(true);
+    expect(outcome).toBe("removed");
     expect(await contents(otherCacheDir)).toEqual(others);
-    // The run drops its anchor, and with it the tree moved into it.
-    expect(await contents(cacheDir)).toEqual(Object.fromEntries(Object.entries(ours).filter(([name]) => name.split(path.sep)[0] !== "tree")));
+    expect(await besidesItsAnchor(cacheDir)).toEqual(Object.fromEntries(Object.entries(ours).filter(([name]) => name.split(path.sep)[0] !== "tree")));
+  });
+
+  // Swaps the branch of a tree moved into the anchor for a symbolic link to outside, once, as the listing of that tree
+  // settles, or as the examination of the branch settles, whether this process or a helper process does either.
+  async function branchSwappedForLink(cacheDir: string, outside: string, window: "after the listing" | "after the branch is examined"): Promise<() => boolean> {
+    const dir = await temporaryDir();
+    const made = path.join(dir, "swapped");
+    const hook = path.join(dir, "hook.cjs");
+    await fs.writeFile(hook, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const [outside, window, made] = ${JSON.stringify([outside, window, made])};
+      const staged = () => /^\\.osnova-bound-/.test(path.basename(path.dirname(process.cwd())));
+      const swap = () => {
+        fs.writeFileSync(made, "");
+        fs.rmSync("branch", { recursive: true });
+        fs.symlinkSync(outside, "branch", "dir");
+      };
+      const readdirSync = fs.readdirSync;
+      fs.readdirSync = (...args) => {
+        const listed = readdirSync(...args);
+        if (window === "after the listing" && !fs.existsSync(made) && staged() && listed.map(String).includes("branch")) swap();
+        return listed;
+      };
+      const lstatSync = fs.lstatSync;
+      fs.lstatSync = (...args) => {
+        const found = lstatSync(...args);
+        if (window === "after the branch is examined" && !fs.existsSync(made) && staged() && args[0] === "branch") swap();
+        return found;
+      };
+    `);
+    preloadedInHelpers(cacheDir, hook);
+    const readdir = fs.readdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
+      const listed = await readdir(...args);
+      const listing = path.resolve(String(args[0]));
+      if (!nodeFs.existsSync(made) && stagedInAnchor(listing)) {
+        nodeFs.writeFileSync(made, "");
+        await fs.rm(path.join(listing, "branch"), { recursive: true });
+        await fs.symlink(outside, path.join(listing, "branch"), "dir");
+      }
+      return listed;
+    }) as never);
+    return () => nodeFs.existsSync(made);
+  }
+
+  it.each([
+    ["after the listing", "removed"],
+    ["after the branch is examined", "cache-changing"],
+  ] as const)("deletes nothing outside the cache when the branch of a tree moved into the anchor is swapped for a link to outside %s", async (window, expected) => {
+    const temporary = await temporaryDir();
+    const cacheDir = path.join(temporary, "cache");
+    const outside = path.join(temporary, "outside");
+    await fs.mkdir(path.join(outside, "inner"), { recursive: true });
+    await fs.writeFile(path.join(outside, "leaf"), "outside");
+    await fs.writeFile(path.join(outside, "inner", "leaf"), "outside");
+    const before = await contents(outside);
+    const identity = await ensureCacheDir(cacheDir);
+    const swapped = await branchSwappedForLink(cacheDir, outside, window);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => {
+      await cacheFs.mkdir(path.join(cacheDir, "tree", "branch"), { recursive: true });
+      await cacheFs.writeFile(path.join(cacheDir, "tree", "branch", "leaf"), "x");
+      return await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true }).then(() => "removed", (error: unknown) => error);
+    });
+    vi.restoreAllMocks();
+    expect(swapped()).toBe(true);
+    expect(await contents(outside)).toEqual(before);
+    if (expected === "removed") {
+      expect(outcome).toBe("removed");
+      expect(await besidesItsAnchor(cacheDir)).toEqual({});
+    } else {
+      expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: expected } });
+    }
+    // The next run removes a tree again, by a helper that has not left the anchor.
+    const again = await withBoundCacheDir(cacheDir, identity, async () => {
+      await cacheFs.mkdir(path.join(cacheDir, "again", "branch"), { recursive: true });
+      await cacheFs.writeFile(path.join(cacheDir, "again", "branch", "leaf"), "x");
+      return await cacheFs.rm(path.join(cacheDir, "again"), { recursive: true }).then(() => "removed", (error: unknown) => error);
+    });
+    expect(again).toBe("removed");
+    expect(await contents(outside)).toEqual(before);
+    expect(Object.keys(await contents(cacheDir)).filter((name) => name.split(path.sep)[0] === "again")).toEqual([]);
   });
 
   it("names the requested path, not the anchor, in the error of a removal that fails once its tree is moved into the anchor", async () => {
     const temporary = await temporaryDir();
     const cacheDir = path.join(temporary, "cache");
     const identity = await ensureCacheDir(cacheDir);
-    let failing = "";
-    // Where target lies within a tree moved into the anchor, its path relative to that tree.
-    const withinStaged = (target: string): string | undefined => {
-      const parts = target.split(path.sep);
-      const at = parts.findIndex((part) => anchorName.test(part));
-      return at < 0 || at + 1 >= parts.length ? undefined : parts.slice(at + 2).join(path.sep);
-    };
-    for (const name of ["unlink", "rmdir"] as const) {
-      const original = fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>;
-      vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
-        const target = String(args[0]);
-        if (withinStaged(target) !== failing) return await original(...args);
-        throw Object.assign(new Error(`EACCES: permission denied, ${name} '${target}'`), { code: "EACCES", errno: -13, syscall: name, path: target });
-      }) as never);
-    }
+    // The helper of the anchor removes a tree moved into it, and fails the unlink or rmdir of the path within that tree
+    // the file failing names.
+    const dir = await temporaryDir();
+    const failingFile = path.join(dir, "failing");
+    const hook = path.join(dir, "hook.cjs");
+    await fs.writeFile(hook, `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const failingFile = ${JSON.stringify(failingFile)};
+      // Where target lies within a tree moved into the anchor, its path relative to that tree.
+      const withinStaged = (target) => {
+        const parts = path.join(process.cwd(), target).split(path.sep);
+        const at = parts.findIndex((part) => /^\\.osnova-bound-[0-9a-f-]{36}$/.test(part));
+        return at < 0 || at + 1 >= parts.length ? undefined : parts.slice(at + 2).join(path.sep);
+      };
+      for (const name of ["unlink", "rmdir"]) {
+        const original = fs[name + "Sync"];
+        fs[name + "Sync"] = (...args) => {
+          const target = String(args[0]);
+          if (withinStaged(target) !== fs.readFileSync(failingFile, "utf8")) return original(...args);
+          throw Object.assign(new Error("EACCES: permission denied, " + name + " '" + target + "'"), { code: "EACCES", errno: -13, syscall: name, path: target });
+        };
+      }
+    `);
+    preloadedInHelpers(cacheDir, hook);
     const outcomes = await withBoundCacheDir(cacheDir, identity, async () => {
       await cacheFs.mkdir(path.join(cacheDir, "tree", "branch"), { recursive: true });
       await cacheFs.writeFile(path.join(cacheDir, "tree", "branch", "leaf"), "x");
       await cacheFs.mkdir(path.join(cacheDir, "other"));
       const settle = async (target: string, inside: string): Promise<unknown> => {
-        failing = inside;
+        await fs.writeFile(failingFile, inside);
         return await cacheFs.rm(target, { recursive: true }).then(() => "removed", (error: unknown) => {
           const failure = error as NodeJS.ErrnoException;
           return { code: failure.code, path: failure.path, message: failure.message };

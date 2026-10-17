@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import childProcess, { type ExecFileException } from "node:child_process";
+import childProcess, { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants, promises, rmdirSync, rmSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
+import type { Socket } from "node:net";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { IndexingError } from "../index/diagnostics.js";
@@ -23,12 +24,13 @@ import { IndexingError } from "../index/diagnostics.js";
 // into the anchor. Node's rm also takes a path it finds missing once it has found its target as removed, so an rm
 // deletes by calls that report a missing path instead. Every change is also checked before and after against the
 // cache directory's identity, which stops a run once a retarget stays in place. A new anchor is made by a helper
-// process whose working directory is the cache directory, relative to it, so it is bound as well. A run that finds the
-// cache directory moved, or the anchor gone, drops the anchor, so the next run makes a new one. An anchor is left
-// behind when it is dropped after the cache directory moved, or when the process dies without exiting. Where .. drops
-// the name before it instead, as Windows resolves it, Node offers no way to bind the directory, and a worker thread
-// makes no anchor, so there every change within the cache directory fails with cache-unbindable before it changes
-// anything; reads go by path.
+// process whose working directory is the cache directory, relative to it, so it is bound as well. The helper then
+// enters the anchor and stays there, and removes each tree moved into it directory by directory, entering each one,
+// so a directory swapped for a link sends no removal outside the tree. A run that finds the cache directory moved, or
+// the anchor gone, drops the anchor, so the next run makes a new one. An anchor is left behind when it is dropped after
+// the cache directory moved, or when the process dies without exiting. Where .. drops the name before it instead, as
+// Windows resolves it, Node offers no way to bind the directory, and a worker thread makes no anchor, so there every
+// change within the cache directory fails with cache-unbindable before it changes anything; reads go by path.
 interface Scope {
   readonly dir: string;
   readonly prefix: string;
@@ -47,8 +49,15 @@ interface Handle extends Kept {
   readonly file: FileHandle;
 }
 
+interface Helper {
+  readonly child: ChildProcessWithoutNullStreams;
+  readonly answers: Array<(answer: string | undefined) => void>;
+  closed: boolean;
+}
+
 interface Anchor extends Kept {
   readonly anchor: string;
+  helper: Promise<Helper> | undefined;
 }
 
 // live ends with the operation, so a call that outlives it, from work the operation started without awaiting, uses the
@@ -127,14 +136,86 @@ async function open(dir: string, identity: string): Promise<Handle | undefined> 
   }
 }
 
-// The exit code of a helper that found its working directory not to be the cache directory.
+// The exit code of a helper that found its working directory not to be the cache directory, or the anchor not to be
+// the directory it entered.
 const elsewhereExit = 3;
-const makeAnchor = [
+// Started in the cache directory, makes the anchor there, or finds it, by its name alone, once "." has the cache
+// directory's identity, enters it, and writes an empty line. Each line it then reads names a tree moved into the anchor,
+// which it removes, answering with a line of JSON. Each directory of the tree is entered and found to be the one an
+// lstat just found there, so a directory replaced, or swapped for a link, before it is entered stops the removal before
+// it changes anything there, and what is removed is named relative to the directory entered, so no link is followed. A
+// helper that cannot find its way back into the anchor answers and exits.
+const serveAnchor = [
   `const fs = require("node:fs");`,
-  `const [name, identity] = process.argv.slice(1);`,
-  `const seen = fs.statSync(".", { bigint: true });`,
-  `if (\`\${seen.dev}:\${seen.ino}\` !== identity) process.exit(${elsewhereExit});`,
-  `fs.mkdirSync(name);`,
+  `const [name, mode, identity] = process.argv.slice(1);`,
+  `const identityOf = (stat) => \`\${stat.dev}:\${stat.ino}\`;`,
+  `const here = () => identityOf(fs.statSync(".", { bigint: true }));`,
+  `const elsewhere = new Error("elsewhere");`,
+  `const enter = (dir, expected) => {`,
+  `  try { process.chdir(dir); } catch { throw elsewhere; }`,
+  `  if (here() !== expected) throw elsewhere;`,
+  `};`,
+  `if (here() !== identity) process.exit(${elsewhereExit});`,
+  `if (mode === "make") fs.mkdirSync(name);`,
+  `const entered = [];`,
+  `try {`,
+  `  const found = fs.lstatSync(name, { bigint: true });`,
+  `  if (!found.isDirectory()) throw elsewhere;`,
+  `  enter(name, identityOf(found));`,
+  `  entered.push(identityOf(found));`,
+  `} catch {`,
+  `  process.exit(${elsewhereExit});`,
+  `}`,
+  `const at = [];`,
+  `const remove = (entry) => {`,
+  `  at.push(entry);`,
+  `  const found = fs.lstatSync(entry, { bigint: true });`,
+  `  if (found.isDirectory()) {`,
+  `    enter(entry, identityOf(found));`,
+  `    entered.push(identityOf(found));`,
+  `    for (const inner of fs.readdirSync(".")) remove(inner);`,
+  `    entered.pop();`,
+  `    enter("..", entered.at(-1));`,
+  `    fs.rmdirSync(entry);`,
+  `  } else fs.unlinkSync(entry);`,
+  `  at.pop();`,
+  `};`,
+  `const answer = (staged) => {`,
+  `  at.length = 0;`,
+  `  try {`,
+  `    remove(staged);`,
+  `    return {};`,
+  `  } catch (error) {`,
+  `    const failed = error === elsewhere ? { elsewhere: true } : { code: error.code, errno: error.errno, syscall: error.syscall, path: error.path, message: error.message, at };`,
+  `    try {`,
+  `      while (entered.length > 1) {`,
+  `        entered.pop();`,
+  `        enter("..", entered.at(-1));`,
+  `      }`,
+  `      if (here() !== entered[0]) throw elsewhere;`,
+  `    } catch {`,
+  `      failed.lost = true;`,
+  `    }`,
+  `    return failed;`,
+  `  }`,
+  `};`,
+  `let buffered = "";`,
+  `process.stdin.setEncoding("utf8");`,
+  `process.stdin.on("data", (chunk) => {`,
+  `  buffered += chunk;`,
+  `  for (let end = buffered.indexOf("\\n"); end >= 0; end = buffered.indexOf("\\n")) {`,
+  `    const reply = answer(buffered.slice(0, end));`,
+  `    buffered = buffered.slice(end + 1);`,
+  `    if (reply.lost !== true) {`,
+  `      process.stdout.write(JSON.stringify(reply) + "\\n");`,
+  `      continue;`,
+  `    }`,
+  `    process.stdin.pause();`,
+  `    process.stdout.write(JSON.stringify(reply) + "\\n", () => process.exit(${elsewhereExit}));`,
+  `    return;`,
+  `  }`,
+  `});`,
+  `process.stdout.write("\\n");`,
 ].join("\n");
 
 // A helper needs no setting Node reads from a NODE_ variable, and one naming a relative path, as a preload in
@@ -143,12 +224,71 @@ function helperEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.toUpperCase().startsWith("NODE_")));
 }
 
+// The helper keeps this process alive only while it owes an answer, and exits once this process closes its input.
+function waiting(helper: Helper): void {
+  const streams = [helper.child.stdout, helper.child.stderr, helper.child.stdin] as unknown as readonly Socket[];
+  if (helper.answers.length > 0) streams[0]?.ref();
+  else for (const stream of streams) stream.unref();
+}
+
+// Starts the helper of anchor, as anchor.helper until it exits. A helper that exits before it is ready fails as the
+// cache directory moved when it found the cache directory or the anchor elsewhere.
+function serve(anchor: Anchor, mode: "make" | "enter"): Promise<Helper> {
+  const started = new Promise<Helper>((resolve, reject) => {
+    const child = childProcess.spawn(process.execPath, ["-e", serveAnchor, path.basename(anchor.anchor), mode, anchor.identity], { cwd: anchor.dir, env: helperEnv(), stdio: "pipe", windowsHide: true });
+    const helper: Helper = { child, answers: [], closed: false };
+    let ready = false;
+    let buffered = "";
+    let stderr = "";
+    const settle = (cause: () => unknown): void => {
+      helper.closed = true;
+      if (anchor.helper === started) anchor.helper = undefined;
+      for (const answer of helper.answers.splice(0)) answer(undefined);
+      if (!ready) reject(cause());
+    };
+    child.unref();
+    child.stdin.on("error", () => {});
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      if (stderr.length < 4096) stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let end = buffered.indexOf("\n"); end >= 0; end = buffered.indexOf("\n")) {
+        const line = buffered.slice(0, end);
+        buffered = buffered.slice(end + 1);
+        if (ready) helper.answers.shift()?.(line);
+        ready = true;
+        waiting(helper);
+        resolve(helper);
+      }
+    });
+    child.on("error", (error) => settle(() => new IndexingError({ phase: "cache", path: anchor.dir, code: "cache-write-failed" }, error)));
+    child.on("close", (code, signal) => settle(() => code === elsewhereExit ? changingIn(anchor)
+      : new IndexingError({ phase: "cache", path: anchor.dir, code: "cache-write-failed" }, new Error(`the anchor helper exited with ${code ?? signal}: ${stderr}`))));
+  });
+  anchor.helper = started;
+  return started;
+}
+
+// The answer of the helper of anchor to line, or undefined when it exits first.
+async function ask(anchor: Anchor, line: string): Promise<string | undefined> {
+  const helper = await (anchor.helper ?? serve(anchor, "enter"));
+  if (helper.closed) return undefined;
+  return await new Promise<string | undefined>((resolve) => {
+    helper.answers.push(resolve);
+    waiting(helper);
+    helper.child.stdin.write(`${line}\n`);
+  });
+}
+
 // Besides a descriptor, the working directory is the one reference to a directory that the kernel resolves a relative
 // path from without resolving that directory's ancestors again. This process could only enter its own working directory
 // again by the path it had, which a retarget or removal can leave naming another directory or none, so a helper process
-// started in the cache directory makes the anchor, by its name alone, once "." has the cache directory's identity. The
-// anchor lands in the cache directory or nowhere, and this process's working directory never changes. A worker thread
-// makes no anchor: one terminated runs no exit handler, so its anchors would stay behind.
+// started in the cache directory makes the anchor and stays in it. The anchor lands in the cache directory or nowhere,
+// and this process's working directory never changes. A worker thread makes no anchor: one terminated runs no exit
+// handler, so its anchors would stay behind.
 async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
   const name = `.osnova-bound-${randomUUID()}`;
   const anchor = `${scope.prefix}${name}`;
@@ -156,15 +296,15 @@ async function anchorIn(scope: Scope): Promise<Anchor | undefined> {
   physicalParent ??= await promises.stat(via).then(() => false, (error: unknown) => codeOf(error) === "ENOENT" ? true : undefined);
   if (physicalParent !== true || !isMainThread) return undefined;
   await ensureSame(scope);
-  const failure = await new Promise<ExecFileException | null>((resolve) => {
-    childProcess.execFile(process.execPath, ["-e", makeAnchor, name, scope.identity], { cwd: scope.dir, env: helperEnv(), windowsHide: true }, (error) => resolve(error));
-  });
-  if (failure === null) return { ...scope, via, anchor, users: 0 };
-  throw failure.code === elsewhereExit ? changingIn(scope) : new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, failure);
+  const made: Anchor = { ...scope, via, anchor, users: 0, helper: undefined };
+  await serve(made, "make");
+  return made;
 }
 
-// The path names the anchor itself, so wherever it resolves, this removes nothing but the anchor.
+// The path names the anchor itself, so wherever it resolves, this removes nothing but the anchor. Its helper exits once
+// its input is closed.
 async function removeAnchor(anchor: Anchor): Promise<void> {
+  void anchor.helper?.then((helper) => helper.child.stdin.end(), () => {});
   await promises.rmdir(anchor.anchor).catch(async (error: unknown) => {
     if (codeOf(error) === "ENOTEMPTY" || codeOf(error) === "EEXIST") await promises.rm(anchor.anchor, { recursive: true, force: true }).catch(() => {});
   });
@@ -359,14 +499,32 @@ async function mkdirs(anchor: Anchor, call: Call, target: string, options: objec
 }
 
 // Once Node's rm has found its target, it takes whatever it then finds missing as removed, so a retarget after that
-// reports success with the target still there. Where rm would delete, this deletes by calls that report a missing path.
-async function removeTree(target: string, directory?: boolean | undefined): Promise<void> {
-  if (!(directory ?? (await promises.lstat(target)).isDirectory())) {
-    await promises.unlink(target);
+// reports success with the target still there, and it reaches what a directory holds by a path a link swapped in for
+// that directory sends elsewhere. The helper of the anchor removes the tree moved into it under the given name instead,
+// by calls that report a missing path, each relative to a directory it has entered and found to be the one it examined.
+// The tree is known to be there, so whatever of it is found missing was looked for elsewhere. An error names the target
+// and what it held, not where they were moved.
+async function removeTree(anchor: Anchor, staged: string, target: string): Promise<void> {
+  const answer = await ask(anchor, staged);
+  if (answer === undefined) throw new IndexingError({ phase: "cache", path: anchor.dir, code: "cache-write-failed" }, new Error("the anchor helper exited before it answered"));
+  const reported = JSON.parse(answer) as {
+    readonly elsewhere?: boolean | undefined;
+    readonly code?: string | undefined;
+    readonly errno?: number | undefined;
+    readonly syscall?: string | undefined;
+    readonly path?: string | undefined;
+    readonly message?: string | undefined;
+    readonly at?: readonly string[] | undefined;
+  };
+  if (reported.message === undefined || reported.at === undefined) {
+    if (reported.elsewhere === true) throw changingIn(anchor);
     return;
   }
-  for (const entry of await promises.readdir(target, { withFileTypes: true })) await removeTree(`${target}${path.sep}${entry.name}`, entry.isDirectory());
-  await promises.rmdir(target);
+  if (reported.code === "ENOENT") throw changingIn(anchor);
+  // The helper names what it was removing, at, relative to the directory it had entered.
+  const named = path.join(target, ...reported.at.slice(1));
+  const message = reported.path === undefined ? reported.message : reported.message.split(`'${reported.path}'`).join(`'${named}'`);
+  throw Object.assign(new Error(message), { code: reported.code, errno: reported.errno, syscall: reported.syscall, path: named });
 }
 
 // Node's recursive rm reaches what a directory holds by path.join, which drops the anchor, so the target is first moved
@@ -397,19 +555,15 @@ async function remove(anchor: Anchor, call: Call, target: string, options: unkno
     }, async (error: unknown) => await missing(error, async () => unbound(anchor, error)));
     return;
   }
-  const trash = `${anchor.anchor}${path.sep}${randomUUID()}`;
+  const staged = randomUUID();
+  const trash = `${anchor.anchor}${path.sep}${staged}`;
   // rm itself reports a missing target with the error lstat gives.
   const reported = async (): Promise<unknown> => await promises.lstat(bound(anchor, target) as string).then(() => changingIn(anchor), (error: unknown) => unbound(anchor, error));
   const moved = await promises.rename(bound(anchor, target) as string, trash).then(() => true, async (error: unknown) => {
     await missing(error, reported);
     return false;
   });
-  if (!moved) return;
-  // The tree is known to be there, so whatever of it is found missing was looked for elsewhere. An error names the
-  // target and what it held, not where they were moved.
-  await removeTree(trash).catch((error: unknown) => {
-    throw codeOf(error) === "ENOENT" ? changingIn(anchor) : unbound({ ...anchor, dir: target, prefix: prefixOf(target), via: trash }, error);
-  });
+  if (moved) await removeTree(anchor, staged, target);
 }
 
 async function changeThrough(anchor: Anchor, name: Bindable, call: Call, args: unknown[], paths: number): Promise<unknown> {
