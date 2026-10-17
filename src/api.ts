@@ -146,9 +146,10 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   // verified unchanged reads no source after the scan and skips those rechecks. Every cache path inside the lock names
   // the locked root's entry without resolving the path again, and where the platform allows, every cache operation
   // reaches the cache directory the lock was taken in without resolving its ancestors again, so a retarget undone
-  // between two checks cannot redirect a write; one undone while sources are read is not seen. Where it does not, each
-  // cache write is checked against that directory before and after, which fails the refresh with cache-changing but
-  // cannot stop the one write a retarget lands during (see withBoundCacheDir).
+  // between two checks cannot redirect a write; one undone while sources are read is not seen. Where no descriptor can
+  // bind the cache directory, an anchor directory inside it does, and a call a retarget redirects changes nothing and
+  // fails the refresh with cache-changing. Where the platform resolves .. by name, each cache write is only checked
+  // before and after, which cannot stop the one write a retarget lands during (see withBoundCacheDir).
   const task = withBoundCacheDir(canonicalCache, cacheIdentity, () => withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {
     const changing = (): IndexingError => new IndexingError({ phase: "scan", path: canonicalRoot, code: "workspace-changing" });
     const identity = await rootIdentity(canonicalRoot);
