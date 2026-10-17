@@ -19,7 +19,8 @@ import { IndexingError } from "../index/diagnostics.js";
 // before it changes anything. A change that fails with ENOENT is checked against the cache directory through the
 // anchor, and fails with cache-changing when what it found missing is there. Node's recursive mkdir and rm compose
 // paths of their own, so a recursive mkdir creates each directory in turn, and a recursive rm first moves its target
-// into the anchor. Every change is also checked before and after against the cache directory's identity, which stops a
+// into the anchor. Node's rm also takes a path it finds missing once it has found its target as removed, so an rm
+// deletes by calls that report a missing path instead. Every change is also checked before and after against the cache directory's identity, which stops a
 // run once a retarget stays in place. A new anchor is made relative to the working directory, entered for that step
 // alone, so it is bound as well. A run that finds the cache directory moved, or the anchor gone, drops the anchor, so
 // the next run makes a new one. An anchor is left behind when it is dropped after the cache directory moved, or when
@@ -359,18 +360,43 @@ async function mkdirs(anchor: Anchor, call: Call, target: string, options: objec
   return first;
 }
 
+// Once Node's rm has found its target, it takes whatever it then finds missing as removed, so a retarget after that
+// reports success with the target still there. Where rm would delete, this deletes by calls that report a missing path.
+async function removeTree(target: string, directory?: boolean | undefined): Promise<void> {
+  if (!(directory ?? (await promises.lstat(target)).isDirectory())) {
+    await promises.unlink(target);
+    return;
+  }
+  for (const entry of await promises.readdir(target, { withFileTypes: true })) await removeTree(`${target}${path.sep}${entry.name}`, entry.isDirectory());
+  await promises.rmdir(target);
+}
+
 // Node's recursive rm reaches what a directory holds by path.join, which drops the anchor, so the target is first moved
 // into the anchor and removed there. A missing target is only taken as missing once the cache directory lacks it.
 async function remove(anchor: Anchor, call: Call, target: string, options: unknown): Promise<void> {
   const given = (typeof options === "object" && options !== null ? options : {}) as { readonly force?: boolean | undefined; readonly recursive?: boolean | undefined };
-  // Settles a failure of the first step: a missing target is done when forced, and anything else is thrown.
+  // Settles a failure of a step that finds the target missing: done when forced, and anything else is thrown.
   const missing = async (error: unknown, reported: () => Promise<unknown>): Promise<void> => {
     if (codeOf(error) !== "ENOENT") throw unbound(anchor, error);
     if (!(await absentIn(anchor, target))) throw changingIn(anchor);
     if (given.force !== true) throw await reported();
   };
   if (given.recursive !== true) {
-    await call(bound(anchor, target), { ...given, force: false }).catch(async (error: unknown) => await missing(error, async () => unbound(anchor, error)));
+    const at = bound(anchor, target) as string;
+    const found = await promises.lstat(at).catch(async (error: unknown) => {
+      await missing(error, async () => unbound(anchor, error));
+      return undefined;
+    });
+    if (found === undefined) return;
+    if (!found.isDirectory()) {
+      await promises.unlink(at).catch(async (error: unknown) => await missing(error, async () => unbound(anchor, error)));
+      return;
+    }
+    // rm refuses a directory without recursive before it removes anything, with the error it gives outside a run, so
+    // what it does remove was no longer the directory found there.
+    await call(at, { ...given, force: false }).then(() => {
+      throw changingIn(anchor);
+    }, async (error: unknown) => await missing(error, async () => unbound(anchor, error)));
     return;
   }
   const trash = `${anchor.anchor}${path.sep}${randomUUID()}`;
@@ -383,7 +409,7 @@ async function remove(anchor: Anchor, call: Call, target: string, options: unkno
   if (!moved) return;
   // The tree is known to be there, so whatever of it is found missing was looked for elsewhere. An error names the
   // target and what it held, not where they were moved.
-  await call(trash, { ...given, force: false }).catch((error: unknown) => {
+  await removeTree(trash).catch((error: unknown) => {
     throw codeOf(error) === "ENOENT" ? changingIn(anchor) : unbound({ ...anchor, dir: target, prefix: prefixOf(target), via: trash }, error);
   });
 }

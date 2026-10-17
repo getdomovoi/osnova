@@ -325,7 +325,7 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
 
   // Retargets the parent inside the first call of name on a path the condition accepts, and restores it when restore
   // says, so a call made between the two resolves the cache path into the other directory.
-  function retargetedAround(name: "mkdir" | "rename" | "rm", parent: string, elsewhere: string, accept: (target: string) => boolean, until: "after the call" | "never"): () => boolean {
+  function retargetedAround(name: "lstat" | "mkdir" | "rename" | "rm", parent: string, elsewhere: string, accept: (target: string) => boolean, until: "after the call" | "never"): () => boolean {
     const original = fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>;
     let done = false;
     vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
@@ -494,7 +494,8 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     expect(answer).toEqual({ outcome: "cache-unbindable", entries: [] });
   });
 
-  // A recursive rm first moves its target into the anchor, under a name of its own, and then removes it there.
+  // A recursive rm first moves its target into the anchor, under a name of its own, and then removes it there, starting
+  // with an lstat of what it moved.
   const stagedInAnchor = (target: string): boolean => anchorName.test(path.basename(path.dirname(target)));
 
   it("fails, and changes nothing in the other cache, when a parent is retargeted during the removal of a tree moved into the anchor and restored after it", async () => {
@@ -502,10 +503,80 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const identity = await ensureCacheDir(cacheDir);
     const ours = await contents(cacheDir);
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedAround("rm", parent, elsewhere, stagedInAnchor, "after the call");
+    const retargeted = retargetedAround("lstat", parent, elsewhere, stagedInAnchor, "after the call");
     const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true }))
       .then(() => "removed", (error: unknown) => error);
     vi.restoreAllMocks();
+    expect(retargeted()).toBe(true);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(await contents(otherCacheDir)).toEqual(others);
+    // The run drops its anchor, and with it the tree moved into it.
+    expect(await contents(cacheDir)).toEqual(Object.fromEntries(Object.entries(ours).filter(([name]) => name.split(path.sep)[0] !== "tree")));
+  });
+
+  // Retargets the parent as the first lstat, by either API, of a target the condition accepts settles, which is how a
+  // removal finds its target, and restores it as the check after the change begins, so only the deletion that follows,
+  // which Node's rm lets take a missing path as removed, resolves the cache path into the other directory.
+  function retargetedOnceRmFindsItsTarget(cacheDir: string, parent: string, elsewhere: string, accept: (target: string) => boolean): () => boolean {
+    const lstat = nodeFs.lstat.bind(nodeFs) as (...args: unknown[]) => void;
+    const lstatPromise = fs.lstat.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    const stat = vi.mocked(fs.stat).getMockImplementation() as (...args: unknown[]) => Promise<unknown>;
+    let state: "idle" | "retargeted" | "restored" = "idle";
+    vi.spyOn(nodeFs, "lstat").mockImplementation(((...args: unknown[]) => {
+      const callback = args.at(-1);
+      if (state !== "idle" || typeof callback !== "function" || !accept(String(args[0]))) return lstat(...args);
+      return lstat(...args.slice(0, -1), (...results: unknown[]) => {
+        retargetSync(parent, elsewhere);
+        state = "retargeted";
+        (callback as (...results: unknown[]) => void)(...results);
+      });
+    }) as never);
+    vi.spyOn(fs, "lstat").mockImplementation((async (...args: unknown[]) => {
+      const settled = await lstatPromise(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      if (state === "idle" && accept(String(args[0]))) {
+        await retarget(parent, elsewhere);
+        state = "retargeted";
+      }
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }) as never);
+    vi.spyOn(fs, "stat").mockImplementation((async (...args: unknown[]) => {
+      if (args[0] === cacheDir && state === "retargeted") {
+        await restore(parent);
+        state = "restored";
+      }
+      return await stat(...args);
+    }) as never);
+    return () => state === "restored";
+  }
+
+  it("fails, and changes nothing in either cache, when a parent is retargeted after rm validates an ordinary deletion and restored before it returns", async () => {
+    const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const ours = await contents(cacheDir);
+    const others = await contents(otherCacheDir);
+    const target = path.join(cacheDir, "entry", "file");
+    const retargeted = retargetedOnceRmFindsItsTarget(cacheDir, parent, elsewhere, (given) => given.includes(".osnova-bound-") && path.resolve(given) === target);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.rm(target, { force: true }))
+      .then(() => "removed", (error: unknown) => error);
+    vi.restoreAllMocks();
+    await restore(parent);
+    expect(retargeted()).toBe(true);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(await contents(otherCacheDir)).toEqual(others);
+    expect(await contents(cacheDir)).toEqual(ours);
+  });
+
+  it("fails, and changes nothing in the other cache, when a parent is retargeted after rm validates a tree moved into the anchor and restored before it returns", async () => {
+    const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const ours = await contents(cacheDir);
+    const others = await contents(otherCacheDir);
+    const retargeted = retargetedOnceRmFindsItsTarget(cacheDir, parent, elsewhere, (given) => stagedInAnchor(path.resolve(given)));
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true }))
+      .then(() => "removed", (error: unknown) => error);
+    vi.restoreAllMocks();
+    await restore(parent);
     expect(retargeted()).toBe(true);
     expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
     expect(await contents(otherCacheDir)).toEqual(others);
@@ -517,14 +588,21 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const temporary = await temporaryDir();
     const cacheDir = path.join(temporary, "cache");
     const identity = await ensureCacheDir(cacheDir);
-    const rm = fs.rm.bind(fs) as (...args: unknown[]) => Promise<unknown>;
     let failing = "";
-    vi.spyOn(fs, "rm").mockImplementation((async (...args: unknown[]) => {
-      const target = String(args[0]);
-      if (!stagedInAnchor(target)) return await rm(...args);
-      const failed = path.join(target, failing);
-      throw Object.assign(new Error(`EACCES: permission denied, rm '${failed}'`), { code: "EACCES", errno: -13, syscall: "rm", path: failed });
-    }) as never);
+    // Where target lies within a tree moved into the anchor, its path relative to that tree.
+    const withinStaged = (target: string): string | undefined => {
+      const parts = target.split(path.sep);
+      const at = parts.findIndex((part) => anchorName.test(part));
+      return at < 0 || at + 1 >= parts.length ? undefined : parts.slice(at + 2).join(path.sep);
+    };
+    for (const name of ["unlink", "rmdir"] as const) {
+      const original = fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+      vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
+        const target = String(args[0]);
+        if (withinStaged(target) !== failing) return await original(...args);
+        throw Object.assign(new Error(`EACCES: permission denied, ${name} '${target}'`), { code: "EACCES", errno: -13, syscall: name, path: target });
+      }) as never);
+    }
     const outcomes = await withBoundCacheDir(cacheDir, identity, async () => {
       await cacheFs.mkdir(path.join(cacheDir, "tree", "branch"), { recursive: true });
       await cacheFs.writeFile(path.join(cacheDir, "tree", "branch", "leaf"), "x");
@@ -541,8 +619,8 @@ describe.runIf(anchored)("withBoundCacheDir where the cache directory cannot be 
     const leaf = path.join(cacheDir, "tree", "branch", "leaf");
     const other = path.join(cacheDir, "other");
     expect(outcomes).toEqual([
-      { code: "EACCES", path: leaf, message: `EACCES: permission denied, rm '${leaf}'` },
-      { code: "EACCES", path: other, message: `EACCES: permission denied, rm '${other}'` },
+      { code: "EACCES", path: leaf, message: `EACCES: permission denied, unlink '${leaf}'` },
+      { code: "EACCES", path: other, message: `EACCES: permission denied, rmdir '${other}'` },
     ]);
   });
 
@@ -668,7 +746,7 @@ describe.runIf(anchored)("refreshWorkspaceWitnessed where the cache directory ca
 
   // Retargets the parent inside the first call the condition accepts, after the check before it, and restores it before
   // the call returns, so the check after it sees the cache directory as it was.
-  function retargetedDuring(name: "writeFile" | "rm", parent: string, elsewhere: string, accept: (target: string) => boolean): () => boolean {
+  function retargetedDuring(name: "writeFile" | "unlink", parent: string, elsewhere: string, accept: (target: string) => boolean): () => boolean {
     const original = fs[name].bind(fs) as (...args: unknown[]) => Promise<unknown>;
     let done = false;
     vi.spyOn(fs, name).mockImplementation((async (...args: unknown[]) => {
@@ -701,7 +779,8 @@ describe.runIf(anchored)("refreshWorkspaceWitnessed where the cache directory ca
   it("fails the refresh, and deletes nothing in the retargeted cache, when a parent is retargeted during the deletion of an evicted entry", async () => {
     const { parent, elsewhere, root, cacheDir, otherCacheDir, olderKey } = await sharedEntries();
     const others = await contents(otherCacheDir);
-    const retargeted = retargetedDuring("rm", parent, elsewhere, (target) =>
+    // The rm of an evicted entry's file deletes it by unlink.
+    const retargeted = retargetedDuring("unlink", parent, elsewhere, (target) =>
       path.basename(path.dirname(target)) === olderKey && path.basename(target) === "index.json");
     const outcome = await refreshWorkspaceWitnessed(root, { cacheDir, maxWorkspaces: 1 }).then((answer) => answer, (error: unknown) => error);
     vi.restoreAllMocks();
