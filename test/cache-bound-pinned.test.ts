@@ -116,6 +116,26 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     expect(await pins(cacheDir)).toEqual([]);
   });
 
+  // A pin removed again once the run fails would leave no trace, so each open is followed by a look at the other cache.
+  it("creates no pin outside the cache directory when the cache path names another directory as the run begins", async () => {
+    const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    await retarget(parent, elsewhere);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const settled = await open(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      landed.push(...await pins(otherCacheDir));
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => {}).then(() => "ran", (error: unknown) => error);
+    vi.mocked(fs.open).mockRestore();
+    await restore(parent);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(landed).toEqual([]);
+  });
+
   it("changes a path outside the cache directory as given", async () => {
     const temporary = await temporaryDir();
     const cacheDir = path.join(temporary, "cache");
@@ -162,6 +182,31 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     vi.restoreAllMocks();
     expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
     expect(await contents(otherCacheDir)).toEqual(others);
+  });
+
+  // The directory the cache path names is open before the pin is created, so a parent cannot be retargeted between
+  // the check of that directory and the creation of the pin.
+  it("keeps a parent from being retargeted as the pin is created, so no pin lands in the other cache", async () => {
+    const { parent, elsewhere, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let refused: unknown;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (refused !== undefined || !path.basename(String(args[0])).startsWith(".osnova-bound-")) return await open(...args);
+      refused = await retarget(parent, elsewhere).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+      try {
+        return await open(...args);
+      } finally {
+        landed.push(...await pins(otherCacheDir));
+        await restore(parent);
+      }
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
+    expect(landed).toEqual([]);
+    expect(outcome).toBe("ran");
   });
 
   it("refreshes a workspace and leaves no pin in the cache directory", async () => {

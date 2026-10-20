@@ -30,14 +30,15 @@ import { IndexingError } from "../index/diagnostics.js";
 // its name, once displaced, or as its input closes when this process exits or dies. An anchor is left behind when it
 // is removed after the cache directory moved, when it holds anything as it is removed, or when the process ends while
 // the anchor has no helper. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
-// directory. Windows refuses to rename or remove a directory while a file inside it is open, so there each run opens a
-// pin, a file under a random name in the cache directory that no other open may share and that is removed as it
-// closes. The pin's real path names, through real directories only, the directory that holds it, which stays where it
-// is with every directory above it while the pin is open; once its identity is the cache directory's, every cacheFs
-// call within the cache directory goes by that path. A pin that lands elsewhere fails the run with cache-changing
-// before it changes anything. On another platform that resolves .. by name, and in a worker thread elsewhere, which
-// makes no anchor, nothing binds the directory, so every change within it fails with cache-unbindable before it changes
-// anything; reads go by path.
+// directory. Windows refuses to rename or remove a directory while a file inside it is open, so there each run first
+// opens the directory the cache path names, creating nothing, and fails with cache-changing unless it has the cache
+// directory's identity; while that handle is open, it creates a pin, a file under a random name in the cache directory
+// that no other open may share and that is removed as it closes. The pin's real path names, through real directories
+// only, the directory that holds it, which stays where it is with every directory above it while the pin is open; once
+// its identity is the cache directory's, every cacheFs call within the cache directory goes by that path. A pin that
+// lands elsewhere fails the run with cache-changing before it changes anything. On another platform that resolves ..
+// by name, and in a worker thread elsewhere, which makes no anchor, nothing binds the directory, so every change within
+// it fails with cache-unbindable before it changes anything; reads go by path.
 interface Scope {
   readonly dir: string;
   readonly prefix: string;
@@ -439,10 +440,27 @@ async function removeAnchor(anchor: Anchor): Promise<void> {
   void anchor.helper?.then((helper) => helper.child.stdin.end(), () => {});
 }
 
-// Opens a pin in the cache directory, as described above. The real path of the pin is found by a call that opens it
-// for no access, which its sharing does not refuse, and its directory must have the cache directory's identity while
-// that path still names the pin.
+// Opens a pin in the cache directory, as described above. The pin is created only once a handle open on the directory
+// the cache path names has the cache directory's identity: a retarget made before that open fails the run with nothing
+// created, and the open handle keeps every directory above the cache directory in place until the pin is open. The
+// real path of the pin is found by a call that opens it for no access, which its sharing does not refuse, and its
+// directory must have the cache directory's identity while that path still names the pin.
 async function pinIn(scope: Scope): Promise<Pin> {
+  let held: FileHandle;
+  try {
+    held = await promises.open(scope.dir, constants.O_RDONLY);
+  } catch (error) {
+    throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" }, error);
+  }
+  try {
+    if (identityOf(await held.stat({ bigint: true })) !== scope.identity) throw changingIn(scope);
+    return await pinWithin(scope);
+  } finally {
+    await held.close().catch(() => {});
+  }
+}
+
+async function pinWithin(scope: Scope): Promise<Pin> {
   const placed = `${scope.prefix}.osnova-bound-${randomUUID()}`;
   let file: FileHandle;
   try {
