@@ -6,8 +6,11 @@ import { refreshWorkspaceWitnessed } from "../src/api.js";
 import { cacheFs, ensureCacheDir, withBoundCacheDir } from "../src/cache/bound.js";
 
 // Every test here runs where no descriptor can bind a cache directory and .. drops the name before it, as Windows
-// resolves a path, so no anchor can bind it either. On other platforms a stat of a path through .. is resolved by name,
-// which is what the probe for an anchor sees on Windows.
+// resolves a path, so no anchor can bind it either. A stat of a path through .. is resolved by name, which is what the
+// probe for an anchor sees on Windows. Windows itself also keeps a directory in place while a file inside it is open,
+// which binds the cache directory there; cache-bound-pinned.test.ts covers that, and these tests run on every other
+// platform, where nothing does.
+const lexicalOnly = process.platform !== "win32";
 const temporaries: string[] = [];
 beforeEach(() => {
   const stat = fs.stat.bind(fs) as (...args: unknown[]) => Promise<unknown>;
@@ -83,7 +86,7 @@ function retargetedDuring(name: "rename" | "rm", parent: string, elsewhere: stri
 
 const refused = (cacheDir: string): object => ({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-unbindable" } });
 
-describe("withBoundCacheDir where .. resolves by name", () => {
+describe.runIf(lexicalOnly)("withBoundCacheDir where .. resolves by name", () => {
   const publications: ReadonlyArray<readonly [string, "rename" | "rm", (cacheDir: string) => Promise<unknown>]> = [
     ["the publication of an artifact", "rename", async (cacheDir) => await cacheFs.rename(path.join(cacheDir, "entry", "file.tmp"), path.join(cacheDir, "entry", "file"))],
     ["the deletion of an entry", "rm", async (cacheDir) => await cacheFs.rm(path.join(cacheDir, "tree"), { recursive: true, force: true })],
@@ -133,7 +136,7 @@ describe("withBoundCacheDir where .. resolves by name", () => {
   });
 });
 
-describe("refreshWorkspaceWitnessed where .. resolves by name", () => {
+describe.runIf(lexicalOnly)("refreshWorkspaceWitnessed where .. resolves by name", () => {
   it("fails before it writes anything into the cache directory", async () => {
     const temporary = await temporaryDir();
     const root = path.join(temporary, "root");

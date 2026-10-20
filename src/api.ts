@@ -148,7 +148,8 @@ export async function refreshWorkspaceWitnessed(root: string, options: Witnessed
   // reaches the cache directory the lock was taken in without resolving its ancestors again, so a retarget undone
   // between two checks cannot redirect a write; one undone while sources are read is not seen. Where no descriptor can
   // bind the cache directory, an anchor directory inside it does, and a call a retarget redirects changes nothing and
-  // fails the refresh with cache-changing. Where the platform resolves .. by name, or in a worker thread, nothing can
+  // fails the refresh with cache-changing. On Windows a file held open in the cache directory keeps it and every
+  // directory above it in place. Where another platform resolves .. by name, or in a worker thread there, nothing can
   // bind a cache write, so the first one fails the refresh with cache-unbindable before it changes anything (see
   // withBoundCacheDir).
   const task = withBoundCacheDir(canonicalCache, cacheIdentity, () => withCacheLock(canonicalWorkspaceLockPath(canonicalCache, canonicalRoot), async () => {

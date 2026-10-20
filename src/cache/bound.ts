@@ -29,9 +29,15 @@ import { IndexingError } from "../index/diagnostics.js";
 // moved, or the anchor gone, drops the anchor, so the next run makes a new one. The helper removes the anchor too, by
 // its name, once displaced, or as its input closes when this process exits or dies. An anchor is left behind when it
 // is removed after the cache directory moved, when it holds anything as it is removed, or when the process ends while
-// the anchor has no helper. Where .. drops the name before it instead, as Windows resolves it, Node offers no way to
-// bind the directory, and a worker thread makes no anchor, so there every change within the cache directory fails with
-// cache-unbindable before it changes anything; reads go by path.
+// the anchor has no helper. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
+// directory. Windows refuses to rename or remove a directory while a file inside it is open, so there each run opens a
+// pin, a file under a random name in the cache directory that no other open may share and that is removed as it
+// closes. The pin's real path names, through real directories only, the directory that holds it, which stays where it
+// is with every directory above it while the pin is open; once its identity is the cache directory's, every cacheFs
+// call within the cache directory goes by that path. A pin that lands elsewhere fails the run with cache-changing
+// before it changes anything. On another platform that resolves .. by name, and in a worker thread elsewhere, which
+// makes no anchor, nothing binds the directory, so every change within it fails with cache-unbindable before it changes
+// anything; reads go by path.
 interface Scope {
   readonly dir: string;
   readonly prefix: string;
@@ -76,10 +82,15 @@ interface Anchor extends Kept {
   helper: Promise<Helper> | undefined;
 }
 
+interface Pin extends Bound {
+  readonly file: FileHandle;
+  readonly pin: string;
+}
+
 // live ends with the operation, so a call that outlives it, from work the operation started without awaiting, uses the
-// path as given rather than a descriptor that may since have closed and been reused, or an anchor since removed. A run
-// without either refuses every change within the cache directory.
-const binding = new AsyncLocalStorage<{ readonly scope: Scope; readonly handle: Handle | Anchor | undefined; live: boolean }>();
+// path as given rather than a descriptor that may since have closed and been reused, or an anchor or pin since removed.
+// A run without any of them refuses every change within the cache directory.
+const binding = new AsyncLocalStorage<{ readonly scope: Scope; readonly handle: Handle | Anchor | Pin | undefined; live: boolean }>();
 // Kept open between refreshes, so a refresh of a cache directory already open compares the stat ensureCacheDir took with
 // it and opens nothing. A handle in use is never closed; one no longer the directory's handle closes with its last user.
 // Anchors are kept the same way, so a refresh of a cache directory already anchored makes no anchor; each is removed
@@ -98,6 +109,10 @@ const keptHandles = 4;
 let unsupported = process.platform !== "linux";
 // Whether .. resolves through the directory before it, probed by the first run that needs an anchor.
 let physicalParent: boolean | undefined;
+// On Windows a pin opens with libuv's flags for no sharing and for removal as it closes, which Node passes through as
+// given and no other platform's open takes; elsewhere the pin is unlinked after it closes.
+const removedOnClose = process.platform === "win32";
+const pinFlags = constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | (removedOnClose ? 0x10000000 | 0x40 : 0);
 
 const identityOf = (stat: { readonly dev: bigint; readonly ino: bigint }): string => `${stat.dev}:${stat.ino}`;
 const prefixOf = (dir: string): string => dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
@@ -424,6 +439,36 @@ async function removeAnchor(anchor: Anchor): Promise<void> {
   void anchor.helper?.then((helper) => helper.child.stdin.end(), () => {});
 }
 
+// Opens a pin in the cache directory, as described above. The real path of the pin is found by a call that opens it
+// for no access, which its sharing does not refuse, and its directory must have the cache directory's identity while
+// that path still names the pin.
+async function pinIn(scope: Scope): Promise<Pin> {
+  const placed = `${scope.prefix}.osnova-bound-${randomUUID()}`;
+  let file: FileHandle;
+  try {
+    file = await promises.open(placed, pinFlags);
+  } catch (error) {
+    throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, error);
+  }
+  let pin = placed;
+  try {
+    pin = await promises.realpath(placed);
+    const via = path.dirname(pin);
+    const [own, found, dir] = await Promise.all([file.stat({ bigint: true }), promises.lstat(pin, { bigint: true }), promises.stat(via, { bigint: true })]);
+    if (identityOf(found) !== identityOf(own) || identityOf(dir) !== scope.identity) throw changingIn(scope);
+    return { ...scope, via, file, pin };
+  } catch (error) {
+    await unpin({ file, pin });
+    if (error instanceof IndexingError) throw error;
+    throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" }, error);
+  }
+}
+
+async function unpin(pin: { readonly file: FileHandle; readonly pin: string }): Promise<void> {
+  await pin.file.close().catch(() => {});
+  if (!removedOnClose) await promises.unlink(pin.pin).catch(() => {});
+}
+
 // Creates the cache directory when it is missing and returns the device and inode of the directory it names. The stat
 // takes the place of the existence check a recursive mkdir makes, so a cache directory already there costs no more.
 export async function ensureCacheDir(cacheDir: string): Promise<string> {
@@ -442,12 +487,23 @@ export async function ensureCacheDir(cacheDir: string): Promise<string> {
 
 // Runs operation with every cacheFs call on a path within the canonical cache directory bound to the directory with
 // the given identity, the one ensureCacheDir found. A directory that path no longer names fails the operation. Where no
-// descriptor can bind the directory, an anchor binds it, or each change within it is refused, as described above.
+// descriptor can bind the directory, a pin or an anchor binds it, or each change within it is refused, as described
+// above.
 export async function withBoundCacheDir<T>(canonicalCache: string, identity: string, operation: () => Promise<T>): Promise<T> {
   let handle = unsupported ? undefined : handles.get(canonicalCache);
   if (!unsupported && (handle === undefined || handle.identity !== identity)) handle = await open(canonicalCache, identity);
   if (handle === undefined) {
     const scope = { dir: canonicalCache, prefix: prefixOf(canonicalCache), identity };
+    if (process.platform === "win32") {
+      const pin = await pinIn(scope);
+      const pinned = { scope: pin, handle: pin, live: true };
+      try {
+        return await binding.run(pinned, operation);
+      } finally {
+        pinned.live = false;
+        await unpin(pin);
+      }
+    }
     let anchor = anchors.get(canonicalCache);
     if (anchor === undefined || anchor.identity !== identity) anchor = await anchorIn(scope);
     if (anchor === undefined) {
