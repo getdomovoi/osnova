@@ -382,14 +382,17 @@ export function createOsnovaMcpServer(
       // does not vouch for it, so its record is reused only while its witness holds.
       const follows = witness.serial > seenAt;
       const observed = follows && observer !== undefined && observer === watch && witness.serial > observer.scans && observer.root === witness.root && sameDirectory(observer.directory, directory) ? observer : undefined;
-      const record: Verified = { index, witness, directory, watch: observed, changes: seen, at: Date.now() };
+      // A change the watcher counted while the refresh ran may be one its scan read, as when a watcher reports a change
+      // made before it started. The record covers each change counted before a check of its witness that still holds.
+      const covered = observed !== undefined && changes !== seen ? await coveredBy(witness, seen) : seen;
+      const record: Verified = { index, witness, directory, watch: observed, changes: covered, at: Date.now() };
       refreshes += 1;
       if (rebuild !== undefined) lastRebuild = { superseded: rebuild.superseded === undefined ? undefined : new WeakRef(rebuild.superseded) };
       if (order > newestPublished) {
         newestPublished = order;
         const changed = latest !== index;
         latest = index; verified = record;
-        if (follows) settled = seen;
+        if (follows) settled = covered;
         if (changed) prewarm(index);
       }
       return record;
@@ -423,12 +426,20 @@ export function createOsnovaMcpServer(
     if (record.witness.serial > asked) return true;
     return await witnessHolds(absRoot, record.witness) && standing(record) === "holds";
   }
+  // The changes counted as a check of witness began when it still holds, otherwise fallback.
+  async function coveredBy(witness: ScanWitness, fallback: number): Promise<number> {
+    const counted = changes;
+    return await witnessHolds(absRoot, witness) ? counted : fallback;
+  }
   // A query may reuse only the verified state of the last refresh, held as one record that is replaced or dropped
   // whole: the index, the scan witness with the canonical root it was verified at, the root directory that scan read,
   // the watcher that observed that directory from before the scan, the change count the refresh started from and the
-  // time it finished. While that watcher is still the running one, the record is reused while the watcher has seen no
-  // change and the verification is recent. Otherwise it is reused while every file, directory and ignore file its scan
-  // read still stats the same; a full refresh per query cost more than the cheap tools it served. Either way reuse also
+  // time it finished. While that watcher is still the running one and the verification is recent, the record is reused
+  // while the watcher has seen no change, or, once it has, while every file, directory and ignore file its scan read
+  // still stats the same, which then settles each change counted before that check began: a watcher may report a
+  // change the scan already read, as macOS reports one made just before the watcher started. Without that watcher the
+  // record is reused while its scan's reads still stat the same; a full refresh per query cost more than the cheap
+  // tools it served. Either way reuse also
   // needs no other owner that may hold the lock of the witness root, and the workspace path to still resolve to that
   // root and name that directory. A contended lock sends the query to a refresh, which waits for the lock or fails, and
   // drops the record, even one a refresh set while the lock was probed, so the next query verifies the tree under the
@@ -440,10 +451,12 @@ export function createOsnovaMcpServer(
     const held = verified;
     if (held === undefined) return refresh();
     const watched = held.watch !== undefined && held.watch === watch;
+    const seen = changes;
+    const quiet = watched && seen === held.changes;
     const kept = (): boolean => verified === held && (watched
-      ? watch === held.watch && changes === held.changes && Date.now() - held.at < maxStaleMs
+      ? watch === held.watch && changes === seen && Date.now() - held.at < maxStaleMs
       : inFlight === undefined);
-    if (kept() && (watched || await witnessHolds(absRoot, held.witness))) {
+    if (kept() && (quiet || await witnessHolds(absRoot, held.witness))) {
       if (await workspaceLockContended(held.witness.root, cacheDir)) {
         verified = undefined;
       } else if (verified !== held) {
@@ -451,7 +464,13 @@ export function createOsnovaMcpServer(
       } else {
         const now = standing(held);
         if (now === "contended") verified = undefined;
-        else if (now === "holds" && kept()) return held.index;
+        else if (now === "holds" && kept()) {
+          if (watched && !quiet) {
+            verified = { ...held, changes: seen };
+            settled = seen;
+          }
+          return held.index;
+        }
       }
     }
     return refresh();
@@ -510,7 +529,7 @@ export function createOsnovaMcpServer(
         changes += 1;
         changedAt = scanSerial();
         if (timer !== undefined) clearTimeout(timer);
-        timer = setTimeout(() => { timer = undefined; refresh().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
+        timer = setTimeout(() => { timer = undefined; current().catch((error: unknown) => { process.stderr.write(`osnova: watch refresh failed: ${error instanceof Error ? error.message : String(error)}\n`); }); }, debounceMs);
         timer.unref();
       });
       if (!sameDirectory(directoryAt(root), directory)) {
