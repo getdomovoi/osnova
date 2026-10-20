@@ -31,9 +31,12 @@ import { IndexingError } from "../index/diagnostics.js";
 // is removed after the cache directory moved, when it holds anything as it is removed, or when the process ends while
 // the anchor has no helper. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
 // directory. Windows refuses to rename or remove a directory while a file inside it is open, so there each run first
-// opens the directory the cache path names, creating nothing, and fails with cache-changing unless it has the cache
-// directory's identity; while that handle is open, it creates a pin, a file under a random name in the cache directory
-// that no other open may share and that is removed as it closes. The pin's real path names, through real directories
+// opens the directory the cache path names, creating nothing and sharing nothing, so that it cannot be renamed or
+// replaced while the handle is open, and fails with cache-changing unless it has the cache directory's identity. While
+// that handle is open, briefly, as it refuses a listing of the cache directory too, the run creates a pin, a file under
+// a random name in the cache directory that no other open may share and that is removed as it closes. Runs of a
+// process take turns at that handle, and a run whose listing or handle another process refuses waits for it to close
+// (see pinIn). The pin's real path names, through real directories
 // only, the directory that holds it, which stays where it is with every directory above it while the pin is open; once
 // its identity is the cache directory's, every cacheFs call within the cache directory goes by that path. A pin that
 // lands elsewhere fails the run with cache-changing before it changes anything. On another platform that resolves ..
@@ -100,12 +103,16 @@ const binding = new AsyncLocalStorage<{ readonly scope: Scope; readonly handle: 
 // collected while open as an error.
 const registry = Symbol.for("osnova.boundCacheHandles");
 const anchorRegistry = Symbol.for("osnova.boundCacheAnchors");
+const holdRegistry = Symbol.for("osnova.boundCacheHolds");
 const shared = globalThis as typeof globalThis & {
   [registry]?: Map<string, Handle> | undefined;
   [anchorRegistry]?: Map<string, Anchor> | undefined;
+  [holdRegistry]?: Map<string, Promise<void>> | undefined;
 };
 const handles = shared[registry] ??= new Map<string, Handle>();
 const anchors = shared[anchorRegistry] ??= new Map<string, Anchor>();
+// The last turn this process's runs took at holding each cache directory to pin it; the runs take them one at a time.
+const holds = shared[holdRegistry] ??= new Map<string, Promise<void>>();
 const keptHandles = 4;
 let unsupported = process.platform !== "linux";
 // Whether .. resolves through the directory before it, probed by the first run that needs an anchor.
@@ -113,7 +120,10 @@ let physicalParent: boolean | undefined;
 // On Windows a pin opens with libuv's flags for no sharing and for removal as it closes, which Node passes through as
 // given and no other platform's open takes; elsewhere the pin is unlinked after it closes.
 const removedOnClose = process.platform === "win32";
-const pinFlags = constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | (removedOnClose ? 0x10000000 | 0x40 : 0);
+const unshared = removedOnClose ? 0x10000000 : 0;
+const pinFlags = constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | (removedOnClose ? unshared | 0x40 : 0);
+// How long a run waits, in milliseconds, for a directory another run holds without sharing.
+const busyWaitMs = 2000;
 
 const identityOf = (stat: { readonly dev: bigint; readonly ino: bigint }): string => `${stat.dev}:${stat.ino}`;
 const prefixOf = (dir: string): string => dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
@@ -440,24 +450,59 @@ async function removeAnchor(anchor: Anchor): Promise<void> {
   void anchor.helper?.then((helper) => helper.child.stdin.end(), () => {});
 }
 
+// Calls call again while it fails with EBUSY, as Windows refuses an open of a directory another run holds without
+// sharing, for up to busyWaitMs.
+async function unlessBusy<T>(call: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  for (let delay = 1; ; delay = Math.min(delay * 2, 100)) {
+    try {
+      return await call();
+    } catch (error) {
+      if (codeOf(error) !== "EBUSY" || Date.now() - started >= busyWaitMs) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+}
+
+// Runs work once every earlier turn of this process at dir has ended.
+async function inTurn<T>(dir: string, work: () => Promise<T>): Promise<T> {
+  const before = holds.get(dir);
+  let end = (): void => {};
+  const turn = new Promise<void>((resolve) => { end = resolve; });
+  holds.set(dir, turn);
+  try {
+    await before;
+    return await work();
+  } finally {
+    end();
+    if (holds.get(dir) === turn) holds.delete(dir);
+  }
+}
+
 // Opens a pin in the cache directory, as described above. The pin is created only once a handle open on the directory
 // the cache path names has the cache directory's identity: a retarget made before that open fails the run with nothing
-// created, and the open handle keeps every directory above the cache directory in place until the pin is open. The
-// real path of the pin is found by a call that opens it for no access, which its sharing does not refuse, and its
-// directory must have the cache directory's identity while that path still names the pin.
+// created. The handle shares nothing, so until the pin is open the cache directory cannot be renamed or replaced, and
+// every directory above it stays in place; libuv opens with delete sharing unless it shares nothing at all. Holding it
+// so also refuses a listing of the cache directory, and another run's hold, so a run holds it only from the check to
+// the open of its pin, a run of this process waits for the turns of the others, and a listing or a hold refused with
+// EBUSY is made again for up to busyWaitMs. The real path of the pin is found by a call that opens it for no access,
+// which its sharing does not refuse, and its directory must have the cache directory's identity while that path still
+// names the pin.
 async function pinIn(scope: Scope): Promise<Pin> {
-  let held: FileHandle;
-  try {
-    held = await promises.open(scope.dir, constants.O_RDONLY);
-  } catch (error) {
-    throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" }, error);
-  }
-  try {
-    if (identityOf(await held.stat({ bigint: true })) !== scope.identity) throw changingIn(scope);
-    return await pinWithin(scope);
-  } finally {
-    await held.close().catch(() => {});
-  }
+  return await inTurn(scope.dir, async () => {
+    let held: FileHandle;
+    try {
+      held = await unlessBusy(async () => await promises.open(scope.dir, constants.O_RDONLY | unshared));
+    } catch (error) {
+      throw new IndexingError({ phase: "cache", path: scope.dir, code: codeOf(error) === "EBUSY" ? "cache-write-failed" : "cache-changing" }, error);
+    }
+    try {
+      if (identityOf(await held.stat({ bigint: true })) !== scope.identity) throw changingIn(scope);
+      return await pinWithin(scope);
+    } finally {
+      await held.close().catch(() => {});
+    }
+  });
 }
 
 async function pinWithin(scope: Scope): Promise<Pin> {
@@ -670,10 +715,12 @@ async function changeThrough(anchor: Anchor, name: Bindable, args: readonly unkn
 }
 
 // The method is looked up on each call, so whatever replaces it on the promises API sees the call, except a change
-// within a cache directory an anchor binds, which the anchor's helper makes.
+// within a cache directory an anchor binds, which the anchor's helper makes. On Windows a listing refused while another
+// run holds the cache directory to pin it is made again.
 function through<K extends Bindable>(name: K, paths: 1 | 2): Promises[K] {
   return (async (...args: unknown[]) => {
-    const call = promises[name] as Call;
+    const direct = promises[name] as Call;
+    const call: Call = name === "readdir" && process.platform === "win32" ? async (...given) => await unlessBusy(async () => await direct(...given)) : direct;
     const run = binding.getStore();
     if (run?.live !== true) return await call(...args);
     const handle = run.handle;

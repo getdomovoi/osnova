@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { promises as fs } from "node:fs";
+import { constants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { refreshWorkspaceWitnessed } from "../src/api.js";
@@ -136,6 +136,87 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     expect(landed).toEqual([]);
   });
 
+  // Windows refuses an open of a directory held without sharing with EBUSY, as another run holds the cache directory
+  // while it checks it and creates its pin.
+  it("waits while the cache directory is held without sharing, then pins it", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let refused = 0;
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (String(args[0]) === cacheDir && refused < 3) {
+        refused += 1;
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${cacheDir}'`), { code: "EBUSY" });
+      }
+      return await open(...args);
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+    expect(refused).toBe(3);
+    expect(outcome).toBe("ran");
+  });
+
+  it("fails with cache-write-failed, creating no pin, once the cache directory stays held without sharing", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (String(args[0]) === cacheDir) throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${cacheDir}'`), { code: "EBUSY" });
+      return await open(...args);
+    }) as never);
+    let ran = false;
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => { ran = true; }).then(() => "ran", (error: unknown) => error);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-write-failed" }, cause: { code: "EBUSY" } });
+    expect(ran).toBe(false);
+    expect(await pins(cacheDir)).toEqual([]);
+  }, 15_000);
+
+  // Two runs of one process would otherwise refuse each other's hold of the cache directory.
+  it("lets runs of one process hold the cache directory in turn", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<{ close: () => Promise<void> }>;
+    let holding = 0;
+    let collisions = 0;
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (String(args[0]) !== cacheDir) return await open(...args);
+      if (holding > 0) {
+        collisions += 1;
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${cacheDir}'`), { code: "EBUSY" });
+      }
+      holding += 1;
+      const held = await open(...args).catch((error: unknown) => {
+        holding -= 1;
+        throw error;
+      });
+      const close = held.close.bind(held);
+      held.close = async () => {
+        holding -= 1;
+        await close();
+      };
+      return held;
+    }) as never);
+    const outcomes = await Promise.all([1, 2, 3].map(async (run) => await withBoundCacheDir(cacheDir, identity, async () => run)));
+    expect(outcomes).toEqual([1, 2, 3]);
+    expect(collisions).toBe(0);
+  });
+
+  it("lists the cache directory while another run holds it without sharing", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const readdir = fs.readdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let refused = 0;
+    vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
+      if (path.resolve(String(args[0])) === cacheDir && refused < 2) {
+        refused += 1;
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, scandir '${cacheDir}'`), { code: "EBUSY" });
+      }
+      return await readdir(...args);
+    }) as never);
+    const listed = await withBoundCacheDir(cacheDir, identity, async () => await cacheFs.readdir(cacheDir));
+    expect(refused).toBe(2);
+    expect(listed.filter((name) => !name.startsWith(".osnova-bound-")).sort()).toEqual(["entry", "tree"]);
+  });
+
   it("changes a path outside the cache directory as given", async () => {
     const temporary = await temporaryDir();
     const cacheDir = path.join(temporary, "cache");
@@ -207,6 +288,55 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
     expect(landed).toEqual([]);
     expect(outcome).toBe("ran");
+  });
+
+  // The directory the cache path names is held without delete sharing until the pin is open, so the cache directory
+  // itself cannot be moved aside and replaced with a junction between the check of its identity and the creation of
+  // the pin.
+  it("keeps the cache directory from being replaced as the pin is created, so no pin lands in the other cache", async () => {
+    const { cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let refused: unknown;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (refused !== undefined || !path.basename(String(args[0])).startsWith(".osnova-bound-")) return await open(...args);
+      refused = await retarget(cacheDir, otherCacheDir).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+      try {
+        return await open(...args);
+      } finally {
+        landed.push(...await pins(otherCacheDir));
+        await restore(cacheDir);
+      }
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
+    expect(landed).toEqual([]);
+    expect(outcome).toBe("ran");
+  });
+
+  it("waits for a hold of the cache directory without sharing to end, then runs", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const held = await fs.open(cacheDir, constants.O_RDONLY | 0x10000000);
+    const listing = await fs.readdir(cacheDir).then(() => "listed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+    const released = new Promise<void>((resolve) => setTimeout(() => void held.close().then(resolve), 200));
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+    await released;
+    expect(listing).toBe("EBUSY");
+    expect(outcome).toBe("ran");
+  });
+
+  it("binds concurrent runs of one process to the same cache directory", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const outcomes = await Promise.all([1, 2, 3, 4].map(async (run) => await withBoundCacheDir(cacheDir, identity, async () => {
+      await cacheFs.writeFile(path.join(cacheDir, "entry", `run-${run}`), String(run));
+      return run;
+    })));
+    expect(outcomes).toEqual([1, 2, 3, 4]);
+    expect(await pins(cacheDir)).toEqual([]);
   });
 
   it("refreshes a workspace and leaves no pin in the cache directory", async () => {
