@@ -7,6 +7,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { cacheFs } from "../src/cache/bound.js";
 import { workspaceLockPath } from "../src/cache/cache.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 import type { OsnovaIndex } from "../src/types.js";
@@ -111,28 +112,30 @@ function after(method: "lstat", target: string, interlude: () => Promise<void>):
   }) as never);
 }
 
-// Resolves when the named promise-API method is first called with the given path as the argument at that position.
+// Resolves when the named cacheFs method is first called with the given path as the argument at that position. A
+// change within the cache directory is intercepted on cacheFs, which every platform calls first: where no descriptor
+// binds the cache directory, as on macOS, a helper process makes the change and the promise API never sees it.
 function reached(method: "rename", target: string, position: number): Promise<void> {
-  const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  const original = cacheFs[method].bind(cacheFs) as (...args: unknown[]) => Promise<unknown>;
   return new Promise((resolve) => {
-    vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+    vi.spyOn(cacheFs, method).mockImplementation((async (...args: unknown[]) => {
       if (reachedPath(String(args[position])) === target) resolve();
       return await original(...args);
     }) as never);
   });
 }
 
-// Holds the first call of the named promise-API method with the given path as the argument at that position until
-// release is called; reached resolves when that call arrives. afterwards, if given, runs once that call has settled
-// and before its caller sees the result.
+// Holds the first call of the named cacheFs method with the given path as the argument at that position until release
+// is called; reached resolves when that call arrives. afterwards, if given, runs once that call has settled and before
+// its caller sees the result.
 function hold(method: "rename", target: string, position: number, afterwards?: () => Promise<void>): { reached: Promise<void>; release: () => void } {
-  const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  const original = cacheFs[method].bind(cacheFs) as (...args: unknown[]) => Promise<unknown>;
   let pending = true;
   let arrive!: () => void;
   let release!: () => void;
   const reached = new Promise<void>((resolve) => { arrive = resolve; });
   const released = new Promise<void>((resolve) => { release = resolve; });
-  vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+  vi.spyOn(cacheFs, method).mockImplementation((async (...args: unknown[]) => {
     if (pending && reachedPath(String(args[position])) === target) {
       pending = false;
       arrive();

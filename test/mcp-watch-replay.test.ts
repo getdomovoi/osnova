@@ -5,6 +5,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { cacheFs } from "../src/cache/bound.js";
 import { workspaceLockPath } from "../src/cache/cache.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
@@ -42,17 +43,19 @@ async function setup(moment: Moment) {
   const lockPath = workspaceLockPath(cacheDir, workspace);
   // The workspace lock is staged and renamed into place before the scan; the artifact is published after it.
   const ofLock = (target: unknown): boolean => path.basename(String(target)).startsWith(path.basename(lockPath));
-  const mkdir = fs.mkdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
-  const rename = fs.rename.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  // Where no descriptor binds the cache directory, as on macOS, a helper process makes these changes, so they are
+  // intercepted on cacheFs, which every platform calls first.
+  const mkdir = cacheFs.mkdir.bind(cacheFs) as (...args: unknown[]) => Promise<unknown>;
+  const rename = cacheFs.rename.bind(cacheFs) as (...args: unknown[]) => Promise<unknown>;
   let pending = moment !== "after the first query";
-  vi.spyOn(fs, "mkdir").mockImplementation((async (...args: unknown[]) => {
+  vi.spyOn(cacheFs, "mkdir").mockImplementation((async (...args: unknown[]) => {
     if (pending && moment === "before the first scan" && ofLock(args[0])) {
       pending = false;
       replay();
     }
     return await mkdir(...args);
   }) as never);
-  vi.spyOn(fs, "rename").mockImplementation((async (...args: unknown[]) => {
+  vi.spyOn(cacheFs, "rename").mockImplementation((async (...args: unknown[]) => {
     const result = await rename(...args);
     if (pending && moment === "after the first scan" && !ofLock(args[0])) {
       pending = false;

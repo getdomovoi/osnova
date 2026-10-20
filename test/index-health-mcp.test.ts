@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 import * as loader from "../src/grammar/loader.js";
+import { cacheFs } from "../src/cache/bound.js";
 import { workspaceDirFor } from "../src/cache/cache.js";
 import { withSequentialExtract } from "./support/extract.js";
 
@@ -82,9 +83,11 @@ it("does not conceal a failed refresh write and can retry safely", async () => {
   const request = { name: "osnova_outline", arguments: { file: "one.ts" } };
   await client.callTool(request);
   await fs.appendFile(path.join(workspace, "one.ts"), "export function added() {}\n");
-  const rename = fs.rename.bind(fs);
+  // Intercepted on cacheFs, which every platform calls first: where no descriptor binds the cache directory, as on
+  // macOS, a helper process publishes the index and the promise API never sees it.
+  const rename = cacheFs.rename.bind(cacheFs);
   let rejected = false;
-  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+  vi.spyOn(cacheFs, "rename").mockImplementation(async (from, to) => {
     if (!rejected && path.basename(String(to)) === "index.json") {
       rejected = true;
       throw new Error("denied");

@@ -5,6 +5,7 @@ import { promises as fs, realpathSync, renameSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { refreshWorkspaceWitnessed } from "../src/api.js";
+import { cacheFs } from "../src/cache/bound.js";
 import { workspaceDirFor, workspaceLockPath } from "../src/cache/cache.js";
 import { scanSerial } from "../src/index/scan.js";
 import { reachedPath } from "./reached-path.js";
@@ -42,24 +43,30 @@ function duringRealpath(target: string, accept: () => boolean, interlude: () => 
   }) as never);
 }
 
-// Resolves when fs.rename is first called with the given path as its destination.
+// A change within the cache directory is intercepted on cacheFs, which every platform calls first: where no descriptor
+// binds the cache directory, as on macOS, a helper process makes the change and the promise API never sees it. A read
+// is made by this process everywhere, so it is intercepted on the promise API.
+const intercepted = (method: "readFile" | "rename") => method === "rename" ? cacheFs : fs;
+
+// Resolves when cacheFs.rename is first called with the given path as its destination.
 function renamedOnto(target: string): Promise<void> {
-  const original = fs.rename.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  const original = cacheFs.rename.bind(cacheFs) as (...args: unknown[]) => Promise<unknown>;
   return new Promise((resolve) => {
-    vi.spyOn(fs, "rename").mockImplementation((async (...args: unknown[]) => {
+    vi.spyOn(cacheFs, "rename").mockImplementation((async (...args: unknown[]) => {
       if (reachedPath(String(args[1])) === target) resolve();
       return await original(...args);
     }) as never);
   });
 }
 
-// Runs before, then the first call of fs[method] whose path (the destination, for rename) the condition accepts, then
+// Runs before, then the first call of method whose path (the destination, for rename) the condition accepts, then
 // after, once that call has settled and before its caller sees the result.
 function aroundFirst(method: "readFile" | "rename", accept: (file: string) => boolean, before: () => Promise<void>, after?: () => Promise<void>): void {
-  const original = fs[method].bind(fs) as (...args: unknown[]) => Promise<unknown>;
+  const api = intercepted(method);
+  const original = api[method].bind(api) as (...args: unknown[]) => Promise<unknown>;
   const at = method === "rename" ? 1 : 0;
   let pending = true;
-  vi.spyOn(fs, method).mockImplementation((async (...args: unknown[]) => {
+  vi.spyOn(api, method).mockImplementation((async (...args: unknown[]) => {
     if (!pending || typeof args[at] !== "string" || !accept(reachedPath(args[at]))) return await original(...args);
     pending = false;
     await before();
@@ -417,8 +424,8 @@ describe("refreshWorkspaceWitnessed and the root it captured", () => {
       await retargetToSymlink(parent, elsewhere);
       retargeted = true;
     });
-    const original = fs.rename.bind(fs) as (...args: unknown[]) => Promise<unknown>;
-    vi.spyOn(fs, "rename").mockImplementation((async (...args: unknown[]) => {
+    const original = cacheFs.rename.bind(cacheFs) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(cacheFs, "rename").mockImplementation((async (...args: unknown[]) => {
       const settled = await original(...args);
       if (retargeted && !restored && path.basename(String(args[1])) === "family.json") {
         restored = true;
