@@ -33,9 +33,11 @@ import { IndexingError } from "../index/diagnostics.js";
 // directory. Windows refuses to rename or remove a directory while a file inside it is open, or while it is a process's
 // working directory, so there each run first opens the directory the cache path names, creating nothing, and fails
 // with cache-changing unless it has the cache directory's identity. A helper process, kept between runs, then enters
-// the cache directory, creating nothing, so the cache directory stays in place, and the run creates a pin there, a file
-// under a random name in the cache directory that no other open may share and that is removed as it closes; the helper
-// leaves once the pin is open (see pinIn). The pin's real path names, through real directories
+// the cache directory, so the cache directory stays in place while the helper runs, and creates a seed there, by its
+// name alone. The run opens the seed, sharing nothing and creating nothing, and once the helper, still in the cache
+// directory, has answered after that open, holds a file in the cache directory itself. Only then does it create a pin
+// there, a file under a random name in the cache directory that no other open may share and that is removed as it
+// closes; the seed is then removed and the helper leaves (see pinIn). The pin's real path names, through real directories
 // only, the directory that holds it, which stays where it is with every directory above it while the pin is open; once
 // its identity is the cache directory's, every cacheFs call within the cache directory goes by that path. A pin that
 // lands elsewhere fails the run with cache-changing before it changes anything. On another platform that resolves ..
@@ -66,7 +68,8 @@ interface Helper {
 }
 
 // What a helper answers to a change: what it returned, or the error it failed with, or that the anchor no longer led
-// back to the cache directory, and with lost, that the helper is no longer in the cache directory and exits.
+// back to the cache directory, and with lost, that the helper is no longer in the cache directory and exits. The holding
+// helper answers with seed the identity of the seed it created, and with failed the code its creation failed with.
 interface Answer {
   readonly value?: unknown;
   readonly elsewhere?: boolean | undefined;
@@ -78,6 +81,8 @@ interface Answer {
   readonly dest?: string | undefined;
   readonly message?: string | undefined;
   readonly at?: readonly string[] | undefined;
+  readonly seed?: string | undefined;
+  readonly failed?: string | undefined;
 }
 
 interface Anchor extends Kept {
@@ -434,14 +439,26 @@ function serve(anchor: Anchor, mode: "make" | "enter"): Promise<Helper> {
   return started;
 }
 
-// Started in a drive's root, enters the directory each line of JSON names, and answers once "." has the identity it
-// names, or that it is elsewhere, or the code its entry failed with; a line naming no directory sends it back to the
-// root. A helper that cannot leave a directory it entered answers lost and exits, so it holds nothing after.
+// Started in a drive's root, enters the directory each line of JSON names, and once "." has the identity it names,
+// creates the seed it names there, by that name alone, and answers with the seed's identity, or with the code its
+// creation failed with; otherwise it answers that it is elsewhere, or the code its entry failed with. A line asking it
+// to check answers whether "." still has that identity. A line naming no directory sends it back to the root, once it
+// has removed the seed it names, by that name alone, while "." still has that identity. A helper that cannot leave a
+// directory it entered answers lost and exits, so it holds nothing after.
 const serveHolder = [
   `const fs = require("node:fs");`,
   `const root = process.cwd();`,
   `const identityOf = (stat) => \`\${stat.dev}:\${stat.ino}\`;`,
+  `let entered;`,
+  `const home = () => {`,
+  `  try {`,
+  `    return entered !== undefined && identityOf(fs.statSync(".", { bigint: true })) === entered;`,
+  `  } catch {`,
+  `    return false;`,
+  `  }`,
+  `};`,
   `const leave = () => {`,
+  `  entered = undefined;`,
   `  try {`,
   `    process.chdir(root);`,
   `    return true;`,
@@ -449,18 +466,39 @@ const serveHolder = [
   `    return false;`,
   `  }`,
   `};`,
-  `const answer = ({ dir, identity }) => {`,
-  `  if (dir === undefined) return leave() ? {} : { lost: true };`,
+  `const seeded = (seed) => {`,
+  `  let fd;`,
+  `  try {`,
+  `    fd = fs.openSync(seed, "wx");`,
+  `    return { seed: identityOf(fs.fstatSync(fd, { bigint: true })) };`,
+  `  } catch (error) {`,
+  `    return { failed: error.code ?? "EIO" };`,
+  `  } finally {`,
+  `    if (fd !== undefined) fs.closeSync(fd);`,
+  `  }`,
+  `};`,
+  `const answer = ({ dir, identity, seed, check, remove }) => {`,
+  `  if (check === true) {`,
+  `    if (home()) return {};`,
+  `    return leave() ? { elsewhere: true } : { elsewhere: true, lost: true };`,
+  `  }`,
+  `  if (dir === undefined) {`,
+  `    if (remove !== undefined && home()) {`,
+  `      try {`,
+  `        fs.unlinkSync(remove);`,
+  `      } catch {`,
+  `        // the seed stays behind`,
+  `      }`,
+  `    }`,
+  `    return leave() ? {} : { lost: true };`,
+  `  }`,
   `  try {`,
   `    process.chdir(dir);`,
   `  } catch (error) {`,
   `    return { code: error.code };`,
   `  }`,
-  `  try {`,
-  `    if (identityOf(fs.statSync(".", { bigint: true })) === identity) return {};`,
-  `  } catch {`,
-  `    // the helper is elsewhere`,
-  `  }`,
+  `  entered = identity;`,
+  `  if (home()) return seeded(seed);`,
   `  return leave() ? { elsewhere: true } : { elsewhere: true, lost: true };`,
   `};`,
   `let buffered = "";`,
@@ -568,18 +606,28 @@ async function inTurn<T>(work: () => Promise<T>): Promise<T> {
 // the cache path names has the cache directory's identity: a retarget made before that open fails the run with nothing
 // created. That handle shares everything, as libuv opens unless it shares nothing at all, so it keeps every directory
 // above the cache directory in place but lets the cache directory itself be renamed. The holding helper then enters the
-// cache directory by its path, creating nothing, and stays there once "." has the cache directory's identity. Windows
-// opens a working directory sharing reads and writes but not removal, so until the helper leaves, the cache directory
-// and every directory above it stay in place, while readers, watchers and other runs' changes of the cache directory go
-// on; libuv opens nothing that way itself. An entry held open would not keep the cache directory in place, as it can be
-// renamed out of it, and a handle that shares nothing would refuse every watcher. The pin is created by the real path
-// of the cache directory, once that path has the cache directory's identity, and the helper leaves as soon as the pin
-// is open. A run of this process waits for the turns of the others, as the helper is in one directory at a time. An
-// open or an entry refused with EBUSY, as when another process holds the cache directory without sharing, is made again
-// for up to busyWaitMs. The real path of the pin is found by a call that opens it for no access, which its sharing does
-// not refuse, and its directory must have the cache directory's identity while that path still names the pin.
+// cache directory by its path and, once "." has the cache directory's identity, creates the seed there by its name
+// alone, so the seed lands in the cache directory or nowhere. Windows opens a working directory sharing reads and writes
+// but not removal, so while the helper is there, the cache directory and every directory above it stay in place, while
+// readers, watchers and other runs' changes of the cache directory go on; libuv opens nothing that way itself. The
+// helper's hold ends as it exits, however, and the helper may exit at any time, so this process creates nothing while
+// that hold is all that keeps the cache directory in place. It opens the seed by the real path of the cache directory,
+// once that path has the cache directory's identity, sharing nothing and creating nothing, so an open sent elsewhere
+// changes nothing there, and checks that the file it holds is the seed. The helper then checks that "." still has the
+// cache directory's identity. A helper that answers was in the cache directory from its entry until that answer, so the
+// open was made while the cache directory stayed in place, and this process holds a file in the cache directory that no
+// other open may share, which can be neither renamed out of it nor removed, and keeps the cache directory and every
+// directory above it in place on its own. A helper that exits first fails the run. Only then is the pin created by
+// that real path; the seed is closed and removed by that path once the pin is open, and otherwise by the helper, by its
+// name, before the helper leaves. A seed is left behind when the helper exits while no pin is open, or the process
+// ends while the seed is there. An entry held open with delete sharing would not keep the cache directory in place, as
+// it can be renamed out of it, and a handle on the directory that shares nothing would refuse every watcher. A run of
+// this process waits for the turns of the others, as the helper is in one directory at a time. An open or an entry
+// refused with EBUSY, as when another process holds the cache directory or the seed without sharing, is made again for
+// up to busyWaitMs. The real path of the pin is found by a call that opens it for no access, which its sharing does not
+// refuse, and its directory must have the cache directory's identity while that path still names the pin.
 async function pinIn(scope: Scope): Promise<Pin> {
-  return await inTurn(async () => await whileHeld(scope, async () => await whileEntered(scope, async (real) => await pinWithin(scope, real))));
+  return await inTurn(async () => await whileHeld(scope, async () => await pinEntered(scope)));
 }
 
 // Runs work while a handle open on the directory the cache path names has the cache directory's identity.
@@ -616,9 +664,9 @@ function startHolder(scope: Scope): Promise<Helper> {
   return started;
 }
 
-// Runs work, given the real path of the cache directory, while the holding helper's working directory is the cache
-// directory, and has the helper leave it after.
-async function whileEntered<T>(scope: Scope, work: (real: string) => Promise<T>): Promise<T> {
+// Opens a pin by the real path of the cache directory while this process holds the seed the holding helper created
+// there, and has the helper leave the cache directory after.
+async function pinEntered(scope: Scope): Promise<Pin> {
   const holding = holder.helper ?? startHolder(scope);
   const helper = await holding;
   // A helper that answers lost exits, so the next run starts another.
@@ -631,24 +679,48 @@ async function whileEntered<T>(scope: Scope, work: (real: string) => Promise<T>)
     }
     return answer;
   };
+  const exited = (): IndexingError => new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, new Error("the holding helper exited before it answered"));
+  const name = `.osnova-bound-${randomUUID()}`;
   let entered: Answer | undefined;
   try {
     entered = await unlessBusy(async () => {
-      const answer = await answered(JSON.stringify({ dir: scope.dir, identity: scope.identity }));
+      const answer = await answered(JSON.stringify({ dir: scope.dir, identity: scope.identity, seed: name }));
       if (answer?.code !== undefined) throw Object.assign(new Error(`${answer.code}: the holding helper could not enter '${scope.dir}'`), { code: answer.code });
       return answer;
     });
   } catch (error) {
     throw new IndexingError({ phase: "cache", path: scope.dir, code: codeOf(error) === "EBUSY" ? "cache-write-failed" : "cache-changing" }, error);
   }
-  if (entered === undefined) throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, new Error("the holding helper exited before it answered"));
+  if (entered === undefined) throw exited();
   if (entered.elsewhere === true) throw changingIn(scope);
+  const seeded = entered.seed;
+  let seed: FileHandle | undefined;
+  let pinned = false;
   try {
+    if (seeded === undefined) {
+      throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-write-failed" }, Object.assign(new Error(`${entered.failed ?? "EIO"}: the holding helper could not create a file in '${scope.dir}'`), { code: entered.failed }));
+    }
     const real = await promises.realpath(scope.dir);
     if (identityOf(await promises.stat(real, { bigint: true })) !== scope.identity) throw changingIn(scope);
-    return await work(real);
+    const seedPath = `${prefixOf(real)}${name}`;
+    try {
+      seed = await unlessBusy(async () => await promises.open(seedPath, constants.O_RDONLY | unshared));
+    } catch (error) {
+      throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" }, error);
+    }
+    if (identityOf(await seed.stat({ bigint: true })) !== seeded) throw changingIn(scope);
+    const checked = await answered(JSON.stringify({ check: true }));
+    if (checked === undefined) throw exited();
+    if (checked.elsewhere === true) throw changingIn(scope);
+    const pin = await pinWithin(scope, real);
+    pinned = true;
+    await seed.close().catch(() => {});
+    seed = undefined;
+    await promises.unlink(seedPath).catch(() => {});
+    return pin;
   } finally {
-    await answered("{}");
+    await seed?.close().catch(() => {});
+    await answered(JSON.stringify(!pinned && seeded !== undefined ? { remove: name } : {}));
   }
 }
 

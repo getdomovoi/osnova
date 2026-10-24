@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChildProcess } from "node:child_process";
 import { constants, promises as fs, watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +85,20 @@ async function childDirs(): Promise<string[]> {
   return dirs;
 }
 
+// Ends the helper that holds a cache directory while a run creates its pin, and returns once its close event, which
+// ends its hold, has been delivered.
+async function endHolder(): Promise<void> {
+  const holder = (globalThis as Record<symbol, { helper?: Promise<{ readonly child: ChildProcess }> | undefined } | undefined>)[Symbol.for("osnova.boundCacheHolder")];
+  const helper = await holder?.helper?.catch(() => undefined);
+  if (helper === undefined) throw new Error("no holding helper is running");
+  const { child } = helper;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve) => {
+    child.once("close", resolve);
+    child.kill("SIGKILL");
+  });
+}
+
 describe("withBoundCacheDir where a file held open keeps the cache directory in place", () => {
   it("makes every change within the cache directory, reads it, and leaves nothing of its own behind", async () => {
     const { cacheDir, otherCacheDir } = await twinCaches();
@@ -147,6 +162,88 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     await restore(parent);
     expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
     expect(landed).toEqual([]);
+  });
+
+  // Windows releases a helper's working directory as the helper exits, after which nothing keeps the cache directory
+  // from being moved aside and replaced with a junction. Here the helper exits as the cache directory's real path is
+  // checked, or as this process opens the first file of its own there, and the cache directory is replaced at that open.
+  // Each open is followed by a look at the other cache, so a file created there and removed again is still seen.
+  it.each([
+    ["as the real path of the cache directory is checked", "stat"],
+    ["as the first file of its own in the cache directory is opened", "open"],
+  ] as const)("creates no file outside the cache directory when the holding helper exits %s and the cache directory is replaced", async (_label, exitAt) => {
+    const { cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const others = await contents(otherCacheDir);
+    const stat = vi.mocked(fs.stat).getMockImplementation()!;
+    let exited = false;
+    vi.mocked(fs.stat).mockImplementation((async (...args: Parameters<typeof stat>) => {
+      if (exitAt === "stat" && !exited && String(args[0]) === cacheDir) {
+        exited = true;
+        await endHolder();
+      }
+      return await stat(...args);
+    }) as never);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let retargeted: unknown;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (retargeted === undefined && path.basename(String(args[0])).startsWith(".osnova-bound-")) {
+        if (!exited) {
+          exited = true;
+          await endHolder();
+        }
+        retargeted = await retarget(cacheDir, otherCacheDir).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+      }
+      const settled = await open(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      landed.push(...await pins(otherCacheDir));
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }) as never);
+    let ran = false;
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => { ran = true; }).then(() => "ran", (error: unknown) => error);
+    vi.mocked(fs.open).mockRestore();
+    await restore(cacheDir);
+    expect(exited).toBe(true);
+    expect(retargeted).toBe("renamed");
+    expect(landed).toEqual([]);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(ran).toBe(false);
+    expect(await contents(otherCacheDir)).toEqual(others);
+  });
+
+  // A link to the file the helper created, placed where the cache path then leads, has that file's identity, so only
+  // the helper's answer after the open shows that the cache directory may have moved before it.
+  it("creates no file outside the cache directory when the holding helper exits and a link to its file waits where the cache directory is replaced", async () => {
+    const { cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const others = await contents(otherCacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let linked: string | undefined;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const name = path.basename(String(args[0]));
+      if (linked === undefined && name.startsWith(".osnova-bound-")) {
+        await endHolder();
+        await retarget(cacheDir, otherCacheDir);
+        linked = name;
+        await fs.link(path.join(`${cacheDir}-saved`, name), path.join(otherCacheDir, name));
+      }
+      const settled = await open(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      landed.push(...(await pins(otherCacheDir)).filter((found) => found !== linked));
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }) as never);
+    let ran = false;
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => { ran = true; }).then(() => "ran", (error: unknown) => error);
+    vi.mocked(fs.open).mockRestore();
+    await restore(cacheDir);
+    expect(linked).toBeDefined();
+    await fs.unlink(path.join(otherCacheDir, linked!));
+    expect(landed).toEqual([]);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-write-failed" } });
+    expect(ran).toBe(false);
+    expect(await contents(otherCacheDir)).toEqual(others);
   });
 
   // Windows refuses an open of a directory held without sharing with EBUSY, as another process may hold the cache
@@ -228,18 +325,19 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     }
     const identity = await ensureCacheDir(cacheDir);
     const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
-    let during: string[] | undefined;
+    const during: string[][] = [];
     vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
-      if (during === undefined && path.basename(String(args[0])).startsWith(".osnova-bound-")) during = await childDirs();
+      if (path.basename(String(args[0])).startsWith(".osnova-bound-")) during.push(await childDirs());
       return await open(...args);
     }) as never);
     const outcome = await withBoundCacheDir(cacheDir, identity, async () => await childDirs());
-    expect(during).toContain(cacheDir);
+    expect(during).toHaveLength(2);
+    for (const dirs of during) expect(dirs).toContain(cacheDir);
     expect(outcome).not.toContain(cacheDir);
     expect(await childDirs()).not.toContain(cacheDir);
   });
 
-  it("pins the cache directory without opening any entry inside it", async () => {
+  it("pins the cache directory without opening any entry inside it but its own", async () => {
     const { cacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
     const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
@@ -403,6 +501,34 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
     expect(landed).toEqual([]);
     expect(outcome).toBe("ran");
+  });
+
+  // The seed the helper created is open in this process, sharing nothing, before the pin is created, so the cache
+  // directory stays in place once the helper exits.
+  it("keeps the cache directory from being replaced when the holding helper exits as the pin is created, so no pin lands in the other cache", async () => {
+    const { cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let opened = 0;
+    let refused: unknown;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (!path.basename(String(args[0])).startsWith(".osnova-bound-") || (opened += 1) !== 2) return await open(...args);
+      await endHolder();
+      refused = await retarget(cacheDir, otherCacheDir).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+      try {
+        return await open(...args);
+      } finally {
+        landed.push(...await pins(otherCacheDir));
+        await restore(cacheDir);
+      }
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => await pins(cacheDir)).then((value) => value, (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
+    expect(landed).toEqual([]);
+    expect(outcome).toHaveLength(1);
+    expect(await pins(cacheDir)).toEqual([]);
   });
 
   // With no entry to hold, a hold of the cache directory itself would have to share nothing, which the watcher's open
