@@ -11,6 +11,7 @@ import { cacheFs, ensureCacheDir, withBoundCacheDir } from "../src/cache/bound.j
 // Windows: elsewhere a stat through /proc/self/fd fails and a stat through .. is resolved by name. Only Windows itself
 // keeps the directories in place, so the tests of what a retarget meets run there alone.
 const windows = process.platform === "win32";
+const linux = process.platform === "linux";
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const temporaries: string[] = [];
 beforeEach(() => {
@@ -70,6 +71,18 @@ async function restore(parent: string): Promise<void> {
 }
 
 const pins = async (dir: string): Promise<string[]> => (await fs.readdir(dir)).filter((name) => name.startsWith(".osnova-bound-"));
+
+// The working directories of this process's children, as /proc names them on Linux.
+async function childDirs(): Promise<string[]> {
+  const dirs: string[] = [];
+  for (const name of (await fs.readdir("/proc")).filter((entry) => /^\d+$/.test(entry))) {
+    const stat = await fs.readFile(`/proc/${name}/stat`, "utf8").catch(() => "");
+    if (stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1] !== String(process.pid)) continue;
+    const cwd = await fs.readlink(`/proc/${name}/cwd`).catch(() => undefined);
+    if (cwd !== undefined) dirs.push(cwd);
+  }
+  return dirs;
+}
 
 describe("withBoundCacheDir where a file held open keeps the cache directory in place", () => {
   it("makes every change within the cache directory, reads it, and leaves nothing of its own behind", async () => {
@@ -136,8 +149,8 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     expect(landed).toEqual([]);
   });
 
-  // Windows refuses an open of a directory held without sharing with EBUSY, as another run holds the cache directory
-  // while it checks it and creates its pin.
+  // Windows refuses an open of a directory held without sharing with EBUSY, as another process may hold the cache
+  // directory.
   it("waits while the cache directory is held without sharing, then pins it", async () => {
     const { cacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
@@ -170,7 +183,7 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     expect(await pins(cacheDir)).toEqual([]);
   }, 15_000);
 
-  // Two runs of one process would otherwise refuse each other's hold of the cache directory.
+  // The holding helper is in one directory at a time, so runs of one process take turns at it.
   it("lets runs of one process hold the cache directory in turn", async () => {
     const { cacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
@@ -200,33 +213,33 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     expect(collisions).toBe(0);
   });
 
-  // Windows refuses to rename a directory while anything inside it is open, whatever that open shares, so an entry held
-  // open keeps the cache directory itself in place as the pin is created, where an open of the directory would have to
-  // share nothing and so refuse its readers and watchers.
-  it("holds an entry of the cache directory open from the check of the directory until its pin is open", async () => {
+  // Windows opens a process's working directory sharing reads and writes but not removal, so a helper process whose
+  // working directory is the cache directory keeps it, and every directory above it, in place as the pin is created,
+  // while its readers, watchers and other runs' changes go on. An entry held open would not: it can be moved away, and
+  // the cache directory with it. An open of the directory itself would have to share nothing and so refuse watchers.
+  it.runIf(linux).each([
+    ["a populated", true],
+    ["an empty", false],
+  ] as const)("holds %s cache directory as a helper's working directory from the check of the directory until its pin is open", async (_label, populated) => {
     const { cacheDir } = await twinCaches();
+    if (!populated) {
+      await fs.rm(cacheDir, { recursive: true });
+      await fs.mkdir(cacheDir);
+    }
     const identity = await ensureCacheDir(cacheDir);
-    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<{ close: () => Promise<void> }>;
-    const opened: string[] = [];
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
     let during: string[] | undefined;
     vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
-      const target = String(args[0]);
-      if (during === undefined && path.basename(target).startsWith(".osnova-bound-")) during = [...opened];
-      const handle = await open(...args);
-      opened.push(target);
-      const close = handle.close.bind(handle);
-      handle.close = async () => {
-        opened.splice(opened.indexOf(target), 1);
-        await close();
-      };
-      return handle;
+      if (during === undefined && path.basename(String(args[0])).startsWith(".osnova-bound-")) during = await childDirs();
+      return await open(...args);
     }) as never);
-    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran");
-    expect(outcome).toBe("ran");
-    expect(during?.filter((held) => path.dirname(held) === cacheDir)).toEqual([expect.stringMatching(/[/\\](entry|tree)$/)]);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => await childDirs());
+    expect(during).toContain(cacheDir);
+    expect(outcome).not.toContain(cacheDir);
+    expect(await childDirs()).not.toContain(cacheDir);
   });
 
-  it("pins the cache directory when no entry inside it can be held open", async () => {
+  it("pins the cache directory without opening any entry inside it", async () => {
     const { cacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
     const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
@@ -243,7 +256,7 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
       await cacheFs.writeFile(path.join(cacheDir, "entry", "new"), "x");
       return await pins(cacheDir);
     });
-    expect(refused).toBe(2);
+    expect(refused).toBe(0);
     expect(outcome).toHaveLength(1);
     expect(await pins(cacheDir)).toEqual([]);
   });
@@ -338,9 +351,8 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     expect(outcome).toBe("ran");
   });
 
-  // The directory the cache path names is held without delete sharing until the pin is open, so the cache directory
-  // itself cannot be moved aside and replaced with a junction between the check of its identity and the creation of
-  // the pin.
+  // The cache directory is a helper's working directory, held without delete sharing, until the pin is open, so it
+  // cannot be moved aside and replaced with a junction between the check of its identity and the creation of the pin.
   it("keeps the cache directory from being replaced as the pin is created, so no pin lands in the other cache", async () => {
     const { cacheDir, otherCacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
@@ -362,6 +374,57 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
     expect(landed).toEqual([]);
     expect(outcome).toBe("ran");
+  });
+
+  // An entry held open with delete sharing can be renamed out of the cache directory, after which nothing inside the
+  // cache directory is open and it can be replaced with a junction before the pin is created.
+  it("keeps the cache directory from being replaced once its entries are moved away as the pin is created, so no pin lands in the other cache", async () => {
+    const { parent, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let moved: unknown;
+    let refused: unknown;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (refused !== undefined || !path.basename(String(args[0])).startsWith(".osnova-bound-")) return await open(...args);
+      moved = await Promise.all((await fs.readdir(cacheDir)).map(async (name) => await fs.rename(path.join(cacheDir, name), path.join(parent, `moved-${name}`))
+        .then(() => "moved", (error: unknown) => (error as NodeJS.ErrnoException).code)));
+      refused = await retarget(cacheDir, otherCacheDir).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+      try {
+        return await open(...args);
+      } finally {
+        landed.push(...await pins(otherCacheDir));
+        await restore(cacheDir);
+      }
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(moved).toEqual(["moved", "moved"]);
+    expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
+    expect(landed).toEqual([]);
+    expect(outcome).toBe("ran");
+  });
+
+  // With no entry to hold, a hold of the cache directory itself would have to share nothing, which the watcher's open
+  // of the directory refuses.
+  it("pins an empty cache directory while a watcher is open on it", async () => {
+    const cacheDir = path.join(await temporaryDir(), "cache");
+    const identity = await ensureCacheDir(cacheDir);
+    const watcher = watch(cacheDir);
+    try {
+      const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+      expect(outcome).toBe("ran");
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it("leaves the cache directory free to be renamed once the run has ended", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    await withBoundCacheDir(cacheDir, identity, async () => "ran");
+    await fs.rename(cacheDir, `${cacheDir}-saved`);
+    await fs.rename(`${cacheDir}-saved`, cacheDir);
   });
 
   it("waits for a hold of the cache directory without sharing to end, then runs", async () => {
