@@ -6,7 +6,7 @@ import path from "node:path";
 const seen = vi.hoisted(() => [] as { lockTimeoutMs?: number | undefined }[]);
 vi.mock("../src/api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/api.js")>();
-  return { ...actual, refreshWorkspace: (root: string, options: Parameters<typeof actual.refreshWorkspace>[1]) => { seen.push(options ?? {}); return actual.refreshWorkspace(root, options); } };
+  return { ...actual, refreshWorkspaceWitnessed: (root: string, options: Parameters<typeof actual.refreshWorkspaceWitnessed>[1]) => { seen.push(options ?? {}); return actual.refreshWorkspaceWitnessed(root, options); } };
 });
 
 import { createOsnovaMcpServer } from "../src/mcp/server.js";

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { promises as fs, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { cacheFs as fs } from "./bound.js";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -213,6 +214,38 @@ async function reclaimAbandonedLock(lockPath: string): Promise<void> {
     if (code === "EEXIST" || TRANSIENT_CODES.has(code)) return;
     throw error;
   }
+}
+
+// Whether a lock this process does not hold may be held by someone else. Only a missing lock directory
+// answers no. Any existing one answers yes whatever it contains: its owner files can change hands while
+// they are read, and no number of reads proves they did not, so even a lock naming only exited owners
+// counts as held. Acquisition reclaims such a lock atomically, so the caller loses nothing by waiting on it.
+export async function foreignLockHolds(lockPath: string): Promise<boolean> {
+  lockPath = path.resolve(lockPath);
+  if (holdsCacheLock(lockPath)) return false;
+  try {
+    await fs.lstat(lockPath);
+    return true;
+  } catch (error) {
+    return !lockMissing(error);
+  }
+}
+
+// foreignLockHolds without yielding, for a caller whose decision must not interleave with other work.
+export function foreignLockHoldsSync(lockPath: string): boolean {
+  lockPath = path.resolve(lockPath);
+  if (holdsCacheLock(lockPath)) return false;
+  try {
+    lstatSync(lockPath);
+    return true;
+  } catch (error) {
+    return !lockMissing(error);
+  }
+}
+
+function lockMissing(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 async function describeHolder(lockPath: string): Promise<string> {

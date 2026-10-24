@@ -19,6 +19,7 @@ import { refreshWorkspace, loadIndex } from "../src/api.js";
 import { serializeText } from "../src/index/textStore.js";
 import { serializeSections } from "../src/index/serialize.js";
 import { workspaceDirFor, workspaceLockPath } from "../src/cache/cache.js";
+import { reachedPath } from "./reached-path.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -84,7 +85,7 @@ describe("copy-on-publish", () => {
       const readFile = fs.readFile;
       const spy = vi.spyOn(fs, "readFile").mockImplementation(async (p, ...rest) => {
         const result = await readFile(p, ...rest as [never]);
-        if (String(p) === path.join(ws, "edges.json") && !triggered) {
+        if (reachedPath(String(p)) === path.join(ws, "edges.json") && !triggered) {
           triggered = true;
           if (fault === "missing") await fs.unlink(path.join(ws, "text.bin"));
           else await fs.truncate(path.join(ws, "text.bin"), 0);

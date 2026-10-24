@@ -2,35 +2,51 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import v8 from "node:v8";
+import vm from "node:vm";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import type { OsnovaIndex } from "../src/types.js";
+import type { WitnessedIndex } from "../src/api.js";
 
-const refreshGate = vi.hoisted(() => ({ next: undefined as ((run: () => Promise<OsnovaIndex>) => Promise<OsnovaIndex>) | undefined }));
+const refreshGate = vi.hoisted(() => ({
+  next: undefined as ((run: () => Promise<WitnessedIndex>) => Promise<WitnessedIndex>) | undefined,
+  witness: undefined as ((holds: boolean) => Promise<boolean>) | undefined,
+  rebuilds: 0,
+}));
 
 vi.mock("../src/api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/api.js")>();
-  const refreshWorkspace = (...args: Parameters<typeof actual.refreshWorkspace>): Promise<OsnovaIndex> => {
+  const refreshWorkspaceWitnessed = (...args: Parameters<typeof actual.refreshWorkspaceWitnessed>): Promise<WitnessedIndex> => {
+    if (args[1]?.rebuild === true) refreshGate.rebuilds += 1;
     const gate = refreshGate.next;
     refreshGate.next = undefined;
-    const run = (): Promise<OsnovaIndex> => actual.refreshWorkspace(...args);
+    const run = (): Promise<WitnessedIndex> => actual.refreshWorkspaceWitnessed(...args);
     return gate === undefined ? run() : gate(run);
   };
-  return { ...actual, refreshWorkspace };
+  return { ...actual, refreshWorkspaceWitnessed };
 });
 
-import { indexGeneration } from "../src/api.js";
+vi.mock("../src/index/scan.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/index/scan.js")>();
+  const witnessHolds = async (...args: Parameters<typeof actual.witnessHolds>): Promise<boolean> => {
+    const gate = refreshGate.witness;
+    refreshGate.witness = undefined;
+    const holds = await actual.witnessHolds(...args);
+    return gate === undefined ? holds : gate(holds);
+  };
+  return { ...actual, witnessHolds };
+});
+
+import { indexGeneration, refreshWorkspace } from "../src/api.js";
+import { workspaceDirFor } from "../src/cache/cache.js";
 import { createOsnovaMcpServer } from "../src/mcp/server.js";
 
 const closers: Array<() => void> = [];
-afterEach(() => { refreshGate.next = undefined; for (const close of closers.splice(0)) close(); });
+afterEach(() => { refreshGate.next = undefined; refreshGate.witness = undefined; for (const close of closers.splice(0)) close(); });
 
-async function setup(watch: boolean, debounceMs = 50) {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-watch-"));
-  const workspace = path.join(temporary, "ws"); await fs.mkdir(path.join(workspace, "node_modules", "dep"), { recursive: true });
-  await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
-  const built = createOsnovaMcpServer(workspace, { cacheDir: path.join(temporary, "cache"), watch: watch ? { debounceMs, maxStaleMs: 60_000 } : false });
+async function serve(workspace: string, cacheDir: string, watch: boolean, debounceMs = 50) {
+  const built = createOsnovaMcpServer(workspace, { cacheDir, watch: watch ? { debounceMs, maxStaleMs: 60_000 } : false });
   closers.push(built.close);
   const client = new Client({ name: "t", version: "0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -39,17 +55,194 @@ async function setup(watch: boolean, debounceMs = 50) {
     const result = await client.callTool({ name: "osnova_ground", arguments: { question } });
     return ((result as { content?: readonly ContentBlock[] }).content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
   };
-  return { workspace, built, ground };
+  const call = async (name: string, args: Record<string, unknown>): Promise<string> => {
+    const result = await client.callTool({ name, arguments: args });
+    return ((result as { content?: readonly ContentBlock[] }).content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
+  };
+  return { built, ground, call };
+}
+
+async function setup(watch: boolean, debounceMs = 50) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-watch-"));
+  const workspace = path.join(temporary, "ws"); await fs.mkdir(path.join(workspace, "node_modules", "dep"), { recursive: true });
+  await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+  return { temporary, workspace, ...await serve(workspace, path.join(temporary, "cache"), watch, debounceMs) };
 }
 const generation = (text: string): string => text.match(/osnova generation ([0-9a-f]+)/)?.[1] ?? "";
 const until = async (check: () => boolean, ms = 5000): Promise<void> => { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error("timed out"); await new Promise((r) => setTimeout(r, 25)); } };
+v8.setFlagsFromString("--expose-gc");
+const gc = vm.runInNewContext("gc") as () => void;
+const collected = async (reference: WeakRef<object>): Promise<boolean> => {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((r) => setTimeout(r, 10));
+    gc();
+    if (reference.deref() === undefined) return true;
+  }
+  return false;
+};
 const recursiveWatch = !(process.platform === "linux" && Number(process.versions.node.split(".")[0]) < 20);
 
 describe("MCP watch mode", () => {
-  it("verifies the tree on every query without a watcher", async () => {
-    const { built, ground } = await setup(false);
-    await ground(); await ground();
-    expect(built.status()).toMatchObject({ watching: false, refreshes: 2 });
+  it("reuses the verified index without a watcher while the tree's metadata is unchanged", async () => {
+    const { workspace, built, ground } = await setup(false);
+    const answers = [await ground(), await ground(), await ground()];
+    await fs.writeFile(path.join(workspace, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+    answers.push(await ground());
+    expect(built.status()).toMatchObject({ watching: false, refreshes: 1, pendingChanges: false });
+    expect(new Set(answers).size).toBe(1);
+  });
+
+  it("refreshes before answering without a watcher when a file, a directory or an ignore file changes", async () => {
+    const { temporary, workspace, built, ground } = await setup(false);
+    await fs.writeFile(path.join(workspace, ".gitignore"), "# none yet\n");
+    await fs.mkdir(path.join(workspace, "src"));
+    await ground();
+    const refreshes = (): number => built.status().refreshes;
+    expect(refreshes()).toBe(1);
+
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function renamed() { return 2; }\n");
+    expect(await ground("renamed")).toContain("function renamed");
+    expect(refreshes()).toBe(2);
+
+    await fs.writeFile(path.join(workspace, "src", "b.ts"), "export function second() { return 2; }\n");
+    expect(await ground("second")).toContain("function second");
+    expect(refreshes()).toBe(3);
+
+    await fs.mkdir(path.join(workspace, "src", "deep"));
+    await fs.writeFile(path.join(workspace, "src", "deep", "c.ts"), "export function third() { return 3; }\n");
+    expect(await ground("third")).toContain("function third");
+    expect(refreshes()).toBe(4);
+
+    await fs.appendFile(path.join(workspace, ".gitignore"), "src/deep/\n");
+    expect(await ground("third")).not.toContain("function third");
+    expect(refreshes()).toBe(5);
+
+    await fs.rm(path.join(workspace, "a.ts"));
+    const reused = await ground("renamed");
+    expect(reused).not.toContain("function renamed");
+    expect(refreshes()).toBe(6);
+    expect(await ground("renamed")).toBe(reused);
+    expect(refreshes()).toBe(6);
+
+    const fresh = await serve(workspace, path.join(temporary, "fresh-cache"), false);
+    expect(await fresh.ground("renamed")).toBe(reused);
+  });
+
+  describe.each([
+    ["deleted", (file: string) => fs.rm(file)],
+    ["truncated", (file: string) => fs.truncate(file, 3)],
+    ["replaced with other bytes", async (file: string) => fs.writeFile(file, "x".repeat((await fs.stat(file)).size + 7))],
+    ["overwritten in place at the same size", async (file: string) => fs.writeFile(file, "x".repeat((await fs.stat(file)).size))],
+  ])("without a watcher, when the loaded cache's text sidecar is %s", (_label, damage) => {
+    it("repairs the cache before a text query instead of failing on the kept index", async () => {
+      const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+      const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+      await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+      const cacheDir = path.join(temporary, "cache");
+      await refreshWorkspace(workspace, { cacheDir });
+      const { built, call } = await serve(workspace, cacheDir, false);
+      expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+      expect(built.status().refreshes).toBe(1);
+
+      await damage(path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin"));
+      const thread = { pattern: "return 1", fixed: true };
+      const answer = await call("osnova_thread", thread);
+      const expected = await (await serve(workspace, path.join(temporary, "fresh-cache"), false)).call("osnova_thread", thread);
+      expect(answer).not.toContain("cache-read-failed");
+      expect(answer).toBe(expected);
+      expect(await call("osnova_thread", thread)).toBe(expected);
+      expect(built.status().refreshes).toBe(2);
+    });
+
+    it("rebuilds once for simultaneous text queries that fail on the same kept index", async () => {
+      const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+      const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+      await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+      const cacheDir = path.join(temporary, "cache");
+      await refreshWorkspace(workspace, { cacheDir });
+      const { built, call } = await serve(workspace, cacheDir, false);
+      expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+
+      await damage(path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin"));
+      const thread = { pattern: "return 1", fixed: true };
+      refreshGate.rebuilds = 0;
+      const answers = await Promise.all([1, 2, 3, 4].map(() => call("osnova_thread", thread)));
+      const expected = await (await serve(workspace, path.join(temporary, "fresh-cache"), false)).call("osnova_thread", thread);
+      expect(refreshGate.rebuilds).toBe(1);
+      expect(built.status().refreshes).toBe(2);
+      expect(answers).toEqual([expected, expected, expected, expected]);
+      expect(await call("osnova_thread", thread)).toBe(expected);
+      expect(built.status().refreshes).toBe(2);
+    });
+
+    it("rebuilds once when a query fails on a kept index that a rebuild replaced before a later refresh", async () => {
+      const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+      const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+      await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+      const cacheDir = path.join(temporary, "cache");
+      await refreshWorkspace(workspace, { cacheDir });
+      const { built, call } = await serve(workspace, cacheDir, false);
+      expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+
+      await damage(path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin"));
+      const thread = { pattern: "return 1", fixed: true };
+      let release = (): void => undefined;
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      let held = false;
+      refreshGate.witness = async (holds) => { held = true; await released; return holds; };
+      refreshGate.rebuilds = 0;
+      const late = call("osnova_thread", thread);
+      await until(() => held);
+      expect(await call("osnova_thread", thread)).not.toContain("cache-read-failed");
+      expect(refreshGate.rebuilds).toBe(1);
+
+      await fs.writeFile(path.join(workspace, "a.ts"), "export function again() { return 1; }\nexport function first() { return 1; }\n");
+      expect(await call("osnova_outline", { file: "a.ts" })).toContain("again");
+      release();
+      const answer = await late;
+      const expected = await (await serve(workspace, path.join(temporary, "fresh-cache"), false)).call("osnova_thread", thread);
+      expect(answer).toBe(expected);
+      expect(refreshGate.rebuilds).toBe(1);
+      expect(built.status().refreshes).toBe(3);
+    });
+  });
+
+  it("keeps no reference to a rebuilt index once a later refresh replaces it", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+    const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+    const cacheDir = path.join(temporary, "cache");
+    await refreshWorkspace(workspace, { cacheDir });
+    const { built, call } = await serve(workspace, cacheDir, false);
+    expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+
+    await fs.rm(path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin"));
+    let rebuilt: WeakRef<object> | undefined;
+    refreshGate.next = async (run) => { const result = await run(); rebuilt = new WeakRef(result.index); return result; };
+    refreshGate.rebuilds = 0;
+    expect(await call("osnova_thread", { pattern: "return 1", fixed: true })).not.toContain("cache-read-failed");
+    expect(refreshGate.rebuilds).toBe(1);
+
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function again() { return 1; }\n");
+    expect(await call("osnova_outline", { file: "a.ts" })).toContain("again");
+    expect(built.status().refreshes).toBe(3);
+    expect(rebuilt).toBeDefined();
+    expect(await collected(rebuilt!)).toBe(true);
+  });
+
+  it("reports a text sidecar read failure that rebuilding cannot repair instead of rebuilding", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mcp-text-"));
+    const workspace = path.join(temporary, "ws"); await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "a.ts"), "export function first() { return 1; }\n");
+    const cacheDir = path.join(temporary, "cache");
+    await refreshWorkspace(workspace, { cacheDir });
+    const { built, call } = await serve(workspace, cacheDir, false);
+    expect(await call("osnova_outline", { file: "a.ts" })).toContain("first");
+    const text = path.join(workspaceDirFor(await fs.realpath(cacheDir), await fs.realpath(workspace)), "text.bin");
+    await fs.rm(text);
+    await fs.mkdir(text);
+    expect(await call("osnova_thread", { pattern: "return 1", fixed: true })).toContain("cache-read-failed");
+    expect(built.status().refreshes).toBe(1);
   });
 
   it.skipIf(!recursiveWatch)("reuses the verified index until a change arrives, then refreshes on its own", async () => {
