@@ -35,7 +35,8 @@ import { IndexingError } from "../index/diagnostics.js";
 // with cache-changing unless it has the cache directory's identity. A helper process, kept between runs, then enters
 // the cache directory, so the cache directory stays in place while the helper runs, and creates a seed there, by its
 // name alone. The run opens the seed, sharing nothing and creating nothing, and once the helper, still in the cache
-// directory, has answered after that open, holds a file in the cache directory itself. Only then does it create a pin
+// directory, has answered after that open that the seed's name there is a file, not a link, and the file the run holds
+// is that seed with no other name, holds a file in the cache directory itself. Only then does it create a pin
 // there, a file under a random name in the cache directory that no other open may share and that is removed as it
 // closes; the seed is then removed and the helper leaves (see pinIn). The pin's real path names, through real directories
 // only, the directory that holds it, which stays where it is with every directory above it while the pin is open; once
@@ -442,7 +443,8 @@ function serve(anchor: Anchor, mode: "make" | "enter"): Promise<Helper> {
 // Started in a drive's root, enters the directory each line of JSON names, and once "." has the identity it names,
 // creates the seed it names there, by that name alone, and answers with the seed's identity, or with the code its
 // creation failed with; otherwise it answers that it is elsewhere, or the code its entry failed with. A line asking it
-// to check answers whether "." still has that identity. A line naming no directory sends it back to the root, once it
+// to check answers whether "." still has that identity, and if so, the identity of what the seed it names is there, by
+// that name alone, when that is a file and not a link. A line naming no directory sends it back to the root, once it
 // has removed the seed it names, by that name alone, while "." still has that identity. A helper that cannot leave a
 // directory it entered answers lost and exits, so it holds nothing after.
 const serveHolder = [
@@ -477,9 +479,17 @@ const serveHolder = [
   `    if (fd !== undefined) fs.closeSync(fd);`,
   `  }`,
   `};`,
+  `const found = (seed) => {`,
+  `  try {`,
+  `    const stat = fs.lstatSync(seed, { bigint: true });`,
+  `    return stat.isFile() ? { seed: identityOf(stat) } : {};`,
+  `  } catch {`,
+  `    return {};`,
+  `  }`,
+  `};`,
   `const answer = ({ dir, identity, seed, check, remove }) => {`,
   `  if (check === true) {`,
-  `    if (home()) return {};`,
+  `    if (home()) return found(seed);`,
   `    return leave() ? { elsewhere: true } : { elsewhere: true, lost: true };`,
   `  }`,
   `  if (dir === undefined) {`,
@@ -613,11 +623,16 @@ async function inTurn<T>(work: () => Promise<T>): Promise<T> {
 // helper's hold ends as it exits, however, and the helper may exit at any time, so this process creates nothing while
 // that hold is all that keeps the cache directory in place. It opens the seed by the real path of the cache directory,
 // once that path has the cache directory's identity, sharing nothing and creating nothing, so an open sent elsewhere
-// changes nothing there, and checks that the file it holds is the seed. The helper then checks that "." still has the
-// cache directory's identity. A helper that answers was in the cache directory from its entry until that answer, so the
-// open was made while the cache directory stayed in place, and this process holds a file in the cache directory that no
-// other open may share, which can be neither renamed out of it nor removed, and keeps the cache directory and every
-// directory above it in place on its own. A helper that exits first fails the run. Only then is the pin created by
+// changes nothing there. The helper closes the seed before that open, so the seed may have been moved out of the cache
+// directory and a link to it left in its place, which the open follows. The helper then checks that "." still has the
+// cache directory's identity and that the seed's name there is a file with the seed's identity, not a link, and this
+// process then checks that the file it holds is the seed with one name. No name of a file held open sharing nothing can
+// be renamed or removed, so the name the open went through still names the file it holds, as does the one the helper
+// found after the open; with one name between them, the open went through the seed's name in the cache directory. A
+// helper that answers was in the cache directory from its entry until that answer, so the open was made while the cache
+// directory stayed in place, and this process holds a file in the cache directory that no other open may share, which
+// can be neither renamed out of it nor removed, and keeps the cache directory and every directory above it in place on
+// its own. A helper that exits first fails the run. Only then is the pin created by
 // that real path; the seed is closed and removed by that path once the pin is open, and otherwise by the helper, by its
 // name, before the helper leaves. A seed is left behind when the helper exits while no pin is open, or the process
 // ends while the seed is there. An entry held open with delete sharing would not keep the cache directory in place, as
@@ -708,10 +723,11 @@ async function pinEntered(scope: Scope): Promise<Pin> {
     } catch (error) {
       throw new IndexingError({ phase: "cache", path: scope.dir, code: "cache-changing" }, error);
     }
-    if (identityOf(await seed.stat({ bigint: true })) !== seeded) throw changingIn(scope);
-    const checked = await answered(JSON.stringify({ check: true }));
+    const checked = await answered(JSON.stringify({ check: true, seed: name }));
     if (checked === undefined) throw exited();
-    if (checked.elsewhere === true) throw changingIn(scope);
+    if (checked.elsewhere === true || checked.seed !== seeded) throw changingIn(scope);
+    const held = await seed.stat({ bigint: true });
+    if (identityOf(held) !== seeded || held.nlink !== 1n) throw changingIn(scope);
     const pin = await pinWithin(scope, real);
     pinned = true;
     await seed.close().catch(() => {});

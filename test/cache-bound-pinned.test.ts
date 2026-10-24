@@ -246,6 +246,90 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     expect(await contents(otherCacheDir)).toEqual(others);
   });
 
+  // The helper closes the seed before this process opens it, so the seed can be moved out of the cache directory and a
+  // link to it left in its place. An open through that link holds a file outside the cache directory, which keeps the
+  // cache directory in place no more than the helper does once it has answered and exited.
+  it("creates no pin outside the cache directory when the seed is moved out and a link to it left in its place, and the holding helper then exits", async () => {
+    const { parent, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const others = await contents(otherCacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let relocated: unknown;
+    let retargeted: unknown;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const name = path.basename(String(args[0]));
+      if (name.startsWith(".osnova-bound-")) {
+        if ((Number(args[1]) & constants.O_CREAT) === 0 && relocated === undefined) {
+          const outside = path.join(parent, name);
+          relocated = await fs.rename(path.join(cacheDir, name), outside)
+            .then(async () => await fs.symlink(outside, path.join(cacheDir, name), "file"))
+            .then(() => "relocated", (error: unknown) => (error as NodeJS.ErrnoException).code);
+        } else if ((Number(args[1]) & constants.O_CREAT) !== 0 && retargeted === undefined) {
+          await endHolder();
+          retargeted = await retarget(cacheDir, otherCacheDir).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+        }
+      }
+      const settled = await open(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      landed.push(...await pins(otherCacheDir));
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }) as never);
+    let ran = false;
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => { ran = true; }).then(() => "ran", (error: unknown) => error);
+    vi.mocked(fs.open).mockRestore();
+    await restore(cacheDir);
+    expect(relocated).toBe("relocated");
+    expect(landed).toEqual([]);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(ran).toBe(false);
+    expect(await contents(otherCacheDir)).toEqual(others);
+  });
+
+  // A hard link to the seed, put in place of the link the open went through, is a file in the cache directory with the
+  // seed's identity, so only the seed's count of links shows that the file this process holds has another name outside.
+  it("creates no pin outside the cache directory when the link the seed was opened through is replaced with a hard link to it, and the holding helper then exits", async () => {
+    const { parent, cacheDir, otherCacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const others = await contents(otherCacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let swapped: unknown;
+    let retargeted: unknown;
+    const landed: string[] = [];
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const name = path.basename(String(args[0]));
+      const creating = (Number(args[1]) & constants.O_CREAT) !== 0;
+      if (name.startsWith(".osnova-bound-") && creating && retargeted === undefined) {
+        await endHolder();
+        retargeted = await retarget(cacheDir, otherCacheDir).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
+      }
+      const outside = path.join(parent, name);
+      const seed = name.startsWith(".osnova-bound-") && !creating && swapped === undefined;
+      if (seed) {
+        await fs.rename(path.join(cacheDir, name), outside);
+        await fs.symlink(outside, path.join(cacheDir, name), "file");
+      }
+      const settled = await open(...args).then((value) => ({ value }), (error: unknown) => ({ error }));
+      if (seed) {
+        swapped = await fs.unlink(path.join(cacheDir, name))
+          .then(async () => await fs.link(outside, path.join(cacheDir, name)))
+          .then(() => "swapped", (error: unknown) => (error as NodeJS.ErrnoException).code);
+      }
+      landed.push(...await pins(otherCacheDir));
+      if ("error" in settled) throw settled.error;
+      return settled.value;
+    }) as never);
+    let ran = false;
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => { ran = true; }).then(() => "ran", (error: unknown) => error);
+    vi.mocked(fs.open).mockRestore();
+    await restore(cacheDir);
+    expect(swapped).toBe("swapped");
+    expect(landed).toEqual([]);
+    expect(outcome).toMatchObject({ diagnostic: { phase: "cache", path: cacheDir, code: "cache-changing" } });
+    expect(ran).toBe(false);
+    expect(await contents(otherCacheDir)).toEqual(others);
+  });
+
   // Windows refuses an open of a directory held without sharing with EBUSY, as another process may hold the cache
   // directory.
   it("waits while the cache directory is held without sharing, then pins it", async () => {
@@ -475,7 +559,8 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
   });
 
   // An entry held open with delete sharing can be renamed out of the cache directory, after which nothing inside the
-  // cache directory is open and it can be replaced with a junction before the pin is created.
+  // cache directory is open and it can be replaced with a junction before the pin is created. The seed this process
+  // holds, sharing nothing, cannot be renamed, so the cache directory stays in place as the pin is created.
   it("keeps the cache directory from being replaced once its entries are moved away as the pin is created, so no pin lands in the other cache", async () => {
     const { parent, cacheDir, otherCacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
@@ -484,9 +569,12 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     let refused: unknown;
     const landed: string[] = [];
     vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
-      if (refused !== undefined || !path.basename(String(args[0])).startsWith(".osnova-bound-")) return await open(...args);
-      moved = await Promise.all((await fs.readdir(cacheDir)).map(async (name) => await fs.rename(path.join(cacheDir, name), path.join(parent, `moved-${name}`))
-        .then(() => "moved", (error: unknown) => (error as NodeJS.ErrnoException).code)));
+      const creating = path.basename(String(args[0])).startsWith(".osnova-bound-") && (Number(args[1]) & constants.O_CREAT) !== 0;
+      if (refused !== undefined || !creating) return await open(...args);
+      moved = Object.fromEntries(await Promise.all((await fs.readdir(cacheDir)).map(async (name) => [
+        name.startsWith(".osnova-bound-") ? "seed" : name,
+        await fs.rename(path.join(cacheDir, name), path.join(parent, `moved-${name}`)).then(() => "moved", (error: unknown) => (error as NodeJS.ErrnoException).code),
+      ])));
       refused = await retarget(cacheDir, otherCacheDir).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code);
       try {
         return await open(...args);
@@ -497,7 +585,7 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     }) as never);
     const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
     vi.restoreAllMocks();
-    expect(moved).toEqual(["moved", "moved"]);
+    expect(moved).toEqual({ entry: "moved", tree: "moved", seed: expect.stringMatching(/^(EPERM|EACCES|EBUSY)$/) });
     expect(["EPERM", "EACCES", "EBUSY"]).toContain(refused);
     expect(landed).toEqual([]);
     expect(outcome).toBe("ran");
