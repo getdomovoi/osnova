@@ -31,12 +31,11 @@ import { IndexingError } from "../index/diagnostics.js";
 // is removed after the cache directory moved, when it holds anything as it is removed, or when the process ends while
 // the anchor has no helper. Where .. drops the name before it instead, as Windows resolves it, no anchor can bind the
 // directory. Windows refuses to rename or remove a directory while a file inside it is open, so there each run first
-// opens the directory the cache path names, creating nothing and sharing nothing, so that it cannot be renamed or
-// replaced while the handle is open, and fails with cache-changing unless it has the cache directory's identity. While
-// that handle is open, briefly, as it refuses a listing of the cache directory too, the run creates a pin, a file under
-// a random name in the cache directory that no other open may share and that is removed as it closes. Runs of a
-// process take turns at that handle, and a run whose listing or handle another process refuses waits for it to close
-// (see pinIn). The pin's real path names, through real directories
+// opens the directory the cache path names, creating nothing, and fails with cache-changing unless it has the cache
+// directory's identity. It then holds open an entry already in the cache directory, creating nothing, so the cache
+// directory stays in place, and creates a pin beside that entry, a file under a random name in the cache directory that
+// no other open may share and that is removed as it closes. A cache directory with no such entry is held by a handle
+// that shares nothing until the pin is open instead (see pinIn). The pin's real path names, through real directories
 // only, the directory that holds it, which stays where it is with every directory above it while the pin is open; once
 // its identity is the cache directory's, every cacheFs call within the cache directory goes by that path. A pin that
 // lands elsewhere fails the run with cache-changing before it changes anything. On another platform that resolves ..
@@ -481,32 +480,80 @@ async function inTurn<T>(dir: string, work: () => Promise<T>): Promise<T> {
 
 // Opens a pin in the cache directory, as described above. The pin is created only once a handle open on the directory
 // the cache path names has the cache directory's identity: a retarget made before that open fails the run with nothing
-// created. The handle shares nothing, so until the pin is open the cache directory cannot be renamed or replaced, and
-// every directory above it stays in place; libuv opens with delete sharing unless it shares nothing at all. Holding it
-// so also refuses a listing of the cache directory, and another run's hold, so a run holds it only from the check to
-// the open of its pin, a run of this process waits for the turns of the others, and a listing or a hold refused with
-// EBUSY is made again for up to busyWaitMs. The real path of the pin is found by a call that opens it for no access,
-// which its sharing does not refuse, and its directory must have the cache directory's identity while that path still
-// names the pin.
+// created. That handle shares everything, as libuv opens unless it shares nothing at all, so it keeps every directory
+// above the cache directory in place but not the cache directory itself. An entry already in the cache directory, held
+// open as the pin is created, keeps the cache directory in place too, and readers, watchers and other runs' changes
+// of the cache directory go on meanwhile; opening it creates nothing, wherever a retarget sends the open. The pin is
+// created in the directory that holds that entry, by its real path, once that directory has the cache directory's
+// identity. That entry is shared for removal too, so another process that removes it, every other entry and then the
+// cache directory itself before the pin is created can still put a link in its place; the pin then lands elsewhere and
+// fails the run with cache-changing. A cache directory with no entry that can be held open is held by a handle that
+// shares nothing instead, which refuses a listing of the cache directory and another run's hold, so a run holds it only
+// from the check to the open of its pin and a run of this process waits for the turns of the others. A hold or a
+// listing refused with EBUSY is made again for up to busyWaitMs. The real path of the pin is found by a call that opens
+// it for no access, which its sharing does not refuse, and its directory must have the cache directory's identity while
+// that path still names the pin.
 async function pinIn(scope: Scope): Promise<Pin> {
   return await inTurn(scope.dir, async () => {
-    let held: FileHandle;
-    try {
-      held = await unlessBusy(async () => await promises.open(scope.dir, constants.O_RDONLY | unshared));
-    } catch (error) {
-      throw new IndexingError({ phase: "cache", path: scope.dir, code: codeOf(error) === "EBUSY" ? "cache-write-failed" : "cache-changing" }, error);
+    const entry = await whileHeld(scope, 0, async () => await entryIn(scope));
+    if (entry !== undefined) {
+      try {
+        return await pinWithin(scope, entry.dir);
+      } finally {
+        await entry.file.close().catch(() => {});
+      }
     }
-    try {
-      if (identityOf(await held.stat({ bigint: true })) !== scope.identity) throw changingIn(scope);
-      return await pinWithin(scope);
-    } finally {
-      await held.close().catch(() => {});
-    }
+    return await whileHeld(scope, unshared, async () => await pinWithin(scope, scope.dir));
   });
 }
 
-async function pinWithin(scope: Scope): Promise<Pin> {
-  const placed = `${scope.prefix}.osnova-bound-${randomUUID()}`;
+// Runs work while a handle open on the directory the cache path names, with the given sharing, has the cache
+// directory's identity.
+async function whileHeld<T>(scope: Scope, sharing: number, work: () => Promise<T>): Promise<T> {
+  let held: FileHandle;
+  try {
+    held = await unlessBusy(async () => await promises.open(scope.dir, constants.O_RDONLY | sharing));
+  } catch (error) {
+    throw new IndexingError({ phase: "cache", path: scope.dir, code: codeOf(error) === "EBUSY" ? "cache-write-failed" : "cache-changing" }, error);
+  }
+  try {
+    if (identityOf(await held.stat({ bigint: true })) !== scope.identity) throw changingIn(scope);
+    return await work();
+  } finally {
+    await held.close().catch(() => {});
+  }
+}
+
+// An entry of the cache directory, directories first and no other run's pin, held open once the real path it is found
+// at names it within a directory with the cache directory's identity, together with that directory's real path; none
+// when no entry can be held so.
+async function entryIn(scope: Scope): Promise<{ readonly file: FileHandle; readonly dir: string } | undefined> {
+  const listed = await unlessBusy(async () => await promises.readdir(scope.dir, { withFileTypes: true })).catch(() => []);
+  const candidates = listed.filter((entry) => (entry.isDirectory() || entry.isFile()) && !entry.name.startsWith(".osnova-bound-"))
+    .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()));
+  for (const candidate of candidates) {
+    const named = `${scope.prefix}${candidate.name}`;
+    let file: FileHandle;
+    try {
+      file = await promises.open(named, constants.O_RDONLY);
+    } catch {
+      continue;
+    }
+    try {
+      const real = await promises.realpath(named);
+      const dir = path.dirname(real);
+      const [own, found, holder] = await Promise.all([file.stat({ bigint: true }), promises.lstat(real, { bigint: true }), promises.stat(dir, { bigint: true })]);
+      if (identityOf(found) === identityOf(own) && identityOf(holder) === scope.identity) return { file, dir };
+    } catch {
+      // the next entry is tried
+    }
+    await file.close().catch(() => {});
+  }
+  return undefined;
+}
+
+async function pinWithin(scope: Scope, dir: string): Promise<Pin> {
+  const placed = `${prefixOf(dir)}.osnova-bound-${randomUUID()}`;
   let file: FileHandle;
   try {
     file = await promises.open(placed, pinFlags);

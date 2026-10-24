@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { constants, promises as fs } from "node:fs";
+import { constants, promises as fs, watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { refreshWorkspaceWitnessed } from "../src/api.js";
@@ -200,6 +200,54 @@ describe("withBoundCacheDir where a file held open keeps the cache directory in 
     expect(collisions).toBe(0);
   });
 
+  // Windows refuses to rename a directory while anything inside it is open, whatever that open shares, so an entry held
+  // open keeps the cache directory itself in place as the pin is created, where an open of the directory would have to
+  // share nothing and so refuse its readers and watchers.
+  it("holds an entry of the cache directory open from the check of the directory until its pin is open", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<{ close: () => Promise<void> }>;
+    const opened: string[] = [];
+    let during: string[] | undefined;
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const target = String(args[0]);
+      if (during === undefined && path.basename(target).startsWith(".osnova-bound-")) during = [...opened];
+      const handle = await open(...args);
+      opened.push(target);
+      const close = handle.close.bind(handle);
+      handle.close = async () => {
+        opened.splice(opened.indexOf(target), 1);
+        await close();
+      };
+      return handle;
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran");
+    expect(outcome).toBe("ran");
+    expect(during?.filter((held) => path.dirname(held) === cacheDir)).toEqual([expect.stringMatching(/[/\\](entry|tree)$/)]);
+  });
+
+  it("pins the cache directory when no entry inside it can be held open", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let refused = 0;
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const target = String(args[0]);
+      if (path.dirname(target) === cacheDir && !path.basename(target).startsWith(".osnova-bound-")) {
+        refused += 1;
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${target}'`), { code: "EBUSY" });
+      }
+      return await open(...args);
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => {
+      await cacheFs.writeFile(path.join(cacheDir, "entry", "new"), "x");
+      return await pins(cacheDir);
+    });
+    expect(refused).toBe(2);
+    expect(outcome).toHaveLength(1);
+    expect(await pins(cacheDir)).toEqual([]);
+  });
+
   it("lists the cache directory while another run holds it without sharing", async () => {
     const { cacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
@@ -328,6 +376,39 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     expect(outcome).toBe("ran");
   });
 
+  // libuv's watcher keeps the directory it watches open, so a run that had to share nothing with every other open of
+  // the cache directory could not pin it while the watcher runs.
+  it("pins the cache directory while a watcher is open on it", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const watcher = watch(cacheDir);
+    try {
+      const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+      expect(outcome).toBe("ran");
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it("lets the cache directory be listed and changed by others as the pin is created", async () => {
+    const { cacheDir } = await twinCaches();
+    const identity = await ensureCacheDir(cacheDir);
+    const open = fs.open.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let others: unknown;
+    vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      if (others !== undefined || !path.basename(String(args[0])).startsWith(".osnova-bound-")) return await open(...args);
+      others = await Promise.all([
+        fs.readdir(cacheDir).then(() => "listed", (error: unknown) => (error as NodeJS.ErrnoException).code),
+        fs.rename(path.join(cacheDir, "entry", "file.tmp"), path.join(cacheDir, "entry", "file")).then(() => "renamed", (error: unknown) => (error as NodeJS.ErrnoException).code),
+      ]);
+      return await open(...args);
+    }) as never);
+    const outcome = await withBoundCacheDir(cacheDir, identity, async () => "ran").then((value) => value, (error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(others).toEqual(["listed", "renamed"]);
+    expect(outcome).toBe("ran");
+  });
+
   it("binds concurrent runs of one process to the same cache directory", async () => {
     const { cacheDir } = await twinCaches();
     const identity = await ensureCacheDir(cacheDir);
@@ -350,5 +431,24 @@ describe.runIf(windows)("withBoundCacheDir on Windows", () => {
     const { index } = await refreshWorkspaceWitnessed(root, { cacheDir });
     expect([...index.files.keys()]).toEqual(["a.ts"]);
     expect(await pins(cacheDir)).toEqual([]);
+  });
+
+  // A workspace may hold its own cache, and a watcher on it, as the MCP server keeps, then has the cache directory open.
+  it("refreshes a workspace that is its own cache directory while a watcher is open on it", async () => {
+    Object.defineProperty(process, "platform", platform);
+    vi.restoreAllMocks();
+    const root = path.join(await temporaryDir(), "root");
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "a.ts"), "export function pinned() { return 1; }\n");
+    const watcher = watch(root, { recursive: true });
+    try {
+      for (let refresh = 0; refresh < 2; refresh += 1) {
+        const { index } = await refreshWorkspaceWitnessed(root, { cacheDir: root });
+        expect([...index.files.keys()]).toEqual(["a.ts"]);
+      }
+    } finally {
+      watcher.close();
+    }
+    expect(await pins(root)).toEqual([]);
   });
 });
