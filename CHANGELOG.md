@@ -4,6 +4,10 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- The prompt hook names an indexed file the prompt spells by file name or path, as `- file <path>: <n> symbols; osnova_outline for its shape`. A prompt such as "fix the bug in claude-settings.js" printed nothing, because only the last segment of a token, `js`, was considered.
+
 ### Changed
 
 - Publishing the edge section encodes each distinct evidence, binding, route and overload value once per save, and every edge that carries the same value made only of plain objects, arrays, strings, numbers, booleans and null, or an equal copy of one, reuses that encoding. Any other value, such as a boxed number, a proxy, an object with an accessor, a method or a `toJSON` hook, enumerable or hidden, or a value that holds itself, is encoded on its own at each edge that carries it, so two values with the same JSON text but different encodings stay separate table entries, and a value that answers each read differently keeps what each edge read. A route that holds itself in an ignored extra field still encodes as the route alone. The edge section format, its bytes, their hash and every other section are unchanged, so an existing cache loads without a rebuild, and a route or overload that fails validation is still refused.

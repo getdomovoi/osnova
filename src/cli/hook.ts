@@ -10,7 +10,7 @@ import { impact } from "../query/impact.js";
 import { boundText } from "../query/budget.js";
 import type { TaskContextResult } from "../query/task-context.js";
 import type { ImpactResult } from "../query/impact.js";
-import type { OsnovaIndex, OsnovaSymbol } from "../types.js";
+import type { FileCard, OsnovaIndex, OsnovaSymbol } from "../types.js";
 import type { CliIo } from "./cli.js";
 
 // Editor hooks: a session hook prints the index size and one pointer to the tools (the MCP server's
@@ -236,17 +236,24 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
     if (cached === undefined) return;
     const terms = promptCodeNames(prompt);
-    if (terms.length === 0) return;
+    const paths = promptFilePaths(prompt);
+    if (terms.length === 0 && paths.length === 0) return;
     const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
+    const fileLines = filesNamed(index, paths).map((card) => `- file ${card.path}: ${card.symbols.length} symbols; osnova_outline for its shape`);
     const seeds = symbolsNamed(index, terms, 8);
-    if (seeds.length === 0) return;
+    if (seeds.length === 0 && fileLines.length === 0) return;
     const header = "[osnova] starting points for this prompt (indexed graph, exact file:line; osnova_footing for the full context, osnova_warp <symbol> for callers):";
     const available = hookPromptCodeUnits - header.length - 1;
-    const seedNames = new Set(seeds.map((symbol) => symbol.qualifiedName));
-    const result = taskContext(index, { task: "understand", question: prompt, symbols: [...seedNames], maxDepth: 1, maxCodeUnits: available, excerptLines: 1, measure: (partial) => formatStartingPoints(partial, seedNames).length });
-    const text = formatStartingPoints(result, seedNames);
-    if (!text.startsWith("- ")) return;
-    emitContext(io, client, "prompt", `${header}\n${boundText(text, available)}`);
+    const symbolBudget = available - fileLines.reduce((sum, line) => sum + line.length + 1, 0);
+    let text = "";
+    if (seeds.length > 0 && symbolBudget > 0) {
+      const seedNames = new Set(seeds.map((symbol) => symbol.qualifiedName));
+      const result = taskContext(index, { task: "understand", question: prompt, symbols: [...seedNames], maxDepth: 1, maxCodeUnits: symbolBudget, excerptLines: 1, measure: (partial) => formatStartingPoints(partial, seedNames).length });
+      text = formatStartingPoints(result, seedNames);
+    }
+    const body = [...fileLines, ...(text.startsWith("- ") ? [text] : [])].join("\n");
+    if (!body.startsWith("- ")) return;
+    emitContext(io, client, "prompt", `${header}\n${boundText(body, available)}`);
   } catch (error) { fail(error); }
 }
 
@@ -312,6 +319,29 @@ export function promptCodeNames(prompt: string): string[] {
   for (const match of prompt.matchAll(/`([^`\n]+)`/g)) consider(match[1]!.trim(), true);
   for (const match of prompt.replace(/`[^`\n]+`/g, " ").matchAll(/[A-Za-z_][A-Za-z0-9_.#:/]*/g)) consider(match[0], false);
   return [...names].sort();
+}
+
+// The file paths a prompt spells: a token ending in an extension, absolute, relative or a bare file name.
+// Only a token that names an indexed file seeds the hook, so dotted prose such as "e.g." never does.
+export function promptFilePaths(prompt: string): string[] {
+  const paths = new Set<string>();
+  for (const match of prompt.matchAll(/[\w@./\\-]+/g)) {
+    const token = match[0].replace(/\\/g, "/").replace(/\.+$/, "").replace(/^\.\//, "");
+    if (/[^/.]\.[A-Za-z0-9]+$/.test(token)) paths.add(token);
+  }
+  return [...paths].sort();
+}
+
+// A spelled path matches an indexed file at a segment boundary in either direction, so "settings.js" does not
+// match "claude-settings.js" and an absolute path matches its repository-relative file. A name shared by more
+// than four files is too ambiguous to be a starting point and is skipped.
+function filesNamed(index: OsnovaIndex, spelled: readonly string[]): FileCard[] {
+  const found = new Map<string, FileCard>();
+  for (const name of spelled) {
+    const matches = [...index.files.values()].filter((card) => card.path === name || card.path.endsWith(`/${name}`) || name.endsWith(`/${card.path}`));
+    if (matches.length <= 4) for (const card of matches) found.set(card.path, card);
+  }
+  return [...found.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 function symbolsNamed(index: OsnovaIndex, names: readonly string[], limit: number): OsnovaSymbol[] {

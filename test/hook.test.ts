@@ -10,6 +10,29 @@ function capture(stdin = "") {
 }
 
 describe("osnova hook", () => {
+  it("names the indexed files a prompt spells by name or path", async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-files-"));
+    try {
+      const root = path.join(temporary, "ws");
+      await fs.mkdir(path.join(root, "scripts"), { recursive: true }); await fs.mkdir(path.join(root, "tools"));
+      await fs.writeFile(path.join(root, "scripts", "claude-settings.js"), "function check() { return 1; }\nfunction apply() { return check(); }\nmodule.exports = { check, apply };\n");
+      await fs.writeFile(path.join(root, "tools", "claude-settings.js"), "function sync() { return 2; }\n");
+      const cacheDir = path.join(temporary, "cache");
+      const { buildIndex } = await import("../src/index.js");
+      await buildIndex(root, { cacheDir });
+      const ask = async (prompt: string) => { const c = capture(JSON.stringify({ prompt, cwd: root })); expect(await runCli(["hook", "prompt", "--cache-dir", cacheDir], c.io)).toBe(0); return c.out.join("\n"); };
+      const bare = await ask("fix the bug in claude-settings.js.");
+      expect(bare).toContain("[osnova] starting points");
+      expect(bare).toMatch(/^- file scripts\/claude-settings\.js: \d+ symbols; osnova_outline for its shape$/m);
+      expect(bare).toMatch(/^- file tools\/claude-settings\.js: \d+ symbols; osnova_outline for its shape$/m);
+      const scoped = await ask("fix the bug in `scripts/claude-settings.js`");
+      expect(scoped).toContain("- file scripts/claude-settings.js");
+      expect(scoped).not.toContain("tools/claude-settings.js");
+      expect(await ask("fix the bug in settings.js")).toBe("");
+      expect(await ask("fix the bug in the settings script")).toBe("");
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
+
   it("prints starting points for a prompt, nothing for a slash command, and the tool contract for a session", async () => {
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-hook-"));
     try {
