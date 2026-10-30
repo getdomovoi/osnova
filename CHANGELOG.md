@@ -6,12 +6,14 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ### Added
 
+- `osnova hook gate`, an opt-in search gate (`osnova setup claude --gate`, `osnova setup agents --gate`, or `--gate` beside `--hooks` or `--plugin`). It denies a grep, rg, find or search-tool call that reaches code osnova indexes until an osnova tool or the osnova CLI has run in the turn, and names the tools to use instead. Searches of data, prose and configuration files, of paths outside the workspace, and of a command's output after `|` always run. Claude Code and Codex get a `PreToolUse` hook, Cursor gets `beforeShellExecution`, `preToolUse` and `afterMCPExecution` entries, OpenCode and Kilo get an `osnova-gate.js` plugin, and Pi gets an `osnova-gate.ts` extension. On Codex and Pi, whose hooks may not see an osnova MCP call, the gate denies once per turn until it has seen one, then holds. Every failure lets the call through, and `OSNOVA_GATE=off` switches it off. Its turn state shares `hook-state/<session id>.json` under the cache directory.
 - The prompt hook names an indexed file the prompt spells by file name or path, as `- file <path>: <n> symbols; osnova_outline for its shape`. A prompt such as "fix the bug in claude-settings.js" printed nothing, because only the last segment of a token, `js`, was considered.
 
 ### Changed
 
 - Publishing the edge section encodes each distinct evidence, binding, route and overload value once per save, and every edge that carries the same value made only of plain objects, arrays, strings, numbers, booleans and null, or an equal copy of one, reuses that encoding. Any other value, such as a boxed number, a proxy, an object with an accessor, a method or a `toJSON` hook, enumerable or hidden, or a value that holds itself, is encoded on its own at each edge that carries it, so two values with the same JSON text but different encodings stay separate table entries, and a value that answers each read differently keeps what each edge read. A route that holds itself in an ignored extra field still encodes as the route alone. The edge section format, its bytes, their hash and every other section are unchanged, so an existing cache loads without a rebuild, and a route or overload that fails validation is still refused.
 - The shipped skill's description now covers fixing bugs, changing, reviewing and explaining code and finding where code lives, and says to use osnova before grep, find, rg or file reads; it named only how code works, callers, change impact and call-site checks.
+- A leftover `hook gate` entry from an earlier strict build is now kept and repointed at this install instead of removed, since this osnova runs it.
 
 ### Fixed
 

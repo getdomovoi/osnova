@@ -42,7 +42,7 @@ export async function planMcp(client: SetupClientId, options: { home?: string | 
 // hook this build cannot run, a duplicate, or a proposed hook filed under another event is removed; a
 // proposed hook still missing is added. Hooks that are not osnova's are never touched, even inside a
 // group osnova shares, and every other key survives with the file's indent.
-export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined }): Promise<PlannedChange> {
+export async function planHooks(options: { home?: string | undefined; settingsPath?: string | undefined; command?: readonly string[] | undefined; client?: HookClient | undefined; nudge?: boolean | undefined; gate?: boolean | undefined }): Promise<PlannedChange> {
   const client = options.client ?? "claude-code";
   const home = path.resolve(options.home ?? os.homedir());
   const defaultPath = client === "codex" ? path.join(home, ".codex", "hooks.json") : client === "cursor" ? path.join(home, ".cursor", "hooks.json") : path.join(home, ".claude", "settings.json");
@@ -55,7 +55,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`osnova setup: ${target} is not a JSON object`);
     root = parsed as Record<string, unknown>;
   }
-  const wanted = hookSettingsObject(options.command ?? ["osnova"], client, options.nudge === true);
+  const wanted = hookSettingsObject(options.command ?? ["osnova"], client, options.nudge === true, options.gate === true);
   const wantedHooks = wanted.hooks as Record<string, unknown[]>;
   const hooks = (root.hooks !== null && typeof root.hooks === "object" && !Array.isArray(root.hooks) ? { ...(root.hooks as Record<string, unknown>) } : {});
   const commandOf = (item: unknown): string[] => {
@@ -64,10 +64,11 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (typeof record.command === "string") return [record.command];
     return Array.isArray(record.hooks) ? record.hooks.flatMap(commandOf) : [];
   };
-  const wantedEvent = new Map<string, string>();
+  // A hook name may run under several events (Cursor runs the gate under three), so identity is event plus name.
+  const wantedEvents = new Map<string, Set<string>>();
   for (const [event, entries] of Object.entries(wantedHooks)) for (const entry of entries) {
     const name = splitHook(commandOf(entry)[0] ?? "")?.name;
-    if (name !== undefined) wantedEvent.set(name, event);
+    if (name !== undefined) wantedEvents.set(name, (wantedEvents.get(name) ?? new Set<string>()).add(event));
   }
   const prefix = splitHook(commandOf(Object.values(wantedHooks)[0]?.[0])[0] ?? "")?.prefix ?? "osnova";
   const kept = new Set<string>(), unknown = new Set<string>(), duplicates = new Set<string>(), moved = new Set<string>(), shellLeft = new Set<string>();
@@ -83,10 +84,10 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
     if (!plainCommand(hook)) { if (shellWrappedOsnovaHook(command as string) !== undefined) shellLeft.add(command as string); return item; }
     if (!isOsnovaLauncher(parts)) return item;
     if (!isHookEvent(hook.name)) { unknown.add(hook.name); return undefined; }
-    const proposed = wantedEvent.get(hook.name);
-    if (proposed !== undefined && proposed !== event) { moved.add(hook.name); return undefined; }
-    if (kept.has(hook.name)) { duplicates.add(hook.name); return undefined; }
-    kept.add(hook.name);
+    const proposed = wantedEvents.get(hook.name);
+    if (proposed !== undefined && !proposed.has(event)) { moved.add(hook.name); return undefined; }
+    if (kept.has(`${event}\u0000${hook.name}`)) { duplicates.add(hook.name); return undefined; }
+    kept.add(`${event}\u0000${hook.name}`);
     const next = `${prefix} hook ${hook.name}${hook.tail}`;
     if (next === command) return item;
     repointed += 1;
@@ -108,7 +109,7 @@ export async function planHooks(options: { home?: string | undefined; settingsPa
   let added = 0;
   for (const [event, entries] of Object.entries(wantedHooks)) for (const entry of entries) {
     const name = splitHook(commandOf(entry)[0] ?? "")?.name;
-    if (name !== undefined && kept.has(name)) continue;
+    if (name !== undefined && kept.has(`${event}\u0000${name}`)) continue;
     hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] as unknown[] : []), entry];
     added += 1;
   }
@@ -142,34 +143,47 @@ function plainCommand(hook: { prefix: string; tail: string }): boolean {
 }
 
 // The shipped integration file for a client that runs plugins instead of hooks, copied into its plugin directory.
-// Unchanged when the same bytes are already there; a differing file is a conflict, never overwritten.
+// Unchanged when the same bytes are already there; a differing file is a conflict, never overwritten. The opt-in
+// gate is a second file beside the plugin.
 export const pluginClients = ["opencode", "kilo", "pi"] as const;
 export type PluginClient = (typeof pluginClients)[number];
-export function pluginSource(client: PluginClient): string {
+function integrationsRoot(): string {
   // The package root holds integrations/ next to dist/ (published) or src/ (checkout); walk up to it.
   let root = path.dirname(fileURLToPath(import.meta.url));
   for (let level = 0; level < 4 && !existsSync(path.join(root, "integrations")); level += 1) root = path.dirname(root);
-  return client === "pi" ? path.join(root, "integrations", "pi", "osnova.ts") : path.join(root, "integrations", "opencode", "osnova.js");
+  return path.join(root, "integrations");
 }
-export function pluginTarget(client: PluginClient, home: string): string {
-  if (client === "pi") return path.join(home, ".pi", "agent", "extensions", "osnova.ts");
-  return path.join(home, ".config", client, "plugins", "osnova.js");
+// The plugin file's path under integrations/.
+function pluginFile(client: PluginClient, gate: boolean): string {
+  return client === "pi" ? `pi/osnova${gate ? "-gate" : ""}.ts` : `opencode/osnova${gate ? "-gate" : ""}.js`;
 }
-export async function planPlugin(client: PluginClient, options: { home?: string | undefined; source?: string | undefined }): Promise<PlannedChange> {
+export function pluginSource(client: PluginClient, gate = false): string {
+  return path.join(integrationsRoot(), ...pluginFile(client, gate).split("/"));
+}
+export function pluginTarget(client: PluginClient, home: string, gate = false): string {
+  if (client === "pi") return path.join(home, ".pi", "agent", "extensions", path.posix.basename(pluginFile(client, gate)));
+  return path.join(home, ".config", client, "plugins", path.posix.basename(pluginFile(client, gate)));
+}
+export async function planPlugin(client: PluginClient, options: { home?: string | undefined; source?: string | undefined; gate?: boolean | undefined }): Promise<PlannedChange> {
   const home = path.resolve(options.home ?? os.homedir());
-  const target = pluginTarget(client, home);
-  const source = await fs.readFile(options.source ?? pluginSource(client), "utf8");
+  const gate = options.gate === true;
+  const target = pluginTarget(client, home, gate);
+  const source = await fs.readFile(options.source ?? pluginSource(client, gate), "utf8");
   const pluginLink = await linkedPart(target, home);
   const existing = pluginLink === undefined ? await readOptional(target) : await readLinked(target);
-  if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova ${client === "pi" ? "extension" : "plugin"}.` };
+  const label = `osnova ${gate ? "gate " : ""}${client === "pi" ? "extension" : "plugin"}`;
+  if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this ${label}.` };
   if (pluginLink !== undefined) return { kind: "plugin", path: target, action: "conflict", linked: true, diff: "", merged: existing ?? "", notice: `${pluginLink} is a link; osnova never writes through a link. Replace it with a plain file or compare by hand.` };
   if (existing !== null) return { kind: "plugin", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a plugin file. Remove it or compare by hand.` };
-  return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`} The file shells out to the osnova on PATH (or OSNOVA_BIN).` };
+  const loads = client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`;
+  const gated = gate ? " It denies a search that reaches indexed code until an osnova tool or the osnova CLI has run in the turn; OSNOVA_GATE=off switches it off." : "";
+  return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${loads} The file shells out to the osnova on PATH (or OSNOVA_BIN).${gated}` };
 }
 
 // The shipped Claude Code skill, copied once into ~/.claude/skills/osnova/; a differing file is a conflict.
+const skillFile = "claude-code/skills/osnova/SKILL.md";
 export function skillSource(): string {
-  return path.join(path.dirname(path.dirname(pluginSource("opencode"))), "claude-code", "skills", "osnova", "SKILL.md");
+  return path.join(integrationsRoot(), ...skillFile.split("/"));
 }
 export function skillTarget(home: string): string {
   return path.join(home, ".claude", "skills", "osnova", "SKILL.md");
@@ -231,13 +245,13 @@ export interface FamilyPlan {
   readonly kept: readonly PlannedChange[];
   readonly skipped: readonly { readonly harness: AgentHarness; readonly reason: string }[];
 }
-export async function planFamily(family: SetupFamily, options: { home?: string | undefined; command?: readonly string[] | undefined; nudge?: boolean | undefined; only?: readonly AgentHarness[] | undefined }): Promise<FamilyPlan> {
+export async function planFamily(family: SetupFamily, options: { home?: string | undefined; command?: readonly string[] | undefined; nudge?: boolean | undefined; gate?: boolean | undefined; only?: readonly AgentHarness[] | undefined }): Promise<FamilyPlan> {
   const home = path.resolve(options.home ?? os.homedir());
   const changes: (PlannedChange & { readonly client?: SetupClientId | undefined })[] = [];
   const skipped: { harness: AgentHarness; reason: string }[] = [];
   if (family === "claude") {
     changes.push({ ...(await planMcp("claude-code", { home, command: options.command })), client: "claude-code" });
-    changes.push(await planHooks({ home, command: options.command, client: "claude-code", nudge: options.nudge }));
+    changes.push(await planHooks({ home, command: options.command, client: "claude-code", nudge: options.nudge, gate: options.gate }));
     changes.push(await planSkill({ home }));
   } else {
     for (const harness of agentHarnesses) {
@@ -245,8 +259,12 @@ export async function planFamily(family: SetupFamily, options: { home?: string |
       const folder = harnessFolder(harness, home);
       if (!existsSync(folder)) { skipped.push({ harness, reason: `not installed (${folder} not found)` }); continue; }
       changes.push({ ...(await planMcp(harness, { home, command: options.command })), client: harness });
-      if (harness === "codex" || harness === "cursor") changes.push(await planHooks({ home, command: options.command, client: harness, nudge: options.nudge }));
-      else changes.push(await planPlugin(harness, { home }));
+      // Cursor's hooks cannot deny a search with a reason the agent reads, so it gets no gate.
+      if (harness === "codex" || harness === "cursor") changes.push(await planHooks({ home, command: options.command, client: harness, nudge: options.nudge, gate: harness === "codex" && options.gate === true }));
+      else {
+        changes.push(await planPlugin(harness, { home }));
+        if (options.gate === true) changes.push(await planPlugin(harness, { home, gate: true }));
+      }
     }
     if (changes.length > 0) changes.push(await planSkill({ home, shared: true }));
   }
@@ -399,9 +417,10 @@ async function planInstalledFile(kind: "plugin" | "skill", target: string, sourc
   return { kind, path: target, action: "delete", diff: unifiedDiff(target, existing, ""), merged: "", notice: `The shipped ${label} is removed.` };
 }
 
-export async function planPluginRemoval(client: PluginClient, options: { home?: string | undefined; source?: string | undefined }): Promise<PlannedChange> {
+export async function planPluginRemoval(client: PluginClient, options: { home?: string | undefined; source?: string | undefined; gate?: boolean | undefined }): Promise<PlannedChange> {
   const home = path.resolve(options.home ?? os.homedir());
-  return planInstalledFile("plugin", pluginTarget(client, home), await fs.readFile(options.source ?? pluginSource(client), "utf8"), home, client === "pi" ? "Pi extension" : `${client} plugin`);
+  const gate = options.gate === true;
+  return planInstalledFile("plugin", pluginTarget(client, home, gate), await fs.readFile(options.source ?? pluginSource(client, gate), "utf8"), home, `${client === "pi" ? "Pi" : client} ${gate ? "gate " : ""}${client === "pi" ? "extension" : "plugin"}`);
 }
 
 export async function planSkillRemoval(options: { home?: string | undefined; source?: string | undefined; shared?: boolean | undefined }): Promise<PlannedChange> {
@@ -443,7 +462,10 @@ export async function planUninstall(family: SetupFamily, options: { home?: strin
       if (!existsSync(folder)) { skipped.push({ harness, reason: `not installed (${folder} not found)` }); continue; }
       changes.push({ ...(await planMcpRemoval(harness, { home })), client: harness });
       if (harness === "codex" || harness === "cursor") changes.push(...await planHookRemoval({ home, client: harness }));
-      else changes.push(await planPluginRemoval(harness, { home }));
+      else {
+        changes.push(await planPluginRemoval(harness, { home }));
+        if (existsSync(pluginTarget(harness, home, true))) changes.push(await planPluginRemoval(harness, { home, gate: true }));
+      }
     }
     // The shared skill is read by Codex, OpenCode, Kilo and Pi; it goes only when none of those that are installed stays.
     const readers = (["codex", "opencode", "kilo", "pi"] as const).filter((harness) => existsSync(harnessFolder(harness, home)) && options.only !== undefined && !options.only.includes(harness));

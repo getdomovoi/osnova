@@ -1,0 +1,162 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { runCli } from "../src/cli/cli.js";
+import { hookSettingsObject } from "../src/cli/hook.js";
+
+function capture(stdin = "") {
+  const out: string[] = []; const err: string[] = [];
+  return { out, err, io: { stdout: (t: string) => out.push(t), stderr: (t: string) => err.push(t), stdin: async () => stdin } };
+}
+
+let temporary: string, root: string, cacheDir: string;
+beforeAll(async () => {
+  temporary = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-gate-"));
+  root = path.join(temporary, "ws");
+  await fs.mkdir(path.join(root, "src"), { recursive: true }); await fs.mkdir(path.join(root, "config"));
+  await fs.writeFile(path.join(root, "src", "app.ts"), "export function total(n: number) { return n; }\n");
+  await fs.writeFile(path.join(root, "config", "settings.json"), "{ \"total\": 1 }\n");
+  await fs.writeFile(path.join(root, "README.md"), "# total\n");
+  cacheDir = path.join(temporary, "cache");
+  const { buildIndex } = await import("../src/index.js");
+  await buildIndex(root, { cacheDir });
+});
+afterAll(async () => { await fs.rm(temporary, { recursive: true, force: true }); });
+
+let sessions = 0;
+async function run(event: "gate" | "prompt", payload: Record<string, unknown>, ...flags: string[]): Promise<string> {
+  const c = capture(JSON.stringify({ cwd: root, ...payload }));
+  expect(await runCli(["hook", event, "--cache-dir", cacheDir, ...flags], c.io)).toBe(0);
+  return c.out.join("\n");
+}
+const gate = (session: string, tool_name: string, tool_input: Record<string, unknown>, ...flags: string[]) => run("gate", { session_id: session, tool_name, tool_input }, ...flags);
+const fresh = () => `s${(sessions += 1)}`;
+const denied = (out: string) => {
+  if (out.length === 0) return false;
+  const parsed = JSON.parse(out) as { hookSpecificOutput?: { hookEventName?: string; permissionDecision?: string; permissionDecisionReason?: string } };
+  expect(parsed.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+  expect(parsed.hookSpecificOutput?.permissionDecisionReason).toContain("osnova_footing");
+  return parsed.hookSpecificOutput?.permissionDecision === "deny";
+};
+
+describe("osnova hook gate", () => {
+  it("denies every search of indexed code in a turn until osnova runs", async () => {
+    const session = fresh();
+    expect(denied(await gate(session, "Grep", { pattern: "total" }))).toBe(true);
+    expect(denied(await gate(session, "Grep", { pattern: "total" }))).toBe(true);
+    expect(await gate(session, "mcp__osnova__osnova_ground", { question: "total" })).toBe("");
+    expect(await gate(session, "Grep", { pattern: "total" })).toBe("");
+    await run("prompt", { session_id: session, prompt: "next turn, fix total" });
+    expect(denied(await gate(session, "Grep", { pattern: "total" }))).toBe(true);
+  });
+
+  it("starts a turn from a plugin's prompt signal, even before any state exists", async () => {
+    const session = fresh();
+    expect(await gate(session, "osnova_osnova_footing", { question: "total" })).toBe("");
+    expect(await gate(session, "grep", { pattern: "total" })).toBe("");
+    expect(await run("gate", { session_id: session, hook_event_name: "UserPromptSubmit" })).toBe("");
+    expect(denied(await gate(session, "grep", { pattern: "total" }))).toBe(true);
+  });
+
+  it("adaptive mode denies once per turn until it has seen an osnova call, then is strict", async () => {
+    const session = fresh();
+    const adaptive = (input: Record<string, unknown>) => gate(session, "Bash", input, "--client", "codex", "--adaptive");
+    expect(denied(await adaptive({ command: "rg total" }))).toBe(true);
+    expect(await adaptive({ command: "rg total" })).toBe("");
+    await run("prompt", { session_id: session, prompt: "second turn about total" });
+    expect(denied(await adaptive({ command: "rg total" }))).toBe(true);
+    expect(await adaptive({ command: "osnova footing total" })).toBe("");
+    await run("prompt", { session_id: session, prompt: "third turn about total" });
+    expect(denied(await adaptive({ command: "rg total" }))).toBe(true);
+    expect(denied(await adaptive({ command: "rg total" }))).toBe(true);
+  });
+
+  it("lets search through after an osnova tool or the osnova CLI ran this turn", async () => {
+    const mcp = fresh();
+    expect(await gate(mcp, "mcp__osnova__osnova_footing", { question: "total" })).toBe("");
+    expect(await gate(mcp, "Bash", { command: "rg total src" })).toBe("");
+    const cli = fresh();
+    expect(await gate(cli, "Bash", { command: "osnova ground total" })).toBe("");
+    expect(await gate(cli, "Grep", { pattern: "total" })).toBe("");
+    await run("prompt", { session_id: cli, prompt: "another turn about total" });
+    expect(denied(await gate(cli, "Grep", { pattern: "total" }))).toBe(true);
+  });
+
+  it("gates only searches that reach indexed code", async () => {
+    const allowed: [string, Record<string, unknown>][] = [
+      ["Grep", { pattern: "total", path: "config" }],
+      ["Grep", { pattern: "total", path: path.join(root, "README.md") }],
+      ["Grep", { pattern: "total", glob: "*.json" }],
+      ["Glob", { pattern: "**/*.md" }],
+      ["Grep", { pattern: "total", path: temporary }],
+      ["Bash", { command: "grep -rn total config/settings.json README.md" }],
+      ["Bash", { command: "git log --oneline | grep total" }],
+      ["Bash", { command: "ls src && cat README.md" }],
+      ["grep", { pattern: "total", include: "*.json" }],
+      ["Read", { file_path: path.join(root, "src", "app.ts") }],
+    ];
+    for (const [tool, input] of allowed) expect(await gate(fresh(), tool, input), `${tool} ${JSON.stringify(input)}`).toBe("");
+    const gated: [string, Record<string, unknown>][] = [
+      ["Grep", { pattern: "total", path: "src" }],
+      ["Glob", { pattern: "**/*.ts" }],
+      ["Bash", { command: "rg -n total" }],
+      ["Bash", { command: "cd src && grep -rn total ." }],
+      ["Bash", { command: "find . -name '*.ts'" }],
+      ["bash", { command: "git grep total" }],
+      ["grep", { pattern: "total", path: "src" }],
+    ];
+    for (const [tool, input] of gated) expect(denied(await gate(fresh(), tool, input)), `${tool} ${JSON.stringify(input)}`).toBe(true);
+  });
+
+  it("fails open without a session, without an index, or when switched off", async () => {
+    expect(await run("gate", { tool_name: "Grep", tool_input: { pattern: "total" } })).toBe("");
+    const c = capture(JSON.stringify({ cwd: path.join(temporary, "elsewhere"), session_id: fresh(), tool_name: "Grep", tool_input: { pattern: "total" } }));
+    await fs.mkdir(path.join(temporary, "elsewhere"), { recursive: true });
+    expect(await runCli(["hook", "gate", "--cache-dir", cacheDir], c.io)).toBe(0);
+    expect(c.out).toEqual([]);
+    process.env.OSNOVA_GATE = "off";
+    try { expect(await gate(fresh(), "Grep", { pattern: "total" })).toBe(""); } finally { delete process.env.OSNOVA_GATE; }
+  });
+
+  it("reads shell commands outside quotes, keeps escaped paths whole, and lets pipeline filters and outside paths through", async () => {
+    const outside = path.join(temporary, "outside"); await fs.mkdir(outside, { recursive: true });
+    await fs.writeFile(path.join(outside, "my notes.txt"), "total\n");
+    expect(await gate(fresh(), "Bash", { command: `grep -nE "FAIL|error" ${outside}/notes.txt` })).toBe("");
+    expect(await gate(fresh(), "Bash", { command: String.raw`grep -n x ${outside}/my\ notes.txt` })).toBe("");
+    expect(await gate(fresh(), "Bash", { command: "cd config && grep -rn total ." })).toBe("");
+    expect(await gate(fresh(), "Bash", { command: ["rg", "total", "config"] })).toBe("");
+    expect(denied(await gate(fresh(), "Bash", { command: 'rg "FAIL|total"' }))).toBe(true);
+    expect(denied(await gate(fresh(), "shell", { command: ["rg", "total"] }))).toBe(true);
+  });
+
+  it("gates Cursor's shell and tool hooks, sees its MCP calls, and starts a turn on a new generation", async () => {
+    const session = fresh();
+    const cursor = async (payload: Record<string, unknown>) => {
+      const c = capture(JSON.stringify({ cwd: root, conversation_id: session, ...payload }));
+      expect(await runCli(["hook", "gate", "--client", "cursor", "--cache-dir", cacheDir], c.io)).toBe(0);
+      return c.out.length === 0 ? undefined : JSON.parse(c.out.join("")) as { permission?: string; agent_message?: string };
+    };
+    const first = await cursor({ generation_id: "g1", command: "rg total" });
+    expect(first?.permission).toBe("deny");
+    expect(first?.agent_message).toContain("osnova_footing");
+    expect((await cursor({ generation_id: "g1", tool_name: "Grep", tool_input: { pattern: "total" } }))?.permission).toBe("deny");
+    expect(await cursor({ generation_id: "g1", tool_name: "ground", mcp_server_name: "osnova", tool_input: { question: "total" } })).toBeUndefined();
+    expect(await cursor({ generation_id: "g1", command: "rg total" })).toBeUndefined();
+    expect((await cursor({ generation_id: "g2", command: "rg total" }))?.permission).toBe("deny");
+    const hooks = hookSettingsObject(["osnova"], "cursor", false, true).hooks as Record<string, unknown>;
+    for (const event of ["beforeShellExecution", "preToolUse", "afterMCPExecution"]) expect(hooks[event]).toEqual([{ command: "osnova hook gate --client cursor", timeout: 10 }]);
+  });
+
+  it("answers Codex in the same deny shape", async () => {
+    expect(denied(await gate(fresh(), "Bash", { command: "rg total" }, "--client", "codex"))).toBe(true);
+  });
+
+  it("is installed only on request, for Claude Code and Codex", () => {
+    const pre = (client: "claude-code" | "codex", gated: boolean) => (hookSettingsObject(["osnova"], client, false, gated).hooks as Record<string, unknown>).PreToolUse;
+    expect(pre("claude-code", false)).toBeUndefined();
+    expect(pre("claude-code", true)).toEqual([{ matcher: "Grep|Glob|Bash|mcp__.*osnova.*", hooks: [{ type: "command", command: "osnova hook gate", timeout: 10 }] }]);
+    expect(pre("codex", true)).toEqual([{ matcher: "shell|grep|glob|search|Bash|Grep|Glob|mcp__.*osnova.*", hooks: [{ type: "command", command: "osnova hook gate --client codex --adaptive", timeout: 10 }] }]);
+    expect((hookSettingsObject(["osnova"], "cursor", false, false).hooks as Record<string, unknown>).preToolUse).toBeUndefined();
+  });
+});
