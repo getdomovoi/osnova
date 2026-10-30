@@ -6,6 +6,7 @@ import { isOsnovaLauncher, previewRemoval, previewSetup, shellWrappedOsnovaHook,
 import type { SetupClientId } from "./setup-preview.js";
 import { hookSettingsObject, isHookEvent } from "../cli/hook.js";
 import type { HookClient } from "../cli/hook.js";
+import { isEarlierShipped } from "./shipped-history.js";
 
 // Applying a setup: every file change is planned first (path, action, diff), then written with a
 // timestamped backup of whatever was there. A conflict is never resolved by writing.
@@ -143,8 +144,8 @@ function plainCommand(hook: { prefix: string; tail: string }): boolean {
 }
 
 // The shipped integration file for a client that runs plugins instead of hooks, copied into its plugin directory.
-// Unchanged when the same bytes are already there; a differing file is a conflict, never overwritten. The opt-in
-// gate is a second file beside the plugin.
+// Unchanged when the same bytes are already there; a file an earlier osnova shipped and nobody edited is updated;
+// any other differing file is a conflict, never overwritten. The opt-in gate is a second file beside the plugin.
 export const pluginClients = ["opencode", "kilo", "pi"] as const;
 export type PluginClient = (typeof pluginClients)[number];
 function integrationsRoot(): string {
@@ -153,7 +154,7 @@ function integrationsRoot(): string {
   for (let level = 0; level < 4 && !existsSync(path.join(root, "integrations")); level += 1) root = path.dirname(root);
   return path.join(root, "integrations");
 }
-// The plugin file's path under integrations/.
+// The plugin file's path under integrations/, which is also its key in the shipped history.
 function pluginFile(client: PluginClient, gate: boolean): string {
   return client === "pi" ? `pi/osnova${gate ? "-gate" : ""}.ts` : `opencode/osnova${gate ? "-gate" : ""}.js`;
 }
@@ -174,13 +175,15 @@ export async function planPlugin(client: PluginClient, options: { home?: string 
   const label = `osnova ${gate ? "gate " : ""}${client === "pi" ? "extension" : "plugin"}`;
   if (existing === source) return { kind: "plugin", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this ${label}.` };
   if (pluginLink !== undefined) return { kind: "plugin", path: target, action: "conflict", linked: true, diff: "", merged: existing ?? "", notice: `${pluginLink} is a link; osnova never writes through a link. Replace it with a plain file or compare by hand.` };
+  if (existing !== null && isEarlierShipped(pluginFile(client, gate), existing)) return { kind: "plugin", path: target, action: "update", diff: unifiedDiff(target, existing, source), merged: source, notice: `${target} is the ${label} an earlier osnova shipped, unedited; it is replaced with this one.` };
   if (existing !== null) return { kind: "plugin", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a plugin file. Remove it or compare by hand.` };
   const loads = client === "pi" ? "Pi loads extensions from ~/.pi/agent/extensions/ at start." : `${client} loads plugins from ${path.dirname(target)} at start.`;
   const gated = gate ? " It denies a search that reaches indexed code until an osnova tool or the osnova CLI has run in the turn; OSNOVA_GATE=off switches it off." : "";
   return { kind: "plugin", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${loads} The file shells out to the osnova on PATH (or OSNOVA_BIN).${gated}` };
 }
 
-// The shipped Claude Code skill, copied once into ~/.claude/skills/osnova/; a differing file is a conflict.
+// The shipped Claude Code skill, copied into ~/.claude/skills/osnova/. An unedited copy an earlier osnova shipped is
+// updated; any other differing file is a conflict.
 const skillFile = "claude-code/skills/osnova/SKILL.md";
 export function skillSource(): string {
   return path.join(integrationsRoot(), ...skillFile.split("/"));
@@ -200,6 +203,7 @@ export async function planSkill(options: { home?: string | undefined; source?: s
   const existing = skillLink === undefined ? await readOptional(target) : await readLinked(target);
   if (existing === source) return { kind: "skill", path: target, action: "unchanged", diff: "", merged: existing, notice: `${target} is already this osnova skill.` };
   if (skillLink !== undefined) return { kind: "skill", path: target, action: "conflict", linked: true, diff: "", merged: existing ?? "", notice: `${skillLink} is a link; osnova never writes through a link. Replace it with a plain folder or compare by hand.` };
+  if (existing !== null && isEarlierShipped(skillFile, existing)) return { kind: "skill", path: target, action: "update", diff: unifiedDiff(target, existing, source), merged: source, notice: `${target} is the osnova skill an earlier osnova shipped, unedited; it is replaced with this one.` };
   if (existing !== null) return { kind: "skill", path: target, action: "conflict", diff: unifiedDiff(target, existing, source), merged: existing, notice: `${target} exists with other content; osnova never overwrites a skill file. Remove it or compare by hand.` };
   return { kind: "skill", path: target, action: "create", diff: unifiedDiff(target, "", source), merged: source, notice: `${options.shared === true ? "Codex, OpenCode, Kilo and Pi load skills from ~/.agents/skills/" : "Claude Code loads skills from ~/.claude/skills/"} at start; the skill's description decides when it is used.` };
 }
@@ -407,25 +411,26 @@ export async function planHookRemoval(options: { home?: string | undefined; clie
   return changes;
 }
 
-// A plugin, extension or skill file is deleted only while it is byte-identical to the shipped one and no link leads to it.
-async function planInstalledFile(kind: "plugin" | "skill", target: string, source: string, home: string, label: string): Promise<PlannedChange> {
+// A plugin, extension or skill file is deleted only while it is byte-identical to the shipped one, or to an earlier
+// shipped version, and no link leads to it.
+async function planInstalledFile(kind: "plugin" | "skill", target: string, source: string, home: string, label: string, shipped: string): Promise<PlannedChange> {
   const link = await linkedPart(target, home);
   if (link !== undefined) return { kind, path: target, action: "conflict", linked: true, diff: "", merged: "", notice: `${link} is a link; osnova never removes through a link. Remove it by hand if you no longer want it.` };
   const existing = await readOptional(target);
   if (existing === null) return { kind, path: target, action: "unchanged", diff: "", merged: "", notice: `${target} is not installed.` };
-  if (existing !== source) return { kind, path: target, action: "conflict", diff: "", merged: existing, notice: `${target} differs from the shipped ${label}; left in place. Remove it by hand if you no longer want it.` };
+  if (existing !== source && !isEarlierShipped(shipped, existing)) return { kind, path: target, action: "conflict", diff: "", merged: existing, notice: `${target} differs from the shipped ${label}; left in place. Remove it by hand if you no longer want it.` };
   return { kind, path: target, action: "delete", diff: unifiedDiff(target, existing, ""), merged: "", notice: `The shipped ${label} is removed.` };
 }
 
 export async function planPluginRemoval(client: PluginClient, options: { home?: string | undefined; source?: string | undefined; gate?: boolean | undefined }): Promise<PlannedChange> {
   const home = path.resolve(options.home ?? os.homedir());
   const gate = options.gate === true;
-  return planInstalledFile("plugin", pluginTarget(client, home, gate), await fs.readFile(options.source ?? pluginSource(client, gate), "utf8"), home, `${client === "pi" ? "Pi" : client} ${gate ? "gate " : ""}${client === "pi" ? "extension" : "plugin"}`);
+  return planInstalledFile("plugin", pluginTarget(client, home, gate), await fs.readFile(options.source ?? pluginSource(client, gate), "utf8"), home, `${client === "pi" ? "Pi" : client} ${gate ? "gate " : ""}${client === "pi" ? "extension" : "plugin"}`, pluginFile(client, gate));
 }
 
 export async function planSkillRemoval(options: { home?: string | undefined; source?: string | undefined; shared?: boolean | undefined }): Promise<PlannedChange> {
   const home = path.resolve(options.home ?? os.homedir());
-  return planInstalledFile("skill", options.shared === true ? agentsSkillTarget(home) : skillTarget(home), await fs.readFile(options.source ?? skillSource(), "utf8"), home, "osnova skill");
+  return planInstalledFile("skill", options.shared === true ? agentsSkillTarget(home) : skillTarget(home), await fs.readFile(options.source ?? skillSource(), "utf8"), home, "osnova skill", skillFile);
 }
 
 // Only the block exactly as this osnova writes it goes, with the blank line setup put before it; nothing else in the

@@ -54,3 +54,26 @@ describe("osnova setup --gate", () => {
   });
 });
 
+describe("setup after an upgrade", () => {
+  it("replaces a skill an earlier osnova shipped, backed up, and keeps one its owner edited", async () => {
+    const target = path.join(home, ".claude", "skills", "osnova", "SKILL.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const earlier = await fs.readFile(path.join(import.meta.dirname, "fixtures", "shipped", "SKILL-0.12.0.md"), "utf8");
+    await fs.writeFile(target, earlier);
+    const report = await setup("--apply", "--skill");
+    expect(report).toMatch(/skill, update, .*SKILL\.md \(backup .*SKILL\.md\.bak-osnova-/);
+    const shipped = await fs.readFile(path.join(import.meta.dirname, "..", "integrations", "claude-code", "skills", "osnova", "SKILL.md"), "utf8");
+    expect(await fs.readFile(target, "utf8")).toBe(shipped);
+    await fs.writeFile(target, `${earlier}\nmy own note\n`);
+    await expect(runCli(["setup", "--apply", "--skill", "--home", home], capture().io)).rejects.toThrow(/nothing was written/);
+  });
+
+  it("uninstall removes a skill an earlier osnova shipped", async () => {
+    await fs.mkdir(path.join(home, ".codex"), { recursive: true });
+    const target = path.join(home, ".agents", "skills", "osnova", "SKILL.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, await fs.readFile(path.join(import.meta.dirname, "fixtures", "shipped", "SKILL-0.12.0.md"), "utf8"));
+    await setup("agents", "--uninstall", "--apply");
+    expect(existsSync(target)).toBe(false);
+  });
+});
