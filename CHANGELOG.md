@@ -4,7 +4,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 
 ## Unreleased
 
-The extraction version moves to `structural-9.45`, so the first run after upgrading rebuilds the cache once.
+The extraction version moves to `structural-9.45` and the edge section format to 14, so the first run after upgrading rebuilds the cache once.
 
 ### Added
 
@@ -12,6 +12,7 @@ The extraction version moves to `structural-9.45`, so the first run after upgrad
 
 ### Changed
 
+- Publishing the edge section encodes each distinct argument-type value once per save, as it does evidence, binding, route and overload values; `test/edge-store.test.ts` checks that shared, copied and proxied values give the same bytes.
 - The type-checker oracle scorer (`benchmarks/oracle/score.mjs`) pairs each call edge with one checker call when a line calls the same name more than once (`a.get(b.get())`). It used to judge every edge at such a line against the first call, so a correct edge for the second call scored false. Rescored, zod has 0 false edges (was 4), gson 1 (was 4), ripgrep 27 (was 29) and humanizer 2 (was 3); recall moves by at most 2 sites per corpus. Every remaining false edge names another function, and the record's `method.sameLine` states the rule.
 
 ### Fixed
