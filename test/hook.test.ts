@@ -30,6 +30,11 @@ describe("osnova hook", () => {
       expect(scoped).not.toContain("tools/claude-settings.js");
       expect(await ask("fix the bug in settings.js")).toBe("");
       expect(await ask("fix the bug in the settings script")).toBe("");
+      // A dotted word that names no indexed file must not cost the prompt a refresh of the index.
+      await fs.writeFile(path.join(root, "tools", "later.js"), "function later() { return 3; }\n");
+      expect(await ask("clean this up, e.g. the version 0.12.0 notes")).toBe("");
+      const { loadIndex } = await import("../src/index.js");
+      expect((await loadIndex(root, { cacheDir }))?.files.has("tools/later.js")).toBe(false);
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 

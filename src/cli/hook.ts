@@ -268,7 +268,9 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
     if (cached === undefined) return;
     const terms = promptCodeNames(prompt);
-    const paths = promptFilePaths(prompt);
+    // A dotted word such as "e.g." or "0.12.0" names no file; checking the loaded index first keeps such a prompt
+    // from paying for a refresh.
+    const paths = promptFilePaths(prompt).filter((spelled) => filesNamed(cached, [spelled]).length > 0);
     if (terms.length === 0 && paths.length === 0) return;
     const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
     const fileLines = filesNamed(index, paths).map((card) => `- file ${card.path}: ${card.symbols.length} symbols; osnova_outline for its shape`);
