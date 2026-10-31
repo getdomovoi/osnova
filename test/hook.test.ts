@@ -35,6 +35,8 @@ describe("osnova hook", () => {
       expect(await ask("clean this up, e.g. the version 0.12.0 notes")).toBe("");
       const { loadIndex } = await import("../src/index.js");
       expect((await loadIndex(root, { cacheDir }))?.files.has("tools/later.js")).toBe(false);
+      // A code name refreshes the index anyway, so a file created since the last refresh is still named.
+      expect(await ask("wire `sync` into tools/later.js")).toMatch(/^- file tools\/later\.js: \d+ symbols/m);
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   });
 
