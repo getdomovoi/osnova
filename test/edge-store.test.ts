@@ -37,7 +37,7 @@ describe("edge store", () => {
     const lines = serializeEdges(index.edges, paths).bytes.toString("utf8").split("\n");
     expect(lines.at(-1)).toBe("");
     const header = JSON.parse(lines[0]!) as { formatVersion: number; count: number; evidence: unknown[]; bindings: unknown[] };
-    expect(header.formatVersion).toBe(13);
+    expect(header.formatVersion).toBe(14);
     expect(header.count).toBe(index.edges.length);
     expect(lines.length - 2).toBe(index.edges.length);
     const fileIndexes = lines.slice(1, -1).map((line) => (JSON.parse(line) as number[])[1]!);
@@ -133,6 +133,23 @@ describe("edge store", () => {
     const transparent = <T extends object>(value: T): T => new Proxy(value, {});
     const proxied = { evidence: transparent(structuredClone(base.evidence!)), binding: transparent(structuredClone(base.binding!)) };
     expect(serializeEdges(shared.map(() => ({ ...base, ...proxied })), paths).bytes.equals(layout.bytes)).toBe(true);
+  });
+
+  it("encodes shared, copied and proxied argument types to the same bytes and reads each back", async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const base = index.edges.find((edge) => edge.kind === "calls")!;
+    const values = [{ types: ["int", null] }, { types: ["String", "int"], names: ["a", "b"] }];
+    const shared = Array.from({ length: 40 }, (_, i): OsnovaEdge => ({ ...base, arguments: 2, argumentTypes: values[i % 2]! }));
+    const layout = serializeEdges(shared, paths);
+    const copies = shared.map((edge): OsnovaEdge => ({ ...edge, argumentTypes: structuredClone(edge.argumentTypes!) }));
+    const proxied = shared.map((edge): OsnovaEdge => ({ ...edge, argumentTypes: new Proxy({ ...edge.argumentTypes!, types: new Proxy([...edge.argumentTypes!.types], {}) }, {}) }));
+    expect(serializeEdges(copies, paths).bytes.equals(layout.bytes)).toBe(true);
+    expect(serializeEdges(proxied, paths).bytes.equals(layout.bytes)).toBe(true);
+    const header = JSON.parse(layout.bytes.toString("utf8").split("\n")[0]!) as { argumentTypes: unknown[] };
+    expect(header.argumentTypes).toHaveLength(2);
+    expect(header.argumentTypes).toEqual(expect.arrayContaining(values));
+    expect(deserializeEdges(layout.bytes, paths, index.files).map((edge) => edge.argumentTypes)).toEqual(shared.map((edge) => edge.argumentTypes));
   });
 
   it("serializes shared, equal and reordered copies of the same tables to the bytes of fresh distinct objects", async () => {

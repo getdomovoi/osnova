@@ -1,7 +1,7 @@
 import type { Node, Tree } from "web-tree-sitter";
 import { makeSpan, makeSignature } from "./adapter.js";
 import type { RawDefinition, RawEdge } from "./adapter.js";
-import type { Callee, Construction, EdgeBinding, EdgeKind, MemberKind, ParameterRange, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
+import type { ArgumentTypes, Callee, Construction, EdgeBinding, EdgeKind, MemberKind, ParameterRange, RouteInfo, SourceSpan, ReturnBinding, SymbolBinding, SymbolKind } from "../types.js";
 
 export type VisitResult = boolean | void;
 
@@ -150,7 +150,7 @@ export class Extractor {
 
   // The edge sits at the line `node` starts on. A call passes its callee name token, so a call written on its own
   // line of a multi-line chain is not reported at the line where the chain's receiver starts.
-  addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number, constructs?: Construction): void {
+  addEdge(kind: EdgeKind, toName: string, node: Node, binding?: EdgeBinding, route?: RouteInfo, args?: number, constructs?: Construction, argumentTypes?: ArgumentTypes): void {
     const name = toName.trim();
     if (name.length === 0 || name.length > 300) return;
     const edge: RawEdge = {
@@ -161,6 +161,7 @@ export class Extractor {
       ...(binding === undefined ? {} : { binding }),
       ...(route === undefined ? {} : { route }),
       ...(args === undefined ? {} : { arguments: args }),
+      ...(argumentTypes === undefined ? {} : { argumentTypes }),
       ...(constructs === undefined ? {} : { constructs }),
     };
     this.edges.push(edge);

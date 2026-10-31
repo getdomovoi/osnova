@@ -1,4 +1,4 @@
-import type { Construction, EdgeBinding, RouteInfo, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol, SymbolDegree } from "../types.js";
+import type { ArgumentTypes, Construction, EdgeBinding, RouteInfo, EdgeKind, FileCard, IndexDiagnostic, OsnovaEdge, OsnovaIndex, OsnovaSymbol, SymbolDegree } from "../types.js";
 import { canonical, deserializeEdges } from "./edgeStore.js";
 import { IndexingError } from "./diagnostics.js";
 
@@ -14,6 +14,7 @@ export interface RawEdgeItem {
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
   readonly arguments?: number | undefined;
+  readonly argumentTypes?: ArgumentTypes | undefined;
   readonly constructs?: Construction | undefined;
 }
 
@@ -188,7 +189,9 @@ function compareEdges(a: OsnovaEdge, b: OsnovaEdge): number {
     compareStr(a.fromSymbol, b.fromSymbol) ||
     compareStr(canonical(a.binding ?? null), canonical(b.binding ?? null)) ||
     (a.arguments ?? -1) - (b.arguments ?? -1) ||
-    compareStr(a.constructs ?? "", b.constructs ?? "")
+    compareStr(a.constructs ?? "", b.constructs ?? "") ||
+    // Two calls of one name on a line with different argument types can bind different overloads.
+    compareStr(canonical(a.argumentTypes ?? null), canonical(b.argumentTypes ?? null))
   );
 }
 
@@ -207,7 +210,8 @@ function dedupeEdges(sorted: OsnovaEdge[]): OsnovaEdge[] {
       prev.toFile === edge.toFile &&
       canonical(prev.binding ?? null) === canonical(edge.binding ?? null) &&
       prev.arguments === edge.arguments &&
-      prev.constructs === edge.constructs
+      prev.constructs === edge.constructs &&
+      canonical(prev.argumentTypes ?? null) === canonical(edge.argumentTypes ?? null)
     ) {
       continue;
     }

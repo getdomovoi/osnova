@@ -101,7 +101,8 @@ export async function extractCard(
           ...(edge.binding === undefined ? {} : { binding: edge.binding }),
           ...(edge.route === undefined ? {} : { route: edge.route }),
           ...(edge.arguments === undefined ? {} : { arguments: edge.arguments }),
-      ...(edge.constructs === undefined ? {} : { constructs: edge.constructs }),
+          ...(edge.argumentTypes === undefined ? {} : { argumentTypes: edge.argumentTypes }),
+          ...(edge.constructs === undefined ? {} : { constructs: edge.constructs }),
         }));
       } finally {
         tree.delete();

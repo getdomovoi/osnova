@@ -112,7 +112,18 @@ export interface ParameterRange {
   readonly constructs?: true | undefined;
   // Java: each parameter's type as written, whitespace removed (a varargs type ends in `...`).
   readonly types?: readonly string[] | undefined;
-  // Java: the simple names `types` read from the file's scope, sorted; another file can shadow them.
+  // Java: the simple names `types` (or `erased`) read from the file's scope, sorted; another file can shadow them.
+  readonly names?: readonly string[] | undefined;
+  // Java, when `types` is absent: each parameter's erased type, a type variable replaced by its first bound (or
+  // `java.lang.Object`) and type arguments dropped; null where the written type proves nothing.
+  readonly erased?: readonly (string | null)[] | undefined;
+}
+
+// Java: the written type of each argument of a call, erased (`java.util.List`, `int`, `java.lang.String[]`), or null
+// where the argument's type is not written down. `null` is the type of the `null` literal. `names` lists, sorted, the
+// simple names the types read from the caller's scope, which an inherited nested type can still shadow.
+export interface ArgumentTypes {
+  readonly types: readonly (string | null)[];
   readonly names?: readonly string[] | undefined;
 }
 
@@ -121,8 +132,9 @@ export interface ParameterRange {
 // is also checked against declarations in declared base classes and other partial declarations of the
 // type: `from` names the method the call resolved to when the one accepting declaration lies there and
 // the edge moved to it, and `elsewhere` lists the accepting declarations there when it did not move.
+// `types` marks a choice the written argument types made among several declarations that take the count.
 export type OverloadChoice =
-  | { readonly line: number; readonly from?: string | undefined }
+  | { readonly line: number; readonly from?: string | undefined; readonly types?: true | undefined }
   | { readonly candidates: readonly number[]; readonly elsewhere?: readonly OverloadDeclaration[] | undefined };
 
 export interface OverloadDeclaration {
@@ -202,6 +214,7 @@ export interface OsnovaEdge {
   readonly binding?: EdgeBinding | undefined;
   readonly route?: RouteInfo | undefined;
   readonly arguments?: number | undefined;
+  readonly argumentTypes?: ArgumentTypes | undefined;
   // A Java or C# object creation: `instance` for `new T(...)`, which runs a constructor of T, and `anonymous`
   // for `new T(...) { ... }`, which creates an anonymous subclass of T.
   readonly constructs?: Construction | undefined;
