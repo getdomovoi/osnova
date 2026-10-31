@@ -370,7 +370,7 @@ describe("a creation claims a declaration only where the compiler's binding is p
     const project = "<Project Sdk=\"Microsoft.NET.Sdk\" />\n";
     const models = "namespace A.Models { public class Foo { public Foo() {} } }\n";
     const use = (namespace: string) => `namespace ${namespace} { class Use { void Run() { new Foo(); } } }\n`;
-    const cases: [string, Record<string, string>, string, boolean][] = [
+    const cases: [string, Record<string, string | Buffer>, string, boolean][] = [
       // An .CSProj counts as a project file, as MSBuild reads it.
       ["upper-case extension", { "A/A.CSProj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", true],
       // The outer project globs the nested one's files too, so the outer's global using may apply there.
@@ -384,6 +384,10 @@ describe("a creation claims a declaration only where the compiler's binding is p
       ["output folder", { "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/bin/Use.cs": use("A") }, "A/bin/Use.cs", false],
       // A file system that ignores case finds a directory.build.props as MSBuild's Directory.Build.props.
       ["lower-case build file", { "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A"), "directory.build.props": "<Project>\n  <ItemGroup>\n    <Compile Remove=\"A/Use.cs\" />\n  </ItemGroup>\n</Project>\n" }, "A/Use.cs", false],
+      // MSBuild reads item and property names in any letter case.
+      ["lower-case compile item", { "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <compile Remove=\"Use.cs\" />\n  </ItemGroup>\n</Project>\n", "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      // A project file the scan cannot decode, such as one saved as UTF-16, has no text to read.
+      ["undecodable project", { "A/A.csproj": Buffer.from(`\ufeff${project}`, "utf16le"), "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
       // A project file above the size cap has no text to read.
       ["oversized project", { "A/A.csproj": `<Project Sdk="Microsoft.NET.Sdk">\n<!--${"x".repeat(1_100_000)}-->\n</Project>\n`, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
     ];
@@ -410,6 +414,8 @@ describe("a creation claims a declaration only where the compiler's binding is p
       "C/Use.cs": "namespace C { class Use { void Run() { new Foo(); } } }\n",
       "D/D.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <ImplicitUsings>disable</ImplicitUsings>\n  </PropertyGroup>\n</Project>\n",
       "D/Use.cs": "namespace D { class Use { void Run() { new Foo(); } } }\n",
+      "E/E.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <ImplicitUsings Condition=\"'$(TargetFramework)' == 'net8.0'\">enable</ImplicitUsings>\n  </PropertyGroup>\n</Project>\n",
+      "E/Use.cs": "namespace E { class Use { void Run() { new Foo(); } } }\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
     const reason = (file: string) => index.edges.find((edge) => edge.fromFile === file && edge.kind === "calls")?.evidence;
@@ -417,6 +423,7 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(reason("B/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "unbound-global" } });
     expect(reason("C/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "no-matching-symbol" } });
     expect(reason("D/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "unbound-global" } });
+    expect(reason("E/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "no-matching-symbol" } });
   });
 
   it("re-resolves C# creations when a project file is added, moved or edited, equal to a full rebuild", async () => {
@@ -456,14 +463,14 @@ describe("a creation claims a declaration only where the compiler's binding is p
 
   it("leaves a C# creation unresolved when a project file declares a using alias of that name", async () => {
     await write({
-      "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Using Include=\"P.T\" Alias=\"X\" />\n    <Using Include=\"P.T\">\n      <Alias>Y</Alias>\n    </Using>\n  </ItemGroup>\n</Project>\n",
+      "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Using Include=\"P.T\" Alias=\"X\" />\n    <Using Include=\"P.T\">\n      <Alias>Y</Alias>\n    </Using>\n    <using Include=\"P.T\" alias=\"W\" />\n  </ItemGroup>\n</Project>\n",
       "A/Box.cs": "namespace P { public class T { public T() {} } }\n",
-      "A/Other.cs": "namespace Q { public class X { public X() {} } public class Y { public Y() {} } public class Z { public Z() {} } }\n",
-      "A/Use.cs": "using Q;\nclass Use { void Run() { new X(); new Y(); new Z(); } }\n",
+      "A/Other.cs": "namespace Q { public class X { public X() {} } public class Y { public Y() {} } public class Z { public Z() {} } public class W { public W() {} } }\n",
+      "A/Use.cs": "using Q;\nclass Use { void Run() { new X(); new Y(); new Z(); new W(); } }\n",
     });
     const index = await buildIndex(workspace, { cacheDir });
     const found = index.edges.filter((edge) => edge.kind === "calls" && edge.fromFile === "A/Use.cs").map((edge) => [edge.toName, edge.toSymbol]);
-    expect(found).toEqual([["X", undefined], ["Y", undefined], ["Z", "A/Other.cs#Z.Z"]]);
+    expect(found).toEqual([["W", undefined], ["X", undefined], ["Y", undefined], ["Z", "A/Other.cs#Z.Z"]]);
   });
 
   it("reads a project file's using aliases only for the files of that project or an unproven one", async () => {

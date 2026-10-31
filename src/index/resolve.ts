@@ -776,10 +776,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     }
     return projectFiles;
   };
-  // A project file's text without comments, or undefined when the scan could not read it.
+  // A project file's text without comments, or undefined when the scan could not read or decode it.
   const projectText = (name: string): string | undefined => {
     const card = files.get(name);
-    if (card === undefined || card.diagnostics?.some((diagnostic) => diagnostic.phase === "scan") === true) return undefined;
+    if (card === undefined || card.diagnostics?.some((diagnostic) => diagnostic.phase === "scan") === true || (card.size > 0 && card.text === "")) return undefined;
     return card.text.replace(/<!--[\s\S]*?-->/gu, "");
   };
   const csharpProjectOf = (file: string): CsharpProject | null => {
@@ -796,8 +796,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const project = byFolder.get(nearest)![0]!;
       const build = ancestors.slice(ancestors.indexOf(nearest)).flatMap((dir) => buildFiles.get(dir) ?? []);
       const texts = [project, ...build].map(projectText);
-      if (texts.every((text) => text !== undefined && !/<(?:Compile|Import)\b|EnableDefault(?:Compile)?Items|DefaultItemExcludes/u.test(text))) {
-        found = { path: project, usingItems: texts.some((text) => /<Using\b|<ImplicitUsings>(?!\s*(?:disable|false)\s*<)/iu.test(text!)), files: [project, ...build] };
+      if (texts.every((text) => text !== undefined && !/<(?:Compile|Import)\b|EnableDefault(?:Compile)?Items|DefaultItemExcludes/iu.test(text))) {
+        found = { path: project, usingItems: texts.some((text) => /<Using\b|<ImplicitUsings\b[^>]*>(?!\s*(?:disable|false)\s*<)/iu.test(text!)), files: [project, ...build] };
       }
     }
     csharpProjects.set(start, found);
@@ -816,7 +816,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     for (const name of project?.files ?? [...byFolder.values(), ...build.values()].flat()) {
       const text = projectText(name);
       if (text === undefined) { any = true; continue; }
-      for (const match of text.matchAll(/<Using\b[^>]*?\bAlias\s*=\s*(?:"([^"]*)"|'([^']*)')|<Alias>([^<]*)<\/Alias>/gu)) {
+      for (const match of text.matchAll(/<Using\b[^>]*?\bAlias\s*=\s*(?:"([^"]*)"|'([^']*)')|<Alias>([^<]*)<\/Alias>/giu)) {
         const alias = (match[1] ?? match[2] ?? match[3] ?? "").trim();
         if (/^@?[\p{L}_][\p{L}\p{N}_]*$/u.test(alias)) names.add(alias.replace(/^@/u, ""));
         else any = true;
@@ -825,9 +825,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     projectAliases.set(key, { names, any });
     return { names, any };
   };
-  // The `global using` directives each project's files carry, and those whose project the index cannot prove.
-  let globalsByProject: { readonly certain: Map<string, CsharpUsing[]>; readonly uncertain: CsharpUsing[] } | undefined;
-  const projectGlobals = (): { readonly certain: Map<string, CsharpUsing[]>; readonly uncertain: CsharpUsing[] } => {
+  // The `global using` directives each project's files carry, those whose project the index cannot prove, and all of them.
+  type ProjectGlobals = { readonly certain: Map<string, CsharpUsing[]>; readonly uncertain: CsharpUsing[]; readonly all: CsharpUsing[] };
+  let globalsByProject: ProjectGlobals | undefined;
+  const projectGlobals = (): ProjectGlobals => {
     if (globalsByProject !== undefined) return globalsByProject;
     const certain = new Map<string, CsharpUsing[]>();
     const uncertain: CsharpUsing[] = [];
@@ -836,7 +837,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (project === null) uncertain.push(using);
       else certain.set(project.path, [...(certain.get(project.path) ?? []), using]);
     }
-    globalsByProject = { certain, uncertain };
+    globalsByProject = { certain, uncertain, all: csharpScopeOf().global };
     return globalsByProject;
   };
   // A written C# type name segment and its generic arity: ``Box`1`` names `Box<T>`, which a type records as `arity`.
@@ -1063,7 +1064,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       // may not apply. If one did and supplied another type of the name, the code would not compile.
       const byProject = depth === 0 ? projectGlobals() : undefined;
       const globals = project === null ? [] : byProject?.certain.get(project.path) ?? [];
-      const uncertain = byProject === undefined ? [] : project === null ? [...byProject.uncertain, ...[...byProject.certain.values()].flat()] : byProject.uncertain;
+      const uncertain = byProject === undefined ? [] : project === null ? byProject.all : byProject.uncertain;
       const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...globals]
         : scoped.filter((using) => using.from < site.line && site.line < using.to);
       // A directive inside an `#if` region may or may not import a type at this level.
