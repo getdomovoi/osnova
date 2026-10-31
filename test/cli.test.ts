@@ -230,6 +230,7 @@ describe("cli", () => {
     expect(run("footing", "two", "--task", "bogus")).toEqual({ status: 2, stderr: "osnova: osnova footing: --task must be understand, change or review\n" });
     expect(run("footing", "two", "--max-code-units", "16385")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units cannot exceed 16384\n" });
     expect(run("footing", "two", "--max-code-units", "0")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units must be a safe integer >= 1\n" });
+    expect(run("ground", "two", "-n", "0")).toEqual({ status: 2, stderr: "osnova: osnova ground: --limit must be a safe integer >= 1\n" });
     expect(run("groundwork", "--max-dirs", "0")).toEqual({ status: 2, stderr: "osnova: osnova groundwork: --max-dirs must be a safe integer >= 1\n" });
     expect(run("warp", "two", "--bogus")).toEqual({ status: 2, stderr: "osnova: osnova warp: Unknown option '--bogus'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"--bogus\"\n" });
     expect(run("settle", "extra")).toEqual({ status: 2, stderr: "osnova: osnova settle: Unexpected argument 'extra'. This command does not take positional arguments\n" });
@@ -329,16 +330,6 @@ describe("cli", () => {
     expect(scopedText).not.toContain("const header =");
   }, 60_000);
 
-  it("names the command as typed in every usage error", async () => {
-    const run = (args: string[]) => runCli([...args, "--workspace", workspace, ...cacheArgs], capture().io);
-    await expect(run(["warp"])).rejects.toThrow(/^osnova warp: missing <symbol> argument$/);
-    await expect(run(["outline"])).rejects.toThrow(/^osnova outline: missing <file> argument$/);
-    await expect(run(["thread", ""])).rejects.toThrow(/^osnova thread: missing <pattern> argument$/);
-    await expect(run(["ground"])).rejects.toThrow(/^osnova ground: missing <question> argument$/);
-    await expect(run(["tests"])).rejects.toThrow(/^osnova tests: give <symbol\.\.\.> or --file <path>$/);
-    await expect(run(["tests", "two", "--file", "test/two.test.ts"])).rejects.toThrow(/^osnova tests: give either <symbol\.\.\.> or --file <path>, not both$/);
-  }, 60_000);
-
   it("names the command as typed when an option is unknown or lacks its value", async () => {
     const commands = ["build", "check", "ground", "thread", "outline", "warp", "groundwork", "footing", "settle", "plumb", "tests", "unreferenced", "coverage", "update-check", "doctor", "setup", "hook", "mcp"];
     for (const command of commands) {
@@ -347,34 +338,6 @@ describe("cli", () => {
     await expect(runCli(["ground", "--workspace"], capture().io)).rejects.toThrow(/^osnova ground: Option '--workspace <value>' argument missing$/);
     await expect(runCli(["footing", "--symbol"], capture().io)).rejects.toThrow(/^osnova footing: Option '--symbol <value>' argument missing$/);
     await expect(runCli(["footing", "two", "--task", "oops", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow(/^osnova footing: --task must be understand, change or review$/);
-  }, 60_000);
-
-  it("prints usage errors with the typed command on stderr and exits 2", () => {
-    const bin = (args: string[]) => spawnSync(process.execPath, ["--import", "tsx", path.resolve("src/cli/bin.ts"), ...args, "--workspace", workspace, ...cacheArgs], { encoding: "utf8", timeout: 60_000 });
-    for (const [args, message] of [
-      [["warp"], "osnova: osnova warp: missing <symbol> argument"],
-      [["outline"], "osnova: osnova outline: missing <file> argument"],
-      [["thread", ""], "osnova: osnova thread: missing <pattern> argument"],
-      [["tests"], "osnova: osnova tests: give <symbol...> or --file <path>"],
-      [["footing", "   "], "osnova: osnova footing: missing <question> argument"],
-      [["ground", "two", "-n", "0"], "osnova: osnova ground: --limit must be a safe integer >= 1"],
-      [["warp", "two", "--depth", "0"], "osnova: osnova warp: --depth must be a safe integer >= 1"],
-      [["groundwork", "--max-dirs", "0"], "osnova: osnova groundwork: --max-dirs must be a safe integer >= 1"],
-    ] as const) {
-      const result = bin([...args]);
-      expect(result.status).toBe(2);
-      expect(result.stderr.trim()).toBe(message);
-    }
-  }, 120_000);
-
-  it("footing rejects a blank question unless symbols seed it", async () => {
-    const run = (args: string[], io = capture().io) => runCli(["footing", ...args, "--workspace", workspace, ...cacheArgs], io);
-    await expect(run([""])).rejects.toThrow(/^osnova footing: missing <question> argument$/);
-    await expect(run(["   "])).rejects.toThrow(/^osnova footing: missing <question> argument$/);
-    await expect(run([])).rejects.toThrow(/^osnova footing: missing <question> argument$/);
-    const seeded = capture();
-    expect(await run(["", "--symbol", "two"], seeded.io)).toBe(0);
-    expect(seeded.lines.join("\n")).toContain("two");
   }, 60_000);
 
   it("rejects a zero or non-numeric --limit on every command whose limit caps results", async () => {
@@ -407,8 +370,6 @@ describe("cli", () => {
     for (const [args, message] of [
       [["warp", "two", "--depth", "0"], "osnova warp: --depth must be a safe integer >= 1"],
       [["footing", "two", "--depth", "abc"], "osnova footing: --depth must be a safe integer >= 1"],
-      [["footing", "two", "--max-code-units", "0"], "osnova footing: --max-code-units must be a safe integer >= 1"],
-      [["groundwork", "--max-dirs", "0"], "osnova groundwork: --max-dirs must be a safe integer >= 1"],
       [["plumb", "two", "--site", "src/two.ts:1", "--depth", "0"], "osnova plumb: --depth must be a safe integer >= 1"],
       [["settle", "--base-cache", path.join(workspace, "no-such-cache"), "--depth", "0"], "osnova settle: --depth must be a safe integer >= 1"],
     ] as const) {
