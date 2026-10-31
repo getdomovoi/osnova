@@ -262,7 +262,7 @@ describe("plugins for OpenCode, Kilo and Pi", () => {
     try {
       const { OsnovaPlugin } = await import("../integrations/opencode/osnova.js");
       const hooks = await OsnovaPlugin({ directory: home, worktree: home });
-      expect(Object.keys(hooks)).toEqual(["chat.message"]);
+      expect(Object.keys(hooks).sort()).toEqual(["chat.message", "event"]);
       const parts = [{ type: "text", text: "why is total wrong" }];
       await hooks["chat.message"]({}, { message: {}, parts });
       expect(parts[0]!.text).toBe("why is total wrong\n\nPOINTS for why is total wrong");

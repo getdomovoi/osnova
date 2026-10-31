@@ -61,6 +61,7 @@
 <h2 id="unreleased">Unreleased</h2>
 <h3 id="unreleased-added">Added</h3>
 <ul>
+<li>The OpenCode and Kilo plugin and the Pi extension hand the agent what its uncommitted change reached when a turn ends, as the stop hook already does for Claude Code, Codex and Cursor. The plugin runs <code>osnova hook stop</code> on <code>session.idle</code> for a root session, skipping a subagent's child session, and posts the reason into the session with <code>session.promptAsync</code>; the extension runs it on <code>agent_settled</code>, skipping an aborted run, and sends the reason with <code>pi.sendUserMessage</code>. Both continue only when the hook does, at most once per diff per session, so the turn the notice starts ends quietly, and the notice, which already names each dependent's line, gets no starting points of its own. Checked live on Kilo 7.8.18: the notice reaches the session as a user message naming each dependent and starts a new turn; the Pi extension follows Pi's extension documentation and was not run against Pi. OpenCode 2.x loads neither plugin.</li>
 <li>The Pi gate extension keys its turns on Pi's session id from <code>ctx.sessionManager.getSessionId()</code> when Pi gives one, and on one id per process otherwise.</li>
 </ul>
 <h2 id="v0-12-1">0.12.1 (2026-10-30)</h2>
