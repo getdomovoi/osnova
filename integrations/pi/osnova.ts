@@ -55,18 +55,21 @@ interface PiApi {
   sendUserMessage(content: string, options?: { deliverAs: "followUp" | "steer" }): void;
 }
 
-// The gate extension keys its turns the same way when Pi gives no session id.
-const processSession = `pi-${process.pid}-${Date.now()}`;
+// Pi's session id when its context gives one; otherwise one process is one session. Both osnova extensions read the
+// fallback from one global, so they key the same session when Pi loads both.
+const fallback = globalThis as { osnovaPiSession?: string };
+const processSession = (fallback.osnovaPiSession ??= `pi-${process.pid}-${Date.now()}`);
 const sessionOf = (ctx: Context | undefined): string => ctx?.sessionManager?.getSessionId?.() || processSession;
 
 export default function osnova(pi: PiApi): void {
   let contract: string | undefined;
-  // Sessions whose next run the sent notice starts: that run settles as a stop hook continuation, which the hook never
-  // continues again. A user prompt clears the mark.
+  // Sessions whose running run the sent notice started: it settles as a stop hook continuation, which the hook never
+  // continues again. Each run's prompt sets or clears the mark, so it follows the run that is going.
   const noticed = new Set<string>();
   pi.on("before_agent_start", async (event, ctx) => {
     const cwd = ctx?.cwd ?? process.cwd();
-    if (typeof event.prompt === "string" && !event.prompt.startsWith("[osnova settle]")) noticed.delete(sessionOf(ctx));
+    if (typeof event.prompt === "string" && event.prompt.startsWith("[osnova settle]")) noticed.add(sessionOf(ctx));
+    else noticed.delete(sessionOf(ctx));
     contract ??= await hook("session", { cwd }, cwd, "--full-contract");
     // The settle notice this extension sends already names each dependent with its line; it needs no starting points.
     const points = typeof event.prompt === "string" && !event.prompt.startsWith("[osnova settle]") ? await hook("prompt", { prompt: event.prompt, cwd }, cwd) : "";
@@ -76,17 +79,19 @@ export default function osnova(pi: PiApi): void {
   // agent_settled is the run's final idle point, after retries and compaction. A run the user aborted gets no notice.
   pi.on("agent_settled", async (event, ctx) => {
     const session = sessionOf(ctx);
-    const continuation = noticed.delete(session);
+    const continuation = noticed.has(session);
     if (event?.aborted === true) return undefined;
     const cwd = ctx?.cwd ?? process.cwd();
     const reason = continueReason(await hook("stop", { session_id: session, cwd, ...(continuation ? { stop_hook_active: true } : {}) }, cwd, "--client", "codex"));
     if (reason === undefined) return undefined;
+    // The hook has already recorded the diff as settled, so the notice must go out: after a run the user started while
+    // the hook ran, and as a follow-up too when a Pi without isIdle refuses a plain message mid-run.
     try {
-      // A run the user started while the stop hook ran gets the notice after it.
       if (ctx?.isIdle?.() === false) pi.sendUserMessage(reason, { deliverAs: "followUp" });
       else pi.sendUserMessage(reason);
-      noticed.add(session);
-    } catch { /* Pi refused the message; the next run is checked as usual. */ }
+    } catch {
+      try { pi.sendUserMessage(reason, { deliverAs: "followUp" }); } catch { /* Pi refused both deliveries. */ }
+    }
     return undefined;
   });
 }

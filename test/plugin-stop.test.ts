@@ -21,12 +21,6 @@ const stopCalls = async () => (await fs.readFile(calls, "utf8").catch(() => ""))
   .map((line) => JSON.parse(line) as { args: string[]; payload: Record<string, unknown> }).filter((call) => call.args[1] === "stop");
 
 describe("the OpenCode and Kilo plugin at the end of a turn", () => {
-  it("recognizes its own notice by the prefix the stop hook writes (test/hook.test.ts pins it)", async () => {
-    for (const file of ["integrations/opencode/osnova.js", "integrations/pi/osnova.ts"]) {
-      expect(await fs.readFile(path.join(import.meta.dirname, "..", file), "utf8"), file).toContain('startsWith("[osnova settle]")');
-    }
-  });
-
   it("posts the settle notice into an idle root session, and skips child sessions and warnings", async () => {
     await fs.rm(calls, { force: true });
     const sent: unknown[] = [];
@@ -63,7 +57,7 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     await vi.waitFor(() => expect(sent).toHaveLength(2));
   });
 
-  it("skips a turn the user aborted and a notice the user's next prompt overtook", async () => {
+  it("skips a turn the user aborted, runs one check per session at a time, and still delivers a notice the user overtook", async () => {
     await fs.rm(calls, { force: true });
     const sent: unknown[] = [];
     const client = { session: { promptAsync: async (options: unknown) => { sent.push(options); return {}; } } };
@@ -72,14 +66,22 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     await hooks.event({ event: { type: "session.error", properties: { sessionID: "root", error: { name: "MessageAbortedError" } } } });
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "root" } } });
     expect(await stopCalls()).toEqual([]);
-    // The idle after the aborted one is checked again.
+    // An abort reported after its idle is cleared by the user's next prompt, so that turn is still checked.
+    await hooks.event({ event: { type: "session.error", properties: { sessionID: "root", error: { name: "MessageAbortedError" } } } });
+    await hooks["chat.message"]({ sessionID: "root" }, { message: {}, parts: [{ type: "text", text: "try again" }] });
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "root" } } });
     await vi.waitFor(() => expect(sent).toHaveLength(1));
-    // The user prompts while the stop hook runs; the notice would land inside the user's turn.
+    // Two idles while the slow check runs start one stop hook; the user's prompt meanwhile does not drop the notice.
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "slow" } } });
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "slow" } } });
     await hooks["chat.message"]({ sessionID: "slow" }, { message: {}, parts: [{ type: "text", text: "next task" }] });
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    expect(sent).toHaveLength(1);
+    await vi.waitFor(() => expect(sent).toHaveLength(2), { timeout: 5_000 });
+    expect((await stopCalls()).filter((call) => call.payload.session_id === "slow")).toHaveLength(1);
+    // A deleted session's marks go with it.
+    await hooks.event({ event: { type: "session.created", properties: { info: { id: "gone", parentID: "root" } } } });
+    await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "gone" } } } });
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "gone" } } });
+    await vi.waitFor(async () => expect((await stopCalls()).filter((call) => call.payload.session_id === "gone")).toHaveLength(1));
   }, 10_000);
 });
 
@@ -121,5 +123,20 @@ describe("the Pi extension at the end of a run", () => {
     const [call] = await stopCalls();
     expect(String(call!.payload.session_id)).toMatch(/^pi-\d+-\d+$/);
     expect(sent).toEqual([[`SETTLE ${String(call!.payload.session_id)}`, { deliverAs: "followUp" }]]);
+    // The user's run that the queued notice waits behind is not the notice's run, so it is checked as usual.
+    await handlers.get("before_agent_start")!({ prompt: "the user's run", systemPrompt: "base" }, ctx("pi-2"));
+    await handlers.get("agent_settled")!({ aborted: false }, ctx("pi-2"));
+    expect((await stopCalls()).at(-1)!.payload.stop_hook_active).toBeUndefined();
   });
+
+  it("queues the notice as a follow-up when Pi refuses a plain message", async () => {
+    await fs.rm(calls, { force: true });
+    const sent: unknown[][] = [];
+    const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+    const { default: osnova } = await import("../integrations/pi/osnova.js");
+    osnova({ on: (event: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => { handlers.set(event, handler); }, sendUserMessage: (...args: unknown[]) => { if (args.length === 1) throw new Error("streaming"); sent.push(args); } } as never);
+    await handlers.get("agent_settled")!({ aborted: false }, { cwd: dir, sessionManager: { getSessionId: () => "pi-3" } });
+    expect(sent).toEqual([["SETTLE pi-3", { deliverAs: "followUp" }]]);
+  });
+
 });

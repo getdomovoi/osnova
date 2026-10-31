@@ -50,33 +50,38 @@ export const OsnovaPlugin = async ({ directory, worktree, client }) => {
   // A subagent runs in a child session; its idle is not the end of the user's turn, so it gets no notice.
   const children = new Set();
   // Sessions whose running turn the posted notice started: their idle is a stop hook continuation, which the hook
-  // never continues again. A user prompt clears the mark.
+  // never continues again. Each user message sets or clears the mark, so it follows the turn that is running.
   const noticed = new Set();
-  // Sessions whose turn the user aborted: their next idle gets no notice.
+  // Sessions whose turn the user aborted: their next idle gets no notice. The user's next prompt clears the mark.
   const aborted = new Set();
-  // Bumped on every user prompt, so a notice computed while the user started a new turn is dropped.
-  const prompts = new Map();
-  const prompted = (sessionID) => { prompts.set(sessionID, (prompts.get(sessionID) ?? 0) + 1); noticed.delete(sessionID); };
+  // One stop check per session at a time, so two idles cannot both post a notice for one diff.
+  const checking = new Set();
+  const forget = (sessionID) => { children.delete(sessionID); noticed.delete(sessionID); aborted.delete(sessionID); checking.delete(sessionID); };
   const settle = async (sessionID) => {
-    const before = prompts.get(sessionID) ?? 0;
-    const continuation = noticed.delete(sessionID);
-    const reason = continueReason(await hook("stop", { session_id: sessionID, cwd, ...(continuation ? { stop_hook_active: true } : {}) }, cwd, "--client", "codex"));
-    if (reason === undefined || (prompts.get(sessionID) ?? 0) !== before) return;
-    noticed.add(sessionID);
-    await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text: reason }] } }).catch(() => { noticed.delete(sessionID); });
+    checking.add(sessionID);
+    try {
+      const continuation = noticed.has(sessionID);
+      const reason = continueReason(await hook("stop", { session_id: sessionID, cwd, ...(continuation ? { stop_hook_active: true } : {}) }, cwd, "--client", "codex"));
+      // The hook has already recorded the diff as settled, so the notice is posted even when the user prompted
+      // meanwhile; OpenCode and Kilo queue it behind the user's turn.
+      if (reason !== undefined) await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text: reason }] } }).catch(() => undefined);
+    } finally { checking.delete(sessionID); }
   };
   // OpenCode and Kilo already put the MCP server's instructions (the tool contract) into the system prompt, so the
   // session hook's text is dropped; it still runs once, first, because on a cold cache it starts the index build.
   let warm;
   return {
     "chat.message": async (input, output) => {
+      const text = output.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+      const notice = text.startsWith("[osnova settle]");
+      if (typeof input?.sessionID === "string") {
+        if (notice) noticed.add(input.sessionID); else noticed.delete(input.sessionID);
+        if (!notice) aborted.delete(input.sessionID);
+      }
       warm ??= hook("session", { cwd }, cwd);
       await warm;
-      const text = output.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
       // The settle notice this plugin posts already names each dependent with its line; it needs no starting points.
-      if (text.startsWith("[osnova settle]")) return;
-      if (typeof input?.sessionID === "string") prompted(input.sessionID);
-      if (text.trim().length === 0) return;
+      if (notice || text.trim().length === 0) return;
       const points = await hook("prompt", { prompt: text, cwd }, cwd);
       if (points.length === 0) return;
       const last = output.parts.filter((part) => part.type === "text").at(-1);
@@ -86,13 +91,14 @@ export const OsnovaPlugin = async ({ directory, worktree, client }) => {
     event: async ({ event }) => {
       const type = event?.type;
       const info = event?.properties?.info;
+      if (type === "session.deleted" && typeof info?.id === "string") { forget(info.id); return; }
       // Messages carry their session's id as parentID too, so only session events name a child session.
       if (typeof type === "string" && type.startsWith("session.") && typeof info?.id === "string" && typeof info.parentID === "string") children.add(info.id);
       const sessionID = event?.properties?.sessionID;
-      if (typeof sessionID !== "string") return;
+      if (typeof sessionID !== "string" || children.has(sessionID)) return;
       if (type === "session.error" && event.properties?.error?.name === "MessageAbortedError") { aborted.add(sessionID); return; }
-      if (type !== "session.idle" || children.has(sessionID) || typeof client?.session?.promptAsync !== "function") return;
-      if (aborted.delete(sessionID)) { noticed.delete(sessionID); return; }
+      if (type !== "session.idle" || checking.has(sessionID) || typeof client?.session?.promptAsync !== "function") return;
+      if (aborted.delete(sessionID)) return;
       void settle(sessionID).catch(() => undefined);
     },
   };

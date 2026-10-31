@@ -15,8 +15,10 @@ const unsafeOnWindows = /["%!\r\n]/;
 // Tool calls the gate may decide on: search tools, MCP calls, and shell commands that search or run osnova.
 const searchTool = /^(?:grep|find|mcp)$|osnova_/;
 const searchCommand = /(?:^|[\s;&|(])(?:grep|egrep|fgrep|rg|ag|ack|fd|find|git\s+grep|osnova)(?:\s|$)/;
-// Pi's session id when its context gives one; otherwise one process is one session.
-const processSession = `pi-${process.pid}-${Date.now()}`;
+// Pi's session id when its context gives one; otherwise one process is one session. Both osnova extensions read the
+// fallback from one global, so they key the same session when Pi loads both.
+const fallback = globalThis as { osnovaPiSession?: string };
+const processSession = (fallback.osnovaPiSession ??= `pi-${process.pid}-${Date.now()}`);
 
 function gate(payload: Record<string, unknown>, cwd: string, session: string): Promise<string> {
   return new Promise((resolve) => {
