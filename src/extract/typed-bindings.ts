@@ -59,6 +59,11 @@ interface Scope { readonly parent: Scope | null; readonly names: Map<string, Dec
 
 export interface TypedBindings {
   at: (fn: Node | null, site: Node) => EdgeBinding | undefined;
+  // The import binding of a plain name at a site, from the innermost scope outward: a block-level `use` counts.
+  imported: (name: string, site: Node) => EdgeBinding | undefined;
+  // A Rust module path written at a site, spelled as the resolver reads it: `super`/`self` paths inside an
+  // inline module from the file root (`self::m::inner`), others as written. Null when it climbs above the file.
+  modulePath: (path: string, site: Node) => string | null;
   heritage: (classNode: Node) => SymbolBinding[];
   interfaces: (classNode: Node) => SymbolBinding[];
   returns: (fn: Node) => ReturnBinding | undefined;
@@ -204,13 +209,34 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   // `flags::parse::lookup()`, `super::render()`, `grep::cli::stdout()`: a path whose last segment is lowercase
   // names a module, so the call is a function of that module (an import), spelled through the head's `use` when
   // one exists. Null means the module is this file: the name resolves locally.
+  // The inline modules of this file a `self`/`super` callee path lands in, outermost first: `super::check()` from
+  // `mod tests` lands at the root (empty), `self::check()` in `tests`, `super::super::f()` from `a::b` in `a`'s parent.
+  // Null when the path climbs above the file.
+  const inlineTarget = (source: string, node: Node): string[] | null => {
+    const chain: string[] = [];
+    for (let current: Node | null = node.parent; current !== null; current = current.parent) {
+      if (current.type !== "mod_item") continue;
+      const name = current.childForFieldName("name")?.text;
+      if (name !== undefined) chain.unshift(name);
+    }
+    const segments = source.split("::").filter((segment) => segment.length > 0);
+    let depth = chain.length;
+    let index = segments[0] === "self" ? 1 : 0;
+    while (segments[index] === "super") { depth -= 1; index += 1; }
+    if (depth < 0) return null;
+    return [...chain.slice(0, depth), ...segments.slice(index)];
+  };
   const modulePathSource = (path: string, site: Node): { source: string } | null | undefined => {
     if (!/(^|::)[a-z_][a-z0-9_]*$/.test(path)) return undefined;
     const head = path.slice(0, path.indexOf("::") >= 0 ? path.indexOf("::") : path.length);
     const item = importOf(head, site);
     if (item !== undefined && item.name !== "*") return { source: `${item.source}::${item.name}${path.slice(head.length)}` };
     const source = relativeSource(path, site);
-    return source === null ? null : { source };
+    if (source !== null) return { source };
+    // The path stays in this file: spell it from the file root so the lookup lands in the right inline module,
+    // and not in the caller's own module, which `super::` leaves.
+    const target = inlineTarget(path, site);
+    return target === null ? null : { source: ["self", ...target].join("::") };
   };
   const calleeOwner = (value: Node, scope: Scope, index?: number): ReceiverOwner | undefined => {
     // `f()?` and `f().unwrap()` name the value inside the wrapper: the callee's unwrapped return type.
@@ -446,6 +472,16 @@ export function collectTypedBindings(root: Node, spec: TypedSpec): TypedBindings
   };
 
   return {
+    modulePath(path, site) {
+      const source = relativeSource(path, site);
+      if (source !== null) return source;
+      const target = inlineTarget(path, site);
+      return target === null ? null : ["self", ...target].join("::");
+    },
+    imported(name, site) {
+      const found = importOf(name, site);
+      return found === undefined ? undefined : { kind: "import", source: found.source, importedName: found.name };
+    },
     at(fn, site) {
       if (fn === null) return undefined;
       const callee = spec.callee(fn);

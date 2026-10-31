@@ -55,7 +55,12 @@ function scopeIds(tree: Tree, targets: readonly Target[]): Map<string, number> {
 // Marks every declaration of a name that the file declares in more than one scope. The resolver
 // refuses those rather than picking one: the artifact keeps a single record per qualified name, so
 // a shadowed local cannot be named, and a wrong target is worse than an unresolved one.
-export function markShadowed(tree: Tree, definitions: readonly RawDefinition[]): RawDefinition[] {
+// With `sameScope`, two declarations of one name in one scope are shadowed too. Rust allows that only
+// under `#[cfg]` attributes that select one declaration per build; the index keeps a single record per
+// qualified name, so it cannot name the one a build compiles.
+// With `sameScope`, two declarations of one name in one scope shadow each other, unless `namespaces` puts them in
+// separate namespaces (Rust's types and values), where both stand.
+export function markShadowed(tree: Tree, definitions: readonly RawDefinition[], sameScope = false, namespaces?: (definition: RawDefinition) => readonly string[]): RawDefinition[] {
   const byName = new Map<string, RawDefinition[]>();
   for (const definition of definitions) {
     const key = localJoin([definition.parent, definition.name]);
@@ -71,12 +76,20 @@ export function markShadowed(tree: Tree, definitions: readonly RawDefinition[]):
   }
   const scopes = scopeIds(tree, [...targets.values()]);
   const shadowed = new Set<string>();
+  const sharing = new Set<RawDefinition>();
   for (const [key, list] of byName) {
     if (list.length < 2) continue;
     const distinct = new Set(list.map((definition) => scopes.get(targetKey(definition)) ?? -1));
     if (distinct.size > 1) shadowed.add(key);
+    else if (sameScope && namespaces === undefined) shadowed.add(key);
+    else if (sameScope) {
+      for (const definition of list) {
+        const own = namespaces!(definition);
+        if (list.some((other) => other !== definition && namespaces!(other).some((namespace) => own.includes(namespace)))) sharing.add(definition);
+      }
+    }
   }
-  if (shadowed.size === 0) return [...definitions];
+  if (shadowed.size === 0 && sharing.size === 0) return [...definitions];
   return definitions.map((definition) =>
-    shadowed.has(localJoin([definition.parent, definition.name])) ? { ...definition, shadowed: true as const } : definition);
+    shadowed.has(localJoin([definition.parent, definition.name])) || sharing.has(definition) ? { ...definition, shadowed: true as const } : definition);
 }
