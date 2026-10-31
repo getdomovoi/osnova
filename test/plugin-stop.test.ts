@@ -73,8 +73,8 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     await hooks.event(idle("root"));
     await pause(200);
     expect(await checks("root")).toHaveLength(1);
-    // The user's next prompt, even one quoting the notice, is checked afresh.
-    await hooks["chat.message"]({ sessionID: "root" }, say("[osnova settle] fix these"));
+    // The user's next prompt, even one that pastes the notice back, is checked afresh.
+    await hooks["chat.message"]({ sessionID: "root" }, say("SETTLE root\nwhy is this flagged?"));
     await hooks.event(idle("root"));
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect((await checks()).every((call) => call.payload.cwd === dir)).toBe(true);
@@ -86,20 +86,35 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     const sent: unknown[] = [];
     const hooks = await open(async (options) => { if (fail) throw new Error("server busy"); sent.push(options); return {}; });
     // Kilo reports the abort, then goes idle twice.
-    await hooks.event({ event: { type: "session.error", properties: { sessionID: "root", error: { name: "MessageAbortedError" } } } });
-    await hooks.event(idle("root"));
-    await hooks.event(idle("root"));
+    await hooks.event({ event: { type: "session.error", properties: { sessionID: "aborted", error: { name: "MessageAbortedError" } } } });
+    await hooks.event(idle("aborted"));
+    await hooks.event(idle("aborted"));
     await pause(200);
-    expect(await checks()).toEqual([]);
-    await hooks["chat.message"]({ sessionID: "root" }, say("try again"));
-    await hooks.event(idle("root"));
-    await vi.waitFor(async () => expect(await checks("root")).toHaveLength(1));
+    expect(await checks("aborted")).toEqual([]);
+    await hooks["chat.message"]({ sessionID: "aborted" }, say("try again"));
+    await hooks.event(idle("aborted"));
+    await vi.waitFor(async () => expect(await checks("aborted")).toHaveLength(1));
     await pause(100);
-    expect(await acks()).toEqual([]);
+    expect(await acks("aborted")).toEqual([]);
     fail = false;
-    await hooks.event(idle("root"));
-    await vi.waitFor(async () => expect(await acks("root")).toHaveLength(1));
+    await hooks.event(idle("aborted"));
+    await vi.waitFor(async () => expect(await acks("aborted")).toHaveLength(1));
     expect(sent).toHaveLength(1);
+  });
+
+  it("checks the turn of a prompt the user sent while the notice was posting", async () => {
+    await reset();
+    let release = (): void => undefined;
+    const sent: unknown[] = [];
+    const hooks = await open((options) => new Promise((resolve) => { sent.push(options); release = () => resolve({}); }));
+    await hooks.event(idle("racing"));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await hooks["chat.message"]({ sessionID: "racing" }, say("and then this"));
+    release();
+    await vi.waitFor(async () => expect(await acks("racing")).toHaveLength(1));
+    await fs.rm(`${calls}.acks`, { force: true });
+    await hooks.event(idle("racing"));
+    await vi.waitFor(async () => expect(await checks("racing")).toHaveLength(2));
   });
 
   it("runs one check at a time per session and forgets a deleted session", async () => {
@@ -140,7 +155,7 @@ describe("the Pi extension at the end of a run", () => {
     expect(await acks("pi-1")).toHaveLength(1);
     // The notice starts the next run as its prompt; it gets the contract but no starting points, and that run gets
     // no second notice.
-    await start({ prompt: "SETTLE pi-1", systemPrompt: "base" }, ctx("pi-1"));
+    await start({ prompt: "SETTLE pi-1\n\n[another extension] note", systemPrompt: "base" }, ctx("pi-1"));
     expect(await prompts()).toEqual([]);
     await fs.rm(`${calls}.acks`, { force: true });
     await settled({ aborted: false }, ctx("pi-1"));

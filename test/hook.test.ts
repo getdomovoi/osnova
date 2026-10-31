@@ -288,7 +288,11 @@ describe("osnova hook", () => {
       const acknowledged = await deferred();
       expect(acknowledged.decision).toBeUndefined();
       expect(acknowledged.systemMessage).toContain("- alt.ts: summary:");
-      await expect(runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), capture().io, { cacheDir, client: "codex", ack: "not-a-digest" })).rejects.toThrow(/--ack needs the 16-digit digest/);
+      // A bad digest is reported on stderr; a hook never fails its harness.
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), c.io, { cacheDir, client: "codex", ack: "not-a-digest" });
+      expect(c.out).toEqual([]);
+      expect(c.err.join("\n")).toContain("--ack needs the 16-digit digest");
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, conversation_id: `${session}-cursor` }), c.io, { cacheDir, client: "cursor" });
       expect(JSON.parse(c.out.join("\n")).followup_message).toContain("- use.ts: report:");

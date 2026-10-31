@@ -71,8 +71,11 @@ export default function osnova(pi: PiApi): void {
   pi.on("before_agent_start", async (event, ctx) => {
     const cwd = ctx?.cwd ?? process.cwd();
     const session = sessionOf(ctx);
-    const own = typeof event.prompt === "string" && sent.get(session) === event.prompt;
-    if (!own) notified.delete(session);
+    // Another extension may append to the notice, so it is recognized, once, by how it starts.
+    const notice = sent.get(session);
+    const own = notice !== undefined && typeof event.prompt === "string" && event.prompt.startsWith(notice);
+    if (own) sent.delete(session);
+    else notified.delete(session);
     contract ??= await hook("session", { cwd }, cwd, "--full-contract");
     // The settle notice this extension sends already names each dependent with its line; it needs no starting points.
     const points = typeof event.prompt === "string" && !own ? await hook("prompt", { prompt: event.prompt, cwd }, cwd) : "";
@@ -88,10 +91,11 @@ export default function osnova(pi: PiApi): void {
     if (found === undefined) return undefined;
     // Pi throws for a plain message while a run streams, so a run the user started meanwhile gets it as a follow-up.
     // The hook records the diff only on the acknowledgement, so a notice Pi refuses is offered again next time.
-    const deliveries: (() => void)[] = ctx?.isIdle?.() === false ? [] : [() => pi.sendUserMessage(found.reason)];
-    deliveries.push(() => pi.sendUserMessage(found.reason, { deliverAs: "followUp" }));
+    const deliver = (options?: { deliverAs: "followUp" }): boolean => {
+      try { if (options === undefined) pi.sendUserMessage(found.reason); else pi.sendUserMessage(found.reason, options); return true; } catch { return false; }
+    };
     sent.set(session, found.reason);
-    const delivered = deliveries.some((deliver) => { try { deliver(); return true; } catch { return false; } });
+    const delivered = (ctx?.isIdle?.() !== false && deliver()) || deliver({ deliverAs: "followUp" });
     if (!delivered) { sent.delete(session); return undefined; }
     notified.add(session);
     await hook("stop", { session_id: session, cwd }, cwd, "--client", "codex", "--ack", found.digest);

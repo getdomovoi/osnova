@@ -226,11 +226,13 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
   }
   if (event === "stop") {
     if (options.ack !== undefined) {
-      if (!/^[0-9a-f]{16}$/.test(options.ack)) throw new Error("osnova hook stop: --ack needs the 16-digit digest a deferred stop printed");
-      if (input.sessionId === undefined) return;
-      const stateFile = hookStateFile(options.cacheDir, input.sessionId);
-      const state = await readHookState(stateFile);
-      if (!state.settled.includes(options.ack)) await writeHookState(stateFile, { ...state, settled: [...state.settled, options.ack] });
+      try {
+        if (!/^[0-9a-f]{16}$/.test(options.ack)) throw new Error("osnova hook stop: --ack needs the 16-digit digest a deferred stop printed");
+        if (input.sessionId === undefined) return;
+        const stateFile = hookStateFile(options.cacheDir, input.sessionId);
+        const state = await readHookState(stateFile);
+        if (!state.settled.includes(options.ack)) await writeHookState(stateFile, { ...state, settled: [...state.settled, options.ack] });
+      } catch (error) { fail(error); }
       return;
     }
     if (input.stopHookActive === true || process.env.OSNOVA_HOOK_SETTLE === "off") return;

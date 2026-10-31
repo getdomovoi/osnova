@@ -21,6 +21,7 @@ export const earlierShippedFiles: Readonly<Record<string, readonly string[]>> = 
     "981e86312ef25d84b2d32420a8308b2c63e929e5d947678b5b7688bcbf5ce21c",
     "a8cb60bfab19660f8702b0b2a49efc97987ea649d0129859e986180459b8ef8b",
     "c21fa9404e52b977119d729dbdb5da86472a4f92513ec6179986d703146a08eb",
+    "d4919f105242fb58f7704e6c7a5089f7d132f172a5ddc7ad631b71e1b7f22662",
     "f9a811f576969ab58bc75e161a0ef9ffb97ba76b3698b163a7a42f5efc6ae758",
     "fb8e34f467d62abedf93483483b38c4358cb559c0e6115ea616d60c5c3c3428c",
     "fd0cc479f619f677e7c2e845953ec3a244fb7dcac01fbda4f05c28ccf7f70cdc",
@@ -28,6 +29,7 @@ export const earlierShippedFiles: Readonly<Record<string, readonly string[]>> = 
   "opencode/osnova-gate.js": [],
   "pi/osnova.ts": [
     "0607f2700e9eabd1d0e6fe85f66067319b6300c8abf560cde91cf3004c87228f",
+    "154fb272fdf290488c3db98402ecd6208aad955e88adff60780b2a5291273c59",
     "243885bbea5f8724ad8402c9fd197396deb445e530a1f4fc8f5ad4205055a185",
     "311b8bf98bf9a5cab91c4815c814dc2fbcec7dc730d9b9f60970c06739676576",
     "67c234d485f1d07acdbc18332234066f5c866afa7bcce49a0b09720401f1ceea",

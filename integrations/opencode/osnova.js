@@ -71,10 +71,11 @@ export const OsnovaPlugin = async ({ directory, worktree, client }) => {
         if (found === undefined) continue;
         // Kilo queues a prompt sent during a turn and runs it after that turn ends. The hook records the diff only on
         // the acknowledgement, so a notice that fails to post is offered again at the next idle.
+        // Marked before the post, so a user prompt that arrives while it is in flight clears the mark for its own turn.
         posted.set(sessionID, found.reason);
-        const delivered = await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text: found.reason }] } }).then(() => true, () => false);
-        if (!delivered) { posted.delete(sessionID); continue; }
         notified.add(sessionID);
+        const delivered = await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text: found.reason }] } }).then(() => true, () => false);
+        if (!delivered) { posted.delete(sessionID); notified.delete(sessionID); continue; }
         await hook("stop", { session_id: sessionID, cwd }, cwd, "--client", "codex", "--ack", found.digest);
       } while (again.has(sessionID));
     } finally { checking.delete(sessionID); }
@@ -90,7 +91,9 @@ export const OsnovaPlugin = async ({ directory, worktree, client }) => {
       // Another plugin may already have appended to the posted notice, so it is recognized by how it starts.
       const notice = sessionID === undefined ? undefined : posted.get(sessionID);
       const own = notice !== undefined && text.startsWith(notice);
-      if (sessionID !== undefined && !own) { notified.delete(sessionID); aborted.delete(sessionID); }
+      // Each notice is recognized once; a later message that pastes it back is the user's.
+      if (own) posted.delete(sessionID);
+      else if (sessionID !== undefined) { notified.delete(sessionID); aborted.delete(sessionID); }
       warm ??= hook("session", { cwd }, cwd);
       await warm;
       // The settle notice this plugin posts already names each dependent with its line; it needs no starting points.
