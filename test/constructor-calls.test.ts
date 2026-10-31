@@ -466,6 +466,24 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(found).toEqual([["X", undefined], ["Y", undefined], ["Z", "A/Other.cs#Z.Z"]]);
   });
 
+  it("reads a project file's using aliases only for the files of that project or an unproven one", async () => {
+    const use = (namespace: string) => `using Q;\nnamespace ${namespace} { class Use { void Run() { new X(); } } }\n`;
+    await write({
+      "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+      "A/Other.cs": "namespace Q { public class X { public X() {} } }\n",
+      "A/Use.cs": use("A"),
+      // B's alias is a property the index cannot read, so it could alias any name in B.
+      "B/B.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Using Include=\"P.T\" Alias=\"$(Name)\" />\n  </ItemGroup>\n</Project>\n",
+      "B/Use.cs": use("B"),
+      // A file under no project may be compiled with B.
+      "Loose/Use.cs": use("Loose"),
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "A/Use.cs", 2)).toMatchObject({ toSymbol: "A/Other.cs#X.X" });
+    expect(creationAt(index, "B/Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Loose/Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("reads a C# alias name past comments in its directive", async () => {
     await write({
       "Alias.cs": "global using X /* alias */ = P.T;\n",

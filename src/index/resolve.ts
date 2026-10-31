@@ -761,8 +761,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // Directory.Build file around it has no readable text, or when one writes Compile items, changes or turns off default
   // items or imports another file, any of which can add or remove files the folder does not show. A Directory.Build
   // file counts in any letter case, since a file system that ignores case finds it. `usingItems` marks Using items or
-  // implicit usings, which import namespaces no directive shows.
-  type CsharpProject = { readonly path: string; readonly usingItems: boolean };
+  // implicit usings, which import namespaces no directive shows; `files` lists the project and Directory.Build files it reads.
+  type CsharpProject = { readonly path: string; readonly usingItems: boolean; readonly files: readonly string[] };
   const csharpProjects = new Map<string, CsharpProject | null>();
   let projectFiles: { readonly byFolder: Map<string, string[]>; readonly build: Map<string, string[]> } | undefined;
   const folderOf = (file: string): string => path.posix.dirname(file);
@@ -797,21 +797,23 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       const build = ancestors.slice(ancestors.indexOf(nearest)).flatMap((dir) => buildFiles.get(dir) ?? []);
       const texts = [project, ...build].map(projectText);
       if (texts.every((text) => text !== undefined && !/<(?:Compile|Import)\b|EnableDefault(?:Compile)?Items|DefaultItemExcludes/u.test(text))) {
-        found = { path: project, usingItems: texts.some((text) => /<Using\b|<ImplicitUsings>(?!\s*(?:disable|false)\s*<)/iu.test(text!)) };
+        found = { path: project, usingItems: texts.some((text) => /<Using\b|<ImplicitUsings>(?!\s*(?:disable|false)\s*<)/iu.test(text!)), files: [project, ...build] };
       }
     }
     csharpProjects.set(start, found);
     return found;
   };
-  // The names Using items alias in any project or Directory.Build file. An alias the text does not spell out, or an
-  // unreadable file, could alias any name (`any`).
-  let projectAliases: { readonly names: Set<string>; readonly any: boolean } | undefined;
-  const projectAliasesOf = (): { readonly names: Set<string>; readonly any: boolean } => {
-    if (projectAliases !== undefined) return projectAliases;
+  // The names Using items alias in the files a site's project reads, or in every project and Directory.Build file when
+  // its project is not proven. An alias the text does not spell out, or an unreadable file, could alias any name (`any`).
+  const projectAliases = new Map<string, { readonly names: Set<string>; readonly any: boolean }>();
+  const projectAliasesOf = (project: CsharpProject | null): { readonly names: Set<string>; readonly any: boolean } => {
+    const key = project?.path ?? "";
+    const cached = projectAliases.get(key);
+    if (cached !== undefined) return cached;
     const names = new Set<string>();
     let any = false;
     const { byFolder, build } = projectFilesOf();
-    for (const name of [...byFolder.values(), ...build.values()].flat()) {
+    for (const name of project?.files ?? [...byFolder.values(), ...build.values()].flat()) {
       const text = projectText(name);
       if (text === undefined) { any = true; continue; }
       for (const match of text.matchAll(/<Using\b[^>]*?\bAlias\s*=\s*(?:"([^"]*)"|'([^']*)')|<Alias>([^<]*)<\/Alias>/gu)) {
@@ -820,8 +822,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         else any = true;
       }
     }
-    projectAliases = { names, any };
-    return projectAliases;
+    projectAliases.set(key, { names, any });
+    return { names, any };
   };
   // The `global using` directives each project's files carry, and those whose project the index cannot prove.
   let globalsByProject: { readonly certain: Map<string, CsharpUsing[]>; readonly uncertain: CsharpUsing[] } | undefined;
@@ -1035,7 +1037,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (!first.name.startsWith("global::")) return unknownType;
       return csharpInNamespace(site.card, "", [{ ...first, name: first.name.slice("global::".length) }, ...rest]) ?? externalType;
     }
-    const aliasItems = projectAliasesOf();
+    const project = csharpProjectOf(site.card.path);
+    const aliasItems = projectAliasesOf(project);
     if (scope.aliases.has(first.name) || aliasItems.any || aliasItems.names.has(first.name)) return unknownType;
     for (let depth = site.enclosing.length; depth > 0; depth -= 1) {
       const holders = declaredAs(site.card.path, qualifiedNameOf(site.card.path, site.enclosing.slice(0, depth).join("."))).filter(isHolder);
@@ -1058,7 +1061,6 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (depth > 0 && scoped.some((using) => site.line === using.from || site.line === using.to)) return unknownType;
       // A `global using` applies in its own project only; one whose project or the site's the index cannot prove may or
       // may not apply. If one did and supplied another type of the name, the code would not compile.
-      const project = depth === 0 ? csharpProjectOf(site.card.path) : null;
       const byProject = depth === 0 ? projectGlobals() : undefined;
       const globals = project === null ? [] : byProject?.certain.get(project.path) ?? [];
       const uncertain = byProject === undefined ? [] : project === null ? [...byProject.uncertain, ...[...byProject.certain.values()].flat()] : byProject.uncertain;
@@ -1073,7 +1075,6 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (uncertain.length > 0 && csharpImported(site.card, uncertain, first, false) !== undefined) return unknownType;
     }
     // A project's Using items, or a project the index cannot read, may import a namespace that supplies the name.
-    const project = csharpProjectOf(site.card.path);
     return project === null || project.usingItems ? unknownType : externalType;
   };
   // In a file that did not parse cleanly, a creation outside any type may have lost the declaration that encloses it,
