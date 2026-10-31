@@ -262,7 +262,7 @@ describe("C# overloads declared in a base class or another partial declaration",
     const index = await buildIndex(workspace, { cacheDir });
     const ranges = index.files.get("src/Suffix.cs")?.symbols.filter((symbol) => symbol.kind === "method").map((symbol) => [symbol.span.startLine, symbol.parameters]);
     expect(ranges).toEqual([[3, { min: 2, max: 2, overrides: true }], [4, { min: 2, max: 2, access: "private" }], [5, { min: 1, max: 1 }], [6, { min: 1, max: 1, access: "private" }]]);
-    expect(index.files.get("src/Gen.cs")?.symbols.find((symbol) => symbol.kind === "class")?.partial).toBe("`0");
+    expect(index.files.get("src/Gen.cs")?.symbols.find((symbol) => symbol.kind === "class")?.partial).toBe("class:`0");
     expect(index.files.get("src/Suffix.cs")?.symbols.find((symbol) => symbol.kind === "class")?.partial).toBeUndefined();
   });
 });

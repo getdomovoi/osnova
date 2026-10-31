@@ -108,7 +108,32 @@ export class Extractor {
     if (last !== undefined) this.definitions.push({ ...last, primary: true });
   }
 
-  markAccess(access: "private" | "package"): void {
+  markConditional(): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, conditional: true });
+  }
+
+  markUnparsedHeader(): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, unparsedHeader: true });
+  }
+
+  markBaseType(baseType: string): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, baseType });
+  }
+
+  markNamespace(namespace: string): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, namespace });
+  }
+
+  markArity(arity: number): void {
+    const last = this.definitions.pop();
+    if (last !== undefined) this.definitions.push({ ...last, arity });
+  }
+
+  markAccess(access: "private" | "package" | "protected"): void {
     const last = this.definitions.pop();
     if (last !== undefined) this.definitions.push({ ...last, access });
   }
