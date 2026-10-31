@@ -157,6 +157,12 @@ describe("osnova hook gate", () => {
     expect(denied(await gate(fresh(), "Bash", { command: "grep -rn osnova src" }))).toBe(true);
   });
 
+  it("keeps an osnova call that lands while a parallel search is being decided", async () => {
+    const session = fresh();
+    await Promise.all([gate(session, "Grep", { pattern: "total" }), gate(session, "mcp__osnova__osnova_ground", { question: "total" })]);
+    expect(await gate(session, "Grep", { pattern: "total" })).toBe("");
+  });
+
   it("expands variables the command sets and follows cd inside a subshell", async () => {
     const outside = path.join(temporary, "outside"); await fs.mkdir(outside, { recursive: true });
     expect(await gate(fresh(), "Bash", { command: `S=${outside}; grep -n total $S/notes.txt` })).toBe("");
