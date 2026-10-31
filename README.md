@@ -160,7 +160,7 @@ The action runs `osnova settle --base-ref` against the pull request base and lis
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: getdomovoi/osnova@v0.12.0
+- uses: getdomovoi/osnova@v0.12.1
   with:
     depth: "2"
 ```
