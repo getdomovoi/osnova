@@ -144,6 +144,25 @@ describe("osnova hook gate", () => {
     expect(await gate(fresh(), "Bash", { command: "pnpm test |& grep FAIL" })).toBe("");
   });
 
+  it("reads each tool's own options, list-only modes, unknown assigned variables and shell keywords", async () => {
+    const outside = path.join(temporary, "outside"); await fs.mkdir(outside, { recursive: true });
+    for (const command of ["grep -E 'a|b' README.md", `grep -rn -E 'total' ${outside}`, `rg --files ${outside}`, `ag -g foo ${outside}`, `ack -f ${outside}`, "D=$HOME/x; rg total $D", `(cd ${outside} && rg 'x)'; rg total)`, `time (cd ${outside} && rg total)`]) {
+      expect(await gate(fresh(), "Bash", { command }), command).toBe("");
+    }
+    for (const command of ["if true; then rg total src; fi", "! rg total src", "for f in x; do grep -rn total src; done", "rg -E utf-8 total src"]) {
+      expect(denied(await gate(fresh(), "Bash", { command })), command).toBe(true);
+    }
+  });
+
+  it("counts only the osnova CLI's own script, not any script in a folder named osnova", async () => {
+    const session = fresh();
+    expect(await gate(session, "Bash", { command: "node /home/u/projects/osnova/scripts/perf.mjs" })).toBe("");
+    expect(denied(await gate(session, "Grep", { pattern: "total" }))).toBe(true);
+    const installed = fresh();
+    expect(await gate(installed, "Bash", { command: "node ./node_modules/@getdomovoi/osnova/dist/bin.js ground total" })).toBe("");
+    expect(await gate(installed, "Grep", { pattern: "total" })).toBe("");
+  });
+
   it("restores the folder when a subshell closes", async () => {
     expect(denied(await gate(fresh(), "Bash", { command: `(cd ${temporary} && make); rg -n total` }))).toBe(true);
   });

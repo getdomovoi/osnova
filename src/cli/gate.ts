@@ -6,8 +6,9 @@ import type { OsnovaIndex } from "../types.js";
 // state and output live in the hook; this module reads a call and an index and nothing else.
 
 const searchCommands = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack", "fd", "find"]);
-// Words that stand in front of the command being run and are not the command itself.
-const wrapperWords = /^(?:\w+=\S*|sudo|command|exec|time|env|nice|nohup|xargs)$/;
+// Words that stand in front of the command being run and are not the command itself, shell keywords included, so
+// `if rg …`, `then rg …`, `do grep …` and `! rg …` are read as the search behind them.
+const wrapperWords = /^(?:\w+=\S*|sudo|command|exec|time|env|nice|nohup|xargs|if|then|else|elif|do|while|until|!)$/;
 const shellEscapable = /[\s'"\\|&;$`()<>*?[\]{}#!~]/;
 
 /** A folder or file a call searches, with the file-name glob it is limited to, if any. */
@@ -30,19 +31,24 @@ interface Stage {
   readonly words: readonly string[];
   /** The stage reads another command's output, so it filters rather than searches. */
   readonly afterPipe: boolean;
+  /** Unquoted `(` that open a subshell in this stage, and `)` that close one. */
+  readonly opens: number;
+  readonly closes: number;
 }
 
 // Splitting on `|` with a regular expression cuts `grep -nE "FAIL|error" notes.txt` in half and loses the
-// path, which then reads as a search of the whole workspace. The separators only count outside quotes.
+// path, which then reads as a search of the whole workspace. The separators only count outside quotes, and so do
+// the parentheses of a subshell; a `$( … )` substitution stays inside its word.
 export function shellStages(command: string): Stage[] {
   const stages: Stage[] = [];
   let words: string[] = [];
   let word = "";
   let started = false;
   let afterPipe = false;
+  let opens = 0, closes = 0, substitution = 0;
   let quote: "'" | "\"" | null = null;
   const endWord = (): void => { if (started) { words.push(word); word = ""; started = false; } };
-  const endStage = (nextAfterPipe: boolean): void => { endWord(); if (words.length > 0) stages.push({ words, afterPipe }); words = []; afterPipe = nextAfterPipe; };
+  const endStage = (nextAfterPipe: boolean): void => { endWord(); if (words.length > 0 || opens > 0 || closes > 0) stages.push({ words, afterPipe, opens, closes }); words = []; afterPipe = nextAfterPipe; opens = 0; closes = 0; };
   for (let i = 0; i < command.length; i += 1) {
     const character = command[i]!;
     if (quote !== null) {
@@ -52,6 +58,11 @@ export function shellStages(command: string): Stage[] {
     if (character === "'" || character === "\"") { quote = character; started = true; continue; }
     // A backslash escapes only a character the shell would otherwise act on, so `C:\Users\me\notes.txt` stays one path.
     if (character === "\\" && i + 1 < command.length && shellEscapable.test(command[i + 1]!)) { word += command[i + 1]!; started = true; i += 1; continue; }
+    if (character === "(" && word.endsWith("$")) { substitution += 1; word += character; continue; }
+    if (character === ")" && substitution > 0) { substitution -= 1; word += character; continue; }
+    if (substitution > 0) { word += character; started = true; continue; }
+    if (character === "(") { endWord(); opens += 1; continue; }
+    if (character === ")") { endWord(); closes += 1; continue; }
     // `||` ends a stage that the next one does not read; `|` and `|&` pipe its output into the next stage.
     if (character === "|") { const double = command[i + 1] === "|"; endStage(!double); if (double || command[i + 1] === "&") i += 1; continue; }
     if (character === "&") { if (command[i + 1] === "&") i += 1; endStage(false); continue; }
@@ -72,13 +83,14 @@ const assignment = /^([A-Za-z_]\w*)=(.*)$/s;
 const shells = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 function scanShellCommand(command: string, cwd: string, depth = 0): "osnova" | GateTarget[] | undefined {
   const targets: GateTarget[] = [];
-  const variables = new Map<string, string>();
+  // A variable assigned from one this command does not set is known to exist but not its value: undefined.
+  const variables = new Map<string, string | undefined>();
   const outer: (string | undefined)[] = [];
   let here: string | undefined = cwd;
   let searched = false;
   const readStage = (stageWords: readonly string[], afterPipe: boolean): "osnova" | undefined => {
     const assigned = stageWords.findIndex((word) => !assignment.test(word));
-    if (assigned === -1) { for (const word of stageWords) { const [, name, value] = assignment.exec(word)!; variables.set(name!, expandVariables(value!, variables) ?? ""); } return undefined; }
+    if (assigned === -1) { for (const word of stageWords) { const [, name, value] = assignment.exec(word)!; variables.set(name!, expandVariables(value!, variables)); } return undefined; }
     const words = stageWords.slice(assigned);
     while (words.length > 0 && wrapperWords.test(words[0]!)) words.shift();
     if (words.length === 0) return undefined;
@@ -103,23 +115,17 @@ function scanShellCommand(command: string, cwd: string, depth = 0): "osnova" | G
     return undefined;
   };
   for (const stage of shellStages(command)) {
-    const first = stage.words[0] ?? "", last = stage.words[stage.words.length - 1] ?? "";
-    const opens = /^[({]*/.exec(first)![0].replace(/\{/g, "").length;
-    const closes = /[)}]*$/.exec(last)![0].replace(/\}/g, "").length;
-    for (let level = 0; level < opens; level += 1) outer.push(here);
-    const words = stage.words.map((word, index, all) => {
-      const opened = index === 0 ? word.replace(/^[({]+/, "") : word;
-      return index === all.length - 1 ? opened.replace(/[)}]+$/, "") : opened;
-    }).filter((word) => word.length > 0);
-    if (readStage(words, stage.afterPipe) === "osnova") return "osnova";
-    for (let level = 0; level < closes && outer.length > 0; level += 1) here = outer.pop();
+    for (let level = 0; level < stage.opens; level += 1) outer.push(here);
+    const words = stage.words.filter((word) => word !== "{" && word !== "}");
+    if (words.length > 0 && readStage(words, stage.afterPipe) === "osnova") return "osnova";
+    for (let level = 0; level < stage.closes && outer.length > 0; level += 1) here = outer.pop();
   }
   return searched ? targets : undefined;
 }
 
-// `$NAME` and `${NAME}` from the command's own assignments; undefined when such a variable is not known here. A `$`
-// that starts no variable name, as in the regex `'total$'`, stays as written.
-function expandVariables(word: string, variables: ReadonlyMap<string, string>): string | undefined {
+// `$NAME` and `${NAME}` from the command's own assignments; undefined when such a variable is not known here or was
+// assigned from one that is not. A `$` that starts no variable name, as in the regex `'total$'`, stays as written.
+function expandVariables(word: string, variables: ReadonlyMap<string, string | undefined>): string | undefined {
   let unknown = false;
   const result = word.replace(/\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g, (_match, braced: string | undefined, bare: string | undefined) => {
     const value = variables.get((braced ?? bare)!);
@@ -129,15 +135,25 @@ function expandVariables(word: string, variables: ReadonlyMap<string, string>): 
   return unknown ? undefined : result;
 }
 
-// Options whose value is the next word, so the value is read as neither the pattern nor a path.
-const valueOptions = new Set(["-e", "-f", "-A", "-B", "-C", "-m", "-g", "-t", "-T", "-d", "-D", "-j", "-M", "-E", "-G",
-  "--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--max-count", "--max-depth", "--context", "--after-context",
-  "--before-context", "--include", "--exclude", "--exclude-dir", "--threads", "--max-columns", "--extension", "--ignore"]);
+// Each tool's grammar: the options whose value is the next word, the options that give the pattern (so every
+// operand is a path), and the list-only modes that take no pattern at all. One shared table read grep's `-E`, a
+// plain flag, as rg's `-E ENCODING` and lost the pattern.
+interface SearchGrammar { readonly values: ReadonlySet<string>; readonly givesPattern: ReadonlySet<string>; readonly listsFiles: ReadonlySet<string> }
+const grammar = (values: string, givesPattern: string, listsFiles = ""): SearchGrammar => ({ values: new Set(values.split(" ")), givesPattern: new Set(givesPattern.split(" ")), listsFiles: new Set(listsFiles.split(" ").filter((flag) => flag.length > 0)) });
+const grepGrammar = grammar("-e -f -A -B -C -m -d -D --regexp --file --context --after-context --before-context --max-count --include --exclude --exclude-dir --label --binary-files --devices --directories", "-e -f --regexp --file");
+const grammars: Readonly<Record<string, SearchGrammar>> = {
+  grep: grepGrammar, egrep: grepGrammar, fgrep: grepGrammar,
+  rg: grammar("-e -f -A -B -C -m -g -t -T -j -M -E -r --regexp --file --glob --iglob --type --type-not --type-add --max-count --max-depth --threads --max-columns --encoding --replace --context --after-context --before-context --ignore-file --pre --pre-glob --sort --sortr --max-filesize --engine --color --colors", "-e -f --regexp --file", "--files --type-list"),
+  ag: grammar("-A -B -C -G -m -g -p --context --after --before --depth --max-count --ignore --ignore-dir --file-search-regex --path-to-ignore --pager", "-g --file-search-regex"),
+  ack: grammar("-A -B -C -m -g --type --ignore-dir --ignore-file --match --context --after-context --before-context --max-count --output", "-g --match", "-f"),
+  fd: grammar("-e -E -t -d -x -X -j -c -S --extension --exclude --type --max-depth --min-depth --exact-depth --exec --exec-batch --threads --color --changed-within --changed-before --size --owner --base-directory --max-results", ""),
+};
 
-// The paths a search reads, by its own grammar: find takes paths before its expression; fd takes a pattern, then
-// paths; grep, rg, ag, ack and git grep take a pattern, unless -e or -f gives it, then paths. A path operand that
-// holds an unknown variable is left out and reported, so the search is not read as one of the working directory.
+// The paths a search reads, by its own grammar: find takes paths before its expression; fd, grep, rg, ag and ack take
+// a pattern first, unless an option gives it or a list-only mode needs none, then paths. A path operand that holds an
+// unknown variable is left out and reported, so the search is not read as one of the working directory.
 function searchOperands(head: string, args: readonly (string | undefined)[]): { paths: string[]; unknown: boolean } {
+  const rules = grammars[head];
   const operands: (string | undefined)[] = [];
   let patternGiven = head === "find";
   for (let i = 0; i < args.length; i += 1) {
@@ -147,16 +163,19 @@ function searchOperands(head: string, args: readonly (string | undefined)[]): { 
     if (head === "find" && (arg.startsWith("-") || arg === "!" || arg === "(")) break;
     if (!arg.startsWith("-") || arg === "-") { operands.push(arg); continue; }
     const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
-    if (head !== "fd" && (flag === "-e" || flag === "-f" || flag === "--regexp" || flag === "--file")) patternGiven = true;
-    if (!arg.includes("=") && valueOptions.has(flag)) i += 1;
+    if (rules?.givesPattern.has(flag) === true || rules?.listsFiles.has(flag) === true) patternGiven = true;
+    if (!arg.includes("=") && rules?.values.has(flag) === true) i += 1;
   }
   const paths = patternGiven ? operands : operands.slice(1);
   return { paths: paths.filter((value): value is string => value !== undefined), unknown: paths.some((value) => value === undefined) };
 }
 
 // The osnova CLI, run directly or through npx, bunx, pnpx, `pnpm exec`, `pnpm dlx`, `yarn exec`, `bun x`, or a
-// runtime given its script (`node …/osnova/dist/bin.js`). A grep for the word osnova is not a run of it.
+// runtime given the CLI's own script (`…/osnova/dist/bin.js`, `…/node_modules/.bin/osnova`). Another script that only
+// lives in a folder named osnova, such as this repository's own scripts, is not a run of the CLI, nor is a grep for
+// the word.
 const packageRunners = new Set(["npx", "bunx", "pnpx"]);
+const osnovaScript = /(?:^|[\\/])osnova[\\/]dist[\\/](?:bin|cli)\.m?js$|(?:^|[\\/])osnova$/;
 function runsOsnova(words: readonly string[]): boolean {
   const launcher = path.basename(words[0]!);
   let index = 0;
@@ -167,7 +186,7 @@ function runsOsnova(words: readonly string[]): boolean {
   while (words[index]?.startsWith("-") === true) index += 1;
   const target = words[index];
   if (target === undefined) return false;
-  if (script) return /(?:^|[\\/])osnova(?:[\\/]|$)/.test(target);
+  if (script) return osnovaScript.test(target);
   return path.posix.basename(target.replace(/(?<=.)@[^/@]*$/, "")) === "osnova";
 }
 
