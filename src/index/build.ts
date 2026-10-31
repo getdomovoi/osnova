@@ -4,6 +4,7 @@ import { languageForPath } from "../grammar/languages.js";
 import { adapterFor } from "../extract/adapters.js";
 import { recoverCsharpTree } from "../extract/csharp-recovery.js";
 import { markShadowed } from "../extract/scope.js";
+import { rustNamespaces } from "../extract/rust.js";
 import { forgetTree, localJoin } from "../extract/util.js";
 import type { RawDefinition, RawEdge } from "../extract/adapter.js";
 import type {
@@ -91,7 +92,7 @@ export async function extractCard(
           diagnostics.push({ phase: "parse", path: relPath, code: "syntax-errors" });
         }
         const output = adapterFor(language).extract(tree, text);
-        definitions = markShadowed(tree, output.definitions);
+        definitions = markShadowed(tree, output.definitions, language === "rust", language === "rust" ? rustNamespaces : undefined);
         reExports = output.reExports ?? [];
         rawEdges = output.edges.map((edge: RawEdge) => ({
           kind: edge.kind,
