@@ -754,6 +754,29 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     // which could be the type a lookup of that name means.
     readonly unplaced: Set<string>;
   };
+  // The file each `global using` is written in: it applies only inside that file's project.
+  const globalUsingFile = new Map<CsharpUsing, string>();
+  // A C# file's project: the one .csproj of the nearest folder above it that holds any; null when that folder holds
+  // several or no folder holds one, since the index then cannot tell which compilation the file is in.
+  const csharpProjects = new Map<string, string | null>();
+  let projectFolders: Map<string, number> | undefined;
+  const csharpProjectOf = (file: string): string | null => {
+    const start = path.posix.dirname(file);
+    const known = csharpProjects.get(start);
+    if (known !== undefined || csharpProjects.has(start)) return known ?? null;
+    if (projectFolders === undefined) {
+      projectFolders = new Map();
+      for (const name of files.keys()) if (name.endsWith(".csproj")) projectFolders.set(path.posix.dirname(name), (projectFolders.get(path.posix.dirname(name)) ?? 0) + 1);
+    }
+    let found: string | null = null;
+    for (let dir = start; ; dir = path.posix.dirname(dir)) {
+      const count = projectFolders.get(dir) ?? 0;
+      if (count > 0) { found = count === 1 ? dir : null; break; }
+      if (dir === "." || dir === "/" || dir === "") break;
+    }
+    csharpProjects.set(start, found);
+    return found;
+  };
   // A written C# type name segment and its generic arity: ``Box`1`` names `Box<T>`, which a type records as `arity`.
   const csharpSegments = (written: string): CsharpSegment[] => written.split(".").map((part) => {
     const tick = part.indexOf("`");
@@ -793,7 +816,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         const directive = /^(#if )?(global )?(static )?(\S+?)(?: in (\S+)@(\d+)-(\d+))?$/u.exec(raw.toName);
         if (directive === null) continue;
         const using = { conditional: directive[1] !== undefined, static: directive[3] !== undefined, target: directive[4]!, scope: directive[5] ?? "", from: Number(directive[6] ?? 0), to: Number(directive[7] ?? 0) };
-        if (directive[2] !== undefined) scope.global.push(using);
+        if (directive[2] !== undefined) { scope.global.push(using); globalUsingFile.set(using, file); }
         else scope.byFile.set(file, [...(scope.byFile.get(file) ?? []), using]);
       }
     }
@@ -972,13 +995,21 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       // another declaration on that line, so the line cannot tell whether those directives apply.
       const scoped = usings.filter((using) => using.scope === level);
       if (depth > 0 && scoped.some((using) => site.line === using.from || site.line === using.to)) return unknownType;
-      const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...scope.global]
+      // A `global using` applies in its own project only; one whose project or the site's the index cannot tell may or
+      // may not apply.
+      const project = depth === 0 ? csharpProjectOf(site.card.path) : null;
+      const projectOfGlobal = (using: CsharpUsing): string | null => csharpProjectOf(globalUsingFile.get(using)!);
+      const globals = depth === 0 ? scope.global.filter((using) => project !== null && projectOfGlobal(using) === project) : [];
+      const uncertain = depth === 0 ? scope.global.filter((using) => project === null || projectOfGlobal(using) === null) : [];
+      const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...globals]
         : scoped.filter((using) => using.from < site.line && site.line < using.to);
       // A directive inside an `#if` region may or may not import a type at this level.
       if (declared.some((using) => using.conditional)) return unknownType;
       const imported = declared.length === 0 ? undefined : csharpImported(site.card, declared, first, depth > 0);
       if (imported === null) return unknownType;
       if (imported !== undefined) return csharpNested(imported, rest);
+      // A type an uncertain global using would supply here, where nothing else does, may be the one meant.
+      if (uncertain.length > 0 && csharpImported(site.card, uncertain, first, false) !== undefined) return unknownType;
     }
     return externalType;
   };

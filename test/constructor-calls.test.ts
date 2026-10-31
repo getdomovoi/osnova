@@ -347,6 +347,25 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "p/Static.java", 4)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("applies a C# global using only inside its own project", async () => {
+    const project = "<Project Sdk=\"Microsoft.NET.Sdk\" />\n";
+    await write({
+      "A/A.csproj": project,
+      "A/GlobalUsings.cs": "global using A.Models;\n",
+      "A/Models/Foo.cs": "namespace A.Models { public class Foo { public Foo() {} } }\n",
+      "A/Use.cs": "namespace A { class Use { void Run() { new Foo(); } } }\n",
+      // B's compiler never sees A's global using, so its Foo comes from somewhere the index does not hold.
+      "B/B.csproj": project,
+      "B/Use.cs": "namespace B { class Use { void Run() { new Foo(); } } }\n",
+      // A file under no project may or may not be compiled with A, so A's global using may or may not apply to it.
+      "Loose/Use.cs": "namespace Loose { class Use { void Run() { new Foo(); } } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "A/Use.cs", 1)).toMatchObject({ toSymbol: "A/Models/Foo.cs#Foo.Foo" });
+    expect(creationAt(index, "B/Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Loose/Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+  });
+
   it("leaves a C# creation unresolved when any file declares an alias of that name", async () => {
     await write({
       "Alias.cs": "global using X = P.T;\n",
