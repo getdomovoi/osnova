@@ -135,6 +135,23 @@ describe("edge store", () => {
     expect(serializeEdges(shared.map(() => ({ ...base, ...proxied })), paths).bytes.equals(layout.bytes)).toBe(true);
   });
 
+  it("encodes shared, copied and proxied argument types to the same bytes and reads each back", async () => {
+    const index = await buildIndex(FIXTURE);
+    const paths = [...index.files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const base = index.edges.find((edge) => edge.kind === "calls")!;
+    const values = [{ types: ["int", null] }, { types: ["String", "int"], names: ["a", "b"] }];
+    const shared = Array.from({ length: 40 }, (_, i): OsnovaEdge => ({ ...base, arguments: 2, argumentTypes: values[i % 2]! }));
+    const layout = serializeEdges(shared, paths);
+    const copies = shared.map((edge): OsnovaEdge => ({ ...edge, argumentTypes: structuredClone(edge.argumentTypes!) }));
+    const proxied = shared.map((edge): OsnovaEdge => ({ ...edge, argumentTypes: new Proxy({ ...edge.argumentTypes!, types: new Proxy([...edge.argumentTypes!.types], {}) }, {}) }));
+    expect(serializeEdges(copies, paths).bytes.equals(layout.bytes)).toBe(true);
+    expect(serializeEdges(proxied, paths).bytes.equals(layout.bytes)).toBe(true);
+    const header = JSON.parse(layout.bytes.toString("utf8").split("\n")[0]!) as { argumentTypes: unknown[] };
+    expect(header.argumentTypes).toHaveLength(2);
+    expect(header.argumentTypes).toEqual(expect.arrayContaining(values));
+    expect(deserializeEdges(layout.bytes, paths, index.files).map((edge) => edge.argumentTypes)).toEqual(shared.map((edge) => edge.argumentTypes));
+  });
+
   it("serializes shared, equal and reordered copies of the same tables to the bytes of fresh distinct objects", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "osnova-mixed-")); dirs.push(dir);
     const repo = path.join(dir, "repo");
