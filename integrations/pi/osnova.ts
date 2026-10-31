@@ -36,12 +36,13 @@ function hook(event: string, payload: unknown, cwd: string, ...flags: readonly s
   });
 }
 
-// The stop hook in the Codex shape: `decision: "block"` with a reason when the agent should check its change, a
-// `systemMessage` warning otherwise. Only the first starts a new turn.
-function continueReason(answer: string): string | undefined {
+// The deferred stop hook in the Codex shape: `decision: "block"` with a reason and the diff's digest when the agent
+// should check its change, a `systemMessage` warning otherwise. Only the first is delivered.
+function notice(answer: string): { reason: string; digest: string } | undefined {
   try {
-    const parsed = JSON.parse(answer) as { decision?: unknown; reason?: unknown };
-    return parsed.decision === "block" && typeof parsed.reason === "string" && parsed.reason.length > 0 ? parsed.reason : undefined;
+    const parsed = JSON.parse(answer) as { decision?: unknown; reason?: unknown; digest?: unknown };
+    return parsed.decision === "block" && typeof parsed.reason === "string" && parsed.reason.length > 0 && typeof parsed.digest === "string"
+      ? { reason: parsed.reason, digest: parsed.digest } : undefined;
   } catch { return undefined; }
 }
 
@@ -63,35 +64,37 @@ const sessionOf = (ctx: Context | undefined): string => ctx?.sessionManager?.get
 
 export default function osnova(pi: PiApi): void {
   let contract: string | undefined;
-  // Sessions whose running run the sent notice started: it settles as a stop hook continuation, which the hook never
-  // continues again. Each run's prompt sets or clears the mark, so it follows the run that is going.
-  const noticed = new Set<string>();
+  // The notice last sent into each session, to tell it from the user's own prompts.
+  const sent = new Map<string, string>();
+  // Sessions that got a notice since the user's last prompt: at most one notice per prompt, however Pi runs it.
+  const notified = new Set<string>();
   pi.on("before_agent_start", async (event, ctx) => {
     const cwd = ctx?.cwd ?? process.cwd();
-    if (typeof event.prompt === "string" && event.prompt.startsWith("[osnova settle]")) noticed.add(sessionOf(ctx));
-    else noticed.delete(sessionOf(ctx));
+    const session = sessionOf(ctx);
+    const own = typeof event.prompt === "string" && sent.get(session) === event.prompt;
+    if (!own) notified.delete(session);
     contract ??= await hook("session", { cwd }, cwd, "--full-contract");
     // The settle notice this extension sends already names each dependent with its line; it needs no starting points.
-    const points = typeof event.prompt === "string" && !event.prompt.startsWith("[osnova settle]") ? await hook("prompt", { prompt: event.prompt, cwd }, cwd) : "";
+    const points = typeof event.prompt === "string" && !own ? await hook("prompt", { prompt: event.prompt, cwd }, cwd) : "";
     const extra = [contract, points].filter((part) => part.length > 0).join("\n\n");
     return extra.length === 0 ? undefined : { systemPrompt: `${event.systemPrompt}\n\n${extra}` };
   });
   // agent_settled is the run's final idle point, after retries and compaction. A run the user aborted gets no notice.
   pi.on("agent_settled", async (event, ctx) => {
     const session = sessionOf(ctx);
-    const continuation = noticed.has(session);
-    if (event?.aborted === true) return undefined;
+    if (event?.aborted === true || notified.has(session)) return undefined;
     const cwd = ctx?.cwd ?? process.cwd();
-    const reason = continueReason(await hook("stop", { session_id: session, cwd, ...(continuation ? { stop_hook_active: true } : {}) }, cwd, "--client", "codex"));
-    if (reason === undefined) return undefined;
-    // The hook has already recorded the diff as settled, so the notice must go out: after a run the user started while
-    // the hook ran, and as a follow-up too when a Pi without isIdle refuses a plain message mid-run.
-    try {
-      if (ctx?.isIdle?.() === false) pi.sendUserMessage(reason, { deliverAs: "followUp" });
-      else pi.sendUserMessage(reason);
-    } catch {
-      try { pi.sendUserMessage(reason, { deliverAs: "followUp" }); } catch { /* Pi refused both deliveries. */ }
-    }
+    const found = notice(await hook("stop", { session_id: session, cwd }, cwd, "--client", "codex", "--defer"));
+    if (found === undefined) return undefined;
+    // Pi throws for a plain message while a run streams, so a run the user started meanwhile gets it as a follow-up.
+    // The hook records the diff only on the acknowledgement, so a notice Pi refuses is offered again next time.
+    const deliveries: (() => void)[] = ctx?.isIdle?.() === false ? [] : [() => pi.sendUserMessage(found.reason)];
+    deliveries.push(() => pi.sendUserMessage(found.reason, { deliverAs: "followUp" }));
+    sent.set(session, found.reason);
+    const delivered = deliveries.some((deliver) => { try { deliver(); return true; } catch { return false; } });
+    if (!delivered) { sent.delete(session); return undefined; }
+    notified.add(session);
+    await hook("stop", { session_id: session, cwd }, cwd, "--client", "codex", "--ack", found.digest);
     return undefined;
   });
 }
