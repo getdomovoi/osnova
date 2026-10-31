@@ -10,7 +10,7 @@ import { indexHealth } from "../index/health.js";
 import { loadArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
 import { ask } from "../query/ask.js";
-import { findTextDetailed } from "../query/findText.js";
+import { findTextDetailed, InvalidPatternError } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
 import { map } from "../query/map.js";
@@ -25,7 +25,7 @@ import { boundText, maximumPlumbCodeUnits } from "../query/budget.js";
 import { scopedAsk } from "../query/scoped.js";
 import { impact } from "../query/impact.js";
 import { baseDiff, materializeBaseRef } from "../index/base-ref.js";
-import { taskContext } from "../query/task-context.js";
+import { taskContext, TaskContextBudgetError } from "../query/task-context.js";
 import { maximumTextResponseCodeUnits } from "../types.js";
 import { doctor, setupClients } from "../diagnostics/index.js";
 import type { SetupClientId } from "../diagnostics/index.js";
@@ -57,10 +57,10 @@ usage:
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--json] [--workspace <path>] [--cache-dir <path>]
-  osnova setup <claude|agents> [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--nudge] [--command <exe>] [--home <path>]   (one harness family; previews unless --apply)
+  osnova setup <claude|agents> [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--nudge] [--gate] [--command <exe>] [--home <path>]   (one harness family; previews unless --apply)
   osnova setup <claude|agents> --uninstall [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--instructions <file>] [--home <path>]   (removes osnova's own parts; previews unless --apply)
-  osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
-  osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
+  osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge] [--gate]] [--plugin [--gate]] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
+  osnova hook <prompt|session|stop|tool|gate|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--gate] [--adaptive] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm] [--lsp-server <absolute path> --lsp-languages <list> [--lsp-arg=<arg>]... [--lsp-timeout-ms <n>]]   (default workspace: current directory)
   osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
@@ -120,30 +120,30 @@ function requirePositional(values: readonly string[], name: string, command: str
   return value;
 }
 
-function numericOption(value: string | undefined, name: string, minimum = 0): number | undefined {
+function numericOption(value: string | undefined, name: string, command: string, minimum = 0): number | undefined {
   if (value === undefined) return undefined;
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < minimum) {
-    throw new RangeError(`osnova: --${name} must be a safe integer >= ${minimum}`);
+    throw new RangeError(`osnova ${command}: --${name} must be a safe integer >= ${minimum}`);
   }
   return number;
 }
 
 // `osnova setup claude|agents`: plan a whole harness family, print it, and write it only with --apply.
-async function setupFamily(positionals: readonly string[], values: { uninstall?: boolean | undefined; apply?: boolean | undefined; preview?: boolean | undefined; home?: string | undefined; command?: string[] | undefined; nudge?: boolean | undefined; only?: string | undefined; client?: string | undefined; hooks?: boolean | undefined; plugin?: boolean | undefined; skill?: boolean | undefined; instructions?: string | undefined; config?: string | undefined }, io: CliIo): Promise<number> {
+async function setupFamily(positionals: readonly string[], values: { uninstall?: boolean | undefined; apply?: boolean | undefined; preview?: boolean | undefined; home?: string | undefined; command?: string[] | undefined; nudge?: boolean | undefined; gate?: boolean | undefined; only?: string | undefined; client?: string | undefined; hooks?: boolean | undefined; plugin?: boolean | undefined; skill?: boolean | undefined; instructions?: string | undefined; config?: string | undefined }, io: CliIo): Promise<number> {
   const { setupFamilies, agentHarnesses, planFamily, planUninstall, applyChanges, SetupApplyError } = await import("../diagnostics/setup-apply.js");
   const family = positionals[0];
   if (positionals.length !== 1 || !(setupFamilies as readonly string[]).includes(family ?? "")) throw new Error(`osnova setup takes ${setupFamilies.join(" or ")} (or the --client form); got ${positionals.join(" ")}`);
   const uninstall = values.uninstall === true;
   if (values.client !== undefined || values.hooks === true || values.plugin === true || values.skill === true || (values.instructions !== undefined && !uninstall) || values.config !== undefined) throw new Error(`osnova setup ${family} sets up the whole family; use the --client form for single pieces`);
-  if (uninstall && (values.command !== undefined || values.nudge === true)) throw new Error("osnova setup --uninstall removes osnova's own parts whatever command they run; it takes no --command or --nudge");
+  if (uninstall && (values.command !== undefined || values.nudge === true || values.gate === true)) throw new Error("osnova setup --uninstall removes osnova's own parts whatever command they run; it takes no --command, --nudge or --gate");
   if (values.apply === true && values.preview === true) throw new Error("osnova setup takes --apply or --preview, not both");
   const only = values.only?.split(",").map((name) => name.trim()).filter((name) => name.length > 0);
   if (only !== undefined && (family !== "agents" || only.length === 0 || only.some((name) => !(agentHarnesses as readonly string[]).includes(name)))) throw new Error(`osnova setup agents --only takes ${agentHarnesses.join(", ")}`);
   const command = values.command !== undefined && values.command.length > 0 ? values.command : undefined;
   const plan = uninstall
     ? await planUninstall(family as (typeof setupFamilies)[number], { home: values.home, only: only as (typeof agentHarnesses)[number][] | undefined, instructions: values.instructions })
-    : await planFamily(family as (typeof setupFamilies)[number], { home: values.home, command, nudge: values.nudge === true, only: only as (typeof agentHarnesses)[number][] | undefined });
+    : await planFamily(family as (typeof setupFamilies)[number], { home: values.home, command, nudge: values.nudge === true, gate: values.gate === true, only: only as (typeof agentHarnesses)[number][] | undefined });
   const label = (change: { kind: string; client?: string | undefined }): string => (change.kind === "mcp" ? change.client ?? "mcp" : change.kind);
   const lines = [
     ...plan.skipped.map((entry) => `osnova setup skipped: ${entry.harness}, ${entry.reason}`),
@@ -175,6 +175,17 @@ function jsonOutput(value: unknown, label: string): string {
     throw new RangeError(`osnova: ${label} JSON exceeds ${maximumTextResponseCodeUnits} code units; use the API for complete structured output`);
   }
   return text;
+}
+
+// Shared query errors keep the wording the API and MCP tools report; the CLI names the command that was typed instead.
+function withCommandError<T>(command: string, run: () => T, describe: (error: unknown) => string | undefined): T {
+  try {
+    return run();
+  } catch (error) {
+    const message = describe(error);
+    if (message === undefined) throw error;
+    throw new Error(`osnova ${command}: ${message}`, { cause: error });
+  }
 }
 
 const lspLanguageNames: readonly LanguageId[] = ["typescript", "tsx", "javascript", "python", "go", "rust", "java", "c_sharp"];
@@ -218,7 +229,18 @@ export async function runCli(
     io.stdout(USAGE);
     return command.length === 0 ? EXIT_ERROR : EXIT_OK;
   }
+  try {
+    return await runCommand(command, rest, io);
+  } catch (error) {
+    // node:util parseArgs reports unknown options and stray positionals without the command that was typed.
+    if (error instanceof Error && "code" in error && typeof error.code === "string" && error.code.startsWith("ERR_PARSE_ARGS_")) {
+      throw new TypeError(`osnova ${command}: ${error.message}`, { cause: error });
+    }
+    throw error;
+  }
+}
 
+async function runCommand(command: string, rest: string[], io: CliIo): Promise<number> {
   switch (command) {
     case "build": {
       const parsed = parseArgs({
@@ -289,7 +311,7 @@ export async function runCli(
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = numericOption(parsed.values.limit, "limit");
+      const limitValue = numericOption(parsed.values.limit, "limit", "ground");
       const lean = parsed.values.lean === true;
       if (parsed.values.scoped === true) {
         const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: lean ? false : parsed.values.full });
@@ -322,16 +344,16 @@ export async function runCli(
           "cache-dir": { type: "string" },
         },
       });
-      const pattern = requirePositional(parsed.positionals, "pattern", "grep");
+      const pattern = requirePositional(parsed.positionals, "pattern", "thread");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const limitValue = numericOption(parsed.values.limit, "limit");
-      const result = findTextDetailed(index, pattern, {
+      const limitValue = numericOption(parsed.values.limit, "limit", "thread");
+      const result = withCommandError("thread", () => findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
         in: parsed.values.in,
         limit: limitValue ?? 50,
         matchesPerGroup: threadMatchesPerGroup,
-      });
+      }), (error) => error instanceof InvalidPatternError ? error.message.replace(/^osnova: /, "") : undefined);
       io.stdout(formatFindTextResult(result, threadMatchesPerGroup));
       return EXIT_OK;
     }
@@ -341,7 +363,7 @@ export async function runCli(
         allowPositionals: true,
         options: { workspace: { type: "string" }, "cache-dir": { type: "string" } },
       });
-      const file = requirePositional(parsed.positionals, "file", "skeleton");
+      const file = requirePositional(parsed.positionals, "file", "outline");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(formatSkeleton(skeleton(index, file)));
       return EXIT_OK;
@@ -358,10 +380,10 @@ export async function runCli(
           "cache-dir": { type: "string" },
         },
       });
-      const symbol = requirePositional(parsed.positionals, "symbol", "callers");
+      const symbol = requirePositional(parsed.positionals, "symbol", "warp");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "warp", io)) return EXIT_ERROR;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const depthValue = numericOption(parsed.values.depth, "depth", 1);
+      const depthValue = numericOption(parsed.values.depth, "depth", "warp", 1);
       const direction = parsed.values.direction;
       if (direction !== undefined && direction !== "in" && direction !== "out") {
         throw new Error(`osnova warp: --direction must be "in" or "out", got ${JSON.stringify(direction)}`);
@@ -384,7 +406,7 @@ export async function runCli(
         },
       });
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", 1);
+      const maxDirsValue = numericOption(parsed.values["max-dirs"], "max-dirs", "groundwork", 1);
       io.stdout(
         formatMap(
           map(index, {
@@ -400,15 +422,19 @@ export async function runCli(
         limit: { type: "string", short: "n" }, depth: { type: "string" }, "max-code-units": { type: "string" },
         workspace: { type: "string" }, "cache-dir": { type: "string" },
       } });
+      const question = parsed.positionals.join(" ");
+      if (question.trim().length === 0 && parsed.values.symbol === undefined) throw new Error("osnova footing: missing <question> argument");
       const task = parsed.values.task;
-      if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova: invalid context task");
+      if (task !== "understand" && task !== "change" && task !== "review") throw new Error("osnova footing: --task must be understand, change or review");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
-      const budget = numericOption(parsed.values["max-code-units"], "max-code-units", 1) ?? maximumTextResponseCodeUnits;
-      if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova: CLI context budget cannot exceed ${maximumTextResponseCodeUnits}`);
+      const budget = numericOption(parsed.values["max-code-units"], "max-code-units", "footing", 1) ?? maximumTextResponseCodeUnits;
+      if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = taskContext(index, { task, question: parsed.positionals.join(" "), symbols: parsed.values.symbol,
-        in: parsed.values.in, limit: numericOption(parsed.values.limit, "limit"),
-        maxDepth: numericOption(parsed.values.depth, "depth", 1), maxCodeUnits: budget });
+      const limit = numericOption(parsed.values.limit, "limit", "footing");
+      const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
+      const result = withCommandError("footing", () => taskContext(index, { task, question, symbols: parsed.values.symbol,
+        in: parsed.values.in, limit, maxDepth, maxCodeUnits: budget }),
+        (error) => error instanceof TaskContextBudgetError ? `--max-code-units ${budget} cannot retain receipts and omissions; give at least ${error.minimum}` : undefined);
       io.stdout(jsonOutput(result, "footing"));
       return EXIT_OK;
     }
@@ -420,7 +446,7 @@ export async function runCli(
       if (baseCache === undefined && baseRef === undefined) throw new Error("osnova settle: --base-ref or --base-cache is required");
       const root = path.resolve(parsed.values.workspace ?? process.cwd());
       const cacheDir = resolveCacheDir(parsed.values["cache-dir"]);
-      const maxDepth = numericOption(parsed.values.depth, "depth", 1) ?? 1;
+      const maxDepth = numericOption(parsed.values.depth, "depth", "settle", 1) ?? 1;
       let result;
       if (baseRef !== undefined) {
         const base = await materializeBaseRef(root, baseRef, { cacheDir });
@@ -467,7 +493,7 @@ export async function runCli(
       const claims = parseClaims([...(parsed.values.site ?? []), ...fromFile]);
       if (claims.length === 0) throw new Error("osnova plumb: give at least one --site path:line or a --sites-file");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
-      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", 1) });
+      const result = plumb(index, symbol, claims, { direction, depth: numericOption(parsed.values.depth, "depth", "plumb", 1) });
       io.stdout(boundText(formatPlumb(result, symbol), maximumPlumbCodeUnits));
       return EXIT_OK;
     }
@@ -478,8 +504,9 @@ export async function runCli(
       const symbols = parsed.positionals.filter((name) => name.length > 0);
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "tests", io)) return EXIT_ERROR;
       const file = parsed.values.file;
-      if ((symbols.length === 0) === (file === undefined)) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
-      const limit = numericOption(parsed.values.limit, "limit");
+      if (symbols.length === 0 && file === undefined) throw new Error("osnova tests: give <symbol...> or --file <path>");
+      if (symbols.length > 0 && file !== undefined) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
+      const limit = numericOption(parsed.values.limit, "limit", "tests");
       const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
@@ -496,7 +523,7 @@ export async function runCli(
       }
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = unreferenced(index, {
-        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit"), includeExported: parsed.values.exported,
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", "unreferenced"), includeExported: parsed.values.exported,
       });
       io.stdout(formatUnreferenced(result));
       return EXIT_OK;
@@ -522,7 +549,7 @@ export async function runCli(
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {
-      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" }, only: { type: "string" }, uninstall: { type: "boolean" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" }, only: { type: "string" }, uninstall: { type: "boolean" } } });
       if (parsed.positionals.length > 0) return await setupFamily(parsed.positionals, parsed.values, io);
       if (parsed.values.uninstall === true) throw new Error("osnova setup --uninstall belongs to osnova setup claude or osnova setup agents");
       if (parsed.values.only !== undefined) throw new Error("osnova setup --only belongs to osnova setup agents");
@@ -532,6 +559,7 @@ export async function runCli(
       if (client !== undefined && !setupClients.some((candidate) => candidate.id === client)) {
         throw new Error(`osnova setup --client must be one of: ${setupClients.map((candidate) => candidate.id).join(", ")}`);
       }
+      if (parsed.values.gate === true && parsed.values.hooks !== true && parsed.values.plugin !== true) throw new Error("osnova setup --gate goes with --hooks or --plugin");
       if (client === undefined && parsed.values.instructions === undefined && parsed.values.hooks !== true && parsed.values.skill !== true) throw new Error("osnova setup needs --client <id>, --hooks, --plugin, --skill and/or --instructions <file>");
       if (parsed.values.hooks === true && client !== undefined && !hookClients.includes(client as HookClient)) throw new Error(`osnova setup --hooks supports --client ${hookClients.join(", ")}`);
       const command = parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined;
@@ -540,8 +568,9 @@ export async function runCli(
       if (parsed.values.plugin === true && (client === undefined || !(pluginClients as readonly string[]).includes(client))) throw new Error(`osnova setup --plugin supports --client ${pluginClients.join(", ")}`);
       const planned = [];
       if (client !== undefined) planned.push(await planMcp(client as SetupClientId, { home: parsed.values.home, configPath: parsed.values.config, command }));
-      if (parsed.values.hooks === true) planned.push(await planHooks({ home: parsed.values.home, command, client: (client ?? "claude-code") as HookClient, nudge: parsed.values.nudge === true }));
+      if (parsed.values.hooks === true) planned.push(await planHooks({ home: parsed.values.home, command, client: (client ?? "claude-code") as HookClient, nudge: parsed.values.nudge === true, gate: parsed.values.gate === true }));
       if (parsed.values.plugin === true) planned.push(await planPlugin(client as PluginClient, { home: parsed.values.home }));
+      if (parsed.values.plugin === true && parsed.values.gate === true) planned.push(await planPlugin(client as PluginClient, { home: parsed.values.home, gate: true }));
       if (parsed.values.skill === true) planned.push(await planSkill({ home: parsed.values.home }));
       if (parsed.values.instructions !== undefined) planned.push(await planInstructions(parsed.values.instructions));
       if (mode === "preview") {
@@ -553,13 +582,13 @@ export async function runCli(
       return EXIT_OK;
     }
     case "hook": {
-      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, "full-contract": { type: "boolean" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, adaptive: { type: "boolean" }, "full-contract": { type: "boolean" } } });
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
       if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
       if (!isHookEvent(event)) throw new Error(`osnova hook needs one of: ${hookEvents.join(", ")}`);
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
-      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
+      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, gate: parsed.values.gate, adaptive: parsed.values.adaptive, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;
     }
     case "mcp": {

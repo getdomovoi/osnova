@@ -55,7 +55,7 @@ Paths are relative to the checkout root with `/` separators. `line` is the 1-bas
 
 ## Reproducing the recorded numbers
 
-The pinned revisions are in `../click-v1.json`, `../zod-v1.json` and `../corpora/{cobra,gson,humanizer,ripgrep}.json`. The recorded run used Osnova 0.11.0. Run `pnpm build` first, then write Osnova's edges for each checkout and score them against its truth file:
+The pinned revisions are in `../click-v1.json`, `../zod-v1.json` and `../corpora/{cobra,gson,humanizer,ripgrep}.json`. The recorded run used Osnova 0.12.0, at commit `18391d5`. Run `pnpm build` first, then write Osnova's edges for each checkout and score them against its truth file:
 
 ```sh
 node benchmarks/oracle/osnova-sites.mjs --workspace <checkout> --output <corpus>-osnova.json --cache-dir <cache>

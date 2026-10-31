@@ -56,7 +56,7 @@ async function planState(args: string[], home: string): Promise<{ pending: strin
   const family = args[1] as SetupFamily;
   const onlyAt = args.indexOf("--only");
   const only = onlyAt === -1 ? undefined : (args[onlyAt + 1] ?? "").split(",") as AgentHarness[];
-  const plan = await planFamily(family, { home, only });
+  const plan = await planFamily(family, { home, only, gate: args.includes("--gate") });
   const component = (change: { kind: string; path: string }) => `${change.kind} ${path.relative(home, change.path)}`;
   return {
     pending: plan.changes.filter((change) => change.action !== "unchanged").map(component).sort(),
@@ -79,6 +79,32 @@ describe("marketing site install commands", () => {
       "osnova setup agents --only kilo --apply",
       "osnova setup agents --only pi --apply",
     ]));
+  });
+
+  it("offers the opt-in search gate in every prompt that installs hooks or plugins, with that prompt's own commands", () => {
+    const families: Record<string, string[]> = {
+      claude: ["osnova setup claude"], codex: ["osnova setup agents --only codex"], cursor: ["osnova setup agents --only cursor"],
+      opencode: ["osnova setup agents --only opencode"], kilo: ["osnova setup agents --only kilo"], pi: ["osnova setup agents --only pi"],
+      all: ["osnova setup claude", "osnova setup agents"],
+    };
+    const explanations = new Set<string>();
+    for (const [id, commands] of Object.entries(families)) {
+      const prompt = decode(page.match(new RegExp(`<pre class="prompt" id="prompt-${id}">([\\s\\S]*?)</pre>`))?.[1] ?? "");
+      expect(prompt, id).toMatch(/Ask me whether to turn on osnova's search gate\. Explain it first:/);
+      for (const command of commands) {
+        expect(prompt, id).toContain(`\`${command} --gate\``);
+        expect(prompt, id).toContain(`\`${command} --gate --apply\``);
+      }
+      expect(prompt, id).toContain("If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.");
+      // The gate choice sits in the steps that run setup, so an agent that follows the steps literally keeps it.
+      const steps = prompt.split("\n").filter((line) => /^\d+\. /.test(line));
+      expect(steps.find((step) => /config diffs? and write/.test(step)), id).toMatch(/--gate`/);
+      expect(steps.find((step) => step.includes("When I approve")), id).toMatch(/--gate --apply`/);
+      // One explanation, word for word, so the prompts cannot drift into describing different gates.
+      explanations.add(prompt.match(/Explain it first: ([\s\S]*?switches it off for a session\.)/)?.[1]?.replace(/\s+/g, " ") ?? "");
+    }
+    expect([...explanations]).toHaveLength(1);
+    expect([...explanations][0]).not.toBe("");
   });
 
   it("previews without writing, as the prompts promise", async () => {
@@ -120,6 +146,14 @@ describe("marketing site install commands", () => {
       // With --only, the shared skill stays while another installed harness still reads it; everything else must be gone.
       const expected = args.includes("--only") ? fresh.pending.filter((entry) => !entry.startsWith("skill ")) : fresh.pending;
       expect({ line, ...(await planState(args, home)) }).toEqual({ line, pending: expected, kept: [], skipped: [] });
+      // The same line removes a gated install too: every gate hook, plugin and extension it wrote is pending again.
+      const gated = [...args, "--gate"];
+      const gatedHome = harnessHome();
+      const freshGated = await planState(gated, gatedHome);
+      expect({ line, ...(await cli([...install, "--gate", "--home", gatedHome])) }).toEqual({ line, code: 0, errors: [] });
+      expect({ line, ...(await cli([...args, "--home", gatedHome])) }).toEqual({ line, code: 0, errors: [] });
+      const expectedGated = args.includes("--only") ? freshGated.pending.filter((entry) => !entry.startsWith("skill ")) : freshGated.pending;
+      expect({ line, gated: true, ...(await planState(gated, gatedHome)) }).toEqual({ line, gated: true, pending: expectedGated, kept: [], skipped: [] });
     }
   });
 
