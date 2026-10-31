@@ -255,7 +255,7 @@
 <section class="install wrap" id="install" aria-labelledby="install-title">
   <h2 id="install-title" data-words>Install with your agent</h2>
   <p class="section-lede">Paste one prompt into the agent you already use. It installs osnova, shows you the change to your agent config, and applies it only after you approve. You need Node.js 22.13 or newer.</p>
-  <p class="section-lede">Each prompt also asks whether you want the search gate. Agents tend to grep code even with osnova installed, because a hint in their instructions is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until the agent has used an osnova tool in that turn, and tells it which tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. <code>OSNOVA_GATE=off</code> switches it off for a session.</p>
+  <p class="section-lede">The setup prompts also ask whether you want the search gate; the Claude Code plugin and the Any MCP client prompt add none. Agents tend to grep code even with osnova installed, because a hint in their instructions is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until the agent has used an osnova tool in that turn, and tells it which tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. <code>OSNOVA_GATE=off</code> switches it off for a session.</p>
 
   <div class="tabs" role="tablist" aria-label="Choose your agent" data-tabs>
     <button type="button" role="tab" id="tab-claude" aria-controls="panel-claude" aria-selected="true">Claude Code</button>
@@ -275,9 +275,9 @@
 
 1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
 2. Run `npm install -g @getdomovoi/osnova`.
-3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. If I say yes, run `osnova setup claude --gate` and `osnova setup claude --gate --apply` in the next two steps instead. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
-4. Run `osnova setup claude`. It prints the config diff and writes nothing. Show me the diff.
-5. When I approve, run `osnova setup claude --apply`. It backs up every file it changes.
+3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session.
+4. Run `osnova setup claude`, or `osnova setup claude --gate` if I want the gate. It prints the config diff and writes nothing. Show me the diff. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
+5. When I approve, run `osnova setup claude --apply`, or `osnova setup claude --gate --apply` with the gate. It backs up every file it changes.
 6. Run `osnova doctor` and tell me about any warning.
 7. Tell me to restart Claude Code so the MCP server, hooks and skill load.</pre>
     </div>
@@ -288,7 +288,7 @@ osnova setup claude --apply</code></pre>
       <p class="note">Adds the MCP entry, session, prompt and stop hooks, and the skill. Prefer a plugin with no global install? Type these in Claude Code:</p>
 <pre class="shell"><code>/plugin marketplace add getdomovoi/osnova
 /plugin install osnova@osnova</code></pre>
-      <p class="note">Add <code>--gate</code> to a setup command for the opt-in search gate.</p>
+      <p class="note">Add <code>--gate</code> to <code>osnova setup claude</code> for the opt-in search gate; the plugin install has no gate. It needs an osnova release after 0.12.0.</p>
       <p class="note">Remove it with <code>osnova setup claude --uninstall --apply</code>.</p>
     </div>
   </div>
@@ -300,9 +300,9 @@ osnova setup claude --apply</code></pre>
 
 1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
 2. Run `npm install -g @getdomovoi/osnova`.
-3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. In Codex the gate blocks once per turn until it has seen an osnova call, then holds. If I say yes, run `osnova setup agents --only codex --gate` and `osnova setup agents --only codex --gate --apply` in the next two steps instead. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
-4. Run `osnova setup agents --only codex`. It prints the config diff and writes nothing. Show me the diff.
-5. When I approve, run `osnova setup agents --only codex --apply`. It backs up every file it changes.
+3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. In Codex the gate blocks once per turn until it has seen an osnova call, then holds.
+4. Run `osnova setup agents --only codex`, or `osnova setup agents --only codex --gate` if I want the gate. It prints the config diff and writes nothing. Show me the diff. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
+5. When I approve, run `osnova setup agents --only codex --apply`, or `osnova setup agents --only codex --gate --apply` with the gate. It backs up every file it changes.
 6. Run `osnova doctor` and tell me about any warning.
 7. Tell me to restart Codex, open `/hooks` and trust the osnova hooks, three or four with the gate. Codex skips a hook it does not trust, without a message.</pre>
     </div>
@@ -311,7 +311,7 @@ osnova setup claude --apply</code></pre>
 <pre class="shell"><code id="shell-codex">npm install -g @getdomovoi/osnova
 osnova setup agents --only codex --apply</code></pre>
       <p class="note">Adds the MCP entry, the session, prompt and stop hooks, and the shared skill. Then trust the hooks in <code>/hooks</code>.</p>
-      <p class="note">Add <code>--gate</code> to a setup command for the opt-in search gate.</p>
+      <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs an osnova release after 0.12.0.</p>
       <p class="note">Remove it with <code>osnova setup agents --only codex --uninstall --apply</code>.</p>
     </div>
   </div>
@@ -323,9 +323,9 @@ osnova setup agents --only codex --apply</code></pre>
 
 1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
 2. Run `npm install -g @getdomovoi/osnova`.
-3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. If I say yes, run `osnova setup agents --only cursor --gate` and `osnova setup agents --only cursor --gate --apply` in the next two steps instead. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
-4. Run `osnova setup agents --only cursor`. It prints the config diff and writes nothing. Show me the diff.
-5. When I approve, run `osnova setup agents --only cursor --apply`. It backs up every file it changes.
+3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session.
+4. Run `osnova setup agents --only cursor`, or `osnova setup agents --only cursor --gate` if I want the gate. It prints the config diff and writes nothing. Show me the diff. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
+5. When I approve, run `osnova setup agents --only cursor --apply`, or `osnova setup agents --only cursor --gate --apply` with the gate. It backs up every file it changes.
 6. Run `osnova doctor` and tell me about any warning.
 7. Tell me to restart Cursor so the MCP server and hooks load.</pre>
     </div>
@@ -334,7 +334,7 @@ osnova setup agents --only codex --apply</code></pre>
 <pre class="shell"><code id="shell-cursor">npm install -g @getdomovoi/osnova
 osnova setup agents --only cursor --apply</code></pre>
       <p class="note">Adds the MCP entry and a stop hook that sends what your change reached as a follow-up message.</p>
-      <p class="note">Add <code>--gate</code> to a setup command for the opt-in search gate.</p>
+      <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs an osnova release after 0.12.0.</p>
       <p class="note">Remove it with <code>osnova setup agents --only cursor --uninstall --apply</code>.</p>
     </div>
   </div>
@@ -346,9 +346,9 @@ osnova setup agents --only cursor --apply</code></pre>
 
 1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
 2. Run `npm install -g @getdomovoi/osnova`.
-3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. The gate is a plugin, and OpenCode 2.0 and newer loads no osnova plugin: check `opencode --version` first and, on 2.x, tell me the gate cannot run there instead of asking. If I say yes, run `osnova setup agents --only opencode --gate` and `osnova setup agents --only opencode --gate --apply` in the next two steps instead. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
-4. Run `osnova setup agents --only opencode`. It prints the config diff and writes nothing. Show me the diff.
-5. When I approve, run `osnova setup agents --only opencode --apply`. It backs up every file it changes.
+3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. The gate is a plugin, and OpenCode 2.0 and newer loads no osnova plugin: check `opencode --version` first and, on 2.x, tell me the gate cannot run there instead of asking.
+4. Run `osnova setup agents --only opencode`, or `osnova setup agents --only opencode --gate` if I want the gate. It prints the config diff and writes nothing. Show me the diff. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
+5. When I approve, run `osnova setup agents --only opencode --apply`, or `osnova setup agents --only opencode --gate --apply` with the gate. It backs up every file it changes.
 6. Run `osnova doctor` and tell me about any warning.
 7. Tell me to restart OpenCode so the MCP server and plugin load.</pre>
     </div>
@@ -357,7 +357,7 @@ osnova setup agents --only cursor --apply</code></pre>
 <pre class="shell"><code id="shell-opencode">npm install -g @getdomovoi/osnova
 osnova setup agents --only opencode --apply</code></pre>
       <p class="note">Adds the MCP entry and a plugin that appends starting points to each message.</p>
-      <p class="note">Add <code>--gate</code> to a setup command for the opt-in search gate.</p>
+      <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs an osnova release after 0.12.0.</p>
       <p class="note">Remove it with <code>osnova setup agents --only opencode --uninstall --apply</code>.</p>
     </div>
   </div>
@@ -369,9 +369,9 @@ osnova setup agents --only opencode --apply</code></pre>
 
 1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
 2. Run `npm install -g @getdomovoi/osnova`.
-3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. If I say yes, run `osnova setup agents --only kilo --gate` and `osnova setup agents --only kilo --gate --apply` in the next two steps instead. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
-4. Run `osnova setup agents --only kilo`. It prints the config diff and writes nothing. Show me the diff.
-5. When I approve, run `osnova setup agents --only kilo --apply`. It backs up every file it changes.
+3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session.
+4. Run `osnova setup agents --only kilo`, or `osnova setup agents --only kilo --gate` if I want the gate. It prints the config diff and writes nothing. Show me the diff. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
+5. When I approve, run `osnova setup agents --only kilo --apply`, or `osnova setup agents --only kilo --gate --apply` with the gate. It backs up every file it changes.
 6. Run `osnova doctor` and tell me about any warning.
 7. Tell me to restart Kilo so the MCP server and plugin load.</pre>
     </div>
@@ -380,7 +380,7 @@ osnova setup agents --only opencode --apply</code></pre>
 <pre class="shell"><code id="shell-kilo">npm install -g @getdomovoi/osnova
 osnova setup agents --only kilo --apply</code></pre>
       <p class="note">Adds the MCP entry and the same plugin OpenCode uses.</p>
-      <p class="note">Add <code>--gate</code> to a setup command for the opt-in search gate.</p>
+      <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs an osnova release after 0.12.0.</p>
       <p class="note">Remove it with <code>osnova setup agents --only kilo --uninstall --apply</code>.</p>
     </div>
   </div>
@@ -393,9 +393,9 @@ osnova setup agents --only kilo --apply</code></pre>
 1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
 2. Pi reaches MCP servers through the `pi-mcp-adapter` extension. If it is not installed, stop and tell me.
 3. Run `npm install -g @getdomovoi/osnova`.
-4. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. In Pi the gate blocks once per turn until it has seen an osnova call, then holds. If I say yes, run `osnova setup agents --only pi --gate` and `osnova setup agents --only pi --gate --apply` in the next two steps instead. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
-5. Run `osnova setup agents --only pi`. It prints the config diff and writes nothing. Show me the diff.
-6. When I approve, run `osnova setup agents --only pi --apply`. It backs up every file it changes.
+4. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. In Pi the gate blocks once per turn until it has seen an osnova call, then holds.
+5. Run `osnova setup agents --only pi`, or `osnova setup agents --only pi --gate` if I want the gate. It prints the config diff and writes nothing. Show me the diff. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
+6. When I approve, run `osnova setup agents --only pi --apply`, or `osnova setup agents --only pi --gate --apply` with the gate. It backs up every file it changes.
 7. Run `osnova doctor` and tell me about any warning.
 8. Tell me to restart Pi so the MCP server and extension load.</pre>
     </div>
@@ -404,7 +404,7 @@ osnova setup agents --only kilo --apply</code></pre>
 <pre class="shell"><code id="shell-pi">npm install -g @getdomovoi/osnova
 osnova setup agents --only pi --apply</code></pre>
       <p class="note">Adds the MCP entry for <code>pi-mcp-adapter</code> and an extension that adds starting points before each turn.</p>
-      <p class="note">Add <code>--gate</code> to a setup command for the opt-in search gate.</p>
+      <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs an osnova release after 0.12.0.</p>
       <p class="note">Remove it with <code>osnova setup agents --only pi --uninstall --apply</code>.</p>
     </div>
   </div>
@@ -416,9 +416,9 @@ osnova setup agents --only pi --apply</code></pre>
 
 1. Check that `node --version` reports 22.13 or newer. If it does not, stop and tell me.
 2. Run `npm install -g @getdomovoi/osnova`.
-3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional hook that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. In Codex and Pi it blocks once per turn until it has seen an osnova call, then holds, and OpenCode 2.0 and newer cannot run it. If I say yes, add `--gate` to every setup command in the next two steps: `osnova setup claude --gate`, `osnova setup agents --gate`, `osnova setup claude --gate --apply` and `osnova setup agents --gate --apply`. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
-4. Run `osnova setup claude` and `osnova setup agents`. They print the config diffs and write nothing. The agents family covers Codex, Cursor, OpenCode, Kilo and Pi, and skips any that is not installed. Show me both diffs.
-5. When I approve, run `osnova setup claude --apply` and `osnova setup agents --apply`. They back up every file they change.
+3. Ask me whether to turn on osnova's search gate. Explain it first: agents tend to grep code even when osnova is installed, because a hint is easy to skip. The gate is an optional check that blocks a grep, rg, find or search-tool call on code osnova indexes until you have used an osnova tool in that turn, and its message names the tool to use. Searches of data, docs and config files, and of folders outside the repository, always run. `OSNOVA_GATE=off` switches it off for a session. In Codex and Pi it blocks once per turn until it has seen an osnova call, then holds, and OpenCode 2.0 and newer cannot run it: if OpenCode is installed, check `opencode --version` and, on 2.x, tell me the gate will not run there.
+4. Run `osnova setup claude` and `osnova setup agents`, or `osnova setup claude --gate` and `osnova setup agents --gate` if I want the gate. They print the config diffs and write nothing. The agents family covers Codex, Cursor, OpenCode, Kilo and Pi, and skips any that is not installed. Show me both diffs. If setup rejects `--gate`, the installed osnova predates the gate: tell me so and continue without it.
+5. When I approve, run `osnova setup claude --apply` and `osnova setup agents --apply`, or `osnova setup claude --gate --apply` and `osnova setup agents --gate --apply` with the gate. They back up every file they change.
 6. Run `osnova doctor` and tell me about any warning.
 7. Tell me to restart each agent. If Codex is set up, tell me to open `/hooks` in Codex and trust the osnova hooks, three or four with the gate.</pre>
     </div>
@@ -428,7 +428,7 @@ osnova setup agents --only pi --apply</code></pre>
 osnova setup claude --apply
 osnova setup agents --apply</code></pre>
       <p class="note">One global install serves every repository. Nothing is written inside your projects.</p>
-      <p class="note">Add <code>--gate</code> to a setup command for the opt-in search gate.</p>
+      <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs an osnova release after 0.12.0.</p>
       <p class="note">Remove it with <code>osnova setup claude --uninstall --apply</code> and <code>osnova setup agents --uninstall --apply</code>.</p>
     </div>
   </div>
