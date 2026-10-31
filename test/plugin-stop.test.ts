@@ -37,6 +37,8 @@ const checks = async (session?: string) => (await recorded()).filter((call) => c
 const acks = async (session?: string) => (await recorded()).filter((call) => call.args.includes("--ack") && (session === undefined || call.payload.session_id === session));
 const prompts = async () => (await recorded()).filter((call) => call.args[1] === "prompt");
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// Each check starts a process; under a loaded test run that takes well over vi.waitFor's default second.
+const until = (check: () => unknown) => vi.waitFor(check, { timeout: 15_000, interval: 50 });
 
 describe("the OpenCode and Kilo plugin at the end of a turn", () => {
   const open = async (promptAsync: (options: unknown) => Promise<unknown>) => {
@@ -56,10 +58,10 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     await hooks.event({ event: { type: "message.updated", properties: { info: { id: "quiet", parentID: "root" } } } });
     await hooks.event(idle("child"));
     await hooks.event(idle("quiet"));
-    await vi.waitFor(async () => expect(await checks()).toHaveLength(1));
+    await until(async () => expect(await checks()).toHaveLength(1));
     expect(sent).toEqual([]);
     await hooks.event(idle("root"));
-    await vi.waitFor(async () => expect(await acks("root")).toHaveLength(1));
+    await until(async () => expect(await acks("root")).toHaveLength(1));
     expect(sent).toEqual([{ path: { id: "root" }, body: { parts: [{ type: "text", text: "SETTLE root" }] } }]);
     expect((await acks("root"))[0]!.args).toEqual(["hook", "stop", "--client", "codex", "--ack", "0123456789abcdef"]);
     // The posted notice arrives as a message; it already names each dependent, so it gets no starting points, and the
@@ -76,9 +78,9 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     // The user's next prompt, even one that pastes the notice back, is checked afresh.
     await hooks["chat.message"]({ sessionID: "root" }, say("SETTLE root\nwhy is this flagged?"));
     await hooks.event(idle("root"));
-    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    await until(() => expect(sent).toHaveLength(2));
     expect((await checks()).every((call) => call.payload.cwd === dir)).toBe(true);
-  });
+  }, 60_000);
 
   it("stays quiet after an abort until the user prompts again, and offers a notice again when posting it fails", async () => {
     await reset();
@@ -93,14 +95,14 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     expect(await checks("aborted")).toEqual([]);
     await hooks["chat.message"]({ sessionID: "aborted" }, say("try again"));
     await hooks.event(idle("aborted"));
-    await vi.waitFor(async () => expect(await checks("aborted")).toHaveLength(1));
+    await until(async () => expect(await checks("aborted")).toHaveLength(1));
     await pause(100);
     expect(await acks("aborted")).toEqual([]);
     fail = false;
     await hooks.event(idle("aborted"));
-    await vi.waitFor(async () => expect(await acks("aborted")).toHaveLength(1));
+    await until(async () => expect(await acks("aborted")).toHaveLength(1));
     expect(sent).toHaveLength(1);
-  });
+  }, 60_000);
 
   it("checks the turn of a prompt the user sent while the notice was posting", async () => {
     await reset();
@@ -108,14 +110,14 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     const sent: unknown[] = [];
     const hooks = await open((options) => new Promise((resolve) => { sent.push(options); release = () => resolve({}); }));
     await hooks.event(idle("racing"));
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await until(() => expect(sent).toHaveLength(1));
     await hooks["chat.message"]({ sessionID: "racing" }, say("and then this"));
     release();
-    await vi.waitFor(async () => expect(await acks("racing")).toHaveLength(1));
+    await until(async () => expect(await acks("racing")).toHaveLength(1));
     await fs.rm(`${calls}.acks`, { force: true });
     await hooks.event(idle("racing"));
-    await vi.waitFor(async () => expect(await checks("racing")).toHaveLength(2));
-  });
+    await until(async () => expect(await checks("racing")).toHaveLength(2));
+  }, 60_000);
 
   it("runs one check at a time per session and forgets a deleted session", async () => {
     await reset();
@@ -123,15 +125,15 @@ describe("the OpenCode and Kilo plugin at the end of a turn", () => {
     const hooks = await open(async (options) => { sent.push(options); return {}; });
     await hooks.event(idle("slow"));
     await hooks.event(idle("slow"));
-    await vi.waitFor(async () => expect(await acks("slow")).toHaveLength(1), { timeout: 5_000 });
+    await until(async () => expect(await acks("slow")).toHaveLength(1));
     await pause(200);
     expect(await checks("slow")).toHaveLength(1);
     expect(sent).toHaveLength(1);
     await hooks.event({ event: { type: "session.created", properties: { info: { id: "gone", parentID: "root" } } } });
     await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "gone" } } } });
     await hooks.event(idle("gone"));
-    await vi.waitFor(async () => expect(await checks("gone")).toHaveLength(1));
-  }, 10_000);
+    await until(async () => expect(await checks("gone")).toHaveLength(1));
+  }, 60_000);
 });
 
 describe("the Pi extension at the end of a run", () => {
@@ -164,7 +166,7 @@ describe("the Pi extension at the end of a run", () => {
     await settled({ aborted: false }, ctx("pi-1"));
     expect(sent).toHaveLength(2);
     expect((await checks()).map((call) => call.payload.session_id)).toEqual(["quiet", "pi-1", "pi-1"]);
-  });
+  }, 60_000);
 
   it("keys a run without a Pi session id on the process and queues the notice behind a run already streaming", async () => {
     await reset();
@@ -174,7 +176,7 @@ describe("the Pi extension at the end of a run", () => {
     const [call] = await checks();
     expect(String(call!.payload.session_id)).toMatch(/^pi-\d+-\d+$/);
     expect(sent).toEqual([[`SETTLE ${String(call!.payload.session_id)}`, { deliverAs: "followUp" }]]);
-  });
+  }, 60_000);
 
   it("falls back to a follow-up when Pi refuses a plain message, and offers the notice again when Pi refuses both", async () => {
     await reset();
@@ -190,5 +192,5 @@ describe("the Pi extension at the end of a run", () => {
     refuseAll = false;
     await settled({ aborted: false }, ctx("pi-4"));
     expect(await acks("pi-4")).toHaveLength(1);
-  });
+  }, 60_000);
 });
