@@ -366,6 +366,64 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "Loose/Use.cs", 1)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("takes a C# file's project from its folder only when no project file could change it", async () => {
+    const project = "<Project Sdk=\"Microsoft.NET.Sdk\" />\n";
+    const models = "namespace A.Models { public class Foo { public Foo() {} } }\n";
+    const use = (namespace: string) => `namespace ${namespace} { class Use { void Run() { new Foo(); } } }\n`;
+    const cases: [string, Record<string, string>, string, boolean][] = [
+      // An .CSProj counts as a project file, as MSBuild reads it.
+      ["upper-case extension", { "A/A.CSProj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", true],
+      // The outer project globs the nested one's files too, so the outer's global using may apply there.
+      ["nested project", { "Outer/Outer.csproj": project, "Outer/GlobalUsings.cs": "global using A.Models;\n", "Outer/Models/Foo.cs": models, "Outer/Tests/Tests.csproj": project, "Outer/Tests/Use.cs": use("T") }, "Outer/Tests/Use.cs", false],
+      // Compile items may link a global using in from elsewhere or remove the site.
+      ["compile items", { "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "B/B.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Compile Include=\"../A/GlobalUsings.cs\" />\n  </ItemGroup>\n</Project>\n", "B/Use.cs": use("B") }, "B/Use.cs", false],
+    ];
+    for (const [name, files, site, resolves] of cases) {
+      const root = path.join(temporary, name.replace(/\W+/g, "-"));
+      for (const [file, text] of Object.entries(files)) {
+        await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+        await fs.writeFile(path.join(root, file), text);
+      }
+      const index = await buildIndex(root, { cacheDir: path.join(root, ".cache") });
+      const found = index.edges.filter((edge) => edge.kind === "calls" && edge.fromFile === site && edge.line === 1);
+      expect(found.map((edge) => edge.toSymbol !== undefined), name).toEqual([resolves]);
+    }
+  });
+
+  it("calls a C# creation nothing supplies unknown, not external, when the project's files declare using items", async () => {
+    await write({
+      "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Using Include=\"Vendor.Models\" />\n  </ItemGroup>\n</Project>\n",
+      "A/Use.cs": "namespace A { class Use { void Run() { new Foo(); } } }\n",
+      "B/B.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+      "B/Use.cs": "namespace B { class Use { void Run() { new Foo(); } } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const reason = (file: string) => index.edges.find((edge) => edge.fromFile === file && edge.kind === "calls")?.evidence;
+    expect(reason("A/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "no-matching-symbol" } });
+    expect(reason("B/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "unbound-global" } });
+  });
+
+  it("re-resolves C# creations when a project file is added, moved or edited, equal to a full rebuild", async () => {
+    await write({
+      "A/GlobalUsings.cs": "global using A.Models;\n",
+      "A/Models/Foo.cs": "namespace A.Models { public class Foo { public Foo() {} } }\n",
+      "A/Use.cs": "namespace A { class Use { void Run() { new Foo(); } } }\n",
+    });
+    let index = await buildIndex(workspace, { cacheDir });
+    const target = (built: Index) => built.edges.find((edge) => edge.fromFile === "A/Use.cs" && edge.kind === "calls")?.toSymbol;
+    expect(target(index)).toBeUndefined();
+    const steps: [string, () => Promise<string[]>][] = [
+      ["add", async () => { await fs.writeFile(path.join(workspace, "A/A.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />\n"); return ["A/A.csproj"]; }],
+      ["edit", async () => { await fs.writeFile(path.join(workspace, "A/A.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Compile Remove=\"Use.cs\" />\n  </ItemGroup>\n</Project>\n"); return ["A/A.csproj"]; }],
+      ["move", async () => { await fs.rename(path.join(workspace, "A/A.csproj"), path.join(workspace, "A.csproj")); return ["A/A.csproj", "A.csproj"]; }],
+    ];
+    for (const [name, step] of steps) {
+      index = await applyChanges(index, workspace, await step());
+      const full = await buildIndex(workspace, { cacheDir: path.join(temporary, `full-${name}`) });
+      expect(serializeArtifact(index).equals(serializeArtifact(full)), name).toBe(true);
+    }
+  });
+
   it("leaves a C# creation unresolved when any file declares an alias of that name", async () => {
     await write({
       "Alias.cs": "global using X = P.T;\n",
