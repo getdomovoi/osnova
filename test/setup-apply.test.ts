@@ -73,7 +73,8 @@ describe("osnova setup --apply", () => {
     expect(await runCli(["setup", "--preview", "--hooks", "--home", home, "--command", "osnova"], c.io)).toBe(0);
     const preview = c.out.join("\n");
     expect(preview).toMatch(/hooks, update, .*settings\.json/);
-    expect(preview).toMatch(/removed .*gate.*mark.*reset/);
+    // gate is a hook this osnova runs, so a strict build's gate entry is kept and repointed; mark and reset are not.
+    expect(preview).toMatch(/removed hooks this osnova cannot run: mark, reset/);
     c = capture();
     expect(await runCli(["setup", "--apply", "--hooks", "--home", home, "--command", "osnova"], c.io)).toBe(0);
     expect(c.out.join("\n")).toMatch(/applied: hooks, update, .*settings\.json \(backup .*settings\.json\.bak-osnova-/);
@@ -81,7 +82,7 @@ describe("osnova setup --apply", () => {
     expect(settings.theme).toBe("dark");
     expect(settings.hooks.SessionStart).toEqual([{ hooks: [{ type: "command", command: "osnova hook session", timeout: 7 }] }]);
     expect(settings.hooks.UserPromptSubmit).toEqual([{ hooks: [{ type: "command", command: "osnova hook prompt", timeout: 15 }] }]);
-    expect(settings.hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "node other.js" }] }]);
+    expect(settings.hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "node other.js" }, { type: "command", command: "osnova hook gate", timeout: 30 }] }]);
     expect(settings.hooks.PostToolUse).toEqual([{ matcher: "Grep|Bash", hooks: [{ type: "command", command: "osnova hook tool", timeout: 10 }] }]);
     expect(settings.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "osnova hook stop", timeout: 30 }] }]);
     c = capture();
@@ -127,7 +128,7 @@ describe("osnova setup --apply", () => {
     expect(c.out.join("\n")).toContain("open /hooks in Codex");
     const codex = JSON.parse(await fs.readFile(hooksPath, "utf8"));
     expect(codex.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "osnova hook stop --client codex", timeout: 30 }] }]);
-    expect(codex.hooks.PreToolUse).toBeUndefined();
+    expect(codex.hooks.PreToolUse).toEqual([{ hooks: [{ type: "command", command: "osnova hook gate --client codex" }] }]);
     expect(codex.hooks.SessionStart[0].hooks[0].command).toBe("osnova hook session --client codex");
   });
 
