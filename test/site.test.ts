@@ -56,7 +56,7 @@ async function planState(args: string[], home: string): Promise<{ pending: strin
   const family = args[1] as SetupFamily;
   const onlyAt = args.indexOf("--only");
   const only = onlyAt === -1 ? undefined : (args[onlyAt + 1] ?? "").split(",") as AgentHarness[];
-  const plan = await planFamily(family, { home, only });
+  const plan = await planFamily(family, { home, only, gate: args.includes("--gate") });
   const component = (change: { kind: string; path: string }) => `${change.kind} ${path.relative(home, change.path)}`;
   return {
     pending: plan.changes.filter((change) => change.action !== "unchanged").map(component).sort(),
@@ -79,6 +79,14 @@ describe("marketing site install commands", () => {
       "osnova setup agents --only kilo --apply",
       "osnova setup agents --only pi --apply",
     ]));
+  });
+
+  it("offers the opt-in search gate in every prompt that installs hooks or plugins", () => {
+    for (const id of ["claude", "codex", "cursor", "opencode", "kilo", "pi", "all"]) {
+      const prompt = decode(page.match(new RegExp(`<pre class="prompt" id="prompt-${id}">([\\s\\S]*?)</pre>`))?.[1] ?? "");
+      expect(prompt, id).toMatch(/Ask me whether to turn on osnova's search gate\. Explain it first:/);
+      expect(prompt, id).toMatch(/osnova setup [^`]*--gate --apply/);
+    }
   });
 
   it("previews without writing, as the prompts promise", async () => {

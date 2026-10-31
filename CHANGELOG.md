@@ -15,6 +15,7 @@ All notable changes to Osnova are recorded here. The format follows Keep a Chang
 - The shipped skill's description now covers fixing bugs, changing, reviewing and explaining code and finding where code lives, and says to use osnova before grep, find, rg or file reads; it named only how code works, callers, change impact and call-site checks.
 - `osnova setup` replaces an installed skill, plugin or extension file that an earlier osnova shipped unedited, backing it up first. It kept every differing file, so an upgrade never delivered a new skill or plugin. A file its owner edited is still kept and reported, and `--uninstall` also removes an earlier shipped version.
 - A leftover `hook gate` entry from an earlier strict build is now kept and repointed at this install instead of removed, since this osnova runs it.
+- The site's install prompts ask whether to turn on the search gate. Each prompt has the agent explain what the gate blocks, why it exists and how to switch it off before asking, and names the `--gate` setup commands to run on a yes; the Codex and Pi prompts say the gate runs adaptive there, and the OpenCode prompt has the agent check for OpenCode 2.x, which loads no osnova plugin. A paragraph under the install heading says the same for readers.
 
 ### Fixed
 
