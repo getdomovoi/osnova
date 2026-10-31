@@ -57,10 +57,10 @@ usage:
   osnova tests --file <path> [-n <n>] [--workspace <path>] [--cache-dir <path>]
   osnova unreferenced [--scope <prefix>] [--kinds <a,b>] [--exported] [-n <n>] [--workspace <path>] [--cache-dir <path>]   (candidates, never proof)
   osnova doctor [--json] [--workspace <path>] [--cache-dir <path>]
-  osnova setup <claude|agents> [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--nudge] [--command <exe>] [--home <path>]   (one harness family; previews unless --apply)
+  osnova setup <claude|agents> [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--nudge] [--gate] [--command <exe>] [--home <path>]   (one harness family; previews unless --apply)
   osnova setup <claude|agents> --uninstall [--apply] [--only <codex,opencode,kilo,pi,cursor>] [--instructions <file>] [--home <path>]   (removes osnova's own parts; previews unless --apply)
-  osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge]] [--plugin] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
-  osnova hook <prompt|session|stop|tool|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
+  osnova setup <--preview|--apply> [--client <claude-code|codex|opencode|kilo|cursor|pi>] [--hooks [--nudge] [--gate]] [--plugin [--gate]] [--skill] [--instructions <AGENTS.md>] [--config <path>] [--command <exe>] [--home <path>]
+  osnova hook <prompt|session|stop|tool|gate|install-preview> [--client <claude-code|codex|cursor>] [--nudge] [--gate] [--adaptive] [--full-contract] [--workspace <path>] [--cache-dir <path>] [--command <exe>]   (editor hooks; payload on stdin)
   osnova mcp [--workspace <path>] [--cache-dir <path>] [--watch] [--no-prewarm] [--lsp-server <absolute path> --lsp-languages <list> [--lsp-arg=<arg>]... [--lsp-timeout-ms <n>]]   (default workspace: current directory)
   osnova update-check [--json]   (the only command that opens a network connection; asks the npm registry for the latest version)
 
@@ -130,20 +130,20 @@ function numericOption(value: string | undefined, name: string, command: string,
 }
 
 // `osnova setup claude|agents`: plan a whole harness family, print it, and write it only with --apply.
-async function setupFamily(positionals: readonly string[], values: { uninstall?: boolean | undefined; apply?: boolean | undefined; preview?: boolean | undefined; home?: string | undefined; command?: string[] | undefined; nudge?: boolean | undefined; only?: string | undefined; client?: string | undefined; hooks?: boolean | undefined; plugin?: boolean | undefined; skill?: boolean | undefined; instructions?: string | undefined; config?: string | undefined }, io: CliIo): Promise<number> {
+async function setupFamily(positionals: readonly string[], values: { uninstall?: boolean | undefined; apply?: boolean | undefined; preview?: boolean | undefined; home?: string | undefined; command?: string[] | undefined; nudge?: boolean | undefined; gate?: boolean | undefined; only?: string | undefined; client?: string | undefined; hooks?: boolean | undefined; plugin?: boolean | undefined; skill?: boolean | undefined; instructions?: string | undefined; config?: string | undefined }, io: CliIo): Promise<number> {
   const { setupFamilies, agentHarnesses, planFamily, planUninstall, applyChanges, SetupApplyError } = await import("../diagnostics/setup-apply.js");
   const family = positionals[0];
   if (positionals.length !== 1 || !(setupFamilies as readonly string[]).includes(family ?? "")) throw new Error(`osnova setup takes ${setupFamilies.join(" or ")} (or the --client form); got ${positionals.join(" ")}`);
   const uninstall = values.uninstall === true;
   if (values.client !== undefined || values.hooks === true || values.plugin === true || values.skill === true || (values.instructions !== undefined && !uninstall) || values.config !== undefined) throw new Error(`osnova setup ${family} sets up the whole family; use the --client form for single pieces`);
-  if (uninstall && (values.command !== undefined || values.nudge === true)) throw new Error("osnova setup --uninstall removes osnova's own parts whatever command they run; it takes no --command or --nudge");
+  if (uninstall && (values.command !== undefined || values.nudge === true || values.gate === true)) throw new Error("osnova setup --uninstall removes osnova's own parts whatever command they run; it takes no --command, --nudge or --gate");
   if (values.apply === true && values.preview === true) throw new Error("osnova setup takes --apply or --preview, not both");
   const only = values.only?.split(",").map((name) => name.trim()).filter((name) => name.length > 0);
   if (only !== undefined && (family !== "agents" || only.length === 0 || only.some((name) => !(agentHarnesses as readonly string[]).includes(name)))) throw new Error(`osnova setup agents --only takes ${agentHarnesses.join(", ")}`);
   const command = values.command !== undefined && values.command.length > 0 ? values.command : undefined;
   const plan = uninstall
     ? await planUninstall(family as (typeof setupFamilies)[number], { home: values.home, only: only as (typeof agentHarnesses)[number][] | undefined, instructions: values.instructions })
-    : await planFamily(family as (typeof setupFamilies)[number], { home: values.home, command, nudge: values.nudge === true, only: only as (typeof agentHarnesses)[number][] | undefined });
+    : await planFamily(family as (typeof setupFamilies)[number], { home: values.home, command, nudge: values.nudge === true, gate: values.gate === true, only: only as (typeof agentHarnesses)[number][] | undefined });
   const label = (change: { kind: string; client?: string | undefined }): string => (change.kind === "mcp" ? change.client ?? "mcp" : change.kind);
   const lines = [
     ...plan.skipped.map((entry) => `osnova setup skipped: ${entry.harness}, ${entry.reason}`),
@@ -549,7 +549,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       return report.ok ? EXIT_OK : EXIT_STALE;
     }
     case "setup": {
-      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" }, only: { type: "string" }, uninstall: { type: "boolean" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { preview: { type: "boolean" }, apply: { type: "boolean" }, client: { type: "string" }, config: { type: "string" }, command: { type: "string", multiple: true }, home: { type: "string" }, hooks: { type: "boolean" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, plugin: { type: "boolean" }, skill: { type: "boolean" }, instructions: { type: "string" }, only: { type: "string" }, uninstall: { type: "boolean" } } });
       if (parsed.positionals.length > 0) return await setupFamily(parsed.positionals, parsed.values, io);
       if (parsed.values.uninstall === true) throw new Error("osnova setup --uninstall belongs to osnova setup claude or osnova setup agents");
       if (parsed.values.only !== undefined) throw new Error("osnova setup --only belongs to osnova setup agents");
@@ -559,6 +559,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       if (client !== undefined && !setupClients.some((candidate) => candidate.id === client)) {
         throw new Error(`osnova setup --client must be one of: ${setupClients.map((candidate) => candidate.id).join(", ")}`);
       }
+      if (parsed.values.gate === true && parsed.values.hooks !== true && parsed.values.plugin !== true) throw new Error("osnova setup --gate goes with --hooks or --plugin");
       if (client === undefined && parsed.values.instructions === undefined && parsed.values.hooks !== true && parsed.values.skill !== true) throw new Error("osnova setup needs --client <id>, --hooks, --plugin, --skill and/or --instructions <file>");
       if (parsed.values.hooks === true && client !== undefined && !hookClients.includes(client as HookClient)) throw new Error(`osnova setup --hooks supports --client ${hookClients.join(", ")}`);
       const command = parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined;
@@ -567,8 +568,9 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       if (parsed.values.plugin === true && (client === undefined || !(pluginClients as readonly string[]).includes(client))) throw new Error(`osnova setup --plugin supports --client ${pluginClients.join(", ")}`);
       const planned = [];
       if (client !== undefined) planned.push(await planMcp(client as SetupClientId, { home: parsed.values.home, configPath: parsed.values.config, command }));
-      if (parsed.values.hooks === true) planned.push(await planHooks({ home: parsed.values.home, command, client: (client ?? "claude-code") as HookClient, nudge: parsed.values.nudge === true }));
+      if (parsed.values.hooks === true) planned.push(await planHooks({ home: parsed.values.home, command, client: (client ?? "claude-code") as HookClient, nudge: parsed.values.nudge === true, gate: parsed.values.gate === true }));
       if (parsed.values.plugin === true) planned.push(await planPlugin(client as PluginClient, { home: parsed.values.home }));
+      if (parsed.values.plugin === true && parsed.values.gate === true) planned.push(await planPlugin(client as PluginClient, { home: parsed.values.home, gate: true }));
       if (parsed.values.skill === true) planned.push(await planSkill({ home: parsed.values.home }));
       if (parsed.values.instructions !== undefined) planned.push(await planInstructions(parsed.values.instructions));
       if (mode === "preview") {
@@ -580,13 +582,13 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       return EXIT_OK;
     }
     case "hook": {
-      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, "full-contract": { type: "boolean" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, adaptive: { type: "boolean" }, "full-contract": { type: "boolean" } } });
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
       if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
       if (!isHookEvent(event)) throw new Error(`osnova hook needs one of: ${hookEvents.join(", ")}`);
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
-      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
+      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, gate: parsed.values.gate, adaptive: parsed.values.adaptive, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;
     }
     case "mcp": {
