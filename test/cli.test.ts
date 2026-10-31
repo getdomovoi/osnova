@@ -329,6 +329,62 @@ describe("cli", () => {
     expect(scopedText).not.toContain("const header =");
   }, 60_000);
 
+  it("names the command as typed when an option is unknown or lacks its value", async () => {
+    const commands = ["build", "check", "ground", "thread", "outline", "warp", "groundwork", "footing", "settle", "plumb", "tests", "unreferenced", "coverage", "update-check", "doctor", "setup", "hook", "mcp"];
+    for (const command of commands) {
+      await expect(runCli([command, "--no-such-option"], capture().io)).rejects.toThrow(new RegExp(`^osnova ${command}: Unknown option '--no-such-option'`));
+    }
+    await expect(runCli(["ground", "--workspace"], capture().io)).rejects.toThrow(/^osnova ground: Option '--workspace <value>' argument missing$/);
+    await expect(runCli(["footing", "--symbol"], capture().io)).rejects.toThrow(/^osnova footing: Option '--symbol <value>' argument missing$/);
+    await expect(runCli(["footing", "two", "--task", "oops", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow(/^osnova footing: --task must be understand, change or review$/);
+  }, 60_000);
+
+  it("answers -n 0 with counts instead of claiming no matches, and rejects a non-numeric --limit before indexing", async () => {
+    write("test/two.test.ts", 'import { two } from "../src/two.js";\nexport const seen = two();\n');
+    const run = async (args: string[]) => { const out = capture(); expect(await runCli([...args, "--workspace", workspace, ...cacheArgs], out.io), args.join(" ")).toBe(0); return out.lines.join("\n"); };
+    // thread -n 0 is a documented count-only mode (totals, no matches); see search-surfaces.test.ts.
+    const thread = await run(["thread", "two", "-n", "0"]);
+    expect(thread).toMatch(/0\/\d+ matches/);
+    expect(thread).not.toContain("no matches");
+    for (const args of [["ground", "two", "-n", "0"], ["ground", "two", "--lean", "--limit=0"]]) {
+      const text = await run(args);
+      expect(text, args.join(" ")).toMatch(/^0 hits shown, [1-9]\d* omitted by the limit$/);
+    }
+    expect(await run(["ground", "zzqqxx", "-n", "0"])).toBe("no matches");
+    const tests = await run(["tests", "two", "-n", "0"]);
+    expect(tests).toContain("1 omitted");
+    expect(tests).not.toContain("no indexed test file has a resolved");
+    // Resolved files sort first, so a listed import-only file means every omitted one is import-only too.
+    write("src/lone.ts", "export function lone(): number { return 1; }\nexport const other = 2;\n");
+    for (const name of ["l1", "l2"]) write(`test/${name}.test.ts`, 'import { other } from "../src/lone.js";\nexport const seen = other;\n');
+    expect(await run(["tests", "lone", "-n", "1"])).toContain("no indexed test file has a resolved call or reference edge to src/lone.ts#lone");
+    expect((JSON.parse(await run(["footing", "two", "-n", "0"])) as { omitted: { retrievalHits: number } }).omitted.retrievalHits).toBeGreaterThan(0);
+    expect(await run(["unreferenced", "--exported", "-n", "0"])).toMatch(/0 candidates listed of [1-9]/);
+    // A non-numeric limit fails before any index is built or written.
+    const untouched = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-untouched-"));
+    try {
+      for (const command of [["thread", "two"], ["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
+        await expect(runCli([...command, "-n", "abc", "--workspace", workspace, "--cache-dir", untouched], capture().io)).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 0$`));
+        expect(fs.readdirSync(untouched), command[0]).toEqual([]);
+      }
+    } finally {
+      fs.rmSync(untouched, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("names the command in every numeric option error", async () => {
+    const run = (args: string[]) => runCli([...args, "--workspace", workspace, ...cacheArgs], capture().io);
+    for (const [args, message] of [
+      [["warp", "two", "--depth", "0"], "osnova warp: --depth must be a safe integer >= 1"],
+      [["footing", "two", "--depth", "abc"], "osnova footing: --depth must be a safe integer >= 1"],
+      [["plumb", "two", "--site", "src/two.ts:1", "--depth", "0"], "osnova plumb: --depth must be a safe integer >= 1"],
+      [["settle", "--base-cache", path.join(workspace, "no-such-cache"), "--depth", "0"], "osnova settle: --depth must be a safe integer >= 1"],
+    ] as const) {
+      const error = await run([...args]).then(() => undefined, (caught: unknown) => caught);
+      expect(error instanceof Error ? error.message : error, args.join(" ")).toBe(message);
+    }
+  }, 60_000);
+
   it("rejects unknown commands with exit 2", async () => {
     const { lines, io } = capture();
     const code = await runCli(["frobnicate"], io);

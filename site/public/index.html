@@ -356,7 +356,7 @@ osnova setup agents --only cursor --apply</code></pre>
       <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-opencode">Copy</button></div>
 <pre class="shell"><code id="shell-opencode">npm install -g @getdomovoi/osnova
 osnova setup agents --only opencode --apply</code></pre>
-      <p class="note">Adds the MCP entry and a plugin that appends starting points to each message.</p>
+      <p class="note">Adds the MCP entry and a plugin that appends starting points to each message and, when a turn ends, tells the agent what its change reached.</p>
       <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs osnova 0.12.1 or newer.</p>
       <p class="note">Remove it with <code>osnova setup agents --only opencode --uninstall --apply</code>.</p>
     </div>
@@ -403,7 +403,7 @@ osnova setup agents --only kilo --apply</code></pre>
       <div class="box-head"><h3>Or run it yourself</h3><button class="copy" type="button" data-copy-target="shell-pi">Copy</button></div>
 <pre class="shell"><code id="shell-pi">npm install -g @getdomovoi/osnova
 osnova setup agents --only pi --apply</code></pre>
-      <p class="note">Adds the MCP entry for <code>pi-mcp-adapter</code> and an extension that adds starting points before each turn.</p>
+      <p class="note">Adds the MCP entry for <code>pi-mcp-adapter</code> and an extension that adds starting points before each turn and, once a run settles, tells the agent what its change reached.</p>
       <p class="note">Add <code>--gate</code> to the setup command for the opt-in search gate. It needs osnova 0.12.1 or newer.</p>
       <p class="note">Remove it with <code>osnova setup agents --only pi --uninstall --apply</code>.</p>
     </div>

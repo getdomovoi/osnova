@@ -9,7 +9,7 @@ import { refreshWorkspace } from "../api.js";
 import { indexHealth } from "../index/health.js";
 import { loadArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
-import { ask } from "../query/ask.js";
+import { askDetailed, DEFAULT_LIMIT as DEFAULT_ASK_LIMIT } from "../query/ask.js";
 import { findTextDetailed, InvalidPatternError } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
@@ -310,8 +310,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const question = parsed.positionals.join(" ").trim();
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit", "ground");
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const lean = parsed.values.lean === true;
       if (parsed.values.scoped === true) {
         const result = scopedAsk(index, question, { in: parsed.values.in, limit: limitValue, full: lean ? false : parsed.values.full });
@@ -323,9 +323,9 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
           }).join("\n\n"));
         return EXIT_OK;
       }
-      const result = ask(index, question, {
+      const result = askDetailed(index, question, {
         in: parsed.values.in,
-        limit: limitValue,
+        limit: limitValue ?? DEFAULT_ASK_LIMIT,
         full: lean ? false : parsed.values.full,
       });
       io.stdout(formatAsk(result, { lean }));
@@ -345,8 +345,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
         },
       });
       const pattern = requirePositional(parsed.positionals, "pattern", "thread");
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit", "thread");
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = withCommandError("thread", () => findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
@@ -429,9 +429,9 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", "footing", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limit = numericOption(parsed.values.limit, "limit", "footing");
       const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = withCommandError("footing", () => taskContext(index, { task, question, symbols: parsed.values.symbol,
         in: parsed.values.in, limit, maxDepth, maxCodeUnits: budget }),
         (error) => error instanceof TaskContextBudgetError ? `--max-code-units ${budget} cannot retain receipts and omissions; give at least ${error.minimum}` : undefined);
@@ -521,9 +521,10 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       for (const kind of kinds ?? []) {
         if (!(cliSymbolKinds as readonly string[]).includes(kind)) throw new Error(`osnova unreferenced: --kinds must be symbol kinds (${cliSymbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
       }
+      const limit = numericOption(parsed.values.limit, "limit", "unreferenced");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = unreferenced(index, {
-        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit: numericOption(parsed.values.limit, "limit", "unreferenced"), includeExported: parsed.values.exported,
+        scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit, includeExported: parsed.values.exported,
       });
       io.stdout(formatUnreferenced(result));
       return EXIT_OK;
@@ -582,13 +583,13 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       return EXIT_OK;
     }
     case "hook": {
-      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, adaptive: { type: "boolean" }, "full-contract": { type: "boolean" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, adaptive: { type: "boolean" }, "full-contract": { type: "boolean" }, defer: { type: "boolean" }, ack: { type: "string" } } });
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
       if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
       if (!isHookEvent(event)) throw new Error(`osnova hook needs one of: ${hookEvents.join(", ")}`);
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
-      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, gate: parsed.values.gate, adaptive: parsed.values.adaptive, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
+      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, gate: parsed.values.gate, adaptive: parsed.values.adaptive, fullContract: parsed.values["full-contract"], defer: parsed.values.defer, ack: parsed.values.ack, workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;
     }
     case "mcp": {
