@@ -269,7 +269,8 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     if (cached === undefined) return;
     const terms = promptCodeNames(prompt);
     // A dotted word such as "e.g." or "0.12.0" names no file; checking the loaded index first keeps such a prompt
-    // from paying for a refresh. Once refreshed, every spelled path is matched again, so a new file is still named.
+    // from paying for a refresh. When a code name or a known file does refresh it, every spelled path is matched again,
+    // so a file created since the last refresh is named too; a prompt that names only such a file waits for a refresh.
     const paths = promptFilePaths(prompt);
     if (terms.length === 0 && filesNamed(cached, paths).length === 0) return;
     const index = await refreshWorkspace(workspace, { cacheDir: options.cacheDir });
