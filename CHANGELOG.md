@@ -2,6 +2,12 @@
 
 All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.
 
+## Unreleased
+
+### Added
+
+- The Pi gate extension keys its turns on Pi's session id from `ctx.sessionManager.getSessionId()` when Pi gives one, and on one id per process otherwise.
+
 ## 0.12.1 (2026-10-30)
 
 The extraction version moves to `structural-9.42`, so the first run after upgrading rebuilds the cache once.

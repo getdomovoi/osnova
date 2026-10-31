@@ -30,7 +30,9 @@ export const earlierShippedFiles: Readonly<Record<string, readonly string[]>> = 
     "8ef82d9342fcc0a511cfe003093161eba362fda68d5560c74bd54350cb782bec",
     "e386c7803cf0e15f596761f5e77ea4aae764448e3afbe15a2b38518c88c917b8",
   ],
-  "pi/osnova-gate.ts": [],
+  "pi/osnova-gate.ts": [
+    "7bb635a4f88df7df4907f4432970bd95aa2cf1915172eb0eedec59b67a9bc9d1",
+  ],
 };
 
 export function shippedHash(text: string): string {

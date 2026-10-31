@@ -15,10 +15,10 @@ const unsafeOnWindows = /["%!\r\n]/;
 // Tool calls the gate may decide on: search tools, MCP calls, and shell commands that search or run osnova.
 const searchTool = /^(?:grep|find|mcp)$|osnova_/;
 const searchCommand = /(?:^|[\s;&|(])(?:grep|egrep|fgrep|rg|ag|ack|fd|find|git\s+grep|osnova)(?:\s|$)/;
-// Pi gives the extension no session id, so one process is one session.
-const session = `pi-${process.pid}-${Date.now()}`;
+// Pi's session id when its context gives one; otherwise one process is one session.
+const processSession = `pi-${process.pid}-${Date.now()}`;
 
-function gate(payload: Record<string, unknown>, cwd: string): Promise<string> {
+function gate(payload: Record<string, unknown>, cwd: string, session: string): Promise<string> {
   return new Promise((resolve) => {
     let out = "";
     if (process.env.OSNOVA_GATE === "off" || (windows && unsafeOnWindows.test(executable))) { resolve(""); return; }
@@ -50,7 +50,8 @@ function denyReason(answer: string): string | undefined {
 }
 
 interface ToolCall { readonly toolName?: string; readonly input?: Record<string, unknown> }
-interface Context { readonly cwd?: string }
+interface Context { readonly cwd?: string; readonly sessionManager?: { getSessionId?(): string | undefined } }
+const sessionOf = (ctx: Context | undefined): string => ctx?.sessionManager?.getSessionId?.() || processSession;
 interface PiApi {
   on(event: "before_agent_start", handler: (event: unknown, ctx: Context) => Promise<undefined>): void;
   on(event: "tool_call", handler: (event: ToolCall, ctx: Context) => Promise<{ block: true; reason: string } | undefined>): void;
@@ -59,7 +60,7 @@ interface PiApi {
 export default function osnovaGate(pi: PiApi): void {
   pi.on("before_agent_start", async (_event, ctx) => {
     const cwd = ctx?.cwd ?? process.cwd();
-    await gate({ hook_event_name: "UserPromptSubmit" }, cwd);
+    await gate({ hook_event_name: "UserPromptSubmit" }, cwd, sessionOf(ctx));
     return undefined;
   });
   pi.on("tool_call", async (event, ctx) => {
@@ -67,7 +68,7 @@ export default function osnovaGate(pi: PiApi): void {
     const input = event?.input ?? {};
     if (!searchTool.test(tool) && !(tool === "bash" && searchCommand.test(String(input.command ?? "")))) return undefined;
     const cwd = ctx?.cwd ?? process.cwd();
-    const reason = denyReason(await gate({ tool_name: tool, tool_input: input }, cwd));
+    const reason = denyReason(await gate({ tool_name: tool, tool_input: input }, cwd, sessionOf(ctx)));
     return reason === undefined ? undefined : { block: true, reason };
   });
 }

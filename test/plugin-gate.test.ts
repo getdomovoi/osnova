@@ -47,5 +47,9 @@ describe("the Pi gate extension", () => {
     const seen = await recorded();
     expect(seen.map((call) => call.args)).toEqual([["hook", "gate", "--adaptive"], ["hook", "gate", "--adaptive"]]);
     expect(seen[0]!.payload.session_id).toBe(seen[1]!.payload.session_id);
+    // Pi's own session id, when its context gives one, keeps the gate's turns apart per session.
+    await fs.rm(calls, { force: true });
+    await handlers.get("tool_call")!({ toolName: "bash", input: { command: "rg total" } }, { cwd: dir, sessionManager: { getSessionId: () => "pi-session-7" } });
+    expect((await recorded()).map((call) => call.payload.session_id)).toEqual(["pi-session-7"]);
   });
 });

@@ -39,6 +39,7 @@
 <p>All notable changes to Osnova are recorded here. The format follows Keep a Changelog, and the project uses Semantic Versioning. Before 1.0, minor versions may change the MCP and CLI contract; each such change is listed under Breaking.</p>
 <nav class="doc-toc" aria-label="Changelog sections">
 <ul>
+<li><a href="#unreleased" title="Unreleased">Unreleased</a></li>
 <li><a href="#v0-12-1" title="0.12.1 (2026-10-30)">0.12.1</a></li>
 <li><a href="#v0-12-0" title="0.12.0 (2026-10-01)">0.12.0</a></li>
 <li><a href="#v0-11-0" title="0.11.0 (2026-09-30)">0.11.0</a></li>
@@ -57,6 +58,11 @@
 <li><a href="#v0-2-0" title="0.2.0">0.2.0</a></li>
 </ul>
 </nav>
+<h2 id="unreleased">Unreleased</h2>
+<h3 id="unreleased-added">Added</h3>
+<ul>
+<li>The Pi gate extension keys its turns on Pi's session id from <code>ctx.sessionManager.getSessionId()</code> when Pi gives one, and on one id per process otherwise.</li>
+</ul>
 <h2 id="v0-12-1">0.12.1 (2026-10-30)</h2>
 <p>The extraction version moves to <code>structural-9.42</code>, so the first run after upgrading rebuilds the cache once.</p>
 <h3 id="v0-12-1-added">Added</h3>
