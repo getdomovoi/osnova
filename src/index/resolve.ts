@@ -738,8 +738,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // `using` directives declared inside it import; and at the global namespace, after its own types, the
   // compilation unit's directives and the `global using` directives of the site's project (`csharpProjectOf`), a
   // project the index cannot prove leaving any other one possible. A dotted name's first segment may name a namespace
-  // instead, and `global::` starts at the global namespace. A name any C# file declares as a `using` alias stays
-  // unresolved, since an alias can be global or scoped to a namespace. The imports edges carry each directive as
+  // instead, and `global::` starts at the global namespace. A name any C# file declares as a `using` alias, or a
+  // project file's Using item aliases, stays unresolved, since an alias can be global or scoped to a namespace. The imports edges carry each directive as
   // `[global ][static ]Target[ in Namespace@from-to]`, or `X =` for an alias, where `in` bounds a directive to the lines of
   // the namespace declaration it is declared inside and its target is read relative to that namespace; a change to them
   // changes the file's imports, which re-resolves every file on an incremental update.
@@ -757,36 +757,71 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   };
   // A C# file's project, as far as project files prove it: the one .csproj of the nearest folder above the file that
   // holds any. null when that folder holds several, when no folder holds one, when a project further up may glob the
-  // file too, or when the project or a Directory.Build file around it writes Compile items, turns default items off or
-  // imports another file, any of which can add or remove files the folder does not show.
+  // file too, when the file lies in the project's bin or obj folder, which default items leave out, when a project or
+  // Directory.Build file around it has no readable text, or when one writes Compile items, changes or turns off default
+  // items or imports another file, any of which can add or remove files the folder does not show. A Directory.Build
+  // file counts in any letter case, since a file system that ignores case finds it. `usingItems` marks Using items or
+  // implicit usings, which import namespaces no directive shows.
   type CsharpProject = { readonly path: string; readonly usingItems: boolean };
   const csharpProjects = new Map<string, CsharpProject | null>();
   let projectFiles: { readonly byFolder: Map<string, string[]>; readonly build: Map<string, string[]> } | undefined;
   const folderOf = (file: string): string => path.posix.dirname(file);
+  const projectFilesOf = (): { readonly byFolder: Map<string, string[]>; readonly build: Map<string, string[]> } => {
+    if (projectFiles !== undefined) return projectFiles;
+    projectFiles = { byFolder: new Map(), build: new Map() };
+    for (const name of files.keys()) {
+      const base = path.posix.basename(name);
+      const into = /\.csproj$/iu.test(base) ? projectFiles.byFolder : /^Directory\.Build\.(?:props|targets)$/iu.test(base) ? projectFiles.build : undefined;
+      if (into !== undefined) into.set(folderOf(name), [...(into.get(folderOf(name)) ?? []), name]);
+    }
+    return projectFiles;
+  };
+  // A project file's text without comments, or undefined when the scan could not read it.
+  const projectText = (name: string): string | undefined => {
+    const card = files.get(name);
+    if (card === undefined || card.diagnostics?.some((diagnostic) => diagnostic.phase === "scan") === true) return undefined;
+    return card.text.replace(/<!--[\s\S]*?-->/gu, "");
+  };
   const csharpProjectOf = (file: string): CsharpProject | null => {
     const start = folderOf(file);
     if (csharpProjects.has(start)) return csharpProjects.get(start)!;
-    if (projectFiles === undefined) {
-      projectFiles = { byFolder: new Map(), build: new Map() };
-      for (const name of files.keys()) {
-        const base = path.posix.basename(name);
-        const into = /\.csproj$/iu.test(base) ? projectFiles.byFolder : base === "Directory.Build.props" || base === "Directory.Build.targets" ? projectFiles.build : undefined;
-        if (into !== undefined) into.set(folderOf(name), [...(into.get(folderOf(name)) ?? []), name]);
-      }
-    }
+    const { byFolder, build: buildFiles } = projectFilesOf();
     const ancestors: string[] = [];
     for (let dir = start; ; dir = folderOf(dir)) { ancestors.push(dir); if (dir === "." || dir === "/") break; }
-    const holding = ancestors.filter((dir) => projectFiles!.byFolder.has(dir));
+    const holding = ancestors.filter((dir) => byFolder.has(dir));
     let found: CsharpProject | null = null;
     const nearest = holding[0];
-    if (nearest !== undefined && holding.length === 1 && projectFiles.byFolder.get(nearest)!.length === 1) {
-      const project = projectFiles.byFolder.get(nearest)![0]!;
-      const build = ancestors.slice(ancestors.indexOf(nearest)).flatMap((dir) => projectFiles!.build.get(dir) ?? []);
-      const texts = [project, ...build].map((name) => (files.get(name)?.text ?? "").replace(/<!--[\s\S]*?-->/gu, ""));
-      if (!texts.some((text) => /<(?:Compile|Import)\b|EnableDefaultCompileItems/u.test(text))) found = { path: project, usingItems: texts.some((text) => /<Using\b/u.test(text)) };
+    const inside = nearest === undefined ? "" : path.posix.relative(nearest, start);
+    if (nearest !== undefined && holding.length === 1 && byFolder.get(nearest)!.length === 1 && !/^(?:bin|obj)(?:\/|$)/iu.test(inside)) {
+      const project = byFolder.get(nearest)![0]!;
+      const build = ancestors.slice(ancestors.indexOf(nearest)).flatMap((dir) => buildFiles.get(dir) ?? []);
+      const texts = [project, ...build].map(projectText);
+      if (texts.every((text) => text !== undefined && !/<(?:Compile|Import)\b|EnableDefault(?:Compile)?Items|DefaultItemExcludes/u.test(text))) {
+        found = { path: project, usingItems: texts.some((text) => /<Using\b|<ImplicitUsings>(?!\s*(?:disable|false)\s*<)/iu.test(text!)) };
+      }
     }
     csharpProjects.set(start, found);
     return found;
+  };
+  // The names Using items alias in any project or Directory.Build file. An alias the text does not spell out, or an
+  // unreadable file, could alias any name (`any`).
+  let projectAliases: { readonly names: Set<string>; readonly any: boolean } | undefined;
+  const projectAliasesOf = (): { readonly names: Set<string>; readonly any: boolean } => {
+    if (projectAliases !== undefined) return projectAliases;
+    const names = new Set<string>();
+    let any = false;
+    const { byFolder, build } = projectFilesOf();
+    for (const name of [...byFolder.values(), ...build.values()].flat()) {
+      const text = projectText(name);
+      if (text === undefined) { any = true; continue; }
+      for (const match of text.matchAll(/<Using\b[^>]*?\bAlias\s*=\s*(?:"([^"]*)"|'([^']*)')|<Alias>([^<]*)<\/Alias>/gu)) {
+        const alias = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+        if (/^@?[\p{L}_][\p{L}\p{N}_]*$/u.test(alias)) names.add(alias.replace(/^@/u, ""));
+        else any = true;
+      }
+    }
+    projectAliases = { names, any };
+    return projectAliases;
   };
   // The `global using` directives each project's files carry, and those whose project the index cannot prove.
   let globalsByProject: { readonly certain: Map<string, CsharpUsing[]>; readonly uncertain: CsharpUsing[] } | undefined;
@@ -1000,7 +1035,8 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (!first.name.startsWith("global::")) return unknownType;
       return csharpInNamespace(site.card, "", [{ ...first, name: first.name.slice("global::".length) }, ...rest]) ?? externalType;
     }
-    if (scope.aliases.has(first.name)) return unknownType;
+    const aliasItems = projectAliasesOf();
+    if (scope.aliases.has(first.name) || aliasItems.any || aliasItems.names.has(first.name)) return unknownType;
     for (let depth = site.enclosing.length; depth > 0; depth -= 1) {
       const holders = declaredAs(site.card.path, qualifiedNameOf(site.card.path, site.enclosing.slice(0, depth).join("."))).filter(isHolder);
       if (holders.length === 0) continue;
