@@ -104,6 +104,10 @@ describe("mcp stdio server", () => {
     try {
       const askText = await callTool(client, "osnova_ground", { question: "greet name hello" });
       expect(askText).toContain("src/greet.ts");
+      for (const lean of [true, false]) {
+        const zero = await callTool(client, "osnova_ground", { question: "greet name hello", limit: 0, lean });
+        expect(zero).toMatch(/\n0 hits shown, [1-9]\d* omitted by the limit$/);
+      }
 
       const findText = await callTool(client, "osnova_thread", { pattern: "toUpperCase", fixed: true });
       expect(findText).toContain("src/loud.ts");

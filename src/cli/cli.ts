@@ -9,7 +9,7 @@ import { refreshWorkspace } from "../api.js";
 import { indexHealth } from "../index/health.js";
 import { loadArtifact } from "../index/serialize.js";
 import { resolveCacheDir } from "../cache/cache.js";
-import { ask } from "../query/ask.js";
+import { askDetailed, DEFAULT_LIMIT as DEFAULT_ASK_LIMIT } from "../query/ask.js";
 import { findTextDetailed, InvalidPatternError } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
@@ -310,7 +310,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const question = parsed.positionals.join(" ").trim();
       if (question.length === 0) throw new Error("osnova ground: missing <question> argument");
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "ground", io)) return EXIT_ERROR;
-      const limitValue = numericOption(parsed.values.limit, "limit", "ground", 1);
+      const limitValue = numericOption(parsed.values.limit, "limit", "ground");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const lean = parsed.values.lean === true;
       if (parsed.values.scoped === true) {
@@ -323,9 +323,9 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
           }).join("\n\n"));
         return EXIT_OK;
       }
-      const result = ask(index, question, {
+      const result = askDetailed(index, question, {
         in: parsed.values.in,
-        limit: limitValue,
+        limit: limitValue ?? DEFAULT_ASK_LIMIT,
         full: lean ? false : parsed.values.full,
       });
       io.stdout(formatAsk(result, { lean }));
@@ -345,8 +345,8 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
         },
       });
       const pattern = requirePositional(parsed.positionals, "pattern", "thread");
-      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const limitValue = numericOption(parsed.values.limit, "limit", "thread");
+      const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = withCommandError("thread", () => findTextDetailed(index, pattern, {
         fixed: parsed.values.fixed,
         ignoreCase: parsed.values["ignore-case"],
@@ -429,7 +429,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       if (rejectStrayDirectory(parsed.positionals, parsed.values.workspace, "footing", io)) return EXIT_ERROR;
       const budget = numericOption(parsed.values["max-code-units"], "max-code-units", "footing", 1) ?? maximumTextResponseCodeUnits;
       if (budget > maximumTextResponseCodeUnits) throw new RangeError(`osnova footing: --max-code-units cannot exceed ${maximumTextResponseCodeUnits}`);
-      const limit = numericOption(parsed.values.limit, "limit", "footing", 1);
+      const limit = numericOption(parsed.values.limit, "limit", "footing");
       const maxDepth = numericOption(parsed.values.depth, "depth", "footing", 1);
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = withCommandError("footing", () => taskContext(index, { task, question, symbols: parsed.values.symbol,
@@ -506,7 +506,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       const file = parsed.values.file;
       if (symbols.length === 0 && file === undefined) throw new Error("osnova tests: give <symbol...> or --file <path>");
       if (symbols.length > 0 && file !== undefined) throw new Error("osnova tests: give either <symbol...> or --file <path>, not both");
-      const limit = numericOption(parsed.values.limit, "limit", "tests", 1);
+      const limit = numericOption(parsed.values.limit, "limit", "tests");
       const includeImportOnly = parsed.values["no-import-only"] !== true;
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       io.stdout(file === undefined ? formatTestsFor(testsFor(index, symbols, { limit, includeImportOnly })) : formatSymbolsUnderTest(symbolsUnderTest(index, file, { limit })));
@@ -521,7 +521,7 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       for (const kind of kinds ?? []) {
         if (!(cliSymbolKinds as readonly string[]).includes(kind)) throw new Error(`osnova unreferenced: --kinds must be symbol kinds (${cliSymbolKinds.join(", ")}), got ${JSON.stringify(kind)}`);
       }
-      const limit = numericOption(parsed.values.limit, "limit", "unreferenced", 1);
+      const limit = numericOption(parsed.values.limit, "limit", "unreferenced");
       const index = await ensureIndex(parsed.values.workspace ?? process.cwd(), parsed.values["cache-dir"], io.stderr);
       const result = unreferenced(index, {
         scope: parsed.values.scope, kinds: kinds as readonly SymbolKind[] | undefined, limit, includeExported: parsed.values.exported,

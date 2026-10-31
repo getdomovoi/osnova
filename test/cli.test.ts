@@ -230,7 +230,6 @@ describe("cli", () => {
     expect(run("footing", "two", "--task", "bogus")).toEqual({ status: 2, stderr: "osnova: osnova footing: --task must be understand, change or review\n" });
     expect(run("footing", "two", "--max-code-units", "16385")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units cannot exceed 16384\n" });
     expect(run("footing", "two", "--max-code-units", "0")).toEqual({ status: 2, stderr: "osnova: osnova footing: --max-code-units must be a safe integer >= 1\n" });
-    expect(run("ground", "two", "-n", "0")).toEqual({ status: 2, stderr: "osnova: osnova ground: --limit must be a safe integer >= 1\n" });
     expect(run("groundwork", "--max-dirs", "0")).toEqual({ status: 2, stderr: "osnova: osnova groundwork: --max-dirs must be a safe integer >= 1\n" });
     expect(run("warp", "two", "--bogus")).toEqual({ status: 2, stderr: "osnova: osnova warp: Unknown option '--bogus'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"--bogus\"\n" });
     expect(run("settle", "extra")).toEqual({ status: 2, stderr: "osnova: osnova settle: Unexpected argument 'extra'. This command does not take positional arguments\n" });
@@ -340,24 +339,28 @@ describe("cli", () => {
     await expect(runCli(["footing", "two", "--task", "oops", "--workspace", workspace, ...cacheArgs], capture().io)).rejects.toThrow(/^osnova footing: --task must be understand, change or review$/);
   }, 60_000);
 
-  it("rejects a zero or non-numeric --limit on every command whose limit caps results", async () => {
-    const run = (args: string[], io = capture().io) => runCli([...args, "--workspace", workspace, ...cacheArgs], io);
+  it("answers -n 0 with counts instead of claiming no matches, and rejects a non-numeric --limit before indexing", async () => {
+    write("test/two.test.ts", 'import { two } from "../src/two.js";\nexport const seen = two();\n');
+    const run = async (args: string[]) => { const out = capture(); expect(await runCli([...args, "--workspace", workspace, ...cacheArgs], out.io), args.join(" ")).toBe(0); return out.lines.join("\n"); };
     // thread -n 0 is a documented count-only mode (totals, no matches); see search-surfaces.test.ts.
-    const counts = capture();
-    expect(await run(["thread", "two", "-n", "0"], counts.io)).toBe(0);
-    expect(counts.lines.join("\n")).toMatch(/0\/\d+ matches/);
-    expect(counts.lines.join("\n")).not.toContain("no matches");
-    await expect(run(["thread", "two", "-n", "abc"])).rejects.toThrow(/^osnova thread: --limit must be a safe integer >= 0$/);
-    for (const command of [["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
-      await expect(run([...command, "-n", "0"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
-      await expect(run([...command, "-n", "abc"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
-      await expect(run([...command, "--limit=0"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
+    const thread = await run(["thread", "two", "-n", "0"]);
+    expect(thread).toMatch(/0\/\d+ matches/);
+    expect(thread).not.toContain("no matches");
+    for (const args of [["ground", "two", "-n", "0"], ["ground", "two", "--lean", "--limit=0"]]) {
+      const text = await run(args);
+      expect(text, args.join(" ")).toMatch(/^0 hits shown, [1-9]\d* omitted by the limit$/);
     }
-    // A rejected limit fails before any index is built or written.
+    expect(await run(["ground", "zzqqxx", "-n", "0"])).toBe("no matches");
+    const tests = await run(["tests", "two", "-n", "0"]);
+    expect(tests).toContain("1 omitted");
+    expect(tests).not.toContain("no indexed test file has a resolved");
+    expect((JSON.parse(await run(["footing", "two", "-n", "0"])) as { omitted: { retrievalHits: number } }).omitted.retrievalHits).toBeGreaterThan(0);
+    expect(await run(["unreferenced", "--exported", "-n", "0"])).toMatch(/0 candidates listed of [1-9]/);
+    // A non-numeric limit fails before any index is built or written.
     const untouched = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-untouched-"));
     try {
-      for (const command of [["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
-        await expect(runCli([...command, "-n", "0", "--workspace", workspace, "--cache-dir", untouched], capture().io)).rejects.toThrow(/--limit must be a safe integer >= 1$/);
+      for (const command of [["thread", "two"], ["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
+        await expect(runCli([...command, "-n", "abc", "--workspace", workspace, "--cache-dir", untouched], capture().io)).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 0$`));
         expect(fs.readdirSync(untouched), command[0]).toEqual([]);
       }
     } finally {

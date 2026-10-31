@@ -11,7 +11,7 @@ import { refreshWorkspace, indexGeneration } from "../api.js";
 import { baseDiff, materializeBaseRef, workspaceGitPrefix } from "../index/base-ref.js";
 import { DEFAULT_SKIP_DIRS } from "../index/scan.js";
 import { resolveCacheDir } from "../cache/cache.js";
-import { ask } from "../query/ask.js";
+import { askDetailed, DEFAULT_LIMIT as DEFAULT_ASK_LIMIT } from "../query/ask.js";
 import { findTextDetailed } from "../query/findText.js";
 import { skeleton } from "../query/skeleton.js";
 import { callersDetailed } from "../query/callers.js";
@@ -366,15 +366,15 @@ export function createOsnovaMcpServer(
       switch (name) {
         case "osnova_ground": {
           const question = requireString(args, "question");
-          const askOptions = { in: optionalString(args, "in"), limit: optionalNumber(args, "limit"), full: optionalBoolean(args, "full") };
+          const askOptions = { in: optionalString(args, "in"), limit: optionalNumber(args, "limit") ?? DEFAULT_ASK_LIMIT, full: optionalBoolean(args, "full") };
           // Lean by default: in a paired agent pilot, matched lean answers were about 76% smaller, with similar file
           // reads (727 against 735) and similar solves; no ground call asked for lean: false or full: true.
           const lean = optionalBoolean(args, "lean");
           if (lean === true || (lean !== false && optionalBoolean(args, "full") !== true)) {
-            return textResult(`${prefix}\n${formatAsk(ask(index, question, { ...askOptions, full: false }), { lean: true })}`);
+            return textResult(`${prefix}\n${formatAsk(askDetailed(index, question, { ...askOptions, full: false }), { lean: true })}`);
           }
-          let text = `${prefix}\n${formatAsk(ask(index, question, { ...askOptions, inlineShortDefinitions: mcpInlineShortDefinitions }))}`;
-          if (text.length > maximumTextResponseCodeUnits) text = `${prefix}\n${formatAsk(ask(index, question, askOptions))}`;
+          let text = `${prefix}\n${formatAsk(askDetailed(index, question, { ...askOptions, inlineShortDefinitions: mcpInlineShortDefinitions }))}`;
+          if (text.length > maximumTextResponseCodeUnits) text = `${prefix}\n${formatAsk(askDetailed(index, question, askOptions))}`;
           return textResult(text);
         }
         case "osnova_thread": {
