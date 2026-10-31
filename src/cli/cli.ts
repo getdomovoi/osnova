@@ -582,13 +582,13 @@ async function runCommand(command: string, rest: string[], io: CliIo): Promise<n
       return EXIT_OK;
     }
     case "hook": {
-      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, adaptive: { type: "boolean" }, "full-contract": { type: "boolean" } } });
+      const parsed = parseArgs({ args: rest, allowPositionals: true, options: { workspace: { type: "string" }, "cache-dir": { type: "string" }, command: { type: "string", multiple: true }, client: { type: "string" }, nudge: { type: "boolean" }, gate: { type: "boolean" }, adaptive: { type: "boolean" }, "full-contract": { type: "boolean" }, defer: { type: "boolean" }, ack: { type: "string" } } });
       const event = parsed.positionals[0];
       const hookClient = parsed.values.client;
       if (hookClient !== undefined && !hookClients.includes(hookClient as HookClient)) throw new Error(`osnova hook --client must be one of: ${hookClients.join(", ")}`);
       if (!isHookEvent(event)) throw new Error(`osnova hook needs one of: ${hookEvents.join(", ")}`);
       const raw = event === "install-preview" ? "" : await (io.stdin ?? readStdin)();
-      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, gate: parsed.values.gate, adaptive: parsed.values.adaptive, fullContract: parsed.values["full-contract"], workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
+      await runHook(event, raw, io, { client: hookClient as HookClient | undefined, nudge: parsed.values.nudge, gate: parsed.values.gate, adaptive: parsed.values.adaptive, fullContract: parsed.values["full-contract"], defer: parsed.values.defer, ack: parsed.values.ack, workspace: parsed.values.workspace, cacheDir: parsed.values["cache-dir"], command: parsed.values.command !== undefined && parsed.values.command.length > 0 ? parsed.values.command : undefined });
       return EXIT_OK;
     }
     case "mcp": {

@@ -273,6 +273,22 @@ describe("osnova hook", () => {
       const codexAgain = JSON.parse(c.out.join("\n"));
       expect(codexAgain.decision).toBeUndefined();
       expect(codexAgain.systemMessage).toContain("- alt.ts: summary:");
+      // A plugin that delivers the notice itself defers the record: the diff stays unsettled until it acknowledges
+      // the digest, so a notice it could not deliver is offered again.
+      const plugin = `${session}-plugin`;
+      const deferred = async () => { c = capture(); await runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), c.io, { cacheDir, client: "codex", defer: true }); return JSON.parse(c.out.join("\n")) as { decision?: string; digest?: string; systemMessage?: string }; };
+      const offered = await deferred();
+      expect(offered.decision).toBe("block");
+      expect(offered.digest).toMatch(/^[0-9a-f]{16}$/);
+      await expect(fs.access(path.join(cacheDir, "hook-state", `${plugin}.json`))).rejects.toThrow();
+      expect((await deferred()).digest).toBe(offered.digest);
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), c.io, { cacheDir, client: "codex", ack: offered.digest });
+      expect(c.out).toEqual([]);
+      const acknowledged = await deferred();
+      expect(acknowledged.decision).toBeUndefined();
+      expect(acknowledged.systemMessage).toContain("- alt.ts: summary:");
+      await expect(runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), capture().io, { cacheDir, client: "codex", ack: "not-a-digest" })).rejects.toThrow(/--ack needs the 16-digit digest/);
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, conversation_id: `${session}-cursor` }), c.io, { cacheDir, client: "cursor" });
       expect(JSON.parse(c.out.join("\n")).followup_message).toContain("- use.ts: report:");
