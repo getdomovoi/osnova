@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OsnovaIndex } from "../types.js";
@@ -53,7 +52,8 @@ export function shellStages(command: string): Stage[] {
     if (character === "'" || character === "\"") { quote = character; started = true; continue; }
     // A backslash escapes only a character the shell would otherwise act on, so `C:\Users\me\notes.txt` stays one path.
     if (character === "\\" && i + 1 < command.length && shellEscapable.test(command[i + 1]!)) { word += command[i + 1]!; started = true; i += 1; continue; }
-    if (character === "|") { const double = command[i + 1] === "|"; endStage(!double); if (double) i += 1; continue; }
+    // `||` ends a stage that the next one does not read; `|` and `|&` pipe its output into the next stage.
+    if (character === "|") { const double = command[i + 1] === "|"; endStage(!double); if (double || command[i + 1] === "&") i += 1; continue; }
     if (character === "&") { if (command[i + 1] === "&") i += 1; endStage(false); continue; }
     if (character === ";" || character === "\n") { endStage(false); continue; }
     if (/\s/.test(character)) { endWord(); continue; }
@@ -64,43 +64,61 @@ export function shellStages(command: string): Stage[] {
 }
 
 // Only the command that opens a pipeline stage is a search: `git status | grep x` filters output already in hand.
-// `cd` moves the folder later stages search, also inside a `( … )` subshell. A variable the command sets with
-// `NAME=value` is expanded; a path that still holds a `$` cannot be known, so it targets nothing, and a search or a
-// `cd` into it lets the call through as any unreadable call does. Any stage that runs the osnova CLI counts as using
-// osnova.
+// `cd` moves the folder later stages search; a `( … )` subshell restores it when it closes. A variable the command
+// sets with `NAME=value` is expanded; a path that still holds an unknown variable cannot be known, so it targets
+// nothing, and a search or a `cd` into it lets the call through as any unreadable call does. A shell started with
+// `-c` is read for the command it runs. Any stage that runs the osnova CLI counts as using osnova.
 const assignment = /^([A-Za-z_]\w*)=(.*)$/s;
-function scanShellCommand(command: string, cwd: string): "osnova" | GateTarget[] | undefined {
+const shells = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
+function scanShellCommand(command: string, cwd: string, depth = 0): "osnova" | GateTarget[] | undefined {
   const targets: GateTarget[] = [];
   const variables = new Map<string, string>();
+  const outer: (string | undefined)[] = [];
   let here: string | undefined = cwd;
   let searched = false;
+  const readStage = (stageWords: readonly string[], afterPipe: boolean): "osnova" | undefined => {
+    const assigned = stageWords.findIndex((word) => !assignment.test(word));
+    if (assigned === -1) { for (const word of stageWords) { const [, name, value] = assignment.exec(word)!; variables.set(name!, expandVariables(value!, variables) ?? ""); } return undefined; }
+    const words = stageWords.slice(assigned);
+    while (words.length > 0 && wrapperWords.test(words[0]!)) words.shift();
+    if (words.length === 0) return undefined;
+    if (runsOsnova(words)) return "osnova";
+    if (afterPipe) return undefined;
+    const head = path.basename(words[0]!);
+    if (shells.has(head)) {
+      const flag = words.findIndex((word, index) => index > 0 && /^-[a-z]*c[a-z]*$/.test(word));
+      const inner = flag > 0 && words[flag + 1] !== undefined && depth < 3 && here !== undefined ? scanShellCommand(words[flag + 1]!, here, depth + 1) : undefined;
+      if (inner === "osnova") return "osnova";
+      if (inner !== undefined) { searched = true; targets.push(...inner); }
+      return undefined;
+    }
+    const expanded = words.map((word) => expandVariables(word, variables));
+    if (head === "cd") { const to = words[1] === undefined ? "~" : expanded[1]; here = here === undefined || to === undefined ? undefined : expandPath(to, here); return undefined; }
+    const git = head === "git" && words[1] === "grep";
+    if (!git && !searchCommands.has(head)) return undefined;
+    searched = true;
+    if (here === undefined) return undefined;
+    const { paths, unknown } = searchOperands(git ? "grep" : head, expanded.slice(git ? 2 : 1));
+    targets.push(...(paths.length > 0 ? paths.map((target) => expandPath(target, here!)) : unknown ? [] : [here]).map((target) => ({ path: target })));
+    return undefined;
+  };
   for (const stage of shellStages(command)) {
+    const first = stage.words[0] ?? "", last = stage.words[stage.words.length - 1] ?? "";
+    const opens = /^[({]*/.exec(first)![0].replace(/\{/g, "").length;
+    const closes = /[)}]*$/.exec(last)![0].replace(/\}/g, "").length;
+    for (let level = 0; level < opens; level += 1) outer.push(here);
     const words = stage.words.map((word, index, all) => {
       const opened = index === 0 ? word.replace(/^[({]+/, "") : word;
       return index === all.length - 1 ? opened.replace(/[)}]+$/, "") : opened;
     }).filter((word) => word.length > 0);
-    const assigned = words.findIndex((word) => !assignment.test(word));
-    if (assigned === -1) { for (const word of words) { const [, name, value] = assignment.exec(word)!; variables.set(name!, expandVariables(value!, variables) ?? ""); } continue; }
-    words.splice(0, assigned);
-    while (words.length > 0 && wrapperWords.test(words[0]!)) words.shift();
-    if (words.length === 0) continue;
-    const head = path.basename(words[0]!);
-    if (head === "osnova") return "osnova";
-    if (stage.afterPipe) continue;
-    const expanded = words.map((word) => expandVariables(word, variables));
-    if (head === "cd") { const to = words[1] === undefined ? "~" : expanded[1]; here = here === undefined || to === undefined ? undefined : expandPath(to, here); continue; }
-    if (!searchCommands.has(head) && !(head === "git" && words[1] === "grep")) continue;
-    searched = true;
-    if (here === undefined) continue;
-    const args = expanded.slice(head === "git" ? 2 : 1);
-    const paths = searchPaths(args.filter((arg): arg is string => arg !== undefined), here);
-    const unknown = args.some((arg) => arg === undefined);
-    targets.push(...(paths.length > 0 ? paths : unknown ? [] : [here]).map((target) => ({ path: target })));
+    if (readStage(words, stage.afterPipe) === "osnova") return "osnova";
+    for (let level = 0; level < closes && outer.length > 0; level += 1) here = outer.pop();
   }
   return searched ? targets : undefined;
 }
 
-// `$NAME` and `${NAME}` from the command's own assignments; undefined when a variable is not known here.
+// `$NAME` and `${NAME}` from the command's own assignments; undefined when such a variable is not known here. A `$`
+// that starts no variable name, as in the regex `'total$'`, stays as written.
 function expandVariables(word: string, variables: ReadonlyMap<string, string>): string | undefined {
   let unknown = false;
   const result = word.replace(/\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g, (_match, braced: string | undefined, bare: string | undefined) => {
@@ -108,20 +126,49 @@ function expandVariables(word: string, variables: ReadonlyMap<string, string>): 
     if (value === undefined) unknown = true;
     return value ?? "";
   });
-  return unknown || result.includes("$") ? undefined : result;
+  return unknown ? undefined : result;
 }
 
-// A path argument is one written as a path (`.`, `/x`, `~/x`) or one that names something that exists. A pattern
-// that happens to name a file only adds a target the working directory would have covered, so it cannot turn a
-// deny into an allow.
-function searchPaths(args: readonly string[], cwd: string): string[] {
-  const found: string[] = [];
-  for (const arg of args) {
-    if (arg.startsWith("-")) continue;
-    if (/^[~/.]/.test(arg)) { found.push(expandPath(arg, cwd)); continue; }
-    if (!/[*?[\]]/.test(arg) && existsSync(path.resolve(cwd, arg))) found.push(path.resolve(cwd, arg));
+// Options whose value is the next word, so the value is read as neither the pattern nor a path.
+const valueOptions = new Set(["-e", "-f", "-A", "-B", "-C", "-m", "-g", "-t", "-T", "-d", "-D", "-j", "-M", "-E", "-G",
+  "--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--max-count", "--max-depth", "--context", "--after-context",
+  "--before-context", "--include", "--exclude", "--exclude-dir", "--threads", "--max-columns", "--extension", "--ignore"]);
+
+// The paths a search reads, by its own grammar: find takes paths before its expression; fd takes a pattern, then
+// paths; grep, rg, ag, ack and git grep take a pattern, unless -e or -f gives it, then paths. A path operand that
+// holds an unknown variable is left out and reported, so the search is not read as one of the working directory.
+function searchOperands(head: string, args: readonly (string | undefined)[]): { paths: string[]; unknown: boolean } {
+  const operands: (string | undefined)[] = [];
+  let patternGiven = head === "find";
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === undefined) { operands.push(undefined); continue; }
+    if (arg === "--") { operands.push(...args.slice(i + 1)); break; }
+    if (head === "find" && (arg.startsWith("-") || arg === "!" || arg === "(")) break;
+    if (!arg.startsWith("-") || arg === "-") { operands.push(arg); continue; }
+    const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (head !== "fd" && (flag === "-e" || flag === "-f" || flag === "--regexp" || flag === "--file")) patternGiven = true;
+    if (!arg.includes("=") && valueOptions.has(flag)) i += 1;
   }
-  return found;
+  const paths = patternGiven ? operands : operands.slice(1);
+  return { paths: paths.filter((value): value is string => value !== undefined), unknown: paths.some((value) => value === undefined) };
+}
+
+// The osnova CLI, run directly or through npx, bunx, pnpx, `pnpm exec`, `pnpm dlx`, `yarn exec`, `bun x`, or a
+// runtime given its script (`node …/osnova/dist/bin.js`). A grep for the word osnova is not a run of it.
+const packageRunners = new Set(["npx", "bunx", "pnpx"]);
+function runsOsnova(words: readonly string[]): boolean {
+  const launcher = path.basename(words[0]!);
+  let index = 0;
+  let script = false;
+  if (packageRunners.has(launcher)) index = 1;
+  else if ((launcher === "pnpm" || launcher === "yarn" || launcher === "bun") && ["exec", "dlx", "x"].includes(words[1] ?? "")) index = 2;
+  else if (launcher === "node" || launcher === "bun" || launcher === "tsx" || launcher === "deno") { index = 1; script = true; }
+  while (words[index]?.startsWith("-") === true) index += 1;
+  const target = words[index];
+  if (target === undefined) return false;
+  if (script) return /(?:^|[\\/])osnova(?:[\\/]|$)/.test(target);
+  return path.posix.basename(target.replace(/(?<=.)@[^/@]*$/, "")) === "osnova";
 }
 
 // Every client names its tools differently: Claude Code has Grep, Glob and Bash; Codex has grep, glob, search and
@@ -138,8 +185,9 @@ function shellCommandOf(toolInput: Readonly<Record<string, unknown>>): string | 
   for (const field of commandFields) {
     const value = toolInput[field];
     if (typeof value === "string" && value.length > 0) return value;
-    // Codex and some MCP shells pass argv as a list; joining it is enough to read the head and its paths.
-    if (Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string")) return value.join(" ");
+    // Codex and some MCP shells pass argv as a list, such as ["bash", "-lc", "rg foo src"]; each part is quoted so
+    // the command a shell runs stays one word.
+    if (Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string")) return value.map((part: string) => (/^[\w@%+=:,./-]+$/.test(part) ? part : `'${part.replace(/'/g, "'\\''")}'`)).join(" ");
   }
   return null;
 }
@@ -162,7 +210,8 @@ function stringsOf(toolInput: Readonly<Record<string, unknown>>, fields: readonl
 export function gateSubject(toolName: string, toolInput: Readonly<Record<string, unknown>>, cwd: string, serverName?: string): "osnova" | GateTarget[] | undefined {
   if (isOsnovaToolName(toolName) || isOsnovaToolName(serverName) || (/mcp/i.test(toolName) && /\bosnova_\w+/.test(JSON.stringify(toolInput)))) return "osnova";
   const command = shellCommandOf(toolInput);
-  if (command !== null) return scanShellCommand(command, cwd);
+  // A shell call's own working folder (Codex's `workdir`) decides where it searches.
+  if (command !== null) return scanShellCommand(command, expandPath(stringsOf(toolInput, ["workdir", "cwd", "dir", "directory"])[0] ?? ".", cwd));
   const tool = toolName.toLowerCase();
   if (!searchToolNames.has(tool)) return undefined;
   const filter = stringsOf(toolInput, ["glob", "include", ...(fileGlobTools.has(tool) ? ["pattern"] : [])])[0];

@@ -130,6 +130,33 @@ describe("osnova hook gate", () => {
     expect(denied(await gate(fresh(), "shell", { command: ["rg", "total"] }))).toBe(true);
   });
 
+  it("reads the pattern as a pattern, not a path", async () => {
+    for (const command of ['rg "/api/users"', 'grep -rn ".then("', "rg README.md", "grep -rn 'total$'", "rg -t ts total src"]) expect(denied(await gate(fresh(), "Bash", { command })), command).toBe(true);
+    for (const command of ["grep -rn total README.md", "rg -t ts total config", "rg 'total$' config"]) expect(await gate(fresh(), "Bash", { command }), command).toBe("");
+  });
+
+  it("reads a command a shell runs with -c, a call's own workdir, and |& as a pipe", async () => {
+    const outside = path.join(temporary, "outside"); await fs.mkdir(outside, { recursive: true });
+    expect(denied(await gate(fresh(), "shell", { command: ["bash", "-lc", "rg -n total src"] }))).toBe(true);
+    expect(denied(await gate(fresh(), "Bash", { command: "sh -c 'cd src && rg total'" }))).toBe(true);
+    expect(await gate(fresh(), "Bash", { command: "bash -lc 'rg -n total config'" })).toBe("");
+    expect(await gate(fresh(), "exec_command", { cmd: "rg total", workdir: outside })).toBe("");
+    expect(await gate(fresh(), "Bash", { command: "pnpm test |& grep FAIL" })).toBe("");
+  });
+
+  it("restores the folder when a subshell closes", async () => {
+    expect(denied(await gate(fresh(), "Bash", { command: `(cd ${temporary} && make); rg -n total` }))).toBe(true);
+  });
+
+  it("counts osnova run through npx, pnpm exec or node as using osnova, but not a grep for the word", async () => {
+    for (const command of ["npx -y @getdomovoi/osnova footing total", "pnpm exec osnova ground total", "node /opt/osnova/dist/bin.js ground total", "bunx @getdomovoi/osnova@0.12.0 thread total"]) {
+      const session = fresh();
+      expect(await gate(session, "Bash", { command }), command).toBe("");
+      expect(await gate(session, "Grep", { pattern: "total" }), command).toBe("");
+    }
+    expect(denied(await gate(fresh(), "Bash", { command: "grep -rn osnova src" }))).toBe(true);
+  });
+
   it("expands variables the command sets and follows cd inside a subshell", async () => {
     const outside = path.join(temporary, "outside"); await fs.mkdir(outside, { recursive: true });
     expect(await gate(fresh(), "Bash", { command: `S=${outside}; grep -n total $S/notes.txt` })).toBe("");
