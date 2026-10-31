@@ -9,6 +9,61 @@ const GO_TYPE_NAMES = new Set([
   "uint16", "uint32", "uint64", "uintptr", "any",
 ]);
 
+// The names a node declares into the scope that holds it: the left of `:=` (in a statement, a for clause, a range clause or a
+// receive case), every name of a `var`, `const` or `type` declaration, and every name of a parameter, result or
+// receiver list, whatever its type. A nested block or statement declares nothing outside itself.
+function declaredNames(node: Node): string[] {
+  const identifiers = (list: Node | null): string[] => list === null ? [] : list.type === "identifier" ? [list.text] : childrenOf(list).filter((child) => child.type === "identifier").map((child) => child.text);
+  // `:=` is an anonymous token, which the named children leave out.
+  const defines = (holder: Node): boolean => holder.children.some((child) => child?.type === ":=");
+  switch (node.type) {
+    case "short_var_declaration":
+      return identifiers(node.childForFieldName("left"));
+    case "range_clause":
+    case "receive_statement":
+      return defines(node) ? identifiers(node.childForFieldName("left")) : [];
+    case "for_clause":
+      return childrenOf(node).flatMap(declaredNames);
+    case "var_declaration":
+    case "const_declaration":
+    case "type_declaration":
+    case "var_spec_list":
+      return childrenOf(node).flatMap(declaredNames);
+    case "var_spec":
+    case "const_spec":
+    case "type_spec":
+    case "type_alias":
+    case "parameter_declaration":
+    case "variadic_parameter_declaration":
+      return node.childrenForFieldName("name").flatMap((name) => name === null ? [] : [name.text]);
+    case "parameter_list":
+      return childrenOf(node).flatMap(declaredNames);
+    // A label makes no block: the statement it marks declares into the block that holds it.
+    case "labeled_statement":
+      return childrenOf(node).filter((child) => child.type !== "label_name").flatMap(declaredNames);
+    default:
+      return [];
+  }
+}
+
+// Whether a local, parameter, named result or receiver binds the name at the site: Go scopes a local from its declaration
+// to the end of its block, and a function's parameters and results to its body, so each enclosing node's children before
+// the one that holds the site are the declarations in scope.
+function locallyBound(site: Node, name: string): boolean {
+  for (let holder: Node = site, scope = site.parent; scope !== null && scope.type !== "source_file"; holder = scope, scope = scope.parent) {
+    for (const child of childrenOf(scope)) {
+      if (child.startIndex >= holder.startIndex) break;
+      if (declaredNames(child).includes(name)) return true;
+    }
+    // A type switch's guard (`switch v := x.(type)`) declares `v` in each of its case clauses.
+    if (scope.type === "type_switch_statement" && holder.type === "type_case") {
+      const alias = scope.childForFieldName("alias");
+      if (alias !== null && childrenOf(alias).some((child) => child.type === "identifier" && child.text === name)) return true;
+    }
+  }
+  return false;
+}
+
 function receiverTypeName(node: Node): string | null {
   const params = node.childForFieldName("receiver");
   if (params === null) return null;
@@ -94,7 +149,8 @@ export const goAdapter: LanguageAdapter = {
           const fn = node.childForFieldName("function");
           if (fn !== null) {
             if (fn.type === "identifier") {
-              if (!GO_TYPE_NAMES.has(fn.text)) out.addEdge("calls", fn.text, fn);
+              // A local variable or parameter holding a function shadows a package function of the same name.
+              if (!GO_TYPE_NAMES.has(fn.text)) out.addEdge("calls", fn.text, fn, locallyBound(node, fn.text) ? { kind: "blocked", reason: "local-value" } : undefined);
             } else if (fn.type === "selector_expression") {
               const field = fn.childForFieldName("field");
               if (field !== null && !GO_TYPE_NAMES.has(field.text)) {
@@ -103,7 +159,7 @@ export const goAdapter: LanguageAdapter = {
             } else if (fn.type === "parenthesized_expression") {
               const inner = childrenOf(fn)[0];
               if (inner !== undefined && inner.type === "identifier" && !GO_TYPE_NAMES.has(inner.text)) {
-                out.addEdge("calls", inner.text, inner);
+                out.addEdge("calls", inner.text, inner, locallyBound(node, inner.text) ? { kind: "blocked", reason: "local-value" } : undefined);
               }
             }
           }
