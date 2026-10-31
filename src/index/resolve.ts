@@ -984,8 +984,10 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     const parts = qualifiedName.slice(qualifiedName.indexOf("#") + 1).split(".");
     const modules: string[] = [];
     for (let take = 1; take <= parts.length; take += 1) {
-      const parent = declaredAs(file, `${file}#${parts.slice(0, take).join(".")}`)[0];
-      if (parent?.kind !== "module") break;
+      const declared = declaredAs(file, `${file}#${parts.slice(0, take).join(".")}`);
+      // A module and a function may share a name (Rust keeps types and values apart): an enclosing name is the module,
+      // and the named declaration itself is a module only when nothing else declares its name.
+      if (take < parts.length ? !declared.some((symbol) => symbol.kind === "module") : declared.length === 0 || declared.some((symbol) => symbol.kind !== "module")) break;
       modules.push(parts[take - 1]!);
     }
     return modules.join(".");

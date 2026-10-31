@@ -88,6 +88,30 @@ describe("a plain Rust call and an inline module", () => {
   });
 });
 
+describe("a plain Rust call and Rust's separate type and value namespaces", () => {
+  it("resolves a function that shares its name with a module or a braced type, and leaves a struct that may be a value open", async () => {
+    const index = await build({
+      "src/main.rs": [
+        "mod parse { pub fn run() {} }",
+        "fn parse() {}",
+        "enum Mode { A }",
+        "fn Mode() {}",
+        "struct Builder {}",
+        "fn Builder() {}",
+        "fn main() { parse(); Mode(); Builder(); parse::run(); }",
+        "",
+      ].join("\n"),
+    });
+    expect(callAt(index, "src/main.rs", 7, "parse")?.toSymbol).toBe("src/main.rs#parse");
+    expect(callAt(index, "src/main.rs", 7, "Mode")?.toSymbol).toBe("src/main.rs#Mode");
+    expect(index.files.get("src/main.rs")!.symbols.filter((symbol) => symbol.name === "parse").map((symbol) => symbol.kind).sort()).toEqual(["function", "module"]);
+    // A struct the kind does not tell braced from tuple may also be a value, so the call stays open, saying why.
+    const builder = callAt(index, "src/main.rs", 7, "Builder");
+    expect(builder?.toSymbol).toBeUndefined();
+    expect(builder?.evidence).toMatchObject({ resolution: { status: "unresolved", reason: "shadowed-declaration" } });
+  });
+});
+
 describe("a plain Rust call and cfg-gated declarations", () => {
   it("refuses a name the file declares more than once in one scope", async () => {
     const index = await build({

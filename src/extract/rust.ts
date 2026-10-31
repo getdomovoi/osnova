@@ -20,6 +20,18 @@ function implTypeName(node: Node): string | null {
   return null;
 }
 
+// The Rust namespaces a declaration of this kind takes a name in: a module, enum, trait or type alias is a type, a
+// function or constant a value. A struct is a type and, when it is a tuple or unit struct, a value too; the kind does
+// not tell which, so a struct takes both.
+export function rustNamespaces(definition: { readonly kind: string }): readonly string[] {
+  switch (definition.kind) {
+    case "module": case "enum": case "trait": case "type": return ["type"];
+    case "struct": return ["type", "value"];
+    case "function": case "method": case "constant": return ["value"];
+    default: return [definition.kind];
+  }
+}
+
 export const rustAdapter: LanguageAdapter = {
   language: "rust",
   extract(tree, _source): AdapterOutput {
