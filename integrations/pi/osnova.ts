@@ -26,7 +26,8 @@ function hook(event: string, payload: unknown, cwd: string, ...flags: readonly s
         killer.on("error", () => child.kill());
         killer.on("exit", (code) => { if (code !== 0) child.kill(); });
       };
-      const timer = setTimeout(() => { stop(); resolve(""); }, 15_000);
+      // The stop hook refreshes the index and walks the diff's dependents, so it gets the 30 seconds hooks.json gives it.
+      const timer = setTimeout(() => { stop(); resolve(""); }, event === "stop" ? 30_000 : 15_000);
       child.stdout.on("data", (chunk: Buffer | string) => { out += chunk; });
       child.on("error", () => { clearTimeout(timer); resolve(""); });
       child.on("close", () => { clearTimeout(timer); resolve(out.trim()); });
@@ -46,17 +47,26 @@ function continueReason(answer: string): string | undefined {
 
 interface BeforeAgentStart { readonly prompt?: string; readonly systemPrompt: string }
 interface AgentSettled { readonly aborted?: boolean }
-interface Context { readonly cwd?: string; readonly sessionManager?: { getSessionId?(): string | undefined } }
+interface Context { readonly cwd?: string; isIdle?(): boolean; readonly sessionManager?: { getSessionId?(): string | undefined } }
 interface PiApi {
   on(event: "before_agent_start", handler: (event: BeforeAgentStart, ctx: Context) => Promise<{ systemPrompt?: string } | undefined>): void;
   on(event: "agent_settled", handler: (event: AgentSettled, ctx: Context) => Promise<undefined>): void;
-  sendUserMessage(content: string): void;
+  // Pi throws for a message sent while a run streams unless it says how to deliver it.
+  sendUserMessage(content: string, options?: { deliverAs: "followUp" | "steer" }): void;
 }
+
+// The gate extension keys its turns the same way when Pi gives no session id.
+const processSession = `pi-${process.pid}-${Date.now()}`;
+const sessionOf = (ctx: Context | undefined): string => ctx?.sessionManager?.getSessionId?.() || processSession;
 
 export default function osnova(pi: PiApi): void {
   let contract: string | undefined;
+  // Sessions whose next run the sent notice starts: that run settles as a stop hook continuation, which the hook never
+  // continues again. A user prompt clears the mark.
+  const noticed = new Set<string>();
   pi.on("before_agent_start", async (event, ctx) => {
     const cwd = ctx?.cwd ?? process.cwd();
+    if (typeof event.prompt === "string" && !event.prompt.startsWith("[osnova settle]")) noticed.delete(sessionOf(ctx));
     contract ??= await hook("session", { cwd }, cwd, "--full-contract");
     // The settle notice this extension sends already names each dependent with its line; it needs no starting points.
     const points = typeof event.prompt === "string" && !event.prompt.startsWith("[osnova settle]") ? await hook("prompt", { prompt: event.prompt, cwd }, cwd) : "";
@@ -64,13 +74,19 @@ export default function osnova(pi: PiApi): void {
     return extra.length === 0 ? undefined : { systemPrompt: `${event.systemPrompt}\n\n${extra}` };
   });
   // agent_settled is the run's final idle point, after retries and compaction. A run the user aborted gets no notice.
-  // The stop hook continues at most once per diff per session, so the run the notice starts ends quietly.
   pi.on("agent_settled", async (event, ctx) => {
-    const session = ctx?.sessionManager?.getSessionId?.();
-    if (event?.aborted === true || typeof session !== "string" || session.length === 0) return undefined;
+    const session = sessionOf(ctx);
+    const continuation = noticed.delete(session);
+    if (event?.aborted === true) return undefined;
     const cwd = ctx?.cwd ?? process.cwd();
-    const reason = continueReason(await hook("stop", { session_id: session, cwd }, cwd, "--client", "codex"));
-    if (reason !== undefined) pi.sendUserMessage(reason);
+    const reason = continueReason(await hook("stop", { session_id: session, cwd, ...(continuation ? { stop_hook_active: true } : {}) }, cwd, "--client", "codex"));
+    if (reason === undefined) return undefined;
+    try {
+      // A run the user started while the stop hook ran gets the notice after it.
+      if (ctx?.isIdle?.() === false) pi.sendUserMessage(reason, { deliverAs: "followUp" });
+      else pi.sendUserMessage(reason);
+      noticed.add(session);
+    } catch { /* Pi refused the message; the next run is checked as usual. */ }
     return undefined;
   });
 }

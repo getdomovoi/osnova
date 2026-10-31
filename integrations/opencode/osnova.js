@@ -26,7 +26,8 @@ function hook(event, payload, cwd, ...flags) {
         killer.on("error", () => child.kill());
         killer.on("exit", (code) => { if (code !== 0) child.kill(); });
       };
-      const timer = setTimeout(() => { stop(); resolve(""); }, 15_000);
+      // The stop hook refreshes the index and walks the diff's dependents, so it gets the 30 seconds hooks.json gives it.
+      const timer = setTimeout(() => { stop(); resolve(""); }, event === "stop" ? 30_000 : 15_000);
       child.stdout.on("data", (chunk) => { out += chunk; });
       child.on("error", () => { clearTimeout(timer); resolve(""); });
       child.on("close", () => { clearTimeout(timer); resolve(out.trim()); });
@@ -48,32 +49,51 @@ export const OsnovaPlugin = async ({ directory, worktree, client }) => {
   const cwd = worktree || directory || process.cwd();
   // A subagent runs in a child session; its idle is not the end of the user's turn, so it gets no notice.
   const children = new Set();
+  // Sessions whose running turn the posted notice started: their idle is a stop hook continuation, which the hook
+  // never continues again. A user prompt clears the mark.
+  const noticed = new Set();
+  // Sessions whose turn the user aborted: their next idle gets no notice.
+  const aborted = new Set();
+  // Bumped on every user prompt, so a notice computed while the user started a new turn is dropped.
+  const prompts = new Map();
+  const prompted = (sessionID) => { prompts.set(sessionID, (prompts.get(sessionID) ?? 0) + 1); noticed.delete(sessionID); };
+  const settle = async (sessionID) => {
+    const before = prompts.get(sessionID) ?? 0;
+    const continuation = noticed.delete(sessionID);
+    const reason = continueReason(await hook("stop", { session_id: sessionID, cwd, ...(continuation ? { stop_hook_active: true } : {}) }, cwd, "--client", "codex"));
+    if (reason === undefined || (prompts.get(sessionID) ?? 0) !== before) return;
+    noticed.add(sessionID);
+    await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text: reason }] } }).catch(() => { noticed.delete(sessionID); });
+  };
   // OpenCode and Kilo already put the MCP server's instructions (the tool contract) into the system prompt, so the
   // session hook's text is dropped; it still runs once, first, because on a cold cache it starts the index build.
   let warm;
   return {
-    "chat.message": async (_input, output) => {
+    "chat.message": async (input, output) => {
       warm ??= hook("session", { cwd }, cwd);
       await warm;
       const text = output.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
       // The settle notice this plugin posts already names each dependent with its line; it needs no starting points.
-      if (text.trim().length === 0 || text.startsWith("[osnova settle]")) return;
+      if (text.startsWith("[osnova settle]")) return;
+      if (typeof input?.sessionID === "string") prompted(input.sessionID);
+      if (text.trim().length === 0) return;
       const points = await hook("prompt", { prompt: text, cwd }, cwd);
       if (points.length === 0) return;
       const last = output.parts.filter((part) => part.type === "text").at(-1);
       if (last !== undefined) last.text = `${last.text}\n\n${points}`;
     },
-    // session.idle is the end of a turn. The stop hook continues at most once per diff per session, so the idle that
-    // follows the posted notice does nothing.
+    // session.idle is the end of a turn. The check runs in the background so later events are not held behind it.
     event: async ({ event }) => {
+      const type = event?.type;
       const info = event?.properties?.info;
-      if (typeof info?.id === "string" && typeof info.parentID === "string") children.add(info.id);
-      if (event?.type !== "session.idle") return;
-      const sessionID = event.properties?.sessionID;
-      if (typeof sessionID !== "string" || children.has(sessionID) || typeof client?.session?.promptAsync !== "function") return;
-      const reason = continueReason(await hook("stop", { session_id: sessionID, cwd }, cwd, "--client", "codex"));
-      if (reason === undefined) return;
-      await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text: reason }] } }).catch(() => undefined);
+      // Messages carry their session's id as parentID too, so only session events name a child session.
+      if (typeof type === "string" && type.startsWith("session.") && typeof info?.id === "string" && typeof info.parentID === "string") children.add(info.id);
+      const sessionID = event?.properties?.sessionID;
+      if (typeof sessionID !== "string") return;
+      if (type === "session.error" && event.properties?.error?.name === "MessageAbortedError") { aborted.add(sessionID); return; }
+      if (type !== "session.idle" || children.has(sessionID) || typeof client?.session?.promptAsync !== "function") return;
+      if (aborted.delete(sessionID)) { noticed.delete(sessionID); return; }
+      void settle(sessionID).catch(() => undefined);
     },
   };
 };

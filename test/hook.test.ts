@@ -243,6 +243,8 @@ describe("osnova hook", () => {
       expect(fired.decision).toBeUndefined();
       expect(fired.hookSpecificOutput.hookEventName).toBe("Stop");
       expect(fired.hookSpecificOutput.additionalContext).toContain("- use.ts: report:");
+      // The OpenCode, Kilo and Pi plugins post this text back and skip starting points for it by this prefix.
+      expect(fired.hookSpecificOutput.additionalContext.startsWith("[osnova settle] ")).toBe(true);
       expect(fired.hookSpecificOutput.additionalContext).toContain("- alt.ts: summary:");
       expect(fired.hookSpecificOutput.additionalContext).toMatch(/2 indexed dependents in 2 files/);
       expect(fired.hookSpecificOutput.additionalContext.length).toBeLessThanOrEqual(1_536);
