@@ -48,6 +48,13 @@ describe("osnova setup --gate", () => {
     expect(existsSync(piGate)).toBe(false);
   });
 
+  it("gives the agents family's Cursor the same gate as the per-client form", async () => {
+    await fs.mkdir(path.join(home, ".cursor"), { recursive: true });
+    await setup("agents", "--apply", "--gate");
+    const cursor = (await json(".cursor", "hooks.json")).hooks;
+    for (const event of ["beforeShellExecution", "preToolUse", "afterMCPExecution"]) expect(cursor[event]).toEqual([{ command: "osnova hook gate --client cursor", timeout: 10 }]);
+  });
+
   it("refuses --gate without hooks or a plugin, and on uninstall", async () => {
     await expect(runCli(["setup", "--apply", "--gate", "--home", home], capture().io)).rejects.toThrow(/--gate goes with --hooks or --plugin/);
     await expect(runCli(["setup", "agents", "--uninstall", "--gate", "--home", home], capture().io)).rejects.toThrow(/takes no --command, --nudge or --gate/);

@@ -263,8 +263,7 @@ export async function planFamily(family: SetupFamily, options: { home?: string |
       const folder = harnessFolder(harness, home);
       if (!existsSync(folder)) { skipped.push({ harness, reason: `not installed (${folder} not found)` }); continue; }
       changes.push({ ...(await planMcp(harness, { home, command: options.command })), client: harness });
-      // Cursor's hooks cannot deny a search with a reason the agent reads, so it gets no gate.
-      if (harness === "codex" || harness === "cursor") changes.push(await planHooks({ home, command: options.command, client: harness, nudge: options.nudge, gate: harness === "codex" && options.gate === true }));
+      if (harness === "codex" || harness === "cursor") changes.push(await planHooks({ home, command: options.command, client: harness, nudge: options.nudge, gate: options.gate }));
       else {
         changes.push(await planPlugin(harness, { home }));
         if (options.gate === true) changes.push(await planPlugin(harness, { home, gate: true }));
