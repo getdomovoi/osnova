@@ -142,13 +142,15 @@ One global install serves every repository and every client: one entry in each c
 
 | Client | How to wire | What it adds |
 | --- | --- | --- |
-| Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge |
+| Claude Code | `osnova setup --apply --client claude-code --hooks` | MCP entry plus session, prompt and stop hooks; `--skill` adds the skill, `--nudge` the opt-in grep nudge, `--gate` the opt-in search gate |
 | Claude Code, as a plugin | `/plugin marketplace add getdomovoi/osnova` then `/plugin install osnova@osnova` | The same MCP entry, hooks and skill, run through `npx -y @getdomovoi/osnova@<version>`, pinned to the plugin's release, with no global install; updates follow the marketplace |
-| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently; step by step in [Osnova with Codex](docs/codex.md) |
-| Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message |
-| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin that appends starting points to each message; the tool guidance comes from the MCP instructions |
-| Kilo | `osnova setup --apply --client kilo --plugin` | MCP entry plus the same plugin |
-| Pi | `osnova setup --apply --client pi --plugin` | MCP entry through `pi-mcp-adapter` plus an extension that does the same |
+| Codex | `osnova setup --apply --client codex --hooks` | MCP entry plus the same three hooks; trust them in `/hooks` or Codex skips them silently; `--gate` adds the search gate; step by step in [Osnova with Codex](docs/codex.md) |
+| Cursor | `osnova setup --apply --client cursor --hooks` | MCP entry plus the stop hook as a follow-up message; `--gate` adds the search gate |
+| OpenCode | `osnova setup --apply --client opencode --plugin` | MCP entry plus a plugin that appends starting points to each message; the tool guidance comes from the MCP instructions; `--gate` adds a gate plugin. OpenCode 2.x does not load either plugin; its plugin API has no message or tool hook |
+| Kilo | `osnova setup --apply --client kilo --plugin` | MCP entry plus the same plugin; `--gate` adds the gate plugin |
+| Pi | `osnova setup --apply --client pi --plugin` | MCP entry through `pi-mcp-adapter` plus an extension that does the same; `--gate` adds a gate extension |
+
+The search gate is opt-in: add `--gate` to `osnova setup claude` or `osnova setup agents`, or to the per-client form. It denies a grep, rg, find or search-tool call that reaches code osnova indexes until an osnova tool, or the osnova CLI, has run in the current turn; the deny names the tools to use instead. A search of data, prose or configuration files, of a path outside the repository, or of a command's output after `|` always runs. Codex and Pi may not report an osnova call to the gate, so there it denies once per turn until it has seen one, then holds as on the other clients. `OSNOVA_GATE=off` switches it off for a session.
 
 ## In CI
 

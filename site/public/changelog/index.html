@@ -58,9 +58,17 @@
 </ul>
 </nav>
 <h2 id="unreleased">Unreleased</h2>
+<h3 id="unreleased-added">Added</h3>
+<ul>
+<li><code>osnova hook gate</code>, an opt-in search gate (<code>osnova setup claude --gate</code>, <code>osnova setup agents --gate</code>, or <code>--gate</code> beside <code>--hooks</code> or <code>--plugin</code>). It denies a grep, rg, find or search-tool call that reaches code osnova indexes until an osnova tool or the osnova CLI has run in the turn, and names the tools to use instead. Searches of data, prose and configuration files, of paths outside the workspace, and of a command's output after <code>|</code> always run. Claude Code and Codex get a <code>PreToolUse</code> hook, Cursor gets <code>beforeShellExecution</code>, <code>preToolUse</code> and <code>afterMCPExecution</code> entries, OpenCode and Kilo get an <code>osnova-gate.js</code> plugin, and Pi gets an <code>osnova-gate.ts</code> extension. On Codex and Pi, whose hooks may not see an osnova MCP call, the gate denies once per turn until it has seen one, then holds. Every failure lets the call through, and <code>OSNOVA_GATE=off</code> switches it off. Its turn state shares <code>hook-state/&lt;session id&gt;.json</code> under the cache directory.</li>
+<li>The prompt hook names an indexed file the prompt spells by file name or path, as <code>- file &lt;path&gt;: &lt;n&gt; symbols; osnova_outline for its shape</code>. A prompt such as &quot;fix the bug in claude-settings.js&quot; printed nothing, because only the last segment of a token, <code>js</code>, was considered.</li>
+</ul>
 <h3 id="unreleased-changed">Changed</h3>
 <ul>
 <li>Publishing the edge section encodes each distinct evidence, binding, route and overload value once per save, and every edge that carries the same value made only of plain objects, arrays, strings, numbers, booleans and null, or an equal copy of one, reuses that encoding. Any other value, such as a boxed number, a proxy, an object with an accessor, a method or a <code>toJSON</code> hook, enumerable or hidden, or a value that holds itself, is encoded on its own at each edge that carries it, so two values with the same JSON text but different encodings stay separate table entries, and a value that answers each read differently keeps what each edge read. A route that holds itself in an ignored extra field still encodes as the route alone. The edge section format, its bytes, their hash and every other section are unchanged, so an existing cache loads without a rebuild, and a route or overload that fails validation is still refused.</li>
+<li>The shipped skill's description now covers fixing bugs, changing, reviewing and explaining code and finding where code lives, and says to use osnova before grep, find, rg or file reads; it named only how code works, callers, change impact and call-site checks.</li>
+<li><code>osnova setup</code> replaces an installed skill, plugin or extension file that an earlier osnova shipped unedited, backing it up first. It kept every differing file, so an upgrade never delivered a new skill or plugin. A file its owner edited is still kept and reported, and <code>--uninstall</code> also removes an earlier shipped version.</li>
+<li>A leftover <code>hook gate</code> entry from an earlier strict build is now kept and repointed at this install instead of removed, since this osnova runs it.</li>
 </ul>
 <h3 id="unreleased-fixed">Fixed</h3>
 <ul>
