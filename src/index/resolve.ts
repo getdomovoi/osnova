@@ -759,19 +759,25 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // holds any. null when that folder holds several, when no folder holds one, when a project further up may glob the
   // file too, when the file lies in the project's bin or obj folder, which default items leave out, when a project or
   // Directory.Build file around it has no readable text, or when one writes Compile items, changes or turns off default
-  // items or imports a file other than the next Directory.Build file up, any of which can add or remove files the folder does not show. A Directory.Build
-  // file counts in any letter case, since a file system that ignores case finds it. `usingItems` marks Using items or
-  // implicit usings, which import namespaces no directive shows; `files` lists the project and Directory.Build files it reads.
+  // items or imports a file other than an indexed Directory.Build file further up (`chainsUp`), any of which can add or
+  // remove files the folder does not show. A Directory.Build file counts in any letter case, since a file system that
+  // ignores case finds it. `usingItems` marks Using items or implicit usings, which import namespaces no directive
+  // shows; `files` lists the project and Directory.Build files it reads.
   type CsharpProject = { readonly path: string; readonly usingItems: boolean; readonly files: readonly string[] };
   const csharpProjects = new Map<string, CsharpProject | null>();
   let projectFiles: { readonly byFolder: Map<string, string[]>; readonly build: Map<string, string[]> } | undefined;
   const folderOf = (file: string): string => path.posix.dirname(file);
+  const ancestorsOf = (folder: string): string[] => {
+    const ancestors: string[] = [];
+    for (let dir = folder; ; dir = folderOf(dir)) { ancestors.push(dir); if (dir === "." || dir === "/") break; }
+    return ancestors;
+  };
+  const isBuildFile = (name: string): boolean => /^Directory\.Build\.(?:props|targets)$/iu.test(path.posix.basename(name));
   const projectFilesOf = (): { readonly byFolder: Map<string, string[]>; readonly build: Map<string, string[]> } => {
     if (projectFiles !== undefined) return projectFiles;
     projectFiles = { byFolder: new Map(), build: new Map() };
     for (const name of files.keys()) {
-      const base = path.posix.basename(name);
-      const into = /\.csproj$/iu.test(base) ? projectFiles.byFolder : /^Directory\.Build\.(?:props|targets)$/iu.test(base) ? projectFiles.build : undefined;
+      const into = /\.csproj$/iu.test(name) ? projectFiles.byFolder : isBuildFile(name) ? projectFiles.build : undefined;
       if (into !== undefined) into.set(folderOf(name), [...(into.get(folderOf(name)) ?? []), name]);
     }
     return projectFiles;
@@ -782,35 +788,49 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     if (card === undefined || card.diagnostics?.some((diagnostic) => diagnostic.phase === "scan") === true || (card.size > 0 && card.text === "")) return undefined;
     return card.text.replace(/<!--[\s\S]*?-->/gu, "");
   };
-  // Whether an Import element of a project file only chains to the next Directory.Build file up, which the project
-  // check reads already: `GetPathOfFileAbove` of a Directory.Build name, or of its own name in a Directory.Build file,
-  // from the folder above the importing file.
+  // Whether an Import element only chains to a Directory.Build file further up that the project check reads already:
+  // `GetPathOfFileAbove` from the folder above the importing file, of a Directory.Build name or, in a Directory.Build
+  // file, of its own name, where a folder above the importer holds an indexed file of exactly that name. Without one,
+  // the search may go past the index root to a file the index never reads.
   const chainsUp = (name: string, element: string): boolean => {
-    const written = /\bProject\s*=\s*(?:"([^"]*)"|'([^']*)')/iu.exec(element);
-    const target = (written?.[1] ?? written?.[2] ?? "").replace(/[\s']/gu, "");
+    let target = "";
+    for (const attribute of element.matchAll(/\s([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu)) {
+      if (attribute[1]!.toLowerCase() === "project") target = (attribute[2] ?? attribute[3]!).replace(/&quot;|&apos;|["'\s]/gu, "");
+    }
     const above = /^\$\(\[MSBuild\]::GetPathOfFileAbove\((Directory\.Build\.(?:props|targets)|\$\(MSBuildThisFile\)),\$\(MSBuildThisFileDirectory\)\.\.[\\/]?\)\)$/iu.exec(target);
     if (above === null) return false;
-    return !/^\$\(/u.test(above[1]!) || /^Directory\.Build\.(?:props|targets)$/iu.test(path.posix.basename(name));
+    const own = /^\$\(/u.test(above[1]!);
+    if (own && !isBuildFile(name)) return false;
+    const wanted = own ? path.posix.basename(name) : above[1]!;
+    const folder = folderOf(name);
+    if (folder === "." || folder === "/") return false;
+    return ancestorsOf(folderOf(folder)).some((dir) => projectFilesOf().build.get(dir)?.some((other) => path.posix.basename(other) === wanted) === true);
+  };
+  // Whether a project or Directory.Build file leaves the files of its folders as they are, per file.
+  const keepsItems = new Map<string, boolean>();
+  const keepsItemsOf = (name: string): boolean => {
+    const cached = keepsItems.get(name);
+    if (cached !== undefined) return cached;
+    const text = projectText(name);
+    const keeps = text !== undefined && !/<Compile\b|EnableDefault(?:Compile)?Items|DefaultItemExcludes/iu.test(text)
+      && [...text.matchAll(/<Import\b(?:[^>"']|"[^"]*"|'[^']*')*>/giu)].every((element) => chainsUp(name, element[0]));
+    keepsItems.set(name, keeps);
+    return keeps;
   };
   const csharpProjectOf = (file: string): CsharpProject | null => {
     const start = folderOf(file);
     if (csharpProjects.has(start)) return csharpProjects.get(start)!;
     const { byFolder, build: buildFiles } = projectFilesOf();
-    const ancestors: string[] = [];
-    for (let dir = start; ; dir = folderOf(dir)) { ancestors.push(dir); if (dir === "." || dir === "/") break; }
+    const ancestors = ancestorsOf(start);
     const holding = ancestors.filter((dir) => byFolder.has(dir));
     let found: CsharpProject | null = null;
     const nearest = holding[0];
     const inside = nearest === undefined ? "" : path.posix.relative(nearest, start);
     if (nearest !== undefined && holding.length === 1 && byFolder.get(nearest)!.length === 1 && !/^(?:bin|obj)(?:\/|$)/iu.test(inside)) {
       const project = byFolder.get(nearest)![0]!;
-      const build = ancestors.slice(ancestors.indexOf(nearest)).flatMap((dir) => buildFiles.get(dir) ?? []);
-      const names = [project, ...build];
-      const texts = names.map(projectText);
-      const proven = (name: string, text: string | undefined): boolean => text !== undefined && !/<Compile\b|EnableDefault(?:Compile)?Items|DefaultItemExcludes/iu.test(text)
-        && [...text.matchAll(/<Import\b[^>]*>/giu)].every((element) => chainsUp(name, element[0]));
-      if (texts.every((text, at) => proven(names[at]!, text))) {
-        found = { path: project, usingItems: texts.some((text) => /<Using\b|<ImplicitUsings\b[^>]*>(?!\s*(?:disable|false)\s*<)/iu.test(text!)), files: [project, ...build] };
+      const names = [project, ...ancestors.slice(ancestors.indexOf(nearest)).flatMap((dir) => buildFiles.get(dir) ?? [])];
+      if (names.every(keepsItemsOf)) {
+        found = { path: project, usingItems: names.some((name) => /<Using\b|<ImplicitUsings\b[^>]*>(?!\s*(?:disable|false)\s*<)/iu.test(projectText(name)!)), files: names };
       }
     }
     csharpProjects.set(start, found);
