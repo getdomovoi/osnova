@@ -163,6 +163,13 @@ describe("osnova hook gate", () => {
     expect(await gate(installed, "Grep", { pattern: "total" })).toBe("");
   });
 
+  it("keeps sessions whose ids differ only by a suffix apart", async () => {
+    // Session abc.osnova's own state must never read as session abc's record of an osnova call.
+    expect(await run("gate", { session_id: "abc.osnova", hook_event_name: "UserPromptSubmit" })).toBe("");
+    expect(await run("gate", { session_id: "abc", hook_event_name: "UserPromptSubmit" })).toBe("");
+    expect(denied(await gate("abc", "Grep", { pattern: "total" }))).toBe(true);
+  });
+
   it("restores the folder when a subshell closes", async () => {
     expect(denied(await gate(fresh(), "Bash", { command: `(cd ${temporary} && make); rg -n total` }))).toBe(true);
   });

@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import path from "node:path";
 import { promises as fs } from "node:fs";
@@ -261,7 +261,7 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     try { await runGate(input, workspace, io, options); } catch (error) { fail(error); }
     return;
   }
-  if (input.sessionId !== undefined) await advanceGateTurn(hookStateFile(options.cacheDir, input.sessionId), false).catch(fail);
+  if (input.sessionId !== undefined) await advanceGateTurn(options.cacheDir, input.sessionId, false).catch(fail);
   const prompt = (input.prompt ?? "").trim();
   if (prompt.length < minimumPromptLength || prompt.startsWith("/")) return;
   try {
@@ -449,12 +449,6 @@ export function formatGrepNudge(index: OsnovaIndex, name: string): string | null
 interface HookState {
   readonly nudges: readonly string[];
   readonly settled: readonly string[];
-  /** The gate's turn counter, advanced by each prompt once the gate has state for the session. */
-  readonly turn?: number | undefined;
-  /** The last turn the gate denied a search in. */
-  readonly deniedTurn?: number | undefined;
-  /** Cursor's generation_id of the current turn. */
-  readonly generation?: string | undefined;
 }
 const emptyHookState: HookState = { nudges: [], settled: [] };
 
@@ -465,40 +459,55 @@ async function readHookState(file: string): Promise<HookState> {
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<Record<keyof HookState, unknown>>;
     const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
-    const count = (value: unknown): number | undefined => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined);
-    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled), turn: count(parsed.turn), deniedTurn: count(parsed.deniedTurn), generation: typeof parsed.generation === "string" ? parsed.generation : undefined };
+    return { nudges: strings(parsed.nudges), settled: strings(parsed.settled) };
   } catch { return emptyHookState; }
 }
 async function writeHookState(file: string, state: HookState): Promise<void> {
   await writeAtomically(file, JSON.stringify({ ...state, nudges: [...new Set(state.nudges)], settled: [...new Set(state.settled)] }));
 }
 // Hooks of one session run in parallel (Claude Code runs PreToolUse hooks for parallel tool calls together), so a
-// reader must never see half a file: write beside it, then rename over it.
+// reader must never see half a file: write beside it, then rename over it, as the cache writes do.
 async function writeAtomically(file: string, text: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  await fs.writeFile(temporary, text);
-  await fs.rename(temporary, file);
+  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await fs.writeFile(temporary, text, { flag: "wx", mode: 0o600 });
+    await fs.rename(temporary, file);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
 }
 
-// The gate's record of an osnova call lives in its own file, written only when osnova runs, so a search decided in
-// parallel and writing the session state cannot erase it.
+// The gate keeps its own files apart from the nudge and stop state, each in its own folder so no session id can
+// name another session's file: `gate/<session>.json` holds the turn counter, the last denied turn and Cursor's
+// generation; `osnova/<session>.json` holds the turn of the last osnova call and is written only by an osnova call,
+// so a search decided in parallel cannot erase it.
+interface GateState { readonly turn: number; readonly deniedTurn?: number | undefined; readonly generation?: string | undefined }
 interface OsnovaMark { readonly turn?: number | undefined; readonly seen: boolean }
-function osnovaMarkFile(stateFile: string): string { return stateFile.replace(/\.json$/, ".osnova.json"); }
+function gateFile(cacheDir: string | undefined, sessionId: string, kind: "gate" | "osnova"): string {
+  return path.join(resolveCacheDir(cacheDir), "hook-state", kind, `${sessionId.replace(/[^\w.-]/g, "_")}.json`);
+}
+const turnCount = (value: unknown): number | undefined => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined);
+async function readGateState(file: string): Promise<GateState> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<Record<keyof GateState, unknown>>;
+    return { turn: turnCount(parsed.turn) ?? 0, deniedTurn: turnCount(parsed.deniedTurn), generation: typeof parsed.generation === "string" ? parsed.generation : undefined };
+  } catch { return { turn: 0 }; }
+}
 async function readOsnovaMark(file: string): Promise<OsnovaMark> {
   try {
-    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { turn?: unknown };
-    return { turn: typeof parsed.turn === "number" && Number.isInteger(parsed.turn) && parsed.turn >= 0 ? parsed.turn : undefined, seen: true };
+    return { turn: turnCount((JSON.parse(await fs.readFile(file, "utf8")) as { turn?: unknown }).turn), seen: true };
   } catch { return { seen: false }; }
 }
 
 // A new turn for the gate. The prompt hook advances only a session the gate already tracks, so a session without
 // the gate writes nothing; a plugin's own prompt signal creates the state.
-async function advanceGateTurn(file: string, create: boolean): Promise<void> {
+async function advanceGateTurn(cacheDir: string | undefined, sessionId: string, create: boolean): Promise<void> {
+  const file = gateFile(cacheDir, sessionId, "gate");
   const present = async (candidate: string): Promise<boolean> => fs.access(candidate).then(() => true, () => false);
-  if (!create && !(await present(file)) && !(await present(osnovaMarkFile(file)))) return;
-  const state = await readHookState(file);
-  await writeHookState(file, { ...state, turn: (state.turn ?? 0) + 1 });
+  if (!create && !(await present(file)) && !(await present(gateFile(cacheDir, sessionId, "osnova")))) return;
+  const state = await readGateState(file);
+  await writeAtomically(file, JSON.stringify({ ...state, turn: state.turn + 1 }));
 }
 
 // Strict: deny until osnova runs in this turn. Adaptive: deny once per turn until the session has shown an osnova
@@ -506,16 +515,16 @@ async function advanceGateTurn(file: string, create: boolean): Promise<void> {
 // prompt event to its hooks, so a new generation_id starts its turn.
 async function runGate(input: HookInput, workspace: string, io: CliIo, options: HookOptions): Promise<void> {
   if (process.env.OSNOVA_GATE === "off" || input.sessionId === undefined) return;
-  const file = hookStateFile(options.cacheDir, input.sessionId);
-  if (input.hookEventName === "UserPromptSubmit") { await advanceGateTurn(file, true); return; }
+  if (input.hookEventName === "UserPromptSubmit") { await advanceGateTurn(options.cacheDir, input.sessionId, true); return; }
+  const file = gateFile(options.cacheDir, input.sessionId, "gate");
   const subject = gateSubject(input.toolName ?? "", input.toolInput ?? {}, path.resolve(input.cwd ?? workspace), input.mcpServerName);
   if (subject === undefined) return;
-  const read = await readHookState(file);
-  const state = input.generationId !== undefined && input.generationId !== read.generation ? { ...read, turn: (read.turn ?? 0) + 1, generation: input.generationId } : read;
-  const turn = state.turn ?? 0;
+  const read = await readGateState(file);
+  const state = input.generationId !== undefined && input.generationId !== read.generation ? { ...read, turn: read.turn + 1, generation: input.generationId } : read;
+  const turn = state.turn;
   // Writes only what changed: a call let through keeps a new Cursor generation, nothing else.
-  const allow = async (): Promise<void> => { if (state !== read) await writeHookState(file, state); };
-  const markFile = osnovaMarkFile(file);
+  const allow = async (): Promise<void> => { if (state !== read) await writeAtomically(file, JSON.stringify(state)); };
+  const markFile = gateFile(options.cacheDir, input.sessionId, "osnova");
   if (subject === "osnova") { await allow(); await writeAtomically(markFile, JSON.stringify({ turn })); return; }
   if ((await readOsnovaMark(markFile)).turn === turn) return allow();
   const index = await loadIndex(workspace, { cacheDir: options.cacheDir });
@@ -524,6 +533,6 @@ async function runGate(input: HookInput, workspace: string, io: CliIo, options: 
   const mark = await readOsnovaMark(markFile);
   if (mark.turn === turn) return allow();
   if (options.adaptive === true && !mark.seen && state.deniedTurn === turn) return allow();
-  await writeHookState(file, { ...state, deniedTurn: turn });
+  await writeAtomically(file, JSON.stringify({ ...state, deniedTurn: turn }));
   io.stdout(JSON.stringify(gateDenyPayload(options.client ?? "claude-code")));
 }
