@@ -208,7 +208,9 @@ class Scanner {
   // After the keyword `class` or `struct`: a primary constructor's parameters and the base type's arguments.
   typeHeader(i: number): number {
     const t = this.text;
-    const nameStart = this.trivia(i);
+    // An escaped name (`class @C(int x)`) starts after its `@`.
+    const at = this.trivia(i);
+    const nameStart = t[at] === "@" ? at + 1 : at;
     const nameEnd = this.word(nameStart);
     if (nameEnd === nameStart) return i;
     let k = this.trivia(nameEnd);
