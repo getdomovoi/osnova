@@ -1,5 +1,6 @@
 import type {
   AskHit,
+  AskDetailedResult,
   AskResult,
   CallersResult,
   CallersDetailedResult,
@@ -121,7 +122,7 @@ export function leanAskBody(hit: AskHit): string {
   return text.length === 0 ? "" : `\nL${hit.line}: ${text}`;
 }
 
-export function formatAsk(result: AskResult & { readonly omittedHits?: number | undefined }, options?: { readonly lean?: boolean | undefined }): string {
+export function formatAsk(result: AskResult & Partial<Pick<AskDetailedResult, "omittedHits">>, options?: { readonly lean?: boolean | undefined }): string {
   if (result.hits.length === 0) return (result.omittedHits ?? 0) > 0 ? `0 hits shown, ${result.omittedHits} omitted by the limit` : "no matches";
   const lean = options?.lean ?? false;
   const folded = foldNestedHits(result.hits);
@@ -906,7 +907,8 @@ export function formatTestsFor(result: TestsForResult): string {
     const resolved = item.tests.filter(isResolved);
     const importOnly = item.tests.filter((test) => !isResolved(test));
     lines.push(`${symbol.kind} ${symbol.qualifiedName} ${symbol.file}:${symbol.span.startLine}: ${testTierCounts(resolved.length, importOnly.length, result.includeImportOnly)}${item.omittedTests > 0 ? `; ${item.omittedTests} omitted` : ""}`);
-    if (resolved.length === 0 && item.omittedTests > 0) lines.push(`no listed test file has a resolved call or reference edge to ${symbol.qualifiedName}; ${item.omittedTests} omitted by the limit`);
+    // Resolved files sort first, so only a limit that listed nothing can hide one.
+    if (item.tests.length === 0 && item.omittedTests > 0) lines.push(`the limit omitted every test file for ${symbol.qualifiedName}`);
     else if (resolved.length === 0) lines.push(`no indexed test file has a resolved call or reference edge to ${symbol.qualifiedName}`);
     else lines.push("resolved edge (calls or references the symbol):");
     for (const test of resolved) lines.push(`- ${test.file} (resolved edge): ${testSiteText(test.file, test.sites, test.omittedSites, true)}`);

@@ -354,6 +354,10 @@ describe("cli", () => {
     const tests = await run(["tests", "two", "-n", "0"]);
     expect(tests).toContain("1 omitted");
     expect(tests).not.toContain("no indexed test file has a resolved");
+    // Resolved files sort first, so a listed import-only file means every omitted one is import-only too.
+    write("src/lone.ts", "export function lone(): number { return 1; }\nexport const other = 2;\n");
+    for (const name of ["l1", "l2"]) write(`test/${name}.test.ts`, 'import { other } from "../src/lone.js";\nexport const seen = other;\n');
+    expect(await run(["tests", "lone", "-n", "1"])).toContain("no indexed test file has a resolved call or reference edge to src/lone.ts#lone");
     expect((JSON.parse(await run(["footing", "two", "-n", "0"])) as { omitted: { retrievalHits: number } }).omitted.retrievalHits).toBeGreaterThan(0);
     expect(await run(["unreferenced", "--exported", "-n", "0"])).toMatch(/0 candidates listed of [1-9]/);
     // A non-numeric limit fails before any index is built or written.
