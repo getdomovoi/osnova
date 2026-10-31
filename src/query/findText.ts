@@ -8,6 +8,8 @@ const MATCHES_PER_GROUP = 10;
 export const DEFAULT_PATTERN_BUDGET_MS = 5_000;
 const INLINE_WORK_LIMIT = 64;
 
+export class InvalidPatternError extends Error {}
+
 export interface FindTextBudgetOptions extends FindTextDetailedOptions {
   readonly budgetMs?: number | undefined;
 }
@@ -49,7 +51,7 @@ export function findTextDetailed(
   try {
     new RegExp(source, flags);
   } catch (error) {
-    throw new Error(`osnova: invalid pattern ${JSON.stringify(pattern)}: ${String(error)}`, {
+    throw new InvalidPatternError(`osnova: invalid pattern ${JSON.stringify(pattern)}: ${String(error)}`, {
       cause: error,
     });
   }
