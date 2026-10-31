@@ -3,7 +3,7 @@ import { idf, matchInPath, queryContext, scopedQueryContext, tokenize } from "./
 import type { QueryContext, SearchDocument } from "./context.js";
 import { isTestFile } from "./tests.js";
 
-const DEFAULT_LIMIT = 8;
+export const DEFAULT_LIMIT = 8;
 const ROLE_WORDS = new Set([
   "definition", "definitions", "method", "methods", "function", "functions",
   "class", "classes", "caller", "callers", "usage", "usages",
