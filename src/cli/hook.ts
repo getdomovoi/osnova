@@ -146,6 +146,10 @@ export interface HookOptions {
   readonly gate?: boolean | undefined;
   /** Gate: deny once per turn until this session has shown an osnova call, for a harness that may not report them. */
   readonly adaptive?: boolean | undefined;
+  /** Stop: leave the diff unsettled and print its `digest`, for a plugin that delivers the notice itself and then acknowledges it. */
+  readonly defer?: boolean | undefined;
+  /** Stop: record this digest as settled for the session, once a plugin has delivered its notice. */
+  readonly ack?: string | undefined;
   /** Session: restate the whole tool contract instead of one pointer to the tools. */
   readonly fullContract?: boolean | undefined;
   /** How long the session hook waits for a background build of a cold repository before answering without starting points (default 3,000 ms). */
@@ -172,10 +176,10 @@ function emitContext(io: CliIo, client: HookClient, event: "prompt" | "session",
 // Stop as non-error feedback that continues the conversation; Codex honors only decision "block" with a reason;
 // Cursor auto-submits followup_message as the next user message. Not continuing: systemMessage is a user-facing
 // warning for Claude Code and Codex; Cursor has no such field, so it gets nothing.
-function emitStop(io: CliIo, client: HookClient, text: string, continues: boolean): void {
+function emitStop(io: CliIo, client: HookClient, text: string, continues: boolean, digest?: string): void {
   if (client === "cursor") { if (continues) io.stdout(JSON.stringify({ followup_message: text })); return; }
   if (!continues) { io.stdout(JSON.stringify({ systemMessage: text })); return; }
-  if (client === "codex") { io.stdout(JSON.stringify({ decision: "block", reason: text })); return; }
+  if (client === "codex") { io.stdout(JSON.stringify({ decision: "block", reason: text, ...(digest === undefined ? {} : { digest }) })); return; }
   io.stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: "Stop", additionalContext: text } }));
 }
 
@@ -221,6 +225,16 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
     return;
   }
   if (event === "stop") {
+    if (options.ack !== undefined) {
+      try {
+        if (!/^[0-9a-f]{16}$/.test(options.ack)) throw new Error("osnova hook stop: --ack needs the 16-digit digest a deferred stop printed");
+        if (input.sessionId === undefined) return;
+        const stateFile = hookStateFile(options.cacheDir, input.sessionId);
+        const state = await readHookState(stateFile);
+        if (!state.settled.includes(options.ack)) await writeHookState(stateFile, { ...state, settled: [...state.settled, options.ack] });
+      } catch (error) { fail(error); }
+      return;
+    }
     if (input.stopHookActive === true || process.env.OSNOVA_HOOK_SETTLE === "off") return;
     try {
       const cached = await loadIndex(workspace, { cacheDir: options.cacheDir });
@@ -235,8 +249,9 @@ export async function runHook(event: HookEvent, raw: string, io: CliIo, options:
       const stateFile = input.sessionId === undefined ? undefined : hookStateFile(options.cacheDir, input.sessionId);
       const state = stateFile === undefined ? emptyHookState : await readHookState(stateFile);
       const continues = !state.settled.includes(digest) && (client === "cursor" || dependents.length > settleContinueThreshold());
-      if (continues && stateFile !== undefined) await writeHookState(stateFile, { ...state, settled: [...state.settled, digest] });
-      emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits), continues);
+      // A deferred stop leaves the record to the plugin's acknowledgement, so an undelivered notice is offered again.
+      if (continues && stateFile !== undefined && options.defer !== true) await writeHookState(stateFile, { ...state, settled: [...state.settled, digest] });
+      emitStop(io, client, boundText(formatStopReason(result), hookStopCodeUnits), continues, options.defer === true ? digest : undefined);
     } catch (error) { fail(error); }
     return;
   }

@@ -100,9 +100,10 @@ describe("starting osnova from the Pi extension on Windows", () => {
     process.env.OSNOVA_BIN = "C:\\Users\\%USERNAME%\\osnova.cmd";
     vi.resetModules();
     const { default: osnova } = await import("../integrations/pi/osnova.js");
-    let handler: ((event: { systemPrompt: string; prompt?: string }, ctx: { cwd?: string }) => Promise<unknown>) | undefined;
-    osnova({ on: (_event: string, fn: typeof handler) => { handler = fn; } });
-    await handler!({ systemPrompt: "base", prompt: "why" }, { cwd: "/w" });
+    // The extension registers more than one handler; the prompt path is the one that starts osnova here.
+    const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+    osnova({ on: (event: string, fn: (event: unknown, ctx: unknown) => Promise<unknown>) => { handlers.set(event, fn); }, sendUserMessage: () => {} } as never);
+    await handlers.get("before_agent_start")!({ systemPrompt: "base", prompt: "why" }, { cwd: "/w" });
     expect(calls).toEqual([]);
   });
 });

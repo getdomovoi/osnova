@@ -243,6 +243,8 @@ describe("osnova hook", () => {
       expect(fired.decision).toBeUndefined();
       expect(fired.hookSpecificOutput.hookEventName).toBe("Stop");
       expect(fired.hookSpecificOutput.additionalContext).toContain("- use.ts: report:");
+      // The OpenCode, Kilo and Pi plugins post this text back and skip starting points for it by this prefix.
+      expect(fired.hookSpecificOutput.additionalContext.startsWith("[osnova settle] ")).toBe(true);
       expect(fired.hookSpecificOutput.additionalContext).toContain("- alt.ts: summary:");
       expect(fired.hookSpecificOutput.additionalContext).toMatch(/2 indexed dependents in 2 files/);
       expect(fired.hookSpecificOutput.additionalContext.length).toBeLessThanOrEqual(1_536);
@@ -271,6 +273,26 @@ describe("osnova hook", () => {
       const codexAgain = JSON.parse(c.out.join("\n"));
       expect(codexAgain.decision).toBeUndefined();
       expect(codexAgain.systemMessage).toContain("- alt.ts: summary:");
+      // A plugin that delivers the notice itself defers the record: the diff stays unsettled until it acknowledges
+      // the digest, so a notice it could not deliver is offered again.
+      const plugin = `${session}-plugin`;
+      const deferred = async () => { c = capture(); await runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), c.io, { cacheDir, client: "codex", defer: true }); return JSON.parse(c.out.join("\n")) as { decision?: string; digest?: string; systemMessage?: string }; };
+      const offered = await deferred();
+      expect(offered.decision).toBe("block");
+      expect(offered.digest).toMatch(/^[0-9a-f]{16}$/);
+      await expect(fs.access(path.join(cacheDir, "hook-state", `${plugin}.json`))).rejects.toThrow();
+      expect((await deferred()).digest).toBe(offered.digest);
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), c.io, { cacheDir, client: "codex", ack: offered.digest });
+      expect(c.out).toEqual([]);
+      const acknowledged = await deferred();
+      expect(acknowledged.decision).toBeUndefined();
+      expect(acknowledged.systemMessage).toContain("- alt.ts: summary:");
+      // A bad digest is reported on stderr; a hook never fails its harness.
+      c = capture();
+      await runHook("stop", JSON.stringify({ cwd: root, session_id: plugin }), c.io, { cacheDir, client: "codex", ack: "not-a-digest" });
+      expect(c.out).toEqual([]);
+      expect(c.err.join("\n")).toContain("--ack needs the 16-digit digest");
       c = capture();
       await runHook("stop", JSON.stringify({ cwd: root, conversation_id: `${session}-cursor` }), c.io, { cacheDir, client: "cursor" });
       expect(JSON.parse(c.out.join("\n")).followup_message).toContain("- use.ts: report:");
