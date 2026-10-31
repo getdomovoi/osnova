@@ -382,12 +382,23 @@ describe("cli", () => {
     // thread -n 0 is a documented count-only mode (totals, no matches); see search-surfaces.test.ts.
     const counts = capture();
     expect(await run(["thread", "two", "-n", "0"], counts.io)).toBe(0);
+    expect(counts.lines.join("\n")).toMatch(/0\/\d+ matches/);
     expect(counts.lines.join("\n")).not.toContain("no matches");
     await expect(run(["thread", "two", "-n", "abc"])).rejects.toThrow(/^osnova thread: --limit must be a safe integer >= 0$/);
     for (const command of [["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
       await expect(run([...command, "-n", "0"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
       await expect(run([...command, "-n", "abc"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
       await expect(run([...command, "--limit=0"])).rejects.toThrow(new RegExp(`^osnova ${command[0]}: --limit must be a safe integer >= 1$`));
+    }
+    // A rejected limit fails before any index is built or written.
+    const untouched = fs.mkdtempSync(path.join(os.tmpdir(), "osnova-cli-untouched-"));
+    try {
+      for (const command of [["ground", "two"], ["footing", "two"], ["tests", "two"], ["unreferenced"]]) {
+        await expect(runCli([...command, "-n", "0", "--workspace", workspace, "--cache-dir", untouched], capture().io)).rejects.toThrow(/--limit must be a safe integer >= 1$/);
+        expect(fs.readdirSync(untouched), command[0]).toEqual([]);
+      }
+    } finally {
+      fs.rmSync(untouched, { recursive: true, force: true });
     }
   }, 60_000);
 
