@@ -347,7 +347,7 @@ The same check runs on every pull request without an agent. The action runs `osn
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: getdomovoi/osnova@v0.12.0
+- uses: getdomovoi/osnova@v0.12.1
   with:
     depth: "2"
 ```
