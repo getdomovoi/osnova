@@ -130,6 +130,16 @@ describe("osnova hook gate", () => {
     expect(denied(await gate(fresh(), "shell", { command: ["rg", "total"] }))).toBe(true);
   });
 
+  it("expands variables the command sets and follows cd inside a subshell", async () => {
+    const outside = path.join(temporary, "outside"); await fs.mkdir(outside, { recursive: true });
+    expect(await gate(fresh(), "Bash", { command: `S=${outside}; grep -n total $S/notes.txt` })).toBe("");
+    expect(await gate(fresh(), "Bash", { command: `S=${outside}; cd "\${S}" && rg total` })).toBe("");
+    expect(await gate(fresh(), "Bash", { command: `F=${outside}; (cd $F && find . -name '*.ts' | sort)` })).toBe("");
+    expect(await gate(fresh(), "Bash", { command: "rg total $UNSET_DIR/x" })).toBe("");
+    expect(denied(await gate(fresh(), "Bash", { command: "(cd src && rg total)" }))).toBe(true);
+    expect(denied(await gate(fresh(), "Bash", { command: "D=src; rg total $D" }))).toBe(true);
+  });
+
   it("gates Cursor's shell and tool hooks, sees its MCP calls, and starts a turn on a new generation", async () => {
     const session = fresh();
     const cursor = async (payload: Record<string, unknown>) => {

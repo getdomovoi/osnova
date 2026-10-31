@@ -64,25 +64,51 @@ export function shellStages(command: string): Stage[] {
 }
 
 // Only the command that opens a pipeline stage is a search: `git status | grep x` filters output already in hand.
-// `cd` moves the folder later stages search. Any stage that runs the osnova CLI counts as using osnova.
+// `cd` moves the folder later stages search, also inside a `( … )` subshell. A variable the command sets with
+// `NAME=value` is expanded; a path that still holds a `$` cannot be known, so it targets nothing, and a search or a
+// `cd` into it lets the call through as any unreadable call does. Any stage that runs the osnova CLI counts as using
+// osnova.
+const assignment = /^([A-Za-z_]\w*)=(.*)$/s;
 function scanShellCommand(command: string, cwd: string): "osnova" | GateTarget[] | undefined {
   const targets: GateTarget[] = [];
-  let here = cwd;
+  const variables = new Map<string, string>();
+  let here: string | undefined = cwd;
   let searched = false;
   for (const stage of shellStages(command)) {
-    const words = [...stage.words];
+    const words = stage.words.map((word, index, all) => {
+      const opened = index === 0 ? word.replace(/^[({]+/, "") : word;
+      return index === all.length - 1 ? opened.replace(/[)}]+$/, "") : opened;
+    }).filter((word) => word.length > 0);
+    const assigned = words.findIndex((word) => !assignment.test(word));
+    if (assigned === -1) { for (const word of words) { const [, name, value] = assignment.exec(word)!; variables.set(name!, expandVariables(value!, variables) ?? ""); } continue; }
+    words.splice(0, assigned);
     while (words.length > 0 && wrapperWords.test(words[0]!)) words.shift();
     if (words.length === 0) continue;
     const head = path.basename(words[0]!);
     if (head === "osnova") return "osnova";
     if (stage.afterPipe) continue;
-    if (head === "cd") { here = expandPath(words[1] ?? "~", here); continue; }
+    const expanded = words.map((word) => expandVariables(word, variables));
+    if (head === "cd") { const to = words[1] === undefined ? "~" : expanded[1]; here = here === undefined || to === undefined ? undefined : expandPath(to, here); continue; }
     if (!searchCommands.has(head) && !(head === "git" && words[1] === "grep")) continue;
     searched = true;
-    const paths = searchPaths(words.slice(head === "git" ? 2 : 1), here);
-    targets.push(...(paths.length > 0 ? paths : [here]).map((target) => ({ path: target })));
+    if (here === undefined) continue;
+    const args = expanded.slice(head === "git" ? 2 : 1);
+    const paths = searchPaths(args.filter((arg): arg is string => arg !== undefined), here);
+    const unknown = args.some((arg) => arg === undefined);
+    targets.push(...(paths.length > 0 ? paths : unknown ? [] : [here]).map((target) => ({ path: target })));
   }
   return searched ? targets : undefined;
+}
+
+// `$NAME` and `${NAME}` from the command's own assignments; undefined when a variable is not known here.
+function expandVariables(word: string, variables: ReadonlyMap<string, string>): string | undefined {
+  let unknown = false;
+  const result = word.replace(/\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g, (_match, braced: string | undefined, bare: string | undefined) => {
+    const value = variables.get((braced ?? bare)!);
+    if (value === undefined) unknown = true;
+    return value ?? "";
+  });
+  return unknown || result.includes("$") ? undefined : result;
 }
 
 // A path argument is one written as a path (`.`, `/x`, `~/x`) or one that names something that exists. A pattern
