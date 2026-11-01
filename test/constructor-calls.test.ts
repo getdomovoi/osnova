@@ -347,6 +347,117 @@ describe("a creation claims a declaration only where the compiler's binding is p
     expect(creationAt(index, "p/Static.java", 4)).toMatchObject({ toSymbol: undefined });
   });
 
+  it("applies a C# global using only inside its own project", async () => {
+    const project = "<Project Sdk=\"Microsoft.NET.Sdk\" />\n";
+    await write({
+      "A/A.csproj": project,
+      "A/GlobalUsings.cs": "global using A.Models;\n",
+      "A/Models/Foo.cs": "namespace A.Models { public class Foo { public Foo() {} } }\n",
+      "A/Use.cs": "namespace A { class Use { void Run() { new Foo(); } } }\n",
+      // B's compiler never sees A's global using, so its Foo comes from somewhere the index does not hold.
+      "B/B.csproj": project,
+      "B/Use.cs": "namespace B { class Use { void Run() { new Foo(); } } }\n",
+      // A file under no project may or may not be compiled with A, so A's global using may or may not apply to it.
+      "Loose/Use.cs": "namespace Loose { class Use { void Run() { new Foo(); } } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "A/Use.cs", 1)).toMatchObject({ toSymbol: "A/Models/Foo.cs#Foo.Foo" });
+    expect(creationAt(index, "B/Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Loose/Use.cs", 1)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("takes a C# file's project from its folder only when no project file could change it", async () => {
+    const project = "<Project Sdk=\"Microsoft.NET.Sdk\" />\n";
+    const models = "namespace A.Models { public class Foo { public Foo() {} } }\n";
+    const use = (namespace: string) => `namespace ${namespace} { class Use { void Run() { new Foo(); } } }\n`;
+    const cases: [string, Record<string, string | Buffer>, string, boolean][] = [
+      // An .CSProj counts as a project file, as MSBuild reads it.
+      ["upper-case extension", { "A/A.CSProj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", true],
+      // The outer project globs the nested one's files too, so the outer's global using may apply there.
+      ["nested project", { "Outer/Outer.csproj": project, "Outer/GlobalUsings.cs": "global using A.Models;\n", "Outer/Models/Foo.cs": models, "Outer/Tests/Tests.csproj": project, "Outer/Tests/Use.cs": use("T") }, "Outer/Tests/Use.cs", false],
+      // Compile items may link a global using in from elsewhere or remove the site.
+      ["compile items", { "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "B/B.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Compile Include=\"../A/GlobalUsings.cs\" />\n  </ItemGroup>\n</Project>\n", "B/Use.cs": use("B") }, "B/Use.cs", false],
+      // Excluded default items may drop the global using or the site.
+      ["default item excludes", { "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <DefaultItemExcludes>$(DefaultItemExcludes);Use.cs</DefaultItemExcludes>\n  </PropertyGroup>\n</Project>\n", "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      ["default items off", { "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <EnableDefaultItems>false</EnableDefaultItems>\n  </PropertyGroup>\n</Project>\n", "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      // The default items leave out the output folders, so a file there may not be compiled.
+      ["output folder", { "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/bin/Use.cs": use("A") }, "A/bin/Use.cs", false],
+      // A file system that ignores case finds a directory.build.props as MSBuild's Directory.Build.props.
+      ["lower-case build file", { "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A"), "directory.build.props": "<Project>\n  <ItemGroup>\n    <Compile Remove=\"A/Use.cs\" />\n  </ItemGroup>\n</Project>\n" }, "A/Use.cs", false],
+      // A Directory.Build file that imports the next one up reads only a file the check already reads.
+      ["chained build file", { "Directory.Build.props": "<Project />\n", "A/Directory.Build.props": "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" Condition=\"Exists('$([MSBuild]::GetPathOfFileAbove(Directory.Build.props, $(MSBuildThisFileDirectory)..))')\" />\n</Project>\n", "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", true],
+      ["chained by own name", { "Directory.Build.targets": "<Project />\n", "A/Directory.Build.targets": "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove($(MSBuildThisFile), $(MSBuildThisFileDirectory)..))\" />\n</Project>\n", "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", true],
+      ["chained with quotes and a comparison", { "Directory.Build.props": "<Project />\n", "A/Directory.Build.props": "<Project>\n  <Import Condition=\"'$(Level)' > '0'\" Project='$([MSBuild]::GetPathOfFileAbove(\"Directory.Build.props\", \"$(MSBuildThisFileDirectory)../\"))' />\n</Project>\n", "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", true],
+      // With no indexed file of that name further up, the search may leave the index root.
+      ["chained with nothing above", { "A/Directory.Build.props": "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" />\n</Project>\n", "A/A.csproj": project, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      // The import target is the Project attribute, not text inside another attribute.
+      ["chain written in a condition", { "Directory.Build.props": "<Project />\n", "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <Import Condition=\"x Project='$([MSBuild]::GetPathOfFileAbove(Directory.Build.props,$(MSBuildThisFileDirectory)..))'\" Project=\"../shared/Common.props\" />\n</Project>\n", "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      // Any other import may bring in a file the index does not read.
+      ["other import", { "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <Import Project=\"../shared/Common.props\" />\n</Project>\n", "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      ["project imports its own name", { "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove($(MSBuildThisFile), $(MSBuildThisFileDirectory)..))\" />\n</Project>\n", "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      // MSBuild reads item and property names in any letter case.
+      ["lower-case compile item", { "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <compile Remove=\"Use.cs\" />\n  </ItemGroup>\n</Project>\n", "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      // A project file the scan cannot decode, such as one saved as UTF-16, has no text to read.
+      ["undecodable project", { "A/A.csproj": Buffer.from(`\ufeff${project}`, "utf16le"), "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+      // A project file above the size cap has no text to read.
+      ["oversized project", { "A/A.csproj": `<Project Sdk="Microsoft.NET.Sdk">\n<!--${"x".repeat(1_100_000)}-->\n</Project>\n`, "A/GlobalUsings.cs": "global using A.Models;\n", "A/Models/Foo.cs": models, "A/Use.cs": use("A") }, "A/Use.cs", false],
+    ];
+    for (const [name, files, site, resolves] of cases) {
+      const root = path.join(temporary, name.replace(/\W+/g, "-"));
+      for (const [file, text] of Object.entries(files)) {
+        await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+        await fs.writeFile(path.join(root, file), text);
+      }
+      const index = await buildIndex(root, { cacheDir: path.join(root, ".cache") });
+      const found = index.edges.filter((edge) => edge.kind === "calls" && edge.fromFile === site && edge.line === 1);
+      expect(found.map((edge) => edge.toSymbol !== undefined), name).toEqual([resolves]);
+    }
+  });
+
+  it("calls a C# creation nothing supplies unknown, not external, when the project's files declare using items", async () => {
+    await write({
+      "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Using Include=\"Vendor.Models\" />\n  </ItemGroup>\n</Project>\n",
+      "A/Use.cs": "namespace A { class Use { void Run() { new Foo(); } } }\n",
+      "B/B.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+      "B/Use.cs": "namespace B { class Use { void Run() { new Foo(); } } }\n",
+      // Implicit usings import namespaces the index may hold types of.
+      "C/C.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <ImplicitUsings>enable</ImplicitUsings>\n  </PropertyGroup>\n</Project>\n",
+      "C/Use.cs": "namespace C { class Use { void Run() { new Foo(); } } }\n",
+      "D/D.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <ImplicitUsings>disable</ImplicitUsings>\n  </PropertyGroup>\n</Project>\n",
+      "D/Use.cs": "namespace D { class Use { void Run() { new Foo(); } } }\n",
+      "E/E.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <ImplicitUsings Condition=\"'$(TargetFramework)' == 'net8.0'\">enable</ImplicitUsings>\n  </PropertyGroup>\n</Project>\n",
+      "E/Use.cs": "namespace E { class Use { void Run() { new Foo(); } } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const reason = (file: string) => index.edges.find((edge) => edge.fromFile === file && edge.kind === "calls")?.evidence;
+    expect(reason("A/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "no-matching-symbol" } });
+    expect(reason("B/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "unbound-global" } });
+    expect(reason("C/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "no-matching-symbol" } });
+    expect(reason("D/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "unbound-global" } });
+    expect(reason("E/Use.cs")).toMatchObject({ resolution: { status: "unresolved", reason: "no-matching-symbol" } });
+  });
+
+  it("re-resolves C# creations when a project file is added, moved or edited, equal to a full rebuild", async () => {
+    await write({
+      "A/GlobalUsings.cs": "global using A.Models;\n",
+      "A/Models/Foo.cs": "namespace A.Models { public class Foo { public Foo() {} } }\n",
+      "A/Use.cs": "namespace A { class Use { void Run() { new Foo(); } } }\n",
+    });
+    let index = await buildIndex(workspace, { cacheDir });
+    const target = (built: Index) => built.edges.find((edge) => edge.fromFile === "A/Use.cs" && edge.kind === "calls")?.toSymbol;
+    expect(target(index)).toBeUndefined();
+    const steps: [string, () => Promise<string[]>][] = [
+      ["add", async () => { await fs.writeFile(path.join(workspace, "A/A.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />\n"); return ["A/A.csproj"]; }],
+      ["edit", async () => { await fs.writeFile(path.join(workspace, "A/A.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Compile Remove=\"Use.cs\" />\n  </ItemGroup>\n</Project>\n"); return ["A/A.csproj"]; }],
+      ["move", async () => { await fs.rename(path.join(workspace, "A/A.csproj"), path.join(workspace, "A.csproj")); return ["A/A.csproj", "A.csproj"]; }],
+    ];
+    for (const [name, step] of steps) {
+      index = await applyChanges(index, workspace, await step());
+      const full = await buildIndex(workspace, { cacheDir: path.join(temporary, `full-${name}`) });
+      expect(serializeArtifact(index).equals(serializeArtifact(full)), name).toBe(true);
+    }
+  });
+
   it("leaves a C# creation unresolved when any file declares an alias of that name", async () => {
     await write({
       "Alias.cs": "global using X = P.T;\n",
@@ -359,6 +470,36 @@ describe("a creation claims a declaration only where the compiler's binding is p
     const index = await buildIndex(workspace, { cacheDir });
     expect(creationAt(index, "Use.cs", 1)).toMatchObject({ toSymbol: undefined });
     expect(creationAt(index, "Inner.cs", 2)).toMatchObject({ toSymbol: undefined });
+  });
+
+  it("leaves a C# creation unresolved when a project file declares a using alias of that name", async () => {
+    await write({
+      "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Using Include=\"P.T\" Alias=\"X\" />\n    <Using Include=\"P.T\">\n      <Alias>Y</Alias>\n    </Using>\n    <using Include=\"P.T\" alias=\"W\" />\n  </ItemGroup>\n</Project>\n",
+      "A/Box.cs": "namespace P { public class T { public T() {} } }\n",
+      "A/Other.cs": "namespace Q { public class X { public X() {} } public class Y { public Y() {} } public class Z { public Z() {} } public class W { public W() {} } }\n",
+      "A/Use.cs": "using Q;\nclass Use { void Run() { new X(); new Y(); new Z(); new W(); } }\n",
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    const found = index.edges.filter((edge) => edge.kind === "calls" && edge.fromFile === "A/Use.cs").map((edge) => [edge.toName, edge.toSymbol]);
+    expect(found).toEqual([["W", undefined], ["X", undefined], ["Y", undefined], ["Z", "A/Other.cs#Z.Z"]]);
+  });
+
+  it("reads a project file's using aliases only for the files of that project or an unproven one", async () => {
+    const use = (namespace: string) => `using Q;\nnamespace ${namespace} { class Use { void Run() { new X(); } } }\n`;
+    await write({
+      "A/A.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+      "A/Other.cs": "namespace Q { public class X { public X() {} } }\n",
+      "A/Use.cs": use("A"),
+      // B's alias is a property the index cannot read, so it could alias any name in B.
+      "B/B.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <Using Include=\"P.T\" Alias=\"$(Name)\" />\n  </ItemGroup>\n</Project>\n",
+      "B/Use.cs": use("B"),
+      // A file under no project may be compiled with B.
+      "Loose/Use.cs": use("Loose"),
+    });
+    const index = await buildIndex(workspace, { cacheDir });
+    expect(creationAt(index, "A/Use.cs", 2)).toMatchObject({ toSymbol: "A/Other.cs#X.X" });
+    expect(creationAt(index, "B/Use.cs", 2)).toMatchObject({ toSymbol: undefined });
+    expect(creationAt(index, "Loose/Use.cs", 2)).toMatchObject({ toSymbol: undefined });
   });
 
   it("reads a C# alias name past comments in its directive", async () => {

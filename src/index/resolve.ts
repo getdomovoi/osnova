@@ -1329,14 +1329,15 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
   // inherited from its written base class when that resolves to an indexed type), innermost first; then each
   // enclosing namespace from the innermost out, where a namespace's own types come before the types that the
   // `using` directives declared inside it import; and at the global namespace, after its own types, the
-  // compilation unit's directives and every `global using`. A dotted name's first segment may name a namespace
-  // instead, and `global::` starts at the global namespace. A name any C# file declares as a `using` alias stays
-  // unresolved, since an alias can be global or scoped to a namespace. The imports edges carry each directive as
+  // compilation unit's directives and the `global using` directives of the site's project (`csharpProjectOf`), a
+  // project the index cannot prove leaving any other one possible. A dotted name's first segment may name a namespace
+  // instead, and `global::` starts at the global namespace. A name any C# file declares as a `using` alias, or a
+  // project file's Using item aliases, stays unresolved, since an alias can be global or scoped to a namespace. The imports edges carry each directive as
   // `[global ][static ]Target[ in Namespace@from-to]`, or `X =` for an alias, where `in` bounds a directive to the lines of
   // the namespace declaration it is declared inside and its target is read relative to that namespace; a change to them
   // changes the file's imports, which re-resolves every file on an incremental update.
   type CsharpSegment = { readonly name: string; readonly arity: number };
-  type CsharpUsing = { readonly conditional: boolean; readonly static: boolean; readonly target: string; readonly scope: string; readonly from: number; readonly to: number };
+  type CsharpUsing = { readonly conditional: boolean; readonly static: boolean; readonly target: string; readonly scope: string; readonly from: number; readonly to: number; readonly file: string };
   type CsharpScope = {
     readonly aliases: Set<string>;
     readonly global: CsharpUsing[];
@@ -1346,6 +1347,124 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
     // Names of types whose namespace is unknown (`?`) or whose header did not parse (so their arity is unknown), any of
     // which could be the type a lookup of that name means.
     readonly unplaced: Set<string>;
+  };
+  // A C# file's project, as far as project files prove it: the one .csproj of the nearest folder above the file that
+  // holds any. null when that folder holds several, when no folder holds one, when a project further up may glob the
+  // file too, when the file lies in the project's bin or obj folder, which default items leave out, when a project or
+  // Directory.Build file around it has no readable text, or when one writes Compile items, changes or turns off default
+  // items or imports a file other than an indexed Directory.Build file further up (`chainsUp`), any of which can add or
+  // remove files the folder does not show. A Directory.Build file counts in any letter case, since a file system that
+  // ignores case finds it. `usingItems` marks Using items or implicit usings, which import namespaces no directive
+  // shows; `files` lists the project and Directory.Build files it reads.
+  type CsharpProject = { readonly path: string; readonly usingItems: boolean; readonly files: readonly string[] };
+  const csharpProjects = new Map<string, CsharpProject | null>();
+  let projectFiles: { readonly byFolder: Map<string, string[]>; readonly build: Map<string, string[]> } | undefined;
+  const folderOf = (file: string): string => path.posix.dirname(file);
+  const ancestorsOf = (folder: string): string[] => {
+    const ancestors: string[] = [];
+    for (let dir = folder; ; dir = folderOf(dir)) { ancestors.push(dir); if (dir === "." || dir === "/") break; }
+    return ancestors;
+  };
+  const isBuildFile = (name: string): boolean => /^Directory\.Build\.(?:props|targets)$/iu.test(path.posix.basename(name));
+  const projectFilesOf = (): { readonly byFolder: Map<string, string[]>; readonly build: Map<string, string[]> } => {
+    if (projectFiles !== undefined) return projectFiles;
+    projectFiles = { byFolder: new Map(), build: new Map() };
+    for (const name of files.keys()) {
+      const into = /\.csproj$/iu.test(name) ? projectFiles.byFolder : isBuildFile(name) ? projectFiles.build : undefined;
+      if (into !== undefined) into.set(folderOf(name), [...(into.get(folderOf(name)) ?? []), name]);
+    }
+    return projectFiles;
+  };
+  // A project file's text without comments, or undefined when the scan could not read or decode it.
+  const projectText = (name: string): string | undefined => {
+    const card = files.get(name);
+    if (card === undefined || card.diagnostics?.some((diagnostic) => diagnostic.phase === "scan") === true || (card.size > 0 && card.text === "")) return undefined;
+    return card.text.replace(/<!--[\s\S]*?-->/gu, "");
+  };
+  // Whether an Import element only chains to a Directory.Build file further up that the project check reads already:
+  // `GetPathOfFileAbove` from the folder above the importing file, of a Directory.Build name or, in a Directory.Build
+  // file, of its own name, where a folder above the importer holds an indexed file of exactly that name. Without one,
+  // the search may go past the index root to a file the index never reads.
+  const chainsUp = (name: string, element: string): boolean => {
+    let target = "";
+    for (const attribute of element.matchAll(/\s([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu)) {
+      if (attribute[1]!.toLowerCase() === "project") target = (attribute[2] ?? attribute[3]!).replace(/&quot;|&apos;|["'\s]/gu, "");
+    }
+    const above = /^\$\(\[MSBuild\]::GetPathOfFileAbove\((Directory\.Build\.(?:props|targets)|\$\(MSBuildThisFile\)),\$\(MSBuildThisFileDirectory\)\.\.[\\/]?\)\)$/iu.exec(target);
+    if (above === null) return false;
+    const own = /^\$\(/u.test(above[1]!);
+    if (own && !isBuildFile(name)) return false;
+    const wanted = own ? path.posix.basename(name) : above[1]!;
+    const folder = folderOf(name);
+    if (folder === "." || folder === "/") return false;
+    return ancestorsOf(folderOf(folder)).some((dir) => projectFilesOf().build.get(dir)?.some((other) => path.posix.basename(other) === wanted) === true);
+  };
+  // Whether a project or Directory.Build file leaves the files of its folders as they are, per file.
+  const keepsItems = new Map<string, boolean>();
+  const keepsItemsOf = (name: string): boolean => {
+    const cached = keepsItems.get(name);
+    if (cached !== undefined) return cached;
+    const text = projectText(name);
+    const keeps = text !== undefined && !/<Compile\b|EnableDefault(?:Compile)?Items|DefaultItemExcludes/iu.test(text)
+      && [...text.matchAll(/<Import\b(?:[^>"']|"[^"]*"|'[^']*')*>/giu)].every((element) => chainsUp(name, element[0]));
+    keepsItems.set(name, keeps);
+    return keeps;
+  };
+  const csharpProjectOf = (file: string): CsharpProject | null => {
+    const start = folderOf(file);
+    if (csharpProjects.has(start)) return csharpProjects.get(start)!;
+    const { byFolder, build: buildFiles } = projectFilesOf();
+    const ancestors = ancestorsOf(start);
+    const holding = ancestors.filter((dir) => byFolder.has(dir));
+    let found: CsharpProject | null = null;
+    const nearest = holding[0];
+    const inside = nearest === undefined ? "" : path.posix.relative(nearest, start);
+    if (nearest !== undefined && holding.length === 1 && byFolder.get(nearest)!.length === 1 && !/^(?:bin|obj)(?:\/|$)/iu.test(inside)) {
+      const project = byFolder.get(nearest)![0]!;
+      const names = [project, ...ancestors.slice(ancestors.indexOf(nearest)).flatMap((dir) => buildFiles.get(dir) ?? [])];
+      if (names.every(keepsItemsOf)) {
+        found = { path: project, usingItems: names.some((name) => /<Using\b|<ImplicitUsings\b[^>]*>(?!\s*(?:disable|false)\s*<)/iu.test(projectText(name)!)), files: names };
+      }
+    }
+    csharpProjects.set(start, found);
+    return found;
+  };
+  // The names Using items alias in the files a site's project reads, or in every project and Directory.Build file when
+  // its project is not proven. An alias the text does not spell out, or an unreadable file, could alias any name (`any`).
+  const projectAliases = new Map<string, { readonly names: Set<string>; readonly any: boolean }>();
+  const projectAliasesOf = (project: CsharpProject | null): { readonly names: Set<string>; readonly any: boolean } => {
+    const key = project?.path ?? "";
+    const cached = projectAliases.get(key);
+    if (cached !== undefined) return cached;
+    const names = new Set<string>();
+    let any = false;
+    const { byFolder, build } = projectFilesOf();
+    for (const name of project?.files ?? [...byFolder.values(), ...build.values()].flat()) {
+      const text = projectText(name);
+      if (text === undefined) { any = true; continue; }
+      for (const match of text.matchAll(/<Using\b[^>]*?\bAlias\s*=\s*(?:"([^"]*)"|'([^']*)')|<Alias>([^<]*)<\/Alias>/giu)) {
+        const alias = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+        if (/^@?[\p{L}_][\p{L}\p{N}_]*$/u.test(alias)) names.add(alias.replace(/^@/u, ""));
+        else any = true;
+      }
+    }
+    projectAliases.set(key, { names, any });
+    return { names, any };
+  };
+  // The `global using` directives each project's files carry, those whose project the index cannot prove, and all of them.
+  type ProjectGlobals = { readonly certain: Map<string, CsharpUsing[]>; readonly uncertain: CsharpUsing[]; readonly all: CsharpUsing[] };
+  let globalsByProject: ProjectGlobals | undefined;
+  const projectGlobals = (): ProjectGlobals => {
+    if (globalsByProject !== undefined) return globalsByProject;
+    const certain = new Map<string, CsharpUsing[]>();
+    const uncertain: CsharpUsing[] = [];
+    for (const using of csharpScopeOf().global) {
+      const project = csharpProjectOf(using.file);
+      if (project === null) uncertain.push(using);
+      else certain.set(project.path, [...(certain.get(project.path) ?? []), using]);
+    }
+    globalsByProject = { certain, uncertain, all: csharpScopeOf().global };
+    return globalsByProject;
   };
   // A written C# type name segment and its generic arity: ``Box`1`` names `Box<T>`, which a type records as `arity`.
   const csharpSegments = (written: string): CsharpSegment[] => written.split(".").map((part) => {
@@ -1385,7 +1504,7 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
         }
         const directive = /^(#if )?(global )?(static )?(\S+?)(?: in (\S+)@(\d+)-(\d+))?$/u.exec(raw.toName);
         if (directive === null) continue;
-        const using = { conditional: directive[1] !== undefined, static: directive[3] !== undefined, target: directive[4]!, scope: directive[5] ?? "", from: Number(directive[6] ?? 0), to: Number(directive[7] ?? 0) };
+        const using = { conditional: directive[1] !== undefined, static: directive[3] !== undefined, target: directive[4]!, scope: directive[5] ?? "", from: Number(directive[6] ?? 0), to: Number(directive[7] ?? 0), file };
         if (directive[2] !== undefined) scope.global.push(using);
         else scope.byFile.set(file, [...(scope.byFile.get(file) ?? []), using]);
       }
@@ -1545,7 +1664,9 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       if (!first.name.startsWith("global::")) return unknownType;
       return csharpInNamespace(site.card, "", [{ ...first, name: first.name.slice("global::".length) }, ...rest]) ?? externalType;
     }
-    if (scope.aliases.has(first.name)) return unknownType;
+    const project = csharpProjectOf(site.card.path);
+    const aliasItems = projectAliasesOf(project);
+    if (scope.aliases.has(first.name) || aliasItems.any || aliasItems.names.has(first.name)) return unknownType;
     for (let depth = site.enclosing.length; depth > 0; depth -= 1) {
       const holders = declaredAs(site.card.path, qualifiedNameOf(site.card.path, site.enclosing.slice(0, depth).join("."))).filter(isHolder);
       if (holders.length === 0) continue;
@@ -1565,15 +1686,23 @@ export function resolveEdges(input: ResolutionInput): OsnovaEdge[] {
       // another declaration on that line, so the line cannot tell whether those directives apply.
       const scoped = usings.filter((using) => using.scope === level);
       if (depth > 0 && scoped.some((using) => site.line === using.from || site.line === using.to)) return unknownType;
-      const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...scope.global]
+      // A `global using` applies in its own project only; one whose project or the site's the index cannot prove may or
+      // may not apply. If one did and supplied another type of the name, the code would not compile.
+      const byProject = depth === 0 ? projectGlobals() : undefined;
+      const globals = project === null ? [] : byProject?.certain.get(project.path) ?? [];
+      const uncertain = byProject === undefined ? [] : project === null ? byProject.all : byProject.uncertain;
+      const declared = depth === 0 ? [...usings.filter((using) => using.scope === ""), ...globals]
         : scoped.filter((using) => using.from < site.line && site.line < using.to);
       // A directive inside an `#if` region may or may not import a type at this level.
       if (declared.some((using) => using.conditional)) return unknownType;
       const imported = declared.length === 0 ? undefined : csharpImported(site.card, declared, first, depth > 0);
       if (imported === null) return unknownType;
       if (imported !== undefined) return csharpNested(imported, rest);
+      // A type an uncertain global using would supply here, where nothing else does, may be the one meant.
+      if (uncertain.length > 0 && csharpImported(site.card, uncertain, first, false) !== undefined) return unknownType;
     }
-    return externalType;
+    // A project's Using items, or a project the index cannot read, may import a namespace that supplies the name.
+    return project === null || project.usingItems ? unknownType : externalType;
   };
   // In a file that did not parse cleanly, a creation outside any type may have lost the declaration that encloses it,
   // so its scope is unknown.
